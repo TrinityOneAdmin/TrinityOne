@@ -886,6 +886,24 @@ fn scenario_p_slow_but_progressing_start_is_kept() {
 
 // (q) [M4] An update whose relay stays alive but never listens and prints nothing: rolled back, but NOT
 //     quarantined (it may only have been slow on this computer), with the reason recorded.
+// The state.json a real rollback wrote, compared with the fixture scripts/fixtures/<name> that the Node chain test
+// (scripts/suite-autoupdate-rollback-chain.test.mjs) renders through the gateway and the panel. restoreFailed is
+// blanked first: this harness box has no store, so it always carries a machine-specific "could not put the data back"
+// path; a clean rollback writes "". A stale fixture FAILS here. Regenerate with TRIN_WRITE_FIXTURES=1.
+fn assert_state_matches_fixture(suite_dir: &Path, name: &str) {
+    let raw = std::fs::read_to_string(suite_dir.join("state.json")).unwrap();
+    let key = "\"restoreFailed\":\"";
+    let at = raw.find(key).expect("state.json has restoreFailed") + key.len();
+    let mut end = at;
+    let b = raw.as_bytes();
+    while b[end] != b'"' { if b[end] == b'\\' { end += 1; } end += 1; }
+    let clean = format!("{}{}", &raw[..at], &raw[end..]);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/fixtures").join(name);
+    if std::env::var("TRIN_WRITE_FIXTURES").is_ok() { std::fs::write(&path, &clean).unwrap(); }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(have, clean, "scripts/fixtures/{name} is stale: re-run with TRIN_WRITE_FIXTURES=1 and commit it");
+}
+
 fn scenario_q_silent_start_rolls_back_without_quarantine() {
     eprintln!("── scenario (q): a silent, never-listening start rolls back without a ban ──");
     let fx = fresh_box("q", "2026-01-01T00:00:00Z");
@@ -900,6 +918,9 @@ fn scenario_q_silent_start_rolls_back_without_quarantine() {
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
     assert_eq!(read_state_field(&fx.suite_dir, "lastReason").as_deref(), Some("the update did not answer in time"));
     assert!(!fx.suite_dir.join("quarantine-sha").exists(), "a merely slow/silent start must not be quarantined");
+    // the panel reads this: no quarantine-sha means state.json must say "quarantined":false (so it never says "skipped")
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":false"), "rollback without a ban must record quarantined:false");
+    assert_state_matches_fixture(&fx.suite_dir, "suite-rollback-state-not-quarantined.json");
     host.stop_relay();
     eprintln!("   (q) OK — rolled back, reason recorded, not quarantined");
 }
@@ -1025,7 +1046,7 @@ fn scenario_w_rollback_to_an_unusable_last_good_runs_the_shipped_code() {
     let clock = clock_at(IN_WINDOW);
     let env = env_for(&host, &fx, &log, &clock);
     let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
-    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, true, "");
+    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, true, "", false);
     assert_eq!(st.code_dir, fx.payload, "rolled back into an empty folder");
     assert!(wait_for_served("v1", Duration::from_secs(10)), "the relay was left down");
     host.stop_relay();
@@ -1323,7 +1344,7 @@ fn a_restore_warning_and_its_backup_survive_until_dealt_with() {
     let _ = std::fs::remove_dir_all(&root);
     let (data, suite, log) = (root.join("data"), root.join("data").join("suite"), root.join("log"));
     std::fs::create_dir_all(&suite).unwrap();
-    let rec = |rf: &'static str| StateRec { sha: "", version: "", date: "", last_applied: "d", outcome: "x", reason: "", auto_off: false, address_before: "", restore_failed: rf };
+    let rec = |rf: &'static str| StateRec { sha: "", version: "", date: "", last_applied: "d", outcome: "x", reason: "", auto_off: false, address_before: "", restore_failed: rf, quarantined: false };
     // a Windows path with backslashes (audit 6f9b2ec0 M2: each carry-over used to double them)
     write_state(&suite, &rec(r"COPY AT C:\Users\x\db-backup\1"), &log);
     for _ in 0..3 {
@@ -1727,6 +1748,8 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     let q = std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default();
     assert_eq!(q.trim(), SHA3, "v3 must be quarantined");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":true"), "a quarantining rollback must record quarantined:true");
+    assert_state_matches_fixture(&fx.suite_dir, "suite-rollback-state-quarantined.json");
     assert_eq!(read_state_field(&fx.suite_dir, "installedVersion").as_deref(), Some("v2"), "installed identity must stay v2");
     assert!(!fx.staging.join("READY").exists(), "v3's staging must be discarded");
     host.stop_relay();

@@ -181,13 +181,29 @@ test('3: after the shell rolled an update back and switched auto-update off, the
     // … then the shell rolled back, REMOVED the marker, and recorded why (main.rs rollback_and_restart).
     mkdirSync(join(d, 'suite'), { recursive: true });
     writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedSha: '', installedVersion: '', installedDate: '', lastApplied: '2026-11-13',
-      lastOutcome: 'rolledback', lastReason: 'the update started but reported the wrong version', autoOff: true }));
+      lastOutcome: 'rolledback', lastReason: 'the update started but reported the wrong version', autoOff: true, quarantined: true }));
   });
   assert.equal((await gw.get('/settings')).settings.autoUpdate, false, 'the relay re-enabled auto-update the shell had switched off');
   const c = await startChrome(gw.base);
   const v = JSON.parse(await waitFor(c, STATUS, (x) => /rolled back/.test(JSON.parse(x).text)));
   assert.equal(v.on, false, 'the switch shows ON although the shell switched it off');
-  assert.match(v.text, /rolled back \(the update started but reported the wrong version\), so automatic updates were turned off/, v.text);
+  // [audit f4baad21] the whole sentence, on the real page, for a rollback onto the installer code that WAS quarantined
+  assert.match(v.text, /rolled back \(the update started but reported the wrong version\), so automatic updates were turned off and that release will be skipped\. Turn them on to try the next release\./, v.text);
+});
+
+test('3b: [audit f4baad21] a rollback the shell did NOT quarantine (or an older shell with no field) never says "skipped" on the real page',
+  { skip, timeout: 120000 }, async () => {
+  const root = packagedTree(); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const gw = await startGateway(root, (d) => {
+    writeFileSync(join(d, 'relay-settings.json'), JSON.stringify({ autoUpdate: true, autoUpdateAt: '03:00' }));
+    mkdirSync(join(d, 'suite'), { recursive: true });
+    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedSha: '', installedVersion: '', installedDate: '', lastApplied: '2026-11-13',
+      lastOutcome: 'rolledback', lastReason: 'the update did not answer in time', autoOff: true, quarantined: false }));
+  });
+  const c = await startChrome(gw.base);
+  const v = JSON.parse(await waitFor(c, STATUS, (x) => /rolled back/.test(JSON.parse(x).text)));
+  assert.match(v.text, /rolled back \(the update did not answer in time\), so automatic updates were turned off\. This release will be tried again if you turn updates back on\./, v.text);
+  assert.doesNotMatch(v.text, /skipped/i, v.text);
 });
 
 test('4: with an update staged, the panel says WHEN it installs (the window, or the next start) and what the last check found',

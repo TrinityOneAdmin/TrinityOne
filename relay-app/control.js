@@ -714,12 +714,16 @@
         (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
         // while an Attention line shows, do not invite turning updates back on (audit a1cc6eff L4)
         (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.'
-          : suite.lastOutcome === 'rolledback' && suite.running === 'update'
-            // Still on the PREVIOUS download until the app is closed; the failed release is quarantined for good.
-            ? ', so automatic updates were turned off and that release will be skipped. Fully close and reopen the app to go back to the version it came with. Turn updates on only if you want to try the next release.'
-            : suite.lastOutcome === 'rolledback'
-              ? ', so automatic updates were turned off and that release will be skipped. Turn them on to try the next release.'
-              : ', so automatic updates were turned off. Turn them on to try the next release.') : ''));
+          : suite.lastOutcome !== 'rolledback' ? ', so automatic updates were turned off. Turn them on to try the next release.'
+          // Only a rollback that really wrote quarantine-sha skips the release; an old shell sends no field = not quarantined.
+          // The rollback sentence ends with what turning updates back on does: on last-good it also brings that download back.
+          : suite.quarantined === true
+            ? (suite.running === 'update'
+              ? ', so automatic updates were turned off and that release will be skipped. Turn them on to try the next release; that also brings back the update running now, at the next start.'
+              : ', so automatic updates were turned off and that release will be skipped. Turn them on to try the next release.')
+            : (suite.running === 'update'
+              ? ', so automatic updates were turned off. This release will be tried again if you turn updates back on, and the update running now comes back at the next start.'
+              : ', so automatic updates were turned off. This release will be tried again if you turn updates back on.')) : ''));
     } else if (suite.lastOutcome === 'stuck') {
       out.push('The last update went wrong and could not be stopped' + (suite.lastReason ? ' (' + suite.lastReason + ')' : ''));
     } else if (suite.lastOutcome === 'not-applied') {
@@ -739,7 +743,7 @@
         out.push('Last check' + hm + ': ' + (SUITE_CHECK_REASON[suite.check.reason] || suite.check.reason));
       }
     } else if (suite.running === 'update') {
-      out.push('Off: at the next start the Suite goes back to the version it came with' + (suite.shippedVersion ? ' (' + suite.shippedVersion + ')' : ''));
+      out.push('Off: fully close and reopen the app and the Suite goes back to the version it came with' + (suite.shippedVersion ? ' (' + suite.shippedVersion + ')' : ''));
     }
     return out.join(' · ');
   }

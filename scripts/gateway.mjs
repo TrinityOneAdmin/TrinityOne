@@ -893,6 +893,8 @@ function suiteUpdateStatus() {
     running: runningUpdate ? 'update' : 'shipped', runningVersion: BUILD.short, shippedVersion,
     installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
     lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '', lastReason: st.lastReason || '', autoOff: st.autoOff === true,
+    // true only when the shell's rollback wrote quarantine-sha (the release is skipped from now on); an older shell writes no field
+    quarantined: st.quarantined === true,
     restoreFailed: typeof st.restoreFailed === 'string' ? st.restoreFailed : '',   // audit 5ad96e13: a rollback that could not put the data back
     recovered: (() => { try { return readFileSync(join(suiteDir, 'recovered.txt'), 'utf8').trim(); } catch { return ''; } })(),   // audit a1cc6eff L2: a restore a crash interrupted was repaired at start-up
     staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
