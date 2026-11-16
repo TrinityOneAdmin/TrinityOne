@@ -239,9 +239,6 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
      const publishedPins = async () => ({});`,
     fnBody(ENGINE, 'async function installModule(item){'),
     fnBody(ENGINE, 'async function restoreInstalled(){'),
-    // the file-IMPORT path: the change handler inside ensureInput is the shipped one, over a fake <input>
-    'let fileInput = null;',
-    fnBody(ENGINE, 'function ensureInput(){'),
     stmt(ENGINE, 'const DEFAULT_MODULE = {'),
     'let loadingFlag = false;',
     'const moduleLinkAllowed = async () => true;   // the allow-list has its own tests (install-bible-from-file-reaudit3, through the real boot path)\nconst _noteLinkRefused = () => {};',
@@ -272,17 +269,16 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
     fnBody(ENGINE, 'function searchDict(query, cap){'),
   ];
   const win = { Bible: {}, addEventListener() {}, removeEventListener() {} };
-  const fakeDoc = { createElement: () => { const el = { style: {}, listeners: {}, addEventListener(t, f) { el.listeners[t] = f; }, click() {} }; return el; }, body: { appendChild() {} } };
   const loc = { search };   // mutable, so a test can drive a second launch with a different query string
-  const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location', 'document',
+  const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location',
     parts.join('\n') +
     '\nreturn { worddefs, modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
     ' addCommentary, addSource, cacheGet, cachePut, cacheKeys, cacheDelete, getInstalled, recordInstalled,' +
     ' isInstalled, isLoaded, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule, setInstalled,' +
     ' noteLoadedFrom, activeUrl: () => (active && urlOf[urlKey("bibles", active)]) || null,' +
-    ' restoreInstalled, ensureInput, autoLoad, subscribe: _sub.subscribe,' +
+    ' restoreInstalled, autoLoad, subscribe: _sub.subscribe,' +
     ' order: () => order, active: () => active, setActive: (a) => { active = a; } };'
-  )(idb, fakeLocalStorage(), console, fixture, win, undefined, loc, fakeDoc);
+  )(idb, fakeLocalStorage(), console, fixture, win, undefined, loc);
   // The vacuity counter goes through the engine's OWN notify/subscribe, so it also proves the harness is
   // running engine.js's pub/sub rather than a stand-in.
   let notified = 0;
@@ -1421,32 +1417,50 @@ test('WORDDEF: after a relaunch restoreInstalled loads it into worddefs, not the
 // ── IMPORTED COMMENTARIES ARE MARKED, through the shipped paths (2026-11-16) ────────────────────────────────
 // getCommentary flags a block `imported` from urlOf, which only noteLoadedFrom writes. The share sheet warns
 // about an imported commentary's copyright on that flag, so BOTH ways a module becomes "imported" must set it:
-// the file-import handler and the relaunch restore. Each is driven here through the engine's own code, and
-// each noteLoadedFrom line was removed in turn to see the matching test go red.
+// the file-import handler and the relaunch restore. Each noteLoadedFrom line was removed in turn to see the
+// matching test go red.
+//
+// REWRITTEN 2026-11-16 (after the install-from-file merge). These two used to lift ensureInput into the slice above and
+// feed it 1000 zero bytes through a stubbed loadModuleBytes. The import handler is now installFromBytes, a long path (boot
+// wait, bounded zip reader, names, save-then-record) that the slice cannot lift, and 1000 zero bytes are rightly refused by
+// the reader. So they run the REAL engine.js (scripts/install-bible-harness.mjs, the same vm the install tests use) with a
+// REAL commentary zip: a MySword .cmt.mybible built with sql.js, zipped. The claim is unchanged and so are the assertions:
+// the imported block is flagged imported, live and after a relaunch.
+import { phone as realPhone, readyPhone as realReady, sqliteBytes as realSqlite, realFflate as realZip, sleep as realSleep } from './install-bible-harness.mjs';
 const IMPORTED_NAME = 'my-notes.cmt.mybible.zip';
-FIXTURE.set(IMPORTED_NAME, { kind: 'comment', bytes: new Uint8Array(1000), declares: 'MYN' });
-const blockOf = (e) => {
+async function importedCommentaryZip() {
+  const db = await realSqlite(`CREATE TABLE Details (Description TEXT, Abbreviation TEXT); INSERT INTO Details VALUES ('My Own Notes', 'MYN');
+    CREATE TABLE Commentary (Book INT, Chapter INT, FromVerse INT, ToVerse INT, Comments TEXT); INSERT INTO Commentary VALUES (1, 1, 1, 1, 'a note on Genesis 1:1');`);
+  return realZip.zipSync({ 'my-notes.cmt.mybible': db });
+}
+const blockOf = (e) => {   // the lifted slice's commentaries have no rows of their own: give each one, then ask the engine's own getCommentary
   for (const a of Object.keys(e.commentaries)) e.commentaries[a].getComment = () => [{ v: 1, html: 'x' }];
   return e.getCommentary(1, 1);
 };
+const importedBlocks = (p) => JSON.parse(JSON.stringify(p.Bible.getCommentary(1, 1))).filter(b => b.kind === 'module');
+const pickInto = async (p, name, bytes) => {
+  p.Bible.pickFile();
+  await p.fakeInput.listeners.change({ target: { files: [{ name, size: bytes.length, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) }], value: '' } });
+};
 
 test('a commentary IMPORTED from a file is marked imported', async () => {
-  const e = engine();
-  const input = e.ensureInput();
-  await input.listeners.change({ target: { files: [{ name: IMPORTED_NAME, arrayBuffer: async () => new Uint8Array(1000).buffer }], value: '' } });
-  assert.deepEqual(Object.keys(e.commentaries), ['MYN'], 'the import handler did not load the module');
-  const b = blockOf(e);
+  const p = await realReady();
+  await pickInto(p, IMPORTED_NAME, await importedCommentaryZip());
+  assert.equal(p.Bible.commentaryList().length, 1, 'the import handler did not load the module');
+  const b = importedBlocks(p);
   assert.equal(b.length, 1);
   assert.equal(b[0].imported, true);
+  assert.equal(b[0].rows.length, 1, 'the real commentary rows did not come through');
 });
 
 test('an imported commentary is STILL marked imported after a relaunch (restoreInstalled)', async () => {
-  const e = engine();
-  await e.cachePut('imported/' + IMPORTED_NAME, new Uint8Array(1000));
-  e.setInstalled({ ['imported/' + IMPORTED_NAME]: { url: 'imported/' + IMPORTED_NAME, id: 'MYN', abbr: 'MYN', name: 'MYN', kind: 'comment', category: 'commentaries' } });
-  await e.restoreInstalled();
-  assert.deepEqual(Object.keys(e.commentaries), ['MYN'], 'the relaunch did not reload the module');
-  assert.equal(blockOf(e)[0].imported, true);
+  const first = await realReady();
+  await pickInto(first, IMPORTED_NAME, await importedCommentaryZip());
+  assert.ok(Object.keys(first.installed()).some(k => k.startsWith('imported/')), 'fixture: nothing was stored under imported/');
+  const again = realPhone({ state: first.state }); await again.boot();
+  for (let i = 0; i < 80 && again.Bible.commentaryList().length < 1; i++) await realSleep(25);
+  assert.equal(again.Bible.commentaryList().length, 1, 'the relaunch did not reload the module');
+  assert.equal(importedBlocks(again)[0].imported, true);
 });
 
 test('a CATALOGUE commentary is not marked imported, installed or restored', async () => {
