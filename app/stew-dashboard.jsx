@@ -2378,7 +2378,11 @@ function StewDashboard({ initial = 'overview' }) {
   // and the first page in a browser. A remount rather than a prop on purpose: a revealed recovery phrase is
   // hidden again by it, which is the right side to fall on for "I pressed Settings".
   const [settingsEpoch, setSettingsEpoch] = React.useState(0);
-  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') setSettingsEpoch(n => n + 1); setTab(k); };
+  // `settingsRepick` tells the remounted DashSettings it was re-picked (so it opens at the top of the console),
+  // as opposed to arrived at from another section (which must not move the console). Owner, 2026-11-16.
+  const [settingsRepick, setSettingsRepick] = React.useState(false);
+  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') { setSettingsEpoch(n => n + 1); setSettingsRepick(true); } setTab(k); };
+  React.useEffect(() => { if (tab !== 'settings' && settingsRepick) setSettingsRepick(false); }, [tab]);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
@@ -2580,7 +2584,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && (stewCapState('care').allowed ? <DashMeals /> : <StewCapBlocked cap='care' />)}
-      {tab === 'settings' && <DashSettings key={settingsEpoch} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
+      {tab === 'settings' && <DashSettings key={settingsEpoch} repicked={settingsRepick} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
   // "New post" and "New team" both write content, so both need the `content` capability — and both sat in the
@@ -13905,7 +13909,7 @@ function settingsPageFor(wanted, visible, pages) {
   return (seen && seen.length) ? seen[0].k : (pages.length ? pages[0].k : null);
 }
 
-function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed }) {
+function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed, repicked }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
   const church = window.useStewardChurch();   // real church name + npub
@@ -13934,16 +13938,28 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const cur = pages.find(p => p.k === open) || null;
   // A NEW SETTINGS PAGE OPENS AT ITS TOP. The console scrolls in its <main>, which outlives every page here, so
   // picking another page after scrolling down one left the new page scrolled to wherever the old one was, with
-  // its top out of sight (owner, 2026-11-16, desktop). Reset ONLY when the open page changes after mount:
-  // arriving at Settings (or a deep link into it) must not move the console (owner decision). On a desktop
-  // the list sits in the same <main>, so it scrolls up too; the owner accepted that.
+  // its top out of sight (owner, 2026-11-16, desktop). Owner decisions, 2026-11-16:
+  //   - switching page, or opening a page from the list, goes to the top (on a desktop the list beside it
+  //     scrolls up too; accepted);
+  //   - re-picking Settings while in Settings (StewDashboard remounts this with `repicked`) goes to the top;
+  //   - arriving at Settings from another section, or by a deep link, does NOT move the console;
+  //   - on a phone, "All settings" goes back to the list WHERE THE STEWARD LEFT IT, not to its top.
   const shellRef = React.useRef(null);
   const pageMounted = React.useRef(false);
+  const listScroll = React.useRef(null);   // the phone list's scroll offset when a page was opened from it
+  const settingsScroller = () => { const el = shellRef.current; return el && el.closest ? el.closest('main') : null; };
+  const openPage = (k) => {
+    if (!open) { const sc = settingsScroller(); listScroll.current = sc ? sc.scrollTop : null; }
+    setPage(k);
+  };
   React.useEffect(() => {
-    if (!pageMounted.current) { pageMounted.current = true; return; }
-    const el = shellRef.current;
-    const sc = el && el.closest ? el.closest('main') : null;
-    if (sc) sc.scrollTop = 0;
+    const first = !pageMounted.current;
+    pageMounted.current = true;
+    if (first && !repicked) return;
+    const sc = settingsScroller();
+    if (!sc) return;
+    if (!first && open === null && listScroll.current != null) { sc.scrollTop = listScroll.current; listScroll.current = null; }
+    else sc.scrollTop = 0;
   }, [open]);
   // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
   // THE DEFAULT IS SHUT. Owner, 2026-09-22, from a screenshot of the Suite's window: "Can we have the settings
@@ -14150,7 +14166,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
                     {/* WHICH PAGE IS OPEN IS NOT SAID IN COLOUR ALONE — the same rule the tab strip's filled
                         dot existed for. aria-current says it to a screen reader, and the heavier weight says
                         it to anyone who cannot separate clay from ink. */}
-                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => setPage(p.k)} onKeyDown={e => onNavKey(e, i)}
+                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => openPage(p.k)} onKeyDown={e => onNavKey(e, i)}
                       aria-current={sel ? 'page' : undefined} className={'set-item' + (sel ? ' set-item--on' : '')}>
                       <span className="set-item-n">{p.n}</span>
                       <span className="set-item-d">{p.d}</span>

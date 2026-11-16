@@ -17,6 +17,8 @@
 // app/*.jsx (CLAUDE.md rule 3). Same instrument as scripts/console-phone-layout-batch-a.test.mjs.
 //
 // Desktop 900x600 is the owner's case; the phone (360x730, list then page) is measured as well.
+// Owner decisions added 2026-11-16 (second round): re-picking Settings while in Settings goes to the top;
+// on a phone, "All settings" returns to the list at the offset the steward left it.
 // Skips itself when chromium is unavailable, so CI without a browser stays green.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -178,18 +180,35 @@ test('desktop 900x600: picking another settings page after scrolling down opens 
   assert.ok(s0.main && s0.page, 're-anchor: Settings shows no <main> or no open page on a desktop: ' + JSON.stringify(s0));
   assert.equal(s0.back, false, 're-anchor: a desktop Settings is showing the phone\'s "All settings" control');
   assert.ok(s0.room > 100, 'precondition: with every group open, the console has only ' + s0.room + 'px to scroll — nothing here could be scrolled out of sight');
-  await scrollMainTo('bottom');
-  await sleep(300);
-  const pre = await state();
-  assert.ok(pre.scrollTop > 0, 'precondition: <main> did not scroll: ' + JSON.stringify(pre));
-  assert.ok(pre.pageTop < pre.mainTop, 'precondition: the open page\'s top is still in view after scrolling down: ' + JSON.stringify(pre));
-  const picked = await pressLastOtherRow();
-  assert.ok(picked, 're-anchor: no other settings row to press');
-  const after = await poll(v => v.page === picked && v.scrollTop === 0);
-  assert.equal(after.page, picked, 'pressing "' + picked + '" did not open it: ' + JSON.stringify(after));
-  assert.equal(after.scrollTop, 0, 'the new page "' + picked + '" opened with the console still scrolled ' + after.scrollTop + 'px down: ' + JSON.stringify(after));
-  assert.ok(after.pageTop >= after.mainTop, 'the top of "' + picked + '" is above the console\'s visible area: ' + JSON.stringify(after));
-  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+  // NOT VACUOUS (audit 2026-11-16). Scrolled to the bottom and switched to a shorter page, the browser clamps
+  // <main> to 0 with no reset at all — measured: the first version of this test did exactly that ("Help run a
+  // church", 444px of room, from 670px). So the console is scrolled a modest Y, and rows are tried from the
+  // bottom up until one opens a page that leaves at least Y of room: a page that, without the reset, WOULD
+  // have stayed scrolled.
+  const names = JSON.parse(await evalIn(`JSON.stringify([...document.querySelectorAll('nav[aria-label="Settings pages"] button.set-item')].map(b => (b.querySelector('.set-item-n') || b).textContent.trim()))`));
+  const tried = [];
+  for (const name of names.reverse()) {
+    const cur = await state();
+    if (cur.page === name) continue;
+    const y = await scrollMainTo(Math.min(300, cur.room));
+    await sleep(250);
+    const pre = await state();
+    assert.ok(pre.scrollTop > 0, 'precondition: <main> did not scroll: ' + JSON.stringify(pre));
+    assert.ok(pre.pageTop < pre.mainTop, 'precondition: the open page\'s top is still in view after scrolling down: ' + JSON.stringify(pre));
+    const r = await evalIn(`(() => { const b = [...document.querySelectorAll('nav[aria-label="Settings pages"] button.set-item')].find(x => (x.querySelector('.set-item-n') || x).textContent.trim() === ${JSON.stringify(name)}); if (!b) return 'miss'; b.click(); return 'ok'; })()`);
+    assert.equal(r, 'ok', 're-anchor: the row "' + name + '" went missing');
+    const opened = await poll(v => v.page === name, 3000);
+    assert.equal(opened.page, name, 'pressing "' + name + '" did not open it: ' + JSON.stringify(opened));
+    await sleep(500);
+    const after = await state();
+    tried.push(name + ' room=' + after.room + ' top=' + after.scrollTop);
+    if (after.room < y) continue;   // too short to tell: a clamp alone would put it at 0
+    assert.equal(after.scrollTop, 0, 'the new page "' + name + '" (room ' + after.room + 'px) opened with the console still scrolled ' + after.scrollTop + 'px down: ' + JSON.stringify(after));
+    assert.ok(after.pageTop >= after.mainTop, 'the top of "' + name + '" is above the console\'s visible area: ' + JSON.stringify(after));
+    assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+    return;
+  }
+  assert.fail('precondition: no settings page left enough room to keep the scroll, so nothing here proves a reset. Tried: ' + tried.join('; '));
 });
 
 test('desktop 900x600: arriving at Settings from another section does NOT move the console (owner decision)', SKIP, async () => {
@@ -206,6 +225,23 @@ test('desktop 900x600: arriving at Settings from another section does NOT move t
   await sleep(600);
   const later = await state();
   assert.equal(later.scrollTop, y, 'arriving at Settings moved the console from ' + y + 'px to ' + later.scrollTop + 'px — the owner asked for the reset only when switching between settings pages');
+});
+
+test('desktop 900x600: re-picking Settings while in Settings puts the console back at its top (owner decision)', SKIP, async () => {
+  // The avatar re-picks Settings; StewDashboard remounts DashSettings (settingsEpoch) on its first page. That
+  // remount is a re-pick, not an arrival, and the owner wants it at the top.
+  const s0 = await state();
+  assert.ok(s0.page, 're-anchor: not on a settings page before the re-pick: ' + JSON.stringify(s0));
+  await scrollMainTo('bottom');
+  await sleep(300);
+  const pre = await state();
+  assert.ok(pre.scrollTop > 0, 'precondition: <main> did not scroll: ' + JSON.stringify(pre));
+  await goSettings();
+  const after = await poll(v => !!v.page && v.scrollTop === 0, 4000);
+  assert.ok(after.page, 're-picking Settings opened no page: ' + JSON.stringify(after));
+  assert.ok(after.room >= pre.scrollTop, 'precondition: after the re-pick the console has ' + after.room + 'px of room, less than the ' + pre.scrollTop + 'px it was at, so a clamp alone would put it at 0');
+  assert.equal(after.scrollTop, 0, 're-picking Settings left the console scrolled ' + after.scrollTop + 'px down: ' + JSON.stringify(after));
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
 test('phone 360x730: a page tapped from a scrolled settings list opens at its top', SKIP, async () => {
@@ -243,4 +279,25 @@ test('phone 360x730: a page tapped from a scrolled settings list opens at its to
     return;
   }
   assert.fail('precondition: no settings page on a phone was tall enough to keep a ' + 200 + 'px scroll, so nothing here proves a reset. Tried: ' + tried.join('; '));
+});
+
+test('phone 360x730: "All settings" goes back to the list where the steward left it, not to its top (owner decision)', SKIP, async () => {
+  await goSettings();                     // a re-pick on a phone shows the list
+  if (await evalIn(`!!document.querySelector('button.set-back')`)) { await evalIn(`document.querySelector('button.set-back').click()`); await sleep(600); }
+  const s0 = await state();
+  assert.equal(s0.page, null, 're-anchor: a phone Settings is not showing the list: ' + JSON.stringify(s0));
+  const y = await scrollMainTo(Math.min(250, s0.room));
+  await sleep(300);
+  assert.ok(y > 50, 'precondition: the phone settings list scrolled only ' + y + 'px, too little to tell a restore from a reset');
+  const name = await evalIn(`(() => { const b = document.querySelector('nav[aria-label="Settings pages"] button.set-item'); if (!b) return null; const n = (b.querySelector('.set-item-n') || b).textContent.trim(); b.click(); return n; })()`);
+  assert.ok(name, 're-anchor: no settings row to tap');
+  const opened = await poll(v => v.page === name, 3000);
+  assert.equal(opened.page, name, 'tapping "' + name + '" did not open it: ' + JSON.stringify(opened));
+  await sleep(400);
+  const back = await evalIn(`(() => { const b = document.querySelector('button.set-back'); if (!b) return 'miss'; b.click(); return 'ok'; })()`);
+  assert.equal(back, 'ok', 're-anchor: no "All settings" control on a phone settings page');
+  const list = await poll(v => v.page === null && Math.abs(v.scrollTop - y) <= 2, 3000);
+  assert.equal(list.page, null, '"All settings" did not return to the list: ' + JSON.stringify(list));
+  assert.ok(Math.abs(list.scrollTop - y) <= 2, '"All settings" put the list at ' + list.scrollTop + 'px instead of where the steward left it (' + y + 'px): ' + JSON.stringify(list));
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
