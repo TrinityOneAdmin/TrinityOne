@@ -191,14 +191,14 @@ test('3: after the shell rolled an update back and switched auto-update off, the
   assert.match(v.text, /rolled back \(the update started but reported the wrong version\), so automatic updates were turned off and that release will be skipped\. Turn them on to try the next release\./, v.text);
 });
 
-test('3b: [audit f4baad21] a rollback the shell did NOT quarantine (or an older shell with no field) never says "skipped" on the real page',
+test('3b: [audit f4baad21] a rollback from an OLDER shell (state.json has no quarantined field) never says "skipped" on the real page',
   { skip, timeout: 120000 }, async () => {
   const root = packagedTree(); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const gw = await startGateway(root, (d) => {
     writeFileSync(join(d, 'relay-settings.json'), JSON.stringify({ autoUpdate: true, autoUpdateAt: '03:00' }));
     mkdirSync(join(d, 'suite'), { recursive: true });
     writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedSha: '', installedVersion: '', installedDate: '', lastApplied: '2026-11-13',
-      lastOutcome: 'rolledback', lastReason: 'the update did not answer in time', autoOff: true, quarantined: false }));
+      lastOutcome: 'rolledback', lastReason: 'the update did not answer in time', autoOff: true }));
   });
   const c = await startChrome(gw.base);
   const v = JSON.parse(await waitFor(c, STATUS, (x) => /rolled back/.test(JSON.parse(x).text)));

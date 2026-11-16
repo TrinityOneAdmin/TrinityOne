@@ -2056,8 +2056,10 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
                 "suite: APPLY health check FAILED (boot={boot:?} reachable={reachable} version_match={version_match} ok={ok}) — rolling back{}",
                 if quarantine { " and quarantining sha" } else { " (not quarantined: it may only have been slow)" }
             ));
-            if quarantine {
-                let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
+            // [audit 93619117 L2] state.json says "quarantined" only if the skip list was really written
+            let banned = quarantine && write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log).is_ok();
+            if quarantine && !banned {
+                applog(log, "suite: could not write quarantine-sha; the release is NOT skipped and the panel will not say it is");
             }
             // Stop the freshly-started (bad) relay — closing its tunnel cleanly first (audit 00aadeed N4) — then roll
             // back, restore the data, restart on known-good code.
@@ -2075,7 +2077,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             } else {
                 "the update started but reported a problem"
             };
-            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), stopped, &address_before, quarantine);
+            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), stopped, &address_before, banned);
             finish_snapshot(suite_dir, r_sha);
             applog(log, "suite: rollback complete");
         }
@@ -2300,9 +2302,8 @@ fn reject_fresh_update(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, 
     let day = json_str_value(&now_raw, "lastApplied").unwrap_or_default();
     let address_before = json_str_value(&now_raw, "addressBefore").unwrap_or_default();
     applog(env.log, &format!("suite: FAILED UPDATE {} — {why}; rolling back and quarantining it", short_sha(&sha)));
-    if !sha.is_empty() {
-        let _ = write_file_atomic(&env.suite_dir.join("quarantine-sha"), &format!("{sha}\n"), env.log);
-    }
+    // [audit 93619117 L2] recorded as quarantined only if the skip list was really written
+    let banned = !sha.is_empty() && write_file_atomic(&env.suite_dir.join("quarantine-sha"), &format!("{sha}\n"), env.log).is_ok();
     let _ = prepare_restart(env.data_dir, env.log);
     env.host.stop_relay();
     let stopped = wait_stopped(&st.alive, Duration::from_secs(20));
@@ -2311,7 +2312,7 @@ fn reject_fresh_update(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, 
         .ok()
         .and_then(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().parse::<i64>().ok()).max())
         .map(|n| env.suite_dir.join("db-backup").join(n.to_string()));
-    rollback_and_restart(env, st, prev_state_raw, &day, why, backup.as_deref(), stopped, &address_before, true);
+    rollback_and_restart(env, st, prev_state_raw, &day, why, backup.as_deref(), stopped, &address_before, banned);
 }
 
 // The auto-update's three capabilities, on the launcher's own process.

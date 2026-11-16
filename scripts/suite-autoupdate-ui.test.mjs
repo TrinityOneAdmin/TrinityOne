@@ -183,7 +183,7 @@ test('[audit f4baad21] rollback onto the downloaded last-good: both wordings, an
   assert.match(els.suiteAutoStatus.textContent, /that release will be skipped\. Turn them on to try the next release; that also brings back the update running now, at the next start\./);
   ({ doc, els } = fakeDom());
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'update', runningVersion: 'bbbbbbb', quarantined: false });
-  assert.match(els.suiteAutoStatus.textContent, /This release will be tried again if you turn updates back on, and the update running now comes back at the next start\./);
+  assert.match(els.suiteAutoStatus.textContent, /If you turn updates back on, this release will be tried again and the update running now comes back at the next start\./);
   ({ doc, els } = fakeDom());
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'update', runningVersion: 'bbbbbbb' });   // an older shell: no field
   assert.doesNotMatch(els.suiteAutoStatus.textContent, /skipped/i);

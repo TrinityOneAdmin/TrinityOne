@@ -92,7 +92,7 @@ test('QUARANTINED rollback (scenario h) -> /update -> panel says the release wil
 test('NOT quarantined rollback (scenario q: a silent start) -> /update -> panel does NOT say skipped, says it will be tried again', async () => {
   const { suite, text } = await render(NOT_QUARANTINED);
   assert.equal(suite.quarantined, false);
-  assert.match(text, /The last update was rolled back \(the update did not answer in time\), so automatic updates were turned off\. This release will be tried again if you turn updates back on, and the update running now comes back at the next start\./);
+  assert.match(text, /The last update was rolled back \(the update did not answer in time\), so automatic updates were turned off\. If you turn updates back on, this release will be tried again and the update running now comes back at the next start\./);
   assert.doesNotMatch(text, /skipped/i);
   assert.match(text, OFF_LINE);
 });
@@ -102,5 +102,5 @@ test('an OLD state.json with no quarantined field never claims "skipped"', async
   const { suite, text } = await render(old);
   assert.equal(suite.quarantined, false);
   assert.doesNotMatch(text, /skipped/i);
-  assert.match(text, /This release will be tried again if you turn updates back on/);
+  assert.match(text, /If you turn updates back on, this release will be tried again/);
 });
