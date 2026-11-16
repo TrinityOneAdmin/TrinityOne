@@ -947,7 +947,9 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
   if (m.kind === 'verse') {
     return (
       <Row me={me} m={m} ctx={ctx} mod={mod}>
-        <div onClick={() => ctx.openShare(m.verse)} style={{
+        {/* ONLY the verse itself goes to "Share as image": m.verse is a RECEIVED event's payload, and its `comment` is the
+            SENDER's thoughts, which are not this member's to send out of the app. */}
+        <div onClick={() => ctx.openShare({ ref: m.verse.ref, text: m.verse.text, version: m.verse.version })} style={{
           maxWidth: 270, borderRadius: 18, padding: 0, overflow: 'hidden', cursor: 'pointer',
           background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)',
         }}>
@@ -2413,7 +2415,9 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       <textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Add thoughts… (optional)" rows={2} style={{ width: '100%', boxSizing: 'border-box', resize: 'none', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', lineHeight: 1.4, marginBottom: 18 }} />
 
       {type === 'verse' ? (
-        <button onClick={() => { onClose(); ctx.openShare(payload); }} style={{
+        // the thoughts typed above go onto the card and into the text shared with it (ShareCard, share-app.jsx). The
+        // field is `shareThoughts`, set here always ('' for none), so nothing else in a payload can stand in for it.
+        <button onClick={() => { const c = comment.trim(); onClose(); ctx.openShare({ ...payload, shareThoughts: c }); }} style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
           border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
           <Icon name="share" size={20} color="var(--clay)" />
