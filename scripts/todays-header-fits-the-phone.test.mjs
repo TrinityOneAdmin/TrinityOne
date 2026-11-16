@@ -131,6 +131,7 @@ function serialize(node) {
     const attrs = [`data-tid="${tid}"`];
     let inner = null;
     for (const [k, v] of Object.entries(n.props || {})) {
+      if (k === 'onClick' && typeof v === 'function') { attrs.push('data-hc="1"'); continue; }
       if (k.startsWith('aria-') && typeof v === 'boolean') { attrs.push(`${k}="${v}"`); continue; }
       if (k === 'children' || k === 'key' || k === 'ref' || v == null || v === false || typeof v === 'function') continue;
       if (k === 'style') { const s = css(v); if (s) attrs.push(`style="${esc(s)}"`); continue; }
@@ -211,14 +212,14 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
   const { useBackLayer } = loadScreen('app/ui.jsx', ['useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener(type, fn) { uiDocL.push({ type, fn }); }, removeEventListener() {} } });
   globals.useBackLayer = useBackLayer;
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
-  const calls = { openListen: 0, toggleDark: 0, openSearch: 0 };
+  const calls = { openListen: 0, toggleDark: 0, openSearch: 0, openServing: 0 };
   const ctx = {
     // `audioFeed` is what puts the LISTEN button in the header — the fourth control, and the state any future
     // addition to this row collides with first.
     church: { name: churchName, initials: 'SB', npub: 'np1', audioFeed: audioFeed ? 'https://example.invalid/feed.xml' : null },
     openChurchSwitcher() {}, openSearch() { calls.openSearch++; }, openNotifications() {}, dark,
     toggleDark() { calls.toggleDark++; }, openListen() { calls.openListen++; },
-    toast() {}, netUnread: 0, openServing() {},
+    toast() {}, netUnread: 0, openServing() { calls.openServing++; },
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
   };
   const M = { ctx, calls, docL, winL, focused, focusCalls, scroll, tree: null,
@@ -316,6 +317,7 @@ before(async () => {
   // The app's own font files are served alongside the page: Sora is what sets these widths.
   srv = createServer((req, res) => {
     const p = decodeURIComponent(req.url.split('?')[0]);
+    if (p === '/live.html') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(LIVE_HTML); }
     const m = /^\/page(\d+)\.html$/.exec(p);
     if (m) { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(PAGES[+m[1]].html); }
     const f = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ''));
@@ -871,4 +873,125 @@ test('PREMISE, in real chromium: focus() scrolls a page back to the focused elem
   assert.equal(m.a, 1000, 'the page scrolled to 1000');
   assert.equal(m.keep, 1000, 'focus({ preventScroll: true }) must leave the page where it is');
   assert.equal(m.jumped, 0, 'a bare focus() scrolls the page to the focused element: the bug this guards against');
+});
+
+test('A. scrolling the screen closes the menu, moves NO focus and leaves the scroll alone; a scroll that does not contain the chevron does not', () => {
+  const M = mountToday({ audioFeed: true });
+  open(M);
+  const sc = M.last(M.docL, 'scroll');
+  assert.ok(sc && sc.cap, 'a CAPTURE scroll listener is registered while open (scroll does not bubble)');
+  M.scroll.y = 700; M.focusCalls.length = 0;
+  sc.fn({ target: { contains: () => false } }); M.redraw();
+  assert.ok(M.panel(), 'an inner list scrolling somewhere else must not shut the menu');
+  sc.fn({ target: { contains: () => true } }); M.redraw();
+  assert.equal(M.panel(), null, 'scrolling the screen that holds the chevron closes the menu');
+  assert.equal(M.focusCalls.length, 0, 'closing on scroll must not move focus (a focus() would scroll the page back)');
+  assert.equal(M.scroll.y, 700);
+  assert.equal(M.calls.openListen + M.calls.openSearch + M.calls.toggleDark, 0, 'closing on scroll must not pick anything');
+});
+
+// ── THE REAL SCREEN IN REAL CHROMIUM, with real mouse events ───────────────────────────────────────────────────────
+// serialize() writes static HTML, so the page above cannot click anything. This BRIDGE keeps the real TodayScreen in the
+// miniature React and connects it to a real page: every real pointerdown / click / scroll in Chromium is sent through a CDP
+// binding to the screen's OWN handlers (the captured document listeners and the elements' onClick), the screen is redrawn,
+// and the page's HTML is replaced (scroll position kept) before the next mouse event is sent, exactly as a real browser
+// reflows between a press and its release. The screen's scroll area is the real ScreenScroll, given 3000px of extra content.
+// THE BUG THIS GUARDS: the open menu is a ~60px row IN the page. Scroll with it open, press a card: the press closed the menu,
+// the content shifted up ~60px between press and release, and the click missed its card.
+let LIVE_HTML = '';
+const LIVE = { M: null, nodes: null, busy: 0 };
+async function livePage() {
+  const M = mountToday({ audioFeed: true, width: 360 });
+  LIVE.M = M; LIVE.busy = 0;
+  const draw = () => { const { html, nodes } = serialize(M.tree); LIVE.nodes = nodes; return html.replace(/<\/div>$/, '<div style="height:3000px"></div></div>'); };
+  LIVE.draw = draw;
+  LIVE_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="/vendor/fonts/fonts.css">
+<style>${pageCss()}
+html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;overflow:hidden} *{animation:none!important}</style>
+<div id="app" class="trinity">${draw()}</div>
+<script>
+  // React-like patching: ONLY the header block (the row and the open menu) is rewritten, so the cards under it stay the SAME
+  // DOM nodes; a press on a card must not lose its element just because the menu above it closed. data-tid is renumbered after.
+  window.__apply = (html) => {
+    const scroller = document.getElementById('app').firstElementChild, box = document.createElement('div'); box.innerHTML = html;
+    const next = box.firstElementChild, wrapOf = sc => sc.querySelector('[data-hdr-more="chevron"]').parentElement.parentElement.parentElement;
+    const oldW = wrapOf(scroller), newW = wrapOf(next);
+    if (oldW.innerHTML !== newW.innerHTML) oldW.innerHTML = newW.innerHTML;
+    const a = [...scroller.querySelectorAll('[data-tid]')], b = [...next.querySelectorAll('[data-tid]')];
+    if (a.length !== b.length) throw new Error('structure changed outside the header: ' + a.length + ' vs ' + b.length);
+    a.forEach((el, i) => el.setAttribute('data-tid', b[i].getAttribute('data-tid')));
+  };
+  const tidOf = e => { const el = e.target && e.target.closest ? e.target.closest('[data-hc]') : null; return el ? +el.getAttribute('data-tid') : -1; };
+  const anyTid = e => { const el = e.target && e.target.closest ? e.target.closest('[data-tid]') : null; return el ? +el.getAttribute('data-tid') : -1; };
+  document.addEventListener('pointerdown', e => window.__bridge(JSON.stringify({ t: 'pointerdown', tid: anyTid(e) })), true);
+  document.addEventListener('click', e => { const tid = tidOf(e); if (tid >= 0) window.__bridge(JSON.stringify({ t: 'click', tid })); }, true);
+  document.addEventListener('scroll', e => { window.__bridge(JSON.stringify({ t: 'scroll' })); }, true);
+</script>`;
+  return M;
+}
+async function liveRender() {
+  const html = LIVE.draw();
+  const r = await send('Runtime.evaluate', { expression: `(() => { try { window.__apply(${JSON.stringify(html)}); return 'ok'; } catch (e) { return String(e); } })()`, returnByValue: true });
+  assert.equal(r.result.result.value, 'ok', 'the bridge could not patch the page: ' + r.result.result.value);
+}
+async function onBridge(payload) {
+  const m = LIVE.M, ev = JSON.parse(payload);
+  LIVE.busy++;
+  try {
+    const node = ev.tid >= 0 ? LIVE.nodes[ev.tid] : null;
+    if (ev.t === 'pointerdown') {
+      const e = { target: { closest: node ? closestIn(m.tree, node) : () => null }, preventDefault() {}, stopPropagation() {} };
+      m.docL.filter(l => l.type === 'pointerdown').forEach(l => l.fn(e));
+    } else if (ev.t === 'click') {
+      if (node && typeof node.props.onClick === 'function') node.props.onClick({ stopPropagation() {}, preventDefault() {} });
+    } else if (ev.t === 'scroll') {
+      m.docL.filter(l => l.type === 'scroll').forEach(l => l.fn({ target: { contains: () => true } }));
+    }
+    m.redraw();
+    await liveRender();
+  } finally { LIVE.busy--; }
+}
+let bridgeWired = false;
+async function liveOpen() {
+  if (!bridgeWired) { bridgeWired = true; ws.on('message', d => { const m = JSON.parse(d); if (m.method === 'Runtime.bindingCalled' && m.params.name === '__bridge') onBridge(m.params.payload); }); }
+  await send('Runtime.addBinding', { name: '__bridge' });
+  await livePage();
+  await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 700, deviceScaleFactor: 1, mobile: false });
+  await send('Page.navigate', { url: `http://127.0.0.1:${srv.address().port}/live.html` });
+  await sleep(600);
+  await send('Runtime.evaluate', { expression: 'document.fonts.ready.then(() => 1)', awaitPromise: true });
+}
+const settle = async () => { await sleep(250); while (LIVE.busy) await sleep(40); await sleep(150); };
+const ev = async (expr) => JSON.parse((await send('Runtime.evaluate', { expression: `JSON.stringify((${expr})())`, returnByValue: true })).result.result.value);
+const mouse = async (type, x, y, extra = {}) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1, ...extra });
+async function realClick(x, y) { await mouse('mouseMoved', x, y, { button: 'none', clickCount: 0 }); await mouse('mousePressed', x, y); await settle(); await mouse('mouseReleased', x, y); await settle(); }
+const centreOf = async sel => ev(`() => { const e = document.querySelector(${JSON.stringify(sel)}); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }`);
+const menuOpen = () => ev(`() => !!document.querySelector('[data-hdr-more="panel"]')`);
+
+test('REAL CHROMIUM, real mouse: scrolling the screen with the menu open closes the menu', { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+  await liveOpen();
+  const c = await centreOf('[data-hdr-more="chevron"]');
+  await realClick(c.x, c.y);
+  assert.equal(await menuOpen(), true, 'a real click on the chevron opens the menu');
+  await mouse('mouseWheel', 180, 500, { deltaX: 0, deltaY: 30, button: 'none', clickCount: 0 });
+  await settle();
+  const st = await ev(`() => document.getElementById('app').firstElementChild.scrollTop`);
+  assert.ok(st > 0, 'the wheel scrolled the screen');
+  assert.equal(await menuOpen(), false, 'the open menu must close when its screen scrolls');
+});
+
+test('REAL CHROMIUM, real mouse: after scrolling with the menu open, a click on the LOWER part of a card reaches that card', { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+  await liveOpen();
+  const c = await centreOf('[data-hdr-more="chevron"]');
+  await realClick(c.x, c.y);
+  assert.equal(await menuOpen(), true);
+  await mouse('mouseWheel', 180, 500, { deltaX: 0, deltaY: 30, button: 'none', clickCount: 0 });
+  await settle();
+  // the Serving card is the first clickable block under the header; click near ITS BOTTOM edge
+  const card = await ev(`() => { const el = [...document.querySelectorAll('div[data-hc]')].find(e => { const r = e.getBoundingClientRect(); return r.bottom > 0 && r.bottom < 650; }); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.bottom - 8, h: r.height }; }`);
+  assert.ok(card, 'no clickable card is on screen under the header');
+  const before = LIVE.M.calls.openServing;
+  await realClick(card.x, card.y);
+  assert.equal(LIVE.M.calls.openServing, before + 1, 'the click on the lower part of the card was lost: the layout shifted between press and release');
 });

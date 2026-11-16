@@ -549,3 +549,20 @@ for (const [i, c] of CASES.entries()) {
     assert.ok(Math.abs(m.h - Math.min(150, Math.round(c.width / 3))) <= 1, `the preview is ${m.h}px tall at ${c.width}px wide, want ${Math.min(150, Math.round(c.width / 3))} (3:1, capped at 150)`);
   });
 }
+
+test('A. scrolling the screen closes the menu, moves NO focus and leaves the scroll alone; a scroll that does not contain the chevron does not', () => {
+  for (const banner of [false, true]) {
+    const M = mountChat({ width: 360, banner });
+    openMenu(M);
+    const sc = M.last('scroll');
+    assert.ok(sc && sc.cap, 'a CAPTURE scroll listener is registered while open (scroll does not bubble)');
+    M.scroll.y = 700; M.focusCalls.length = 0;
+    sc.fn({ target: { contains: () => false } }); M.redraw();
+    assert.ok(M.panel(), 'an inner list scrolling somewhere else must not shut the menu');
+    sc.fn({ target: { contains: () => true } }); M.redraw();
+    assert.equal(M.panel(), null, `scrolling the screen closes the menu (banner=${banner})`);
+    assert.equal(M.focusCalls.length, 0, 'closing on scroll must not move focus');
+    assert.equal(M.scroll.y, 700);
+    assert.equal(M.calls.openProfile + M.calls.openDMInbox, 0);
+  }
+});

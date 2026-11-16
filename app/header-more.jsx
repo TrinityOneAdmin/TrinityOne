@@ -34,12 +34,26 @@ function useHeaderMore() {
   // A TAP OFF closes the menu and moves NOTHING: the press is aimed at something else (a card), and a focus() call made
   // during the pointerdown scrolled a scrolled page back to the top, so the click that followed missed its card.
   const tapOff = () => { if (!openRef.current) return; setOpen(false); };
+  // SCROLLING THE SCREEN CLOSES THE MENU (like a phone's own pop-over). On Today the open menu is a row IN the page, about
+  // 60px tall; if it were still open when a press landed, the press would close it and the content would shift up 60px
+  // between press and release, so the click would miss the card under the finger. Closed on scroll, it is already gone
+  // before any click lands. Same path as a tap off: closes, moves no focus. A scroll event does not bubble, so it is caught
+  // in the capture phase on the document; only a scroll of something that CONTAINS the chevron (the screen's own scroll
+  // container, or the page) counts, so an inner list scrolling elsewhere does not shut the menu.
+  const onScroll = (e) => {
+    try {
+      const t = e && e.target, chev = document.querySelector('[data-hdr-more="chevron"]');
+      if (t && chev && t !== document && typeof t.contains === 'function' && !t.contains(chev)) return;
+    } catch (err) {}
+    tapOff();
+  };
   React.useEffect(() => {
     if (!open) return undefined;
     const off = TrinityReplyKit.tapOffHandler('[data-hdr-more]', tapOff);
     document.addEventListener('pointerdown', off, true);
+    document.addEventListener('scroll', onScroll, true);
     focusSel('[data-hdr-item]');   // first item in DOM order
-    return () => document.removeEventListener('pointerdown', off, true);
+    return () => { document.removeEventListener('pointerdown', off, true); document.removeEventListener('scroll', onScroll, true); };
   }, [open]);
   // HARDWARE BACK *AND* ESCAPE both close the menu through the app's one back stack, so each runs `dismiss` ONCE.
   // The mechanism is useBackLayer (app/ui.jsx): an open layer registers its close handler on window.__trinityBackStack;
