@@ -16,10 +16,11 @@ import { loadScreen, miniReact } from './render-jsx-screen.mjs';
 
 const { React } = miniReact();
 const noop = () => {};
-const { shareCardLayout } = loadScreen('app/share-app.jsx', ['shareCardLayout'], {
+const GLOBALS = {
   React, window: {}, btoa, File, Blob, fetch: noop, console, navigator: {}, document: {}, URL, setTimeout,
   Icon: noop, IconBtn: noop, Overlay: noop, BottomSheet: noop,
-});
+};
+const { shareCardLayout, shareCardClip } = loadScreen('app/share-app.jsx', ['shareCardLayout', 'shareCardClip'], GLOBALS);
 const measure = (t, font) => String(t).length * Number(/(\d+)px/.exec(font)[1]) * 0.5;
 const words = (n) => { const w = 'and the Lord said blessed are those who walk in the light of grace'.split(' '); let o = ''; for (let i = 0; o.length < n; i++) o += (o ? ' ' : '') + w[i % w.length]; return o.slice(0, n).trim(); };
 const q = (t) => '“' + t + '”';
@@ -108,4 +109,20 @@ test('right-to-left text is flagged per block (verse and thoughts), by its first
   assert.equal(a.rtl, true); assert.equal(a.cRtl, false);
   const b = shareCardLayout(measure, q('In the beginning'), heb);
   assert.equal(b.rtl, false); assert.equal(b.cRtl, true);
+});
+
+// ── re-audit of 6f0e2871 ──
+test('a cut that lands just after a blank line ends on the text, not on a lone "…"', () => {
+  const m = (t) => measure(t, '500 36px x');
+  assert.deepEqual(shareCardClip(m, ['First thought.', '', 'Second thought.', 'Third.'], 2, 872), ['First thought.\u2026']);
+  // and the ordinary case is unchanged
+  assert.deepEqual(shareCardClip(m, ['one', 'two', 'three'], 2, 872), ['one', 'two\u2026']);
+});
+
+test('with no Intl.Segmenter (older WebView) a long word still wraps, by code point, without throwing', () => {
+  const { shareCardLayout: noSeg } = loadScreen('app/share-app.jsx', ['shareCardLayout'], { ...GLOBALS, Intl: {} });
+  const word = 'abcdefghij'.repeat(300);
+  const L = noSeg(measure, q('Rejoice.'), word);
+  assert.ok(L.cLines.length > 1, 'the long word was not wrapped');
+  assert.ok(L.cLines.join('').replace(/\u2026$/, '').length > 0 && word.startsWith(L.cLines.join('').replace(/\u2026$/, '')), 'the wrapped word is not the word');
 });

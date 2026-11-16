@@ -330,6 +330,8 @@ function shareCardWrapLine(measure, text, max) {
 function shareCardClip(measure, lines, n, max) {
   if (lines.length <= n) return lines;
   const out = lines.slice(0, Math.max(1, n));
+  // a cut that lands just after a blank line (a paragraph break) must not leave a lone "…" under it
+  while (out.length > 1 && !out[out.length - 1]) out.pop();
   let last = out[out.length - 1];
   while (last && measure(last + '…') > max) last = last.slice(0, -1);
   out[out.length - 1] = last.replace(/\s+$/, '') + '…';
@@ -510,6 +512,7 @@ const CARD_STYLES = [
   { id: 'night', bg: 'linear-gradient(155deg, #2a2218, #16120c)', fg: '#F3ECDC', serif: true,
     cv: { from: ['#2a2218', '#2a2218'], to: ['#16120c', '#16120c'], fg: ['#F3ECDC', '#F3ECDC'], mark: ['var(--clay)', '#C25A38'], ref: ['#F3ECDC', '#F3ECDC'] } },
 ];
+const shareCardNextGen = (g) => (g < 2 ? g + 1 : g);   // the font redraw counter: at most 2 per opening
 function ShareCard({ verse, open, onClose, ctx }) {
   const [style, setStyle] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
@@ -522,19 +525,23 @@ function ShareCard({ verse, open, onClose, ctx }) {
   const pngRef = React.useRef(null);
   pngRef.current = png;
   // A PICTURE DRAWN BEFORE THE FONTS ARRIVED (the 2.5s wait ran out — a slow first start) IS DRAWN AGAIN WHEN THEY
-  // DO, so what is shared is not in the fallback serif. At most twice per opening, so a font that keeps failing
-  // cannot loop.
+  // DO, so what is shared is not in the fallback serif. At most twice per opening (fontGen goes back to 0 each time
+  // the card opens), so a font that keeps failing cannot loop. Two ways in: the fonts' 'loadingdone' event, and a
+  // re-check right after a picture is saved — the fonts can finish between the drawing's own check and the save,
+  // and then the only event fires while there is no picture yet to redraw.
   React.useEffect(() => {
     const f = typeof document !== 'undefined' && document.fonts;
     if (!open || !f || !f.addEventListener) return;
-    const again = () => { const p = pngRef.current; if (p && p.fontsOk === false && shareCardFontsIn()) setFontGen(g => (g < 2 ? g + 1 : g)); };
+    const again = () => { const p = pngRef.current; if (p && p.fontsOk === false && shareCardFontsIn()) setFontGen(shareCardNextGen); };
     f.addEventListener('loadingdone', again);
     return () => { try { f.removeEventListener('loadingdone', again); } catch (e) {} };
   }, [open]);
   React.useEffect(() => { if (open) setStyle(0); }, [open]);
-  // the preview's blob URL is let go when the card closes, and when ShareCard itself goes away
+  // the preview's blob URL is let go when the card closes, and when ShareCard itself goes away; closing also resets
+  // the font-redraw counter, so the next opening gets its own two
   React.useEffect(() => {
     if (open) return;
+    setFontGen(0);
     const p = pngRef.current;
     if (p) { try { p.url && URL.revokeObjectURL(p.url); } catch (e) {} setPng(null); }
   }, [open]);
@@ -550,6 +557,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
         let url = null;
         try { url = URL.createObjectURL(new Blob([r.bytes], { type: 'image/png' })); } catch (e) {}
         setPng((prev) => { try { prev && prev.url && URL.revokeObjectURL(prev.url); } catch (e) {} return { key: pngKey, bytes: r.bytes, url, truncated: r.layout.truncated, fontsOk: r.fontsOk }; });
+        if (r.fontsOk === false && shareCardFontsIn()) setFontGen(shareCardNextGen);
       }, (e) => { try { console.warn('shareCardRender: ' + ((e && e.message) || e)); } catch (e2) {} if (live) setPng({ key: pngKey, failed: true }); });
     return () => { live = false; };
   }, [pngKey]);

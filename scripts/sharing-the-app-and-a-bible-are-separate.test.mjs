@@ -842,6 +842,10 @@ test('C18 (NIT) — Hebrew is set from the right edge of the card; English from 
     assert.ok(line, 're-anchor: the verse was not drawn');
     assert.equal(line.align, align, `${align} text drawn aligned ${line.align}`);
     assert.equal(line.x, x, `${align} text drawn at x=${line.x}`);
+    const ref = (v.drawn.pos || []).find(d => d.t.startsWith('Genesis 1:1'));
+    assert.ok(ref, 're-anchor: the reference was not drawn');
+    assert.equal(ref.align, align, `the reference under ${align} text is aligned ${ref.align}`);
+    assert.equal(ref.x, x, `the reference under ${align} text is at x=${ref.x}`);
   }
 });
 
@@ -855,4 +859,61 @@ test('C19 (NIT) — closing the card lets go of the preview picture (its blob UR
   v.tree({ verse: null, open: false });
   v.tree({ verse: null, open: false });
   assert.deepEqual(revoked, made, 'the preview blob URL was kept after the card closed');
+});
+
+// ═════════════════ re-audit of 6f0e2871: LOW a/b and NITs ═════════════════
+function fontRig(checkFn) {
+  const listeners = [];
+  return { listeners, fonts: { load: () => new Promise(() => {}), check: checkFn, addEventListener: (ev, fn) => listeners.push([ev, fn]), removeEventListener() {} },
+    fire() { listeners.filter(([ev]) => ev === 'loadingdone').forEach(([, fn]) => fn()); } };
+}
+
+test('C20 (re-audit LOW a) — the font redraw allowance is per opening: exhausted, closed, reopened, it redraws again', async () => {
+  let fontsIn = false;
+  const rig = fontRig(() => fontsIn);
+  const v = verseCard({ cap: fakeCapacitor(), fonts: rig.fonts, fontsHang: true });
+  const arrive = async () => { fontsIn = true; rig.fire(); fontsIn = false; await v.settle(); };   // the picture is redrawn, still without fonts
+  await v.settle();
+  assert.equal(v.canvases.length, 1);
+  await arrive(); await arrive();
+  assert.equal(v.canvases.length, 3, 're-anchor: two font redraws did not happen');
+  await arrive();
+  assert.equal(v.canvases.length, 3, 'a third redraw in one opening — the bound does not hold');
+  v.tree({ verse: null, open: false }); v.tree({ verse: null, open: false });
+  await v.settle();
+  assert.equal(v.canvases.length, 4, 're-anchor: reopening did not draw the card');
+  await arrive();
+  assert.equal(v.canvases.length, 5, 'after closing and reopening, the fonts arriving did not redraw the card — the allowance was spent for the session');
+});
+
+test('C21 (re-audit LOW b) — fonts that finish between the drawing\'s check and the save still get a redraw, with no event', async () => {
+  let calls = 0;
+  const rig = fontRig(() => (calls++ === 0 ? false : true));   // missing when the drawing checks, in by the time it is saved
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap, fonts: rig.fonts, fontsHang: true, numbered: true });
+  await v.settle(); await v.settle();
+  assert.equal(v.canvases.length, 2, 'the fallback-font picture was kept although the fonts were in when it was saved');
+  await v.buttons().main.props.onClick();
+  assert.equal(cap.writes[0].bytes[cap.writes[0].bytes.length - 1], 2, 'the fallback-font picture was shared');
+});
+
+test('C22 (re-audit NIT) — unmounting ShareCard lets go of the preview picture', async () => {
+  const { fakeReact } = await import('./console-screens.mjs');
+  const r = fakeReact();
+  const made = [], revoked = [];
+  const browser = fakeBrowser();
+  const S = loadScreen('app/share-app.jsx', ['ShareCard'], {
+    React: r.React, window: {}, btoa, File, Blob, fetch: apkFetch(), console: { warn() {}, log() {}, error() {} },
+    navigator: browser.navigator, URL: { createObjectURL: () => { const u = 'blob:fake/' + (made.length + 1); made.push(u); return u; }, revokeObjectURL: (u) => revoked.push(u) },
+    document: { ...browser.document, fonts: { load: async () => [] }, createElement: (t) => (t === 'canvas' ? fakeCanvas([]) : browser.document.createElement(t)) },
+    setTimeout: () => 0, Icon: () => null, IconBtn: () => null, Overlay: () => null, BottomSheet: () => null, verseShareText: realVerseShareText(),
+  });
+  const props = { verse: VERSE, open: true, onClose() {}, ctx: { toast() {}, shareText() {} } };
+  r.reset(); S.ShareCard(props); r.flush();
+  await ticks();
+  r.reset(); S.ShareCard(props); r.flush();
+  assert.equal(made.length, 1, 're-anchor: no preview URL was made');
+  assert.deepEqual(revoked, [], 're-anchor: revoked before unmount');
+  r.unmount();
+  assert.deepEqual(revoked, made, 'unmounting ShareCard kept the preview blob URL');
 });
