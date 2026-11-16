@@ -223,7 +223,7 @@ for (const width of [320, 360, 390]) {
 // structure that works on the phone: the scroller's padding-bottom stays its fixed value while the player is
 // up, and the extra room is a real box ([data-player-room]) inside it — asserted from computed styles below,
 // alongside the geometry. Putting the var back into the padding fails that assertion in every case.
-const LIVE_FILES = ['app/icons.jsx', 'app/ui.jsx', 'app/screens-today.jsx', 'app/screens-church.jsx', 'app/screens-library.jsx', 'app/screens-watch.jsx', 'app/screens-audio.jsx'];
+const LIVE_FILES = ['app/icons.jsx', 'app/ui.jsx', 'app/header-more.jsx', 'app/screens-today.jsx', 'app/screens-church.jsx', 'app/screens-library.jsx', 'app/screens-watch.jsx', 'app/screens-audio.jsx'];
 const LIVE_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="/vendor/fonts/fonts.css">
 <style>${[...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')}

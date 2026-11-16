@@ -13321,7 +13321,7 @@ function DashBrandingPanel({ church }) {
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
       {/* live preview — the church header the way members' phones draw it (see the note above badgeCol) */}
       {church.banner ? (
-        <div data-brand-preview="banner" style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: mainCol || 'transparent' }}>
+        <div data-brand-preview="banner" style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', maxHeight: 150, borderRadius: 14, overflow: 'hidden', background: mainCol || 'transparent' }}>
           <div style={{ position: 'absolute', inset: 0, WebkitMaskImage: fade > 0 ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: fade > 0 ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
             <div style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url(${church.banner})` }} />
             <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />

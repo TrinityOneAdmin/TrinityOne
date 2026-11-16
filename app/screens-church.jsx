@@ -101,7 +101,10 @@ window.ChurchBadge = ChurchBadge;
 
 // header shown at the top of Chat — shows the current church. Display only: switching and following a
 // church moved to You -> “Follow a church” (owner 2026-10-16), so this no longer opens the switcher.
-function ChurchPill({ ctx }) {
+// reserveRight: how much of the banner's right edge the caller's floating controls take (the name must end before
+// them). DEFAULT 156 = the original three-icon bar and stays the default; ChatScreen, the only caller, passes the
+// width of Messages + the chevron. The banner is capped at 150px tall (aspect 3:1 would be 253px at 760 wide).
+function ChurchPill({ ctx, reserveRight = 156 }) {
   const c = ctx.church;
   if (!c) return null;
   // MAIN colour (owner 2026-11-12): fills the compact header, and is what a banner's faded edge blends into.
@@ -116,7 +119,7 @@ function ChurchPill({ ctx }) {
       <div data-church-pill="1" style={{
         position: 'relative', display: 'block', width: '100%',
         overflow: 'hidden', textAlign: 'left',
-        aspectRatio: '3 / 1',
+        aspectRatio: '3 / 1', maxHeight: 150,
         ...(main ? { background: main } : {}),
       }}>
         {/* image + legibility scrim on a MASKED layer — the steward's fade blends THIS into the page.
@@ -125,7 +128,7 @@ function ChurchPill({ ctx }) {
           <span style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url("${banner}")` }} />
           <span style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0) 62%)' }} />
         </span>
-        <span data-banner-name="1" style={{ position: 'absolute', left: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 156, display: 'flex', alignItems: 'center', gap: 11 }}>
+        <span data-banner-name="1" style={{ position: 'absolute', left: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: reserveRight, display: 'flex', alignItems: 'center', gap: 11 }}>
           <ChurchBadge church={c} size={40} radius={12} />
           {!(c.features && c.features.hideChurchName) ? <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: c.titleColor || '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span> : null}
         </span>

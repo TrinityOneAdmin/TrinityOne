@@ -32,29 +32,6 @@
      heading) while Android inherits the ink colour and looked correct. Inherit here so buttons match
      normal text on both. Buttons that set their own colour inline still win. (2026-10-21) */
   button { color: inherit; }
-  /* TODAY HEADER CHEVRON (2026-11-14). A church with an audio feed has 4 header controls and the row needs
-     330px; below that Listen and the dark-mode moon fold behind one chevron (app/screens-today.jsx, header).
-     `!important` is REQUIRED: those buttons carry an inline `display:flex`, which beats any class rule that
-     is not important. The class names exist only for a church WITH a feed, so a church without one keeps
-     its moon at every width. `.trn-hdr-wrap` is a plain full-width block: container-type:inline-size makes
-     it a layout-containment box and a stacking context, so nothing positioned may escape it (the only
-     positioned child is the bell's dot, which is relative to its own button).
-     Fold width is `width < 330px` (the row fits AT 330), i.e. a viewport under 366px (18px padding a side).
-     THE FALLBACK, for a WebView without container queries (Chrome/WebView < 105: Android 5-7 with a frozen
-     WebView, iOS < 16): same fold on the viewport, 366 - 36 = 330. NOTE todays-header-fits-the-phone.test.mjs
-     rewrites the two guarded lines to force that path, so keep both anchors as written. */
-  .trn-hdr-chev, .trn-hdr-panel { display: none !important; }
-  .trn-hdr-wrap { container-type: inline-size; }
-  @container (width < 330px) {
-    .trn-hdr-inline { display: none !important; }
-    .trn-hdr-chev, .trn-hdr-panel { display: flex !important; }
-  }
-  @supports not (container-type: inline-size) {
-    @media (max-width: 365.98px) {
-      .trn-hdr-inline { display: none !important; }
-      .trn-hdr-chev, .trn-hdr-panel { display: flex !important; }
-    }
-  }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     background: #ddd6c8;
@@ -255,6 +232,8 @@
 <script type="text/babel" src="app/error-boundary.jsx"></script>
 <script type="text/babel" src="app/icons.jsx"></script>
 <script type="text/babel" src="app/ui.jsx"></script>
+<!-- the Today + Community header chevron (useHeaderMore / HeaderMoreChevron / HeaderMorePanel); uses Icon (icons.jsx) and, at effect time, TrinityReplyKit -->
+<script type="text/babel" src="app/header-more.jsx"></script>
 <script type="text/babel" src="app/identity-avatar.jsx"></script>
 <script type="text/babel" src="app/identity.jsx"></script>
 <script type="text/babel" src="app/identity-extras.jsx"></script>

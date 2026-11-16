@@ -49,6 +49,14 @@ export function loadScreen(relPath, exportNames, globals) {
   let js = compileScreen(relPath);
   // The shared reply pieces (app/reply-kit.jsx) are a classic-script global in the app; give every screen the
   // REAL kit, compiled from source, unless the test supplied its own or is loading the kit itself.
+  // THE HEADER CHEVRON PIECES (app/header-more.jsx: useHeaderMore, HeaderMoreChevron, HeaderMorePanel) are shared by
+  // TodayScreen and ChatScreen and are free identifiers in both. Prepend the real file when a screen mentions the
+  // hook and the test did not inject its own — NOT all of ui.jsx, which would redeclare IconBtn etc. and shadow the
+  // tests' stubs. It runs BEFORE the reply-kit check below because the file itself uses TrinityReplyKit.
+  // Callers: every test that loadScreen()s app/screens-today.jsx or app/screens-chat.jsx (listed in the commit).
+  if (relPath !== 'app/header-more.jsx' && !names.includes('useHeaderMore') && js.includes('useHeaderMore')) {
+    js = compileScreen('app/header-more.jsx') + '\n' + js;
+  }
   if (relPath !== 'app/reply-kit.jsx' && !names.includes('TrinityReplyKit') && js.includes('TrinityReplyKit')) {
     js = compileScreen('app/reply-kit.jsx') + '\n' + js;
   }
