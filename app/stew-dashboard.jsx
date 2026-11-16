@@ -13932,6 +13932,19 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [page, setPage] = React.useState(() => settingsPageFor(initialSection, groups, pages));
   const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
   const cur = pages.find(p => p.k === open) || null;
+  // A NEW SETTINGS PAGE OPENS AT ITS TOP. The console scrolls in its <main>, which outlives every page here, so
+  // picking another page after scrolling down one left the new page scrolled to wherever the old one was, with
+  // its top out of sight (owner, 2026-11-16, desktop). Reset ONLY when the open page changes after mount:
+  // arriving at Settings (or a deep link into it) must not move the console (owner decision). On a desktop
+  // the list sits in the same <main>, so it scrolls up too; the owner accepted that.
+  const shellRef = React.useRef(null);
+  const pageMounted = React.useRef(false);
+  React.useEffect(() => {
+    if (!pageMounted.current) { pageMounted.current = true; return; }
+    const el = shellRef.current;
+    const sc = el && el.closest ? el.closest('main') : null;
+    if (sc) sc.scrollTop = 0;
+  }, [open]);
   // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
   // THE DEFAULT IS SHUT. Owner, 2026-09-22, from a screenshot of the Suite's window: "Can we have the settings
   // groups minimized like this on default?" A steward who has never chosen (nothing stored) starts with every
@@ -14098,7 +14111,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
-      <div className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
+      <div ref={shellRef} className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
       {/* THE LIST. On a phone it is the whole first screen; in a browser it is the left-hand column, always
           on screen beside the page. Sixteen pages is a lot to scan and most stewards live in one or two
           groups, so each GROUP is a disclosure — owner, 2026-09-09, "that will help tidy it up".
