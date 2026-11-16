@@ -233,3 +233,68 @@ function ShareAppSheet({ open, onClose, ctx }) {
   );
 }
 window.ShareAppSheet = ShareAppSheet;
+
+// ── the "Share as image" card ──
+// Moved here from app/app.jsx (2026-11-16) so a test can draw the real component; this file loads before
+// app.jsx in index.html, and nothing else references ShareCard or CARD_STYLES. verseShareText / verseShareUrl
+// are app.jsx globals, read only when a button is pressed (after every script has loaded).
+// Header top: env(safe-area-inset-top) + 8px like the other overlays. It was + 50px, which on Android (where the
+// WebView already sits below the status bar, inset 0) left a 50px empty band above the header.
+const CARD_STYLES = [
+  { id: 'clay', bg: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', fg: '#fff', serif: true },
+  { id: 'sage', bg: 'linear-gradient(155deg, #6BA17C, #3C6E57)', fg: '#fff', serif: true },
+  { id: 'paper', bg: 'var(--surface)', fg: 'var(--ink)', serif: true, bordered: true },
+  { id: 'night', bg: 'linear-gradient(155deg, #2a2218, #16120c)', fg: '#F3ECDC', serif: true },
+];
+function ShareCard({ verse, open, onClose, ctx }) {
+  const [style, setStyle] = React.useState(0);
+  React.useEffect(() => { if (open) setStyle(0); }, [open]);
+  if (!verse) return null;
+  const s = CARD_STYLES[style];
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px' }}>
+          <IconBtn name="chevL" onClick={onClose} />
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Share verse</span>
+          {/* These two used to be theatre: one toasted "Card ready to share" and the other "Saved to Photos",
+              and neither rendered, saved or shared anything. ctx.shareText is the real thing (native share
+              sheet, then Web Share, then clipboard), so share the verse itself rather than lie about a file. */}
+          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you', verseShareUrl(verse)); }} />
+        </div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
+          <div style={{
+            width: '100%', aspectRatio: '4/5', borderRadius: 26, background: s.bg, color: s.fg,
+            border: s.bordered ? '1px solid var(--line)' : 'none', boxShadow: 'var(--shadow-lg)',
+            display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 30, position: 'relative', overflow: 'hidden',
+            transition: 'background .3s',
+          }}>
+            <div style={{ position: 'absolute', right: -20, top: -20, opacity: s.bordered ? .06 : .14 }}>
+              <Icon name="sparkle" size={130} stroke={1.3} color={s.fg} /></div>
+            <Icon name="sparkle" size={26} stroke={1.8} color={s.id === 'clay' ? '#fff' : 'var(--clay)'} />
+            <p style={{ fontFamily: s.serif ? 'var(--font-read)' : 'var(--font-ui)', fontSize: 25, lineHeight: 1.4,
+              fontWeight: 500, margin: '18px 0 20px', textWrap: 'pretty' }}>“{verse.text}”</p>
+            <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, letterSpacing: '.5px',
+              color: s.bordered ? 'var(--clay)' : s.fg, opacity: s.bordered ? 1 : .9 }}>{verse.ref} · {verse.version || 'WEB'}</div>
+            <div style={{ position: 'absolute', bottom: 16, right: 22, fontSize: 11, fontWeight: 700, letterSpacing: '1px', opacity: .5 }}>TRINITYONE</div>
+          </div>
+        </div>
+        <div style={{ padding: '4px 26px 8px' }}>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 18 }}>
+            {CARD_STYLES.map((c, i) => (
+              <button key={c.id} onClick={() => setStyle(i)} style={{
+                width: 46, height: 46, borderRadius: 14, background: c.bg, cursor: 'pointer',
+                border: style === i ? '2.5px solid var(--clay)' : '1px solid var(--line)', flexShrink: 0,
+              }} />
+            ))}
+          </div>
+          <button onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you', verseShareUrl(verse)); }} style={{
+            width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
+            fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}><Icon name="share" size={18} color="#fff" /> Share this verse</button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
