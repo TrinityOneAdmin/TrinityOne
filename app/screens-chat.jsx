@@ -2402,7 +2402,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       <textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Add thoughts… (optional)" rows={2} style={{ width: '100%', boxSizing: 'border-box', resize: 'none', padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', lineHeight: 1.4, marginBottom: 18 }} />
 
       {type === 'verse' ? (
-        <button onClick={() => { onClose(); ctx.openShare(payload); }} style={{
+        // the thoughts typed above go onto the card and into the text shared with it (ShareCard, share-app.jsx)
+        <button onClick={() => { const c = comment.trim(); onClose(); ctx.openShare(c ? { ...payload, comment: c } : payload); }} style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
           border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
           <Icon name="share" size={20} color="var(--clay)" />

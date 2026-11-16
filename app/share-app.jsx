@@ -435,7 +435,7 @@ async function shareCardRender(verse, st, probe, comment) {
 async function shareCardPng(verse, st, probe) { return (await shareCardRender(verse, st, probe, '')).bytes; }
 
 // THE SHARE BUTTON: the card as a PNG plus the verse words (verseShareText, app/app.jsx — words and reference,
-// no link). If the picture cannot be made, the words alone go, still with no link, and the member is told.
+// no link) and the member's thoughts, if any (`verse.comment`, from VerseShareSheet's "Add thoughts"). If the picture cannot be made, the words alone go, still with no link, and the member is told.
 // `opts.ready`: PNG bytes ShareCard drew when the card opened (or the style changed). With them, nothing is
 // awaited before the share sheet is asked for — a browser only allows navigator.share close to the tap, and
 // the font wait + toBlob could outlast that. Without them the card is drawn now (slower, still correct).
@@ -443,10 +443,12 @@ async function shareCardPng(verse, st, probe) { return (await shareCardRender(ve
 // The share's title (Android EXTRA_SUBJECT; an email's subject) is the reference, not a made-up label.
 async function shareCardShare(verse, st, probe, ctx, opts) {
   const o = opts || {};
-  const text = verseShareText(verse);
+  // the member's thoughts ("Add thoughts" in VerseShareSheet) go under the verse, as the group/DM sends put them
+  const thoughts = String(verse.comment || '').trim();
+  const text = verseShareText(verse) + (thoughts ? '\n\n' + thoughts : '');
   let bytes = o.ready || null;
   if (!bytes) {
-    try { bytes = await shareCardPng(verse, st, probe); }
+    try { bytes = (await shareCardRender(verse, st, probe, thoughts)).bytes; }
     catch (e) { try { console.warn('shareCardPng: ' + ((e && e.message) || e)); } catch (e2) {} }
     if (o.stillOpen && !o.stillOpen()) return 'closed';
   }
@@ -478,12 +480,12 @@ function ShareCard({ verse, open, onClose, ctx }) {
   const openRef = React.useRef(open);
   openRef.current = open;
   React.useEffect(() => { if (open) setStyle(0); }, [open]);
-  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text].join('\u0001') : '';
+  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text, verse.comment || ''].join('\u0001') : '';
   // DRAW THE PICTURE AS SOON AS THE CARD OPENS (and again when the style changes), so the tap shares at once.
   React.useEffect(() => {
     if (!pngKey) return;
     let live = true;
-    Promise.resolve().then(() => shareCardRender(verse, CARD_STYLES[style], cardRef.current, ''))
+    Promise.resolve().then(() => shareCardRender(verse, CARD_STYLES[style], cardRef.current, verse.comment || ''))
       .then((r) => {
         if (!live) return;
         let url = null;

@@ -69,23 +69,28 @@ test('shareCardPng makes a real 1080-wide PNG (1350 tall; taller for a long pass
       out.long = await read(await shareCardPng(long, CARD_STYLES[0], null));
       // the same card with no words: what the reference, the marks and the TRINITYONE line alone paint
       out.empty = await read(await shareCardPng({ ...verse, text: '' }, CARD_STYLES[0], null));
+      // the member's thoughts, drawn under the reference (bug 1)
+      const thoughts = ('I read this the week my father died, and it held me. ').repeat(8);
+      out.thoughts = await read((await shareCardRender(verse, CARD_STYLES[0], null, thoughts)).bytes);
       return JSON.stringify(out);
     })()`;
     const r = await send('Runtime.evaluate', { expression: probe, returnByValue: true, awaitPromise: true });
     assert.ok(!r.result.exceptionDetails, 'shareCardPng threw: ' + JSON.stringify(r.result.exceptionDetails || {}).slice(0, 400));
     const out = JSON.parse(r.result.result.value);
     const near = (a, b, tol = 24) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
-    for (const id of ['clay', 'sage', 'paper', 'night', 'church', 'long']) {
+    for (const id of ['clay', 'sage', 'paper', 'night', 'church', 'long', 'thoughts']) {
       const o = out[id];
       assert.deepEqual(o.sig, [137, 80, 78, 71, 13, 10, 26, 10], `${id}: not a PNG`);
       assert.equal(o.w, 1080, `${id}: width ${o.w}`);
       // a long passage makes the card taller (shareCardLayout: up to 1080 x 1920) instead of cutting it short
-      if (id === 'long') assert.ok(o.h > 1350 && o.h <= 1920, `long: height ${o.h} — a long passage should grow the card, up to 1920`);
+      if (id === 'thoughts') assert.ok(o.h >= 1350 && o.h <= 1920, `thoughts: height ${o.h}`);
+      else if (id === 'long') assert.ok(o.h > 1350 && o.h <= 1920, `long: height ${o.h} — a long passage should grow the card, up to 1920`);
       else assert.equal(o.h, 1350, `${id}: height ${o.h}`);
       assert.ok(o.ink > 300, `${id}: almost nothing is painted on the card (${o.ink} ink samples) — the verse is not drawn`);
     }
     // the words themselves are painted: far more ink than the same card with no words (measured 6549 vs 1142, ~5.7x)
     assert.ok(out.clay.ink > out.empty.ink * 2, `the verse adds almost no ink (${out.clay.ink} vs ${out.empty.ink} with no words) — the words are not drawn`);
+    assert.ok(out.thoughts.ink > out.clay.ink * 1.5, `the thoughts add almost no ink (${out.thoughts.ink} vs ${out.clay.ink} without) — they are not drawn`);
     assert.ok(out.long.ink > out.clay.ink, `a long passage paints no more than a short verse (${out.long.ink} vs ${out.clay.ink})`);
     // the card's own colours at its top-left corner (where the 155deg gradient starts), with :root's theme
     assert.ok(near(out.clay.corner, [0xC2, 0x5A, 0x38]), `clay corner ${out.clay.corner}`);

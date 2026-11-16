@@ -682,3 +682,72 @@ test('C12 (NIT) — the share title (Android EXTRA_SUBJECT, an email subject) is
   await v.buttons().main.props.onClick();
   assert.equal(cap.shares[0].title, 'John 3:16');
 });
+
+// ═════════════════ C, bug 1 (2026-11-16): "Add thoughts" reaches the card and the shared text ═════════════════
+// The thoughts typed in VerseShareSheet used to go to a group or a DM but were dropped by "Share as image". This
+// types them into the REAL VerseShareSheet (app/screens-chat.jsx), presses its real "Share as image" button, hands
+// what that button gave ctx.openShare to the REAL ShareCard (as App does — scripts/the-app-mounts-the-share-card
+// proves App passes it through unchanged), presses Share, and finds the thoughts both drawn on the card (the fake
+// canvas's fillText) and in the text shared beside the picture.
+function verseSheet() {
+  const { React, draw } = miniReact();
+  const opened = [];
+  const mod = loadScreen('app/screens-chat.jsx', ['VerseShareSheet'], {
+    React, window: { Fellowship: null, TrinityData: { GROUPS: [], RELAYS: [] }, addEventListener() {}, removeEventListener() {} },
+    document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {} }, addEventListener() {}, removeEventListener() {} },
+    location: { search: '', href: 'https://app.trinityone.church/' },
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    lsGet: (_k, d) => d, lsSet: () => {}, todayISO: () => '2026-11-16',
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    IconBtn: ({ name, title, onClick }) => React.createElement('button', { title: title || name, onClick }),
+    Overlay: ({ open, children }) => (open ? children : null), ScreenScroll: ({ children }) => children, ChurchPill: () => null,
+    UserAvatar: () => null, SectionLabel: ({ children }) => children, BottomSheet: ({ open, children }) => (open ? children : null),
+    safeCssColor: (c) => c, relTime: () => 'now', D: { GROUPS: [], RELAYS: [] },
+  });
+  let closed = 0;
+  const ctx = { toast() {}, church: null, openShare: (p) => opened.push(p) };
+  const payload = { type: 'verse', ...VERSE };
+  const render = () => draw(mod.VerseShareSheet, { payload, open: true, onClose: () => { closed++; }, ctx });
+  return { render, opened, closed: () => closed };
+}
+const THOUGHTS = 'This carried me through a hard March.';
+
+test('C13 (bug 1) — thoughts typed in the share sheet are drawn on the card and go in the text beside it', async () => {
+  const sh = verseSheet();
+  let tree = sh.render();
+  const box = find(tree, n => n.type === 'textarea');
+  assert.equal(box.length, 1, 're-anchor: no "Add thoughts" box on the share sheet');
+  box[0].props.onChange({ target: { value: '  ' + THOUGHTS + '  ' } });
+  tree = sh.render();
+  const asImage = find(tree, n => n.type === 'button' && texts(n).join(' ').includes('Share as image'));
+  assert.equal(asImage.length, 1, 're-anchor: no "Share as image" button');
+  asImage[0].props.onClick();
+  assert.equal(sh.closed(), 1, 'the sheet did not close');
+  assert.equal(sh.opened.length, 1, '"Share as image" did not open the card');
+  assert.equal(sh.opened[0].comment, THOUGHTS, `the card was opened without the thoughts: ${JSON.stringify(sh.opened[0])}`);
+
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap, verse: sh.opened[0] });
+  await v.settle();
+  await v.buttons().main.props.onClick();
+  assert.equal(cap.shares.length, 1);
+  const s = cap.shares[0];
+  assert.match(s.files[0], /\.png$/);
+  assert.ok(s.text.includes(VERSE.text) && s.text.includes(VERSE.ref), 'the verse is not in the shared text');
+  assert.ok(s.text.endsWith('\n\n' + THOUGHTS), `the thoughts are not under the verse in the shared text: ${JSON.stringify(s.text)}`);
+  const onCard = v.drawn.join(' ');
+  for (const w of ['carried', 'hard', 'March.']) assert.ok(onCard.includes(w), `"${w}" (the thoughts) is not drawn on the card`);
+  const { files, ...rest } = s;
+  assert.ok(noLink(rest), 'a link went with the picture');
+});
+
+test('C14 (bug 1) — with no thoughts the card opens with the payload as it was, and nothing extra is shared', async () => {
+  const sh = verseSheet();
+  const tree = sh.render();
+  find(tree, n => n.type === 'button' && texts(n).join(' ').includes('Share as image'))[0].props.onClick();
+  assert.equal('comment' in sh.opened[0], false, 'an empty comment was added to the payload');
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap, verse: sh.opened[0] });
+  await v.buttons().main.props.onClick();
+  assert.equal(cap.shares[0].text, realVerseShareText()(VERSE), 'with no thoughts the shared text is not just the verse');
+});
