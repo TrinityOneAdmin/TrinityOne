@@ -41,6 +41,7 @@ export function buildVersePage(ref, text, version) {
     + '<meta name="twitter:card" content="summary_large_image">\n'
     + '<meta name="twitter:title" content="' + (r || 'A verse') + '">\n'
     + '<meta name="twitter:image" content="https://trinityone.church/og-cover-v2.jpg">\n'
+    + '<meta name="twitter:image:alt" content="TrinityOne: A private home for your church">\n'
     + '<style>\n'
     + '*{box-sizing:border-box;margin:0}\n'
     + 'body{min-height:100vh;display:flex;align-items:center;justify-content:center;'

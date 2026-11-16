@@ -33,6 +33,12 @@ function dims(buf) { // PNG IHDR or JPEG SOF
   throw new Error('no SOF');
 }
 
+const COVER = 'https://trinityone.church/og-cover-v2.jpg';
+const EXPECT = {
+  'index.html': COVER, 'welcome.html': COVER, 'help.html': COVER,
+  'join.html': 'https://app.trinityone.church/og-join-v2.jpg',
+  'public-verse.mjs output': COVER,
+};
 const PAGES = {
   'index.html': readFileSync(join(ROOT, 'index.html'), 'utf8'),
   'welcome.html': readFileSync(join(ROOT, 'welcome.html'), 'utf8'),
@@ -48,6 +54,7 @@ describe('link-preview cards', () => {
       assert.ok(og && tw, 'both og:image and twitter:image present');
       assert.match(og, /^https:\/\/[a-z0-9.-]+\/[^/?#]+\.(png|jpg)$/, 'absolute https URL');
       assert.equal(og, tw, 'og:image === twitter:image');
+      assert.equal(og, EXPECT[name], 'exact expected card URL for ' + name);
       const file = join(ROOT, basename(new URL(og).pathname));
       assert.ok(existsSync(file), 'file exists in repo root: ' + file);
       assert.ok(statSync(file).size < MAX, 'under 300KB, got ' + statSync(file).size);
@@ -56,6 +63,9 @@ describe('link-preview cards', () => {
       assert.equal(type, og.endsWith('.jpg') ? 'image/jpeg' : 'image/png', 'og:image:type matches the file');
     });
   }
+  it('public-verse sets twitter:image:alt', () => {
+    assert.match(PAGES['public-verse.mjs output'], /name="twitter:image:alt" content="TrinityOne: /);
+  });
   it('public-verse sets twitter:title', () => {
     assert.match(PAGES['public-verse.mjs output'], /name="twitter:title" content="Psalm 23:1"/);
   });

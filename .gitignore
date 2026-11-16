@@ -127,3 +127,4 @@ scripts/.sim-*.json
 # ⚠ The 14 OTHER scripts/*.probe.mjs are still TRACKED. Moving those is a separate decision, not an
 # oversight — nothing imports them, but they are referenced by name in commit messages and docs.
 scripts/console-shots.probe.mjs
+.og-tmp-*.png

@@ -66,17 +66,18 @@
     background:radial-gradient(70% 90% at 82% 50%,#5a2a18 0%,#2b1a10 45%,#17120B 100%)}
   body.v2 .card{display:none}
   body.v2 .mid{display:block}
+  body.v2 .mid.brand{display:flex}  /* must follow .mid{display:block} or the row never flexes */
   .mid.ring{position:absolute;right:-250px;top:-60px;width:760px;height:760px;opacity:.95}
-  .mid.brand{position:absolute;left:84px;top:78px;display:flex;align-items:center;gap:20px}
-  .brand img{width:76px;height:76px;border-radius:18px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
-  .brand b{font-weight:800;font-size:26px;letter-spacing:5px;text-transform:uppercase}
-  .mid.rule{position:absolute;left:84px;top:200px;width:64px;height:3px;background:var(--gold-soft)}
-  .mid.h2{position:absolute;left:84px;top:230px;width:600px;font-family:var(--serif);font-style:italic;
+  .mid.brand{position:absolute;left:84px;top:56px;display:none;align-items:center;gap:24px}
+  .brand img{width:88px;height:88px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .brand b{font-weight:800;font-size:44px;letter-spacing:5px;text-transform:uppercase}
+  .mid.rule{position:absolute;left:84px;top:172px;width:64px;height:3px;background:var(--gold-soft)}
+  .mid.h2{position:absolute;left:84px;top:200px;width:600px;font-family:var(--serif);font-style:italic;
     font-weight:500;font-size:84px;line-height:1.03;letter-spacing:-1.5px}
   .h2 em{color:var(--gold-soft)}
-  .mid.tag{position:absolute;left:84px;bottom:76px;width:560px;font-size:25px;line-height:1.4;color:#d6c9b3}
-  .mid.pill{position:absolute;left:84px;bottom:76px;padding:20px 44px;border-radius:999px;
-    background:var(--clay);color:var(--paper);font-weight:600;font-size:30px;letter-spacing:.3px;
+  .mid.tag{position:absolute;left:84px;bottom:44px;width:620px;font-size:40px;line-height:1.28;color:#d6c9b3}
+  .mid.pill{position:absolute;left:84px;bottom:76px;padding:22px 52px;border-radius:999px;
+    background:var(--clay);color:var(--paper);font-weight:600;font-size:40px;letter-spacing:.3px;
     box-shadow:0 10px 28px rgba(0,0,0,.35)}
   body.v2-cover .pill{display:none} body.v2-join .tag{display:none}
 </style>
@@ -113,7 +114,7 @@
     }
   };
   var V2 = {
-    cover2: {h: 'A private home for <em>your church.</em>', tag: 'Scripture · prayer · groups · serving · care — on a server you own.', pill: ''},
+    cover2: {h: 'A private home for <em>your church.</em>', tag: 'Scripture, prayer, groups and care on a server you own.', pill: ''},
     join2:  {h: 'Join your church on <em>TrinityOne</em>', tag: '', pill: 'Tap to join'}
   };
   var v = (new URLSearchParams(location.search).get('v') || 'join');

@@ -12,14 +12,26 @@ ROOT="$(pwd)"
 TPL="file://$ROOT/scripts/og-card.html"
 
 CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)"
-[ -n "$CHROME" ] || { echo "no chromium found"; exit 1; }
+[ -n "$CHROME" ] || { echo "ERROR: no chromium found (need chromium, chromium-browser or google-chrome)"; exit 1; }
+for tool in convert identify; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: '$tool' not found - install ImageMagick"; exit 1; }
+done
+
+# DEPLOY ORDER: deploy Pages (release.sh wrangler pages deploy) BEFORE updating a8 / the gateway,
+# or link previews fetch og-*-v2.jpg while it is still missing and messengers cache the failure.
+# Own chromium profile (never the user's real one). Snap chromium cannot write /tmp NOR ~/.cache
+# (measured: SingletonLock permission denied), only ~/snap/chromium/common - so use that when it exists.
+if [ -d "$HOME/snap/chromium/common" ]; then PBASE="$HOME/snap/chromium/common"; else PBASE="$HOME/.cache"; fi
+PROFILE="$PBASE/trin-og-cards-$$"
+mkdir -p "$PROFILE"
+trap 'rm -rf "$PROFILE" "$ROOT"/.og-tmp-*.png' EXIT
 
 MAX_BYTES=300000   # WhatsApp refuses/drops link-preview images over ~300KB; fail loudly, never skip
 FAILED=0
 render () { # <variant> <outfile.jpg>
   local v="$1" out="$2"; local tmp="$ROOT/.og-tmp-$v.png"
   rm -f "$tmp"
-  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-color-profile=srgb \
+  "$CHROME" --headless=new --disable-gpu --user-data-dir="$PROFILE" --no-first-run --hide-scrollbars --force-color-profile=srgb \
     --window-size=1200,630 --virtual-time-budget=3000 \
     --screenshot="$tmp" "$TPL?v=$v" >/dev/null 2>&1 || true
   [ -s "$tmp" ] || { echo "ERROR: chromium produced no screenshot for $v"; exit 1; }
