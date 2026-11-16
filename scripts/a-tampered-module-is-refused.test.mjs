@@ -141,7 +141,12 @@ async function attempt(item) {
     const out = { ok: false, err: '', rows: 0, cached: false, installed: false };
     try { await window.Bible.installModule(item); out.ok = true; }
     catch (e) { out.err = String(e && e.message || e); }
-    try { out.rows = (window.Bible.getCommentary(63, 1) || []).reduce((n, b) => n + b.rows.length, 0); } catch (e) {}
+    // ONLY the notes of an installed COMMENTARY MODULE count. getCommentary() also returns the ACTIVE BIBLE's own footnotes
+    // (kind 'footnotes'); the default BSB installs itself in this page a few seconds after load, and when that landed inside
+    // this window the old count read 3 footnote rows and called a correctly-refused module a failure (flaky, on main too).
+    try { out.rows = (window.Bible.getCommentary(63, 1) || []).filter(b => b.kind === 'module').reduce((n, b) => n + b.rows.length, 0); } catch (e) {}
+    // and ask directly whether the module is in memory at all
+    try { out.cmtAbbrs = window.Bible.commentaryList().map(c => c.abbr); out.loaded = !!window.Bible.isLoaded(item.url); } catch (e) {}
     out.installed = !!window.Bible.isInstalled(item.url);
     out.cached = await new Promise(res => {
       const q = indexedDB.open('bible-modules', 1);
@@ -166,6 +171,8 @@ test('a module whose bytes do not match the catalogue pin is REFUSED, and never 
     assert.equal(r.rows, 0,
       `${r.rows} study notes reached the Study panel from a module that failed its pin`);
     assert.equal(r.installed, false, 'a module that failed its pin was recorded as installed');
+    assert.equal(r.loaded, false, 'a module that failed its pin is LOADED in memory');
+    assert.ok(!r.cmtAbbrs.includes('OSN'), 'a module that failed its pin is registered as a commentary: ' + JSON.stringify(r.cmtAbbrs));
   });
 
 test('the refused bytes are not cached either, so a reload cannot resurrect them',
@@ -185,6 +192,7 @@ test('the same module with its REAL pin installs and reaches the Study panel',
     assert.equal(r.err, '', `installing with the correct pin failed: ${r.err}`);
     assert.equal(r.ok, true, 'the module did not install even with the pin that matches its bytes');
     assert.ok(r.rows >= 5, `only ${r.rows} notes reached the Study panel for 2 John 1`);
+    assert.equal(r.loaded, true, 'the verified module is not loaded');
     assert.equal(r.cached, true, 'the verified module was not cached, so it would re-download every launch');
   });
 

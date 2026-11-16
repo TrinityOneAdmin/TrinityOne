@@ -516,8 +516,12 @@ window.safeImgUrl = function (v) {
     const sdb = new SQL.Database(dbBytes);
     const q = (sql, params) => { const st = sdb.prepare(sql); if(params) st.bind(params); const o = []; while(st.step()) o.push(st.getAsObject()); st.free(); return o; };
     const tables = q("SELECT name FROM sqlite_master WHERE type='table'").map(r => r.name);
-    return { q, tables, has: t => tables.some(x => x.toLowerCase() === t.toLowerCase()) };
+    return { q, tables, has: t => tables.some(x => x.toLowerCase() === t.toLowerCase()), close: () => { try{ sdb.close(); }catch(e){} } };
   }
+  // A SQL IDENTIFIER, quoted. Table and column names inside a module come from a file somebody else made, and
+  // buildDictFromDb/buildCommentaryFromDb used to paste them into SQL bare: a column NAMED like a recursive
+  // query ran that query (audit 2026-11-14 H2). Quoted, a hostile name is only a name.
+  const qid = (n) => '"' + String(n).replace(/"/g, '""') + '"';
   // A module's own Details row. `license` is the ATTRIBUTION NOTICE THE MODULE CARRIES ITSELF, not a
   // catalogue label: an openly-licensed resource (CC BY-SA and friends) obliges us to credit the author and
   // name the licence wherever its words are shown, and a notice that lives only in catalog.json covers only
@@ -555,12 +559,13 @@ window.safeImgUrl = function (v) {
   }
   // MySword dictionary/lexicon → { TOPIC: {gloss, short} }
   function buildDictFromDb(db){
+    const qid = (n) => '"' + String(n).replace(/"/g, '""') + '"';   // identifiers come from the file: quote, never paste
     const t = db.tables.find(x => /dictionary/i.test(x)); if(!t) return null;
-    const cols = db.q("PRAGMA table_info(" + t + ")").map(c => c.name.toLowerCase());
+    const cols = db.q("PRAGMA table_info(" + qid(t) + ")").map(c => c.name.toLowerCase());
     const topicCol = cols.includes("topic") ? "topic" : (cols.includes("word") ? "word" : cols[0]);
     const defCol = cols.includes("definition") ? "definition" : (cols.includes("data") ? "data" : cols[1] || cols[0]);
     const entries = {};
-    db.q("SELECT " + topicCol + " AS topic, " + defCol + " AS def FROM " + t).forEach(r => {
+    db.q("SELECT " + qid(topicCol) + " AS topic, " + qid(defCol) + " AS def FROM " + qid(t)).forEach(r => {
       const id = String(r.topic || "").trim().toUpperCase(); if(!id) return;
       const g = stripTags(String(r.def || ""));
       entries[id] = { gloss: g, short: g.slice(0, 64) };
@@ -569,15 +574,16 @@ window.safeImgUrl = function (v) {
   }
   // MySword commentary (.cmt.mybible): a Commentary table keyed by book/chapter (+ verse range)
   function buildCommentaryFromDb(db, fb){
+    const qid = (n) => '"' + String(n).replace(/"/g, '""') + '"';   // identifiers come from the file: quote, never paste
     const t = db.tables.find(x => /commentary/i.test(x)); if(!t) return null;
-    const cols = db.q("PRAGMA table_info(" + t + ")").map(c => c.name);
+    const cols = db.q("PRAGMA table_info(" + qid(t) + ")").map(c => c.name);
     const find = (...names) => cols.find(c => names.some(n => c.toLowerCase() === n));
     const bookCol = find("book", "booknumber"), chapCol = find("chapter", "chapternumber", "chapterbegin", "fromchapter");
     const fromV = find("fromverse", "versebegin", "verse", "versenumber"), toV = find("toverse", "verseend");
     const dataCol = find("comments", "data", "text", "commentary", "definition");
     if(!bookCol || !chapCol || !dataCol) return null;
     const det = detailsOf(db, fb);
-    const sel = "SELECT " + [bookCol + " AS b", chapCol + " AS c", (fromV ? fromV : "0") + " AS fv", (toV ? toV : (fromV || "0")) + " AS tv", dataCol + " AS d"].join(", ") + " FROM " + t + " WHERE " + bookCol + "=? AND " + chapCol + "=? ORDER BY fv";
+    const sel = "SELECT " + [qid(bookCol) + " AS b", qid(chapCol) + " AS c", (fromV ? qid(fromV) : "0") + " AS fv", (toV ? qid(toV) : (fromV ? qid(fromV) : "0")) + " AS tv", qid(dataCol) + " AS d"].join(", ") + " FROM " + qid(t) + " WHERE " + qid(bookCol) + "=? AND " + qid(chapCol) + "=? ORDER BY fv";
     return {
       abbr: det.abbr, name: det.name, kind: "comment", license: det.license,
       getComment: (b, c) => { try { return db.q(sel, [b, c]).map(r => ({ v: r.fv, vTo: r.tv, html: parseVerse(String(r.d || "")) })).filter(x => x.html.trim()); } catch(e){ return []; } }
@@ -704,7 +710,13 @@ window.safeImgUrl = function (v) {
   function applyMeta(src, meta){ if(meta && meta.abbr) src.abbr = meta.abbr; if(meta && meta.name) src.name = meta.name; src.category = (meta && meta.category) || src.category || "bibles"; return src; }
 
   // Returns {kind:'bible', abbr} or {kind:'dict'}.
+  //
+  // `preFiles` (optional): the entries of a zip, ALREADY extracted. A file a member handed us is extracted by
+  // _zipExtract (one bounded, central-directory-driven reader, below) and passed here, so fflate.unzipSync is never
+  // run on it. A hosted catalogue module (fetchAndCacheModule) and a catalogue-pinned copy pass nothing and take the
+  // old path: those bytes come from our own server or match a published hash, they are not a stranger's.
   async function loadModuleBytes(u8, srcName, meta){
+    const preFiles = arguments[3];   // optional 4th argument (kept off the signature: tests lift this function by its exact first line)
     if(isSqlite(u8)){
       const db = await openDb(u8);
       if(db.has("Bible")) return { kind: "bible", abbr: addSource(applyMeta(buildBibleFromDb(db, srcName), meta)) };
@@ -715,7 +727,7 @@ window.safeImgUrl = function (v) {
       throw new Error("unsupported MySword module — no Bible, commentary or dictionary table");
     }
     if(isZip(u8)){
-      const files = fflate.unzipSync(u8);
+      const files = preFiles || fflate.unzipSync(u8);
       const names = Object.keys(files).filter(n => !n.startsWith("__MACOSX"));
       const dbName = names.find(n => /\.(bbl\.mybible|mybible|bbl|sqlite|db)$/i.test(n)) || names.find(n => isSqlite(files[n]));
       if(dbName){
@@ -924,6 +936,20 @@ window.safeImgUrl = function (v) {
     throw last || new Error("could not fetch " + u);
   }
 
+  // The bytes of a downloaded module, read by the SAME bounded reader as a member's file (_zipExtract), never by
+  // fflate.unzipSync (re-audit 3, M2). `?module=<any https url>` and the eBible mirror fetch zips from hosts that are not
+  // ours, with no pin; they were decoded with no size limit and again on every boot. A zip the reader refuses, or (for a
+  // non-relative url) a database with a view/trigger/generated column, is refused HERE, before anything is saved.
+  async function _hostedFiles(u8, url){
+    let files;
+    if(isZip(u8)){ const x = _zipExtract(u8); if(x.refuse) throw new Error("module refused (" + x.refuse + "): " + url); files = x.files; }
+    if(/^https?:/i.test(url)){
+      let pk = null;
+      try{ pk = await _peekModule(u8, "", files); }catch(e){ throw new Error("module refused (unreadable): " + url); }
+      if(pk && pk.unsafe) throw new Error("module refused (unsafe database): " + url);
+    }
+    return files;
+  }
   async function fetchAndCacheModule(url, meta){
     const cached = await cacheGet(url);
     // A CACHE HIT IS ONLY GOOD IF IT IS THE PUBLISHED BUILD. This used to be an unconditional
@@ -933,7 +959,7 @@ window.safeImgUrl = function (v) {
     // copy is replaced rather than merely refused, and a phone that is offline keeps reading (the fetch
     // throws and the caller reports it, exactly as it does for a first install with no signal).
     if(cached && await cachedCopyIsCurrent(url, cached, meta && meta.sha256))
-      return loadModuleBytes(cached, url.split("/").pop(), meta);
+      return _hostedFiles(cached, url).then(files => withReg(() => loadModuleBytes(cached, url.split("/").pop(), meta, files)));
     const res = await fetchAsset(url);
     // SECURITY-AUDIT-2026-06-24 L4: size cap (matches the JSON branch in installModule). The
     // ceiling is well above any real module: BSB ≈ 3 MB, the KJV+S MySword ≈ 9 MB. A compromised
@@ -943,8 +969,10 @@ window.safeImgUrl = function (v) {
     const u8 = new Uint8Array(await res.arrayBuffer());
     if (u8.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + u8.byteLength + " bytes — refusing)");
     await verifyIntegrity(url, u8, meta && meta.sha256);   // M3: verify before we cache/parse
-    await cachePut(url, u8);
-    return loadModuleBytes(u8, url.split("/").pop(), meta);
+    // saved and registered under the registration lock, so a file install that is checking names cannot run
+    // between the two and then be replaced by this module when it registers
+    const files = await _hostedFiles(u8, url);   // refused => nothing below runs, nothing is saved
+    return withReg(async () => { await cachePut(url, u8); return loadModuleBytes(u8, url.split("/").pop(), meta, files); });
   }
 
   // generic cached asset fetch -> raw bytes (same IndexedDB cache + ASSET_BASE host as Bible modules).
@@ -1144,6 +1172,17 @@ window.safeImgUrl = function (v) {
     finally{ installing.delete(item.url); notify(); }
   }
 
+  // A stored module that was NOT loaded because it is unsafe: tell the member once. Told by event if the app is already
+  // listening, else kept (told:false on the record) for takeQuarantineNotices(), which the app calls when it mounts.
+  function _noticeQuarantine(url, name){
+    if(_fileSubs.size){ _emitFile({ phase: "quarantined", name }); const m = getInstalled(); if(m[url]){ m[url].told = true; setInstalled(m); } }
+  }
+  function takeQuarantineNotices(){
+    const m = getInstalled(), out = [];
+    for(const u of Object.keys(m)) if(m[u].quarantined && m[u].told === false){ out.push(m[u].name || m[u].abbr || u); m[u].told = true; }
+    if(out.length) setInstalled(m);
+    return out;
+  }
   // re-load everything previously installed (boot, before autoLoad)
   async function restoreInstalled(){
     const m = getInstalled();
@@ -1160,8 +1199,35 @@ window.safeImgUrl = function (v) {
     for(const url of Object.keys(m)){
       const meta = m[url];
       try{
+        if(meta.quarantined) continue;   // an unsafe stored file: never loaded again; it stays listed so it can be removed
         const bytes = await cacheGet(url);
         if(!bytes) continue;  // cache cleared — user can re-download
+        // A FILE A MEMBER IMPORTED (imported/...) is read by the SAME bounded reader as at install time (never
+        // fflate.unzipSync), and a stored file an older build accepted unchecked is checked once. FAIL CLOSED: if the reader
+        // refuses it or the check cannot finish (it throws), the file is quarantined, not loaded (re-audit L-e, A4). The
+        // record stays listed and its bytes stay, so it can be removed in Library > Installed.
+        let memberFiles = null;
+        // EVERY record that is not an EXACT published url (catalogue, eBible mirror, the default Bible) is a stranger's: imported/,
+        // an https url, and also what an old build's ?module= could have saved under `//host/x.zip`, ` https://...` with a
+        // leading space or tab, `HTTPS://...`, or a bare name (re-audit round 4, R4-1). Matching on a prefix missed those.
+        if(!(await moduleLinkAllowed(url)) && (meta.format || "").toUpperCase() !== "JSON"){
+          let bad = false;
+          if(isZip(bytes)){ const x = _zipExtract(bytes); if(x.refuse) bad = true; else memberFiles = x.files; }
+          if(!bad && !meta.checked){ try{ const pk = await _peekModule(bytes, "", memberFiles); bad = !!(pk && pk.unsafe); }catch(e){ bad = true; } }
+          // WHEN WE CANNOT READ OUR OWN LISTS (offline, short read, low memory) a published module looks like a stranger's file, and
+          // a transient failure must not brand it unsafe for good (re-audit round 5, R5-1). So a refusal then SKIPS the record for
+          // THIS boot only: not loaded (a record that is not ours never loads unless the reader accepts it), not quarantined, not
+          // marked, and tried again at the next boot. With the lists readable the refusal is permanent, as before.
+          // an imported/ key is a member's own file and can never be a published module, so no list can vouch for it: it is quarantined at once
+          if(bad && url.indexOf("imported/") !== 0 && !(await _listsReadable())){ console.warn("restore: skipped (cannot yet tell whether it is ours)", url); continue; }
+          const mm = getInstalled();
+          if(bad){
+            if(mm[url]){ mm[url].quarantined = true; mm[url].told = false; setInstalled(mm); }
+            _noticeQuarantine(url, meta.name || meta.abbr || url);
+            continue;
+          }
+          if(!meta.checked && mm[url]){ mm[url].checked = true; setInstalled(mm); }
+        }
         if(!(await cachedCopyIsCurrent(url, bytes, pins[url]))){
           // The catalogue pins a different build: this module was republished after the phone installed
           // it. Re-install through the ordinary path — installModule re-downloads, verifies before it
@@ -1201,7 +1267,7 @@ window.safeImgUrl = function (v) {
                  : loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr),
             isXr ? "crossrefs" : "dictionaries") });
         } else {
-          const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
+          const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category }, memberFiles);
           noteLoadedFrom(url, r && r.abbr, catOf(meta));
         }
       }catch(e){ console.error("restore failed for", url, e); }
@@ -1210,7 +1276,419 @@ window.safeImgUrl = function (v) {
     if(_pendingDicts.length){ if(typeof requestIdleCallback === 'function') requestIdleCallback(_ensureDicts, { timeout: 5000 }); else setTimeout(_ensureDicts, 1500); }
   }
 
-  // ── hidden file input ──
+  // ── INSTALL A MODULE FROM A FILE (a Bible, commentary, dictionary or cross-reference set someone sent) ──
+  //
+  // ONE ENTRY POINT, installFromBytes(u8, hint), used by the browser's file picker (pickFile, below) and by
+  // "Open with TrinityOne" on Android (app/install-bible.jsx). It NEVER THROWS and never writes Bible._error:
+  // it answers {ok:true, kind, abbr, name, already?, renamed?} or {ok:false, reason}, with reason one of
+  // "unusable" | "too-big" | "no-space" | "failed". A screen turns that into words (app/install-bible.jsx).
+  //
+  // WHY IT IS NOT JUST loadModuleBytes. loadModuleBytes (unchanged, and used by the hosted-install and boot
+  // paths) trusts what it is given. A file somebody SENT us is the one input here that is untrusted, so every
+  // guard lives in this caller and none in the shared function. In order:
+  //   0. wait for the boot restore (autoLoad), so a cold open from a file cannot race it into BSB and BSB2;
+  //   1. caps: 50 MB raw; for a zip a header-only pass sums the DECLARED inflated size (128 MB) and counts the
+  //      entries (2,000) before anything is inflated; fflate allocates from that same field, so the sum is an
+  //      upper bound (audit of 2026-11-14 measured it on the vendored fflate 0.8.3);
+  //   2. REFUSE any SQLite file holding a view or a trigger, bare or inside a zip. detailsOf() runs
+  //      `SELECT * FROM Details`, which a hostile file can make a recursive view: an 8 KB file stalled the
+  //      main thread for 13.6 s on a desktop. A finite one would then be paid again on every boot;
+  //   3. IDENTITY IS THE BYTES. Key = imported/<first 12 hex of sha256>/<cleaned name><ext>. Identical bytes
+  //      are "already here" (nothing is written). Bytes that match a PINNED hash (KNOWN_HASHES, or a
+  //      catalogue sha256) take that catalogue entry's name. A module can NEVER take a name a loaded (or
+  //      catalogue) module holds: it gets " (from a file)" and a distinct abbreviation instead, because
+  //      addSource/addCommentary REPLACE a module with the same abbr and name, and altered Scripture under a
+  //      trusted name is the realistic attack on this product's first audience. There is no Replace;
+  //   4. load through the unchanged loadModuleBytes, naming it first with the meta this function decided;
+  //   5. SAVE THE BYTES, THEN RECORD. cachePut first; a record is written only after it succeeded, and if
+  //      saving fails the module is taken back out of memory. A record with no bytes can never exist.
+  // Installs run one at a time (_installChain).
+  const INSTALL_MAX_RAW = 50 * 1024 * 1024;        // the hosted-install cap (fetchAndCacheModule), same number
+  const INSTALL_MAX_INFLATED = 128 * 1024 * 1024;  // sum of a zip's declared inflated sizes
+  const INSTALL_MAX_ENTRIES = 2000;
+  const FROM_FILE = " (from a file)";
+  const DB_NAME_RE = /\.(bbl\.mybible|mybible|bbl|sqlite|db)$/i;   // the same pattern loadModuleBytes uses
+  let _bootDone = Promise.resolve();
+  let _installChain = Promise.resolve();
+  const _fileSubs = new Set();
+  function onFileInstall(fn){ _fileSubs.add(fn); return () => _fileSubs.delete(fn); }
+  const _emitFile = (ev) => _fileSubs.forEach(fn => { try{ fn(ev); }catch(e){ console.error(e); } });
+
+  // The last part of the stored key: safe as a file name and as a path part (exportModule, shareOneFile and
+  // restoreInstalled's srcName all read it). Only [A-Za-z0-9._-], at most 40, never a leading dot, never "..".
+  function _cleanFileName(s){
+    let t = String(s == null ? "" : s);
+    while(/\.(zip|usfm|sfm|json|mybible|bbl|cmt|dct|dvn)$/i.test(t)) t = t.replace(/\.[A-Za-z0-9]+$/, "");
+    t = t.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/\.{2,}/g, ".").replace(/^[._-]+/, "").slice(0, 40).replace(/[._-]+$/, "");
+    return t || "module";
+  }
+  // NFKC, and no format characters (zero-width, bidi overrides, U+2060...): a name that LOOKS like another name
+  // must not be stored as a different one (audit M2).
+  const _cleanTitle = (s) => String(s == null ? "" : s).normalize("NFKC").replace(/\p{Cf}/gu, "").replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  // THE KEY TWO NAMES ARE COMPARED ON is the Unicode UTS #39 "skeleton": every character that is confusable with an
+  // ASCII letter or digit is replaced by it, so "King James Versi\u0585n" (Armenian o), "V\u1d07rsion" (small-cap E),
+  // "Kin\u0261" (script g) and "K\u0131ng" (dotless i) all become "kingjamesversion". The table is GENERATED from the
+  // Unicode Consortium's confusables.txt (https://www.unicode.org/Public/security/latest/confusables.txt, version 18.0,
+  // "MA" mixed-script-any-case mappings, single characters whose prototype is ASCII letters/digits: 1,806 characters),
+  // plus the Latin small capitals U+1D00.. which that file omits. Data (c) Unicode, Inc., used under the Unicode
+  // terms of use. Format: `prototype:hex,hex,...;prototype:...`. Then NFD with the marks removed, case-folded, and
+  // everything that is not a letter or digit dropped (spaces, punctuation, soft hyphens, every format character).
+  //
+  // WHY THIS AND NOT "LABEL ANY MIXED-SCRIPT NAME": a stricter script rule would label real names (a Ukrainian or
+  // Greek Bible whose own name is in its own script, or "Bible Reina-Valera" with a Latin-1 accent) and teach members
+  // that the label means nothing. The skeleton labels only what IMITATES a name we hold.
+  //
+  // LICENCE NOTICE for the data the table below is derived from (Unicode License v3; the same text is in
+  // scripts/data/UNICODE-LICENSE-3.0.txt, which is not shipped, so it is repeated here, where the data ships):
+  //
+  //   UNICODE LICENSE V3
+  //   COPYRIGHT AND PERMISSION NOTICE
+  //   Copyright (c) 1991-2026 Unicode, Inc.
+  //   NOTICE TO USER: Carefully read the following legal agreement. BY DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING
+  //   DATA FILES, AND/OR SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE TERMS AND CONDITIONS OF THIS
+  //   AGREEMENT. IF YOU DO NOT AGREE, DO NOT DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+  //   Permission is hereby granted, free of charge, to any person obtaining a copy of data files and any associated
+  //   documentation (the "Data Files") or software and any associated documentation (the "Software") to deal in the Data
+  //   Files or Software without restriction, including without limitation the rights to use, copy, modify, merge, publish,
+  //   distribute, and/or sell copies of the Data Files or Software, and to permit persons to whom the Data Files or Software
+  //   are furnished to do so, provided that either (a) this copyright and permission notice appear with all copies of the
+  //   Data Files or Software, or (b) this copyright and permission notice appear in associated Documentation.
+  //   THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+  //   LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF THIRD PARTY
+  //   RIGHTS.
+  //   IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL
+  //   INDIRECT OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+  //   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+  //   THE DATA FILES OR SOFTWARE.
+  //   Except as contained in this notice, the name of a copyright holder shall not be used in advertising or otherwise to
+  //   promote the sale, use or other dealings in these Data Files or Software without prior written authorization of the
+  //   copyright holder.
+  const _CONF_DATA = "2:1a7,3e8,10c7,14bf,1616,1cb7,a644,a6ef,a75a,ff12,1ccf2,1d7d0,1d7da,1d7e4,1d7ee,1d7f8,1fbf2;3:1b7,21c,417,4e0,545,969,ae9,1702,1c95,2c9c,2cc4,2ccc,a76a,a7ab,ff13,118ca,16f3b,1ccf3,1d206,1d7d1,1d7db,1d7e5,1d7ef,1d7f9,1fbf3;4:13ce,ab9e,ff14,118af,16e82,1ccf4,1d7d2,1d7dc,1d7e6,1d7f0,1d7fa,1fbf4;5:1bc,ff15,118bb,1ccf5,1d7d3,1d7dd,1d7e7,1d7f1,1d7fb,1fbf5;6:3ec,431,13ee,2cd2,2cd3,2cdc,a543,abbe,ff16,118d5,1ccf6,1d7d4,1d7de,1d7e8,1d7f2,1d7fc,1fbf6;7:172a,1c84,ff17,104d2,118c6,16e8a,1ccf7,1d1fe,1d212,1d7d5,1d7df,1d7e9,1d7f3,1d7fd,1fbf7;8:222,223,9ea,a6a,b03,a589,ff18,1031a,11445,169fe,1ccf8,1d7d6,1d7e0,1d7ea,1d7f4,1d7fe,1e8cb,1fbf8;9:9ed,a67,b68,d6d,2cca,2ccb,a76e,a76f,ff19,118ac,118cc,118d6,169c1,1ccf9,1d7d7,1d7e1,1d7eb,1d7f5,1d7ff,1e2f2,1fbf9;A:391,410,13aa,15c5,a4ee,ff21,102a0,16f40,1ccd6,1d400,1d434,1d468,1d49c,1d4d0,1d504,1d538,1d56c,1d5a0,1d5d4,1d608,1d63c,1d670,1d6a8,1d6e2,1d71c,1d756,1d790,1df6a;AA:a732;AE:c6,4d4;AO:a734;AR:1f707;AU:3373,a736;AV:a738,a73a;AY:a73c;B:392,412,13f4,15f7,212c,2c82,a4d0,a557,a7b4,ff22,10282,102a1,10301,1ccd7,1d401,1d435,1d469,1d4d1,1d505,1d539,1d56d,1d5a1,1d5d5,1d609,1d63d,1d671,1d6a9,1d6e3,1d71d,1d757,1d791;Bq:33c3;C:3f9,421,13df,2102,212d,216d,2ca4,a4da,ff23,102a2,10302,10415,1051b,118e9,118f2,1ccd8,1d402,1d436,1d46a,1d49e,1d4d2,1d56e,1d5a2,1d5d6,1d60a,1d63e,1d672,1f74c;D:13a0,15de,15ea,2145,216e,a4d3,ff24,1ccd9,1d403,1d437,1d46b,1d49f,1d4d3,1d507,1d53b,1d56f,1d5a3,1d5d7,1d60b,1d63f,1d673;DJ:1f190;DZ:1f1;Dz:1f2;E:395,415,13ac,2130,22ff,2d39,a4f0,a5cb,ff25,10286,118a6,118ae,1ccda,1d404,1d438,1d46c,1d4d4,1d508,1d53c,1d570,1d5a4,1d5d8,1d60c,1d640,1d674,1d6ac,1d6e6,1d720,1d75a,1d794,1df81;F:3dc,7d3,15b4,2131,a4dd,a798,ff26,10287,102a5,10525,118a2,118c2,1ccdb,1d213,1d405,1d439,1d46d,1d4d5,1d509,1d53d,1d571,1d5a5,1d5d9,1d60d,1d641,1d675,1d7ca;FAX:213b;G:50c,13c0,13f3,a4d6,ff27,1ccdc,1d406,1d43a,1d46e,1d4a2,1d4d6,1d50a,1d53e,1d572,1d5a6,1d5da,1d60e,1d642,1d676;GB:3387;GHz:3393;GPa:33ac;Gy:33c9;H:397,41d,13bb,157c,210b,210c,210d,2c8e,a4e7,ff28,102cf,1ccdd,1d407,1d43b,1d46f,1d4d7,1d573,1d5a7,1d5db,1d60f,1d643,1d677,1d6ae,1d6e8,1d722,1d75c,1d796;HP:33cb;Hg:32cc;Hz:3390;J:37f,408,13ab,148d,a4d9,a7b2,ff2a,1ccdf,1d409,1d43d,1d471,1d4a5,1d4d9,1d50d,1d541,1d575,1d5a9,1d5dd,1d611,1d645,1d679;K:39a,41a,13e6,16d5,2c94,a4d7,ff2b,10518,1cce0,1d40a,1d43e,1d472,1d4a6,1d4da,1d50e,1d542,1d576,1d5aa,1d5de,1d612,1d646,1d67a,1d6b1,1d6eb,1d725,1d75f,1d799;KB:3385;KK:33cd;KM:33ce;L:13de,14aa,2112,216c,2cd0,a4e1,ff2c,1041b,10526,118a3,118b2,16f16,1cce1,1d22a,1d40b,1d43f,1d473,1d4db,1d50f,1d543,1d577,1d5ab,1d5df,1d613,1d647,1d67b;LJ:1c7;LTD:32cf;Lj:1c8;M:39c,3fa,41c,13b7,15f0,16d6,2133,216f,2c98,a4df,ff2d,102b0,10311,10c21,1cce2,1d40c,1d440,1d474,1d4dc,1d510,1d544,1d578,1d5ac,1d5e0,1d614,1d648,1d67c,1d6b3,1d6ed,1d727,1d761,1d79b;MB:3386,1f76b;MHz:3392;MPa:33ab;MV:33b9;MW:33bf;N:39d,2115,2c9a,a4e0,ff2e,10513,11abe,1cce3,1d40d,1d441,1d475,1d4a9,1d4dd,1d511,1d579,1d5ad,1d5e1,1d615,1d649,1d67d,1d6b4,1d6ee,1d728,1d762,1d79c;NJ:1ca;Nj:1cb;No:2116;O:39f,41e,555,7c0,b20,ce6,12d0,1cbf,2c9e,2d54,3007,a4f3,ff10,ff2f,10292,102ab,1030f,10404,104c2,10516,10c17,118b5,118e0,11de0,16ae9,1cce4,1ccf0,1d40e,1d442,1d476,1d4aa,1d4de,1d512,1d546,1d57a,1d5ae,1d5e2,1d616,1d64a,1d67e,1d6b6,1d6f0,1d72a,1d764,1d79e,1d7ce,1d7d8,1d7e2,1d7ec,1d7f6,1e140,1e2f0,1fbf0;OE:152;OO:a698,a74e;Oy:478;P:3a1,420,13e2,146d,2119,2ca2,2cce,a4d1,ff30,10295,1cce5,1d40f,1d443,1d477,1d4ab,1d4df,1d513,1d57b,1d5af,1d5e3,1d617,1d64b,1d67f,1d6b8,1d6f2,1d72c,1d766,1d7a0;PH:33d7;PPM:33d9;PR:33da;PTE:3250;Pa:33a9;Q:51a,211a,2d55,ff31,1cce6,1d410,1d444,1d478,1d4ac,1d4e0,1d514,1d57c,1d5b0,1d5e4,1d618,1d64c,1d680;QE:1f700;R:1a6,24c,13a1,13d2,1587,211b,211c,211d,a4e3,ff32,104b4,16f35,1cce7,1d216,1d411,1d445,1d479,1d4e1,1d57d,1d5b1,1d5e5,1d619,1d64d,1d681;Rs:20a8;S:405,54f,10bd,10fd,13d5,13da,1cbd,a4e2,a576,ff33,10296,10420,16ad6,16f3a,1cce8,1d412,1d446,1d47a,1d4ae,1d4e2,1d516,1d54a,1d57e,1d5b2,1d5e6,1d61a,1d64e,1d682;Sv:33dc;T:3a4,422,7e0,13a2,22a4,27d9,2ca6,3112,4e05,a4d4,a50b,ff34,10297,102b1,10315,118bc,16f0a,1cce9,1d373,1d413,1d447,1d47b,1d4af,1d4e3,1d517,1d54b,1d57f,1d5b3,1d5e7,1d61b,1d64f,1d683,1d6bb,1d6f5,1d72f,1d769,1d7a3,1f768;T3:a728;TEL:2121;THz:3394;U:54d,1200,144c,222a,22c3,a4f4,ff35,104ce,118b8,16f42,1ccea,1d414,1d448,1d47c,1d4b0,1d4e4,1d518,1d54c,1d580,1d5b4,1d5e8,1d61c,1d650,1d684;V:474,667,6f7,13d9,142f,2164,2d38,a4e6,a6df,ff36,1051d,10c1f,118a0,16f08,1cceb,1cefc,1d20d,1d415,1d449,1d47d,1d4b1,1d4e5,1d519,1d54d,1d581,1d5b5,1d5e9,1d61d,1d651,1d685,1e145;VB:1f76c;Vl:2165;Vll:2166;Vlll:2167;W:51c,13b3,13d4,a4ea,ff37,118e6,118ef,1ccec,1d20c,1d416,1d44a,1d47e,1d4b2,1d4e6,1d51a,1d54e,1d582,1d5b6,1d5ea,1d61e,1d652,1d686;Wb:33dd;X:3a7,425,166d,16b7,1cf5,2169,2573,2cac,2d5d,a4eb,a7b3,ff38,10290,102b4,10317,10322,10527,10c13,10c82,10cfc,118ec,1cced,1d417,1d44b,1d47f,1d4b3,1d4e7,1d51b,1d54f,1d583,1d5b7,1d5eb,1d61f,1d653,1d687,1d6be,1d6f8,1d732,1d76c,1d7a6;Xl:216a;Xll:216b;Y:3a5,3d2,423,4ae,7cc,13a9,13bd,2ca8,311a,4e2b,a4ec,ff39,102b2,10c20,118a4,16f43,1ccee,1d418,1d44c,1d480,1d4b4,1d4e8,1d51c,1d550,1d584,1d5b8,1d5ec,1d620,1d654,1d688,1d6bc,1d6f6,1d730,1d76a,1d7a4;Z:396,10cd,13c3,2124,2128,2c6b,2c8c,a4dc,a6c9,ff3a,102f5,10507,118a9,118e5,11abc,1ccef,1d419,1d44d,1d481,1d4b5,1d4e9,1d585,1d5b9,1d5ed,1d621,1d655,1d689,1d6ad,1d6e7,1d721,1d75b,1d795;a:251,3b1,430,1d00,237a,ab64,ff41,1d41a,1d44e,1d482,1d4b6,1d4ea,1d51e,1d552,1d586,1d5ba,1d5ee,1d622,1d656,1d68a,1d6c2,1d6fc,1d736,1d770,1d7aa,1df5a;aa:a733;ae:e6,4d5;ao:a735;au:a737;av:a739,a73b;ay:a73d;b:184,299,42c,7d5,13cf,1472,15af,ff42,1031c,16eb6,1d207,1d41b,1d44f,1d483,1d4b7,1d4eb,1d51f,1d553,1d587,1d5bb,1d5ef,1d623,1d657,1d68b;bar:3374;bl:42b;c:3f2,441,1004,105a,1c83,1d04,217d,2ca5,abaf,ff43,1043d,1d134,1d41c,1d450,1d484,1d4b8,1d4ec,1d520,1d554,1d588,1d5bc,1d5f0,1d624,1d658,1d68c;cal:3388;cc:33c4;cd:33c5;co:ab43;crn:339d;d:501,13e7,146f,1d05,2146,217e,a4d2,ff44,1018b,1d41d,1d451,1d485,1d4b9,1d4ed,1d521,1d555,1d589,1d5bd,1d5f1,1d625,1d659,1d68d;dB:33c8;da:3372;dl:3397;drn:3377;dz:1f3,2a3;e:435,4bd,1d07,212e,212f,2147,ab32,ff45,1d41e,1d452,1d486,1d4ee,1d522,1d556,1d58a,1d5be,1d5f2,1d626,1d65a,1d68e;eV:32ce;erg:32cd;f:17f,192,284,584,1e9d,a799,ab35,ff46,1017e,1d41f,1d453,1d487,1d4bb,1d4ef,1d523,1d557,1d58b,1d5bf,1d5f3,1d627,1d65b,1d68f;ff:fb00;ffi:fb03;ffl:fb04;fi:fb01;fl:fb02;frn:3399;ft:fb05;g:18d,261,262,581,1d83,210a,ff47,1d420,1d454,1d488,1d4f0,1d524,1d558,1d58c,1d5c0,1d5f4,1d628,1d65c,1d690;gal:33ff;h:29c,4ba,4bb,570,10b9,13c2,210e,ff48,1d421,1d489,1d4bd,1d4f1,1d525,1d559,1d58d,1d5c1,1d5f5,1d629,1d65d,1d691;hPa:3371;ha:33ca;i:a1,131,269,26a,3b9,456,582,13a5,2139,2148,2170,2373,2c93,a647,ab75,ff49,118c3,1d422,1d456,1d48a,1d4be,1d4f2,1d526,1d55a,1d58e,1d5c2,1d5f6,1d62a,1d65e,1d692,1d6a4,1d6ca,1d704,1d73e,1d778,1d7b2;ie:1df5d;ii:2171;iii:2172;ij:133;in:33cc;iv:2173;ix:2178;j:237,3f3,458,575,1d0a,2149,ff4a,1d423,1d457,1d48b,1d4bf,1d4f3,1d527,1d55b,1d58f,1d5c3,1d5f7,1d62b,1d65f,1d693,1d6a5;k:1d0b,ff4b,1d424,1d458,1d48c,1d4c0,1d4f4,1d528,1d55c,1d590,1d5c4,1d5f8,1d62c,1d660,1d694;kA:3384;kHz:3391;kPa:33aa;kV:33b8;kW:33be;kcal:3389;kg:338f;kl:3398;krn:339e;kt:33cf;l:196,1c0,29f,399,406,4c0,4cf,5c0,5d5,5df,627,661,6f1,7ca,964,104a,16c1,16d0,2110,2111,2113,2160,217c,21bf,2223,23fd,2502,2503,2c92,2d4a,2d4f,a4f2,a56f,a781,a7ae,a7fe,a830,a8ce,aa5d,fe31,fe8d,fe8e,ff11,ff29,ff4c,ff5c,ffe8,1028a,10309,10320,1050e,10926,10c3e,10ca5,10cfa,11047,110c0,11141,111c5,113d4,1144b,115c5,11641,11c41,11dda,11de1,16d63,16eaa,16f28,1ccde,1ccf1,1d100,1d377,1d408,1d425,1d43c,1d459,1d470,1d48d,1d4c1,1d4d8,1d4f5,1d529,1d540,1d55d,1d574,1d591,1d5a8,1d5c5,1d5dc,1d5f9,1d610,1d62d,1d644,1d661,1d678,1d695,1d6b0,1d6ea,1d724,1d75e,1d798,1d7cf,1d7d9,1d7e3,1d7ed,1d7f7,1e141,1e8c7,1ed01,1ee00,1ee80,1fbf1;lJ:132;lL:1efa;lO:42e;lU:337a;lV:2163;lX:2168;lj:1c9;ll:1c1,5f0,965,104b,2016,2161,2225,a8cf,11048,110c1,11142,111c6,113d5,1144c,11642,11c42,1d262;lll:2162,a516;ln:33d1;log:33d2;lrn:33d0;ls:2aa;lt:20b6;lx:33d3;lz:2ab;m:1d0d;n:274,578,57c,ff4e,1d427,1d45b,1d48f,1d4c3,1d4f7,1d52b,1d55f,1d593,1d5c7,1d5fb,1d62f,1d663,1d697;nA:3381;nF:338b;nV:33b5;nW:33bb;nj:1cc;nrn:339a;ns:33b1;o:3bf,3c3,3ed,43e,585,5e1,647,665,6be,6c1,6d5,6f5,7cb,840,966,9e6,a66,ae6,b66,be6,c02,c66,c82,d02,d20,d66,d82,e50,ed0,101d,1040,10ff,110b,11bc,17e0,1a45,1a80,1a90,1bea,1c82,1d0f,1d11,2134,2c9f,3147,ab3d,fba6,fba7,fba8,fba9,fbaa,fbab,fbac,fbad,fee9,feea,feeb,feec,ff4f,ffb7,1042c,104ea,1092c,10d07,11124,11302,114d0,118c8,118d7,1d428,1d45c,1d490,1d4f8,1d52c,1d560,1d594,1d5c8,1d5fc,1d630,1d664,1d698,1d6d0,1d6d4,1d70a,1d70e,1d744,1d748,1d77e,1d782,1d7b8,1d7bc,1ee24,1ee84;oV:3375;oe:153;oi:1df5e;ol:1ee64;oo:1147,11ee,221e,3180,a699,a74f;ou:1df5f;oy:479;p:fe,1bf,3c1,3f1,3f8,440,1d18,2374,2ca3,2ccf,ff50,1d429,1d45d,1d491,1d4c5,1d4f9,1d52d,1d561,1d595,1d5c9,1d5fd,1d631,1d665,1d699,1d6d2,1d6e0,1d70c,1d71a,1d746,1d754,1d780,1d78e,1d7ba,1d7c8;pA:3380;pF:338a;pV:33b4;pW:33ba;pc:3376;ps:33b0;q:51b,563,566,ff51,1d42a,1d45e,1d492,1d4c6,1d4fa,1d52e,1d562,1d596,1d5ca,1d5fe,1d632,1d666,1d69a;r:280,433,1d26,2c85,ab47,ab48,ab81,ff52,16a19,1d42b,1d45f,1d493,1d4c7,1d4fb,1d52f,1d563,1d597,1d5cb,1d5ff,1d633,1d667,1d69b;rad:33ad;rn:560,217f,ff4d,11700,118e3,1d426,1d45a,1d48e,1d4c2,1d4f6,1d52a,1d55e,1d592,1d5c6,1d5fa,1d62e,1d662,1d696;rnA:3383;rnV:33b7;rnW:33bd;rnb:33d4;rng:338e;rnil:33d5;rnl:3396;rnol:33d6;rnrn:339c;rns:33b3;s:1bd,455,d1f,a731,abaa,ff53,10448,118c1,1d42c,1d460,1d494,1d4c8,1d4fc,1d530,1d564,1d598,1d5cc,1d600,1d634,1d668,1d69c;sr:33db;sss:1f75c;st:fb06;t:1d1b,ff54,1d42d,1d461,1d495,1d4c9,1d4fd,1d531,1d565,1d599,1d5cd,1d601,1d635,1d669,1d69d;tf:a777;th:1df64;ts:2a6;u:28b,3c5,57d,1d1c,a79f,ab4e,ab52,ff55,104f6,118d8,1d42e,1d462,1d496,1d4ca,1d4fe,1d532,1d566,1d59a,1d5ce,1d602,1d636,1d66a,1d69e,1d6d6,1d710,1d74a,1d784,1d7be;ue:1d6b;uo:ab63;v:3bd,475,5d8,1d20,2174,2228,22c1,aba9,ff56,11706,118c0,1d42f,1d463,1d497,1d4cb,1d4ff,1d533,1d567,1d59b,1d5cf,1d603,1d637,1d66b,1d69f,1d6ce,1d708,1d742,1d77c,1d7b6;vi:2175;vii:2176;viii:2177;w:26f,448,461,51d,561,1d21,29e2,2cbd,a7fa,ab83,aba4,ff57,1170a,1170e,1170f,1d430,1d464,1d498,1d4cc,1d500,1d534,1d568,1d59c,1d5d0,1d604,1d638,1d66c,1d6a0,1df7d;wh:1df65;x:d7,445,1541,157d,166e,1763,1bec,2179,292b,292c,2a2f,ff58,10cc2,1d431,1d465,1d499,1d4cd,1d501,1d535,1d569,1d59d,1d5d1,1d605,1d639,1d66d,1d6a1;xi:217a;xii:217b;y:263,28f,3b3,443,4af,10e7,1d8c,1eff,213d,2ca9,ab5a,ff59,118c4,118dc,1d432,1d466,1d49a,1d4ce,1d502,1d536,1d56a,1d59e,1d5d2,1d606,1d63a,1d66e,1d6a2,1d6c4,1d6fe,1d738,1d772,1d7ac;z:1d22,2c6c,2c8d,2d2d,ab93,ff5a,1d433,1d467,1d49b,1d4cf,1d503,1d537,1d56b,1d59f,1d5d3,1d607,1d63b,1d66f,1d6a3";
+  let _confMap = null;
+  const _confOf = (cp) => {
+    if(!_confMap){ _confMap = new Map(); for(const g of _CONF_DATA.split(";")){ const i = g.indexOf(":"); const to = g.slice(0, i); for(const h of g.slice(i + 1).split(",")) _confMap.set(parseInt(h, 16), to); } }
+    return _confMap.get(cp);
+  };
+  const _nameKey = (s) => {
+    let o = "";
+    // accents come off FIRST (Greek \u03cc and Cyrillic \u04e7, \u0451, \u0457, \u04d1 are an accented lookalike of a letter the table knows), then the map
+    // Mn (nonspacing) only: the Telugu, Kannada, Malayalam and Sinhala anusvara are SPACING marks (Mc) that look like "o", and the table maps them
+    for(const ch of String(s == null ? "" : s).normalize("NFKC").normalize("NFD").replace(/\p{Mn}/gu, "")){ const t = ch.codePointAt(0) >= 128 ? _confOf(ch.codePointAt(0)) : null; o += t || ch; }
+    return o.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  };
+  const _deriveAbbr = (name) => {
+    const w = String(name).split(/[^A-Za-z0-9]+/).filter(Boolean);
+    return (w.length > 1 ? w.map(x => x[0]).join("").toUpperCase().slice(0, 8) : String(name).replace(/[^A-Za-z0-9]/g, "")).slice(0, 12) || "USFM";
+  };
+  // A USFM Bible's own name, from the file itself. The \id line carries it after the book code (`\id GEN -
+  // Berean Study Bible`) ONLY SOMETIMES: in the shipped KJV it holds each BOOK's title (`\id 1SA The First Book
+  // of Samuel`), and \toc1 and \h are always book titles. So: an \id text counts only when it is the SAME in at
+  // least two books (or the zip has just one book) and is not the book's own title; failing that, the file name
+  // the picker gave us; failing that "USFM Bible" - never a book title (audit M3: the KJV installed as "The First
+  // Book of Samuel"). Front-matter files (FRT, INT...) are skipped.
+  function _usfmName(files, fileName){
+    const dec = new TextDecoder("utf-8"), lc = (x) => String(x || "").toLowerCase();
+    const seen = {}; let books = 0;
+    for(const nm of Object.keys(files).filter(n => !n.startsWith("__MACOSX") && /\.(usfm|sfm)$/i.test(n)).sort()){
+      const head = dec.decode(files[nm].subarray(0, 4096));
+      const code = (head.match(/^\\id[ \t]+(\S+)/m) || [])[1];
+      if(!code || !USFM_BOOK[code.toUpperCase()]) continue;
+      books++;
+      let m;
+      const h = (m = head.match(/^\\h[ \t]+([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
+      const t1 = (m = head.match(/^\\toc1[ \t]+([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
+      const t2 = (m = head.match(/^\\toc2[ \t]+([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
+      const id = (m = head.match(/^\\id[ \t]+\S+[ \t]*(?:[-\u2013\u2014:][ \t]*)?([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
+      if(id && ![h, t1, t2, bookName(USFM_BOOK[code.toUpperCase()])].map(lc).includes(lc(id))) seen[id] = (seen[id] || 0) + 1;
+    }
+    let idT = null, best = 0;
+    for(const t of Object.keys(seen)) if(seen[t] > best){ best = seen[t]; idT = t; }
+    if(idT && !(best >= 2 || books === 1)) idT = null;
+    const fromFile = _cleanTitle(String(fileName || "").replace(/\.(zip|usfm|sfm)$/i, ""));
+    return idT || fromFile || "USFM Bible";
+  }
+  // Anything in a SQLite file that makes a plain SELECT do work the engine did not ask for. Refused outright:
+  //   · a VIEW or TRIGGER (a recursive view in Details froze a desktop for 13.6 s from 8 KB);
+  //   · a VIRTUAL table (FTS and the like; they cannot run arbitrary SQL, but nothing here needs one);
+  //   · a GENERATED column (computed on every SELECT, e.g. length(hex(zeroblob(N))) in Details or Bible.Scripture);
+  //   · a table or column whose NAME is not plain (letters, digits, underscore, space): names go into SQL, and
+  //     the builders quote them now, but a module whose names are code is not a MySword module.
+  // The database is CLOSED again before this returns (sql.js keeps a closed-over copy of the file in memory until
+  // it is, and an 8 MB Bible leaked 8.5 MB per attempt).
+  const _PLAIN_NAME = /^[A-Za-z0-9_ ]+$/;
+  async function _sqliteUnsafe(dbBytes){
+    const SQL = await initSqlJs({ locateFile: f => SQLJS_BASE + f });
+    const sdb = new SQL.Database(dbBytes);
+    const q = (sql) => { const st = sdb.prepare(sql); const o = []; while(st.step()) o.push(st.getAsObject()); st.free(); return o; };
+    try{
+      for(const r of q("SELECT type, name, sql FROM sqlite_master")){
+        if(r.type === "view" || r.type === "trigger") return true;
+        if(r.type === "table"){
+          if(/^\s*CREATE\s+VIRTUAL\b/i.test(String(r.sql || ""))) return true;
+          if(!_PLAIN_NAME.test(String(r.name))) return true;
+          if(/^sqlite_/i.test(String(r.name))) continue;
+          for(const c of q("PRAGMA table_xinfo(" + qid(r.name) + ")")){
+            if(!_PLAIN_NAME.test(String(c.name)) || c.hidden === 2 || c.hidden === 3) return true;
+          }
+        }
+      }
+      return false;
+    } finally { try{ sdb.close(); }catch(e){} }
+  }
+  // What loadModuleBytes WOULD make of these bytes, without registering anything: its kind, the name and
+  // abbreviation it would register under, and the extension the stored copy gets. Mirrors loadModuleBytes'
+  // own branches; anything it would refuse returns null (and loadModuleBytes would throw on it too).
+  async function _peekDb(dbBytes, fb){
+    const db = await openDb(dbBytes);
+    try{
+      if(db.has("Bible")){ const d = detailsOf(db, fb); return { kind: "bible", abbr: d.abbr, name: d.name }; }
+      const cmt = buildCommentaryFromDb(db, fb);
+      if(cmt) return { kind: "comment", abbr: cmt.abbr, name: cmt.name };
+      if(db.tables.find(x => /dictionary/i.test(x))){
+        const d = db.has("Details") ? detailsOf(db, "") : null;
+        const abbr = (d && d.abbr && d.abbr !== "Bible") ? d.abbr : "Dict";
+        return { kind: "dict", abbr, name: (d && d.name && d.name !== "Module") ? d.name : abbr };
+      }
+      return null;
+    } finally { db.close(); }   // the peek only READS the names; the module itself is opened (and kept) by loadModuleBytes
+  }
+  const _DBEXT = { bible: ".bbl.mybible", comment: ".cmt.mybible", dict: ".dct.mybible" };
+  async function _peekModule(u8, hint, preFiles){
+    const fb = String(hint || "");
+    if(isSqlite(u8)){
+      if(await _sqliteUnsafe(u8)) return { unsafe: true };
+      const p = await _peekDb(u8, fb);
+      return p && { ...p, ext: _DBEXT[p.kind] };
+    }
+    if(isZip(u8)){
+      // the zip is read ONCE, bounded, by _zipExtract; the same entries go on to loadModuleBytes (peek.files)
+      let files = preFiles;
+      if(!files){ const x = _zipExtract(u8); if(x.refuse) return { unsafe: true }; files = x.files; }
+      const names = Object.keys(files).filter(n => !n.startsWith("__MACOSX"));
+      const dbNames = names.filter(n => DB_NAME_RE.test(n));
+      const sqliteNames = dbNames.length ? dbNames.filter(n => isSqlite(files[n])) : names.filter(n => isSqlite(files[n]));
+      for(const n of sqliteNames) if(await _sqliteUnsafe(files[n])) return { unsafe: true };
+      const dbName = names.find(n => DB_NAME_RE.test(n)) || names.find(n => isSqlite(files[n]));
+      if(dbName){ const p = await _peekDb(files[dbName], fb); return p && { ...p, ext: _DBEXT[p.kind] + ".zip", files }; }
+      const name = _usfmName(files, fb);
+      return { kind: "bible", abbr: _deriveAbbr(name), name, ext: ".zip", usfm: true, files };
+    }
+    const head = new TextDecoder().decode(u8.slice(0, 256));
+    if(/\\id\s+\w+/.test(head) || /\\c\s+\d/.test(head)){
+      const name = _usfmName({ "book.usfm": u8 }, fb);
+      return { kind: "bible", abbr: _deriveAbbr(name), name, ext: ".usfm", usfm: true };
+    }
+    if(head.replace(/^﻿/, "").trimStart().charAt(0) === "{"){
+      let parsed = null; try{ parsed = JSON.parse(new TextDecoder().decode(u8)); }catch(e){ parsed = null; }
+      if(parsed && parsed.meta && parsed.meta.kind === "crossref" && parsed.refs && typeof parsed.refs === "object" && !Array.isArray(parsed.refs)){
+        const abbr = String(parsed.meta.abbr || "TSK");
+        return { kind: "crossref", abbr, name: String(parsed.meta.name || abbr), ext: ".json", parsed };
+      }
+    }
+    return null;
+  }
+  const _CAT_OF_KIND = { bible: "bibles", comment: "commentaries", dict: "dictionaries", crossref: "crossrefs" };
+  // Is this name or abbreviation already held — by a LOADED module of the same kind (the stores that REPLACE
+  // on a clash), or by a CATALOGUE or eBible-mirror entry we publish (a file must not borrow a trusted Bible's name
+  // even before that Bible is installed)? Compared on _nameKey, so an invisible character or a lookalike letter
+  // does not make a different name.
+  function _taken(kind, abbr, name, reserved){
+    const K = _nameKey, ka = K(abbr), kn = K(name);
+    const coll = kind === "bible" ? modules : kind === "comment" ? commentaries : kind === "crossref" ? crossrefs : null;
+    let held = false;
+    if(coll){
+      for(const a of Object.keys(coll)){ if(K(a) === ka || K(coll[a].name) === kn) { held = true; break; } }
+      if(kind === "crossref" && abbr === CROSSREF_ALL) held = true;
+    } else if(kind === "dict") held = hasDict(abbr) || dicts.some(d => K(d.abbr) === ka);
+    return held || reserved.has(ka) || reserved.has(kn);
+  }
+  async function _reservedNames(kind){
+    const out = new Set(), cat = _CAT_OF_KIND[kind];
+    const add = (it, abbrToo = true) => { if(it && catOf(it) === cat){ if(it.name) out.add(_nameKey(it.name)); if(abbrToo && it.abbr) out.add(_nameKey(it.abbr)); } };
+    add(DEFAULT_MODULE); add(DEFAULT_LEXICON);
+    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
+    // the 1,290 eBible translations the Library offers by name: a file must not wear one either
+    if(kind === "bible"){ try{ const m = await getMirror(); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
+    return out;
+  }
+  async function _pinnedEntry(h){
+    for(const it of [DEFAULT_MODULE, DEFAULT_LEXICON]) if(it.url && KNOWN_HASHES[it.url] === h) return it;
+    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
+    return null;
+  }
+  // take a just-loaded module back out of memory (no record, no bytes involved)
+  function _undoLoaded(kind, abbr){
+    if(kind === "bible"){ delete modules[abbr]; order = order.filter(a => a !== abbr); if(active === abbr) active = order[0] || null; }
+    else if(kind === "comment") delete commentaries[abbr];
+    else if(kind === "dict") removeDict(abbr);
+    else if(kind === "crossref") delete crossrefs[abbr];
+    notify();
+  }
+  const _fail = (reason) => ({ ok: false, reason });
+  // ONE ZIP READER FOR EVERYTHING A MEMBER HANDS US (re-audit 3, A1). Twice the install check read a zip one way and the
+  // loader read it another: first local headers against the central directory, then a classic end record against the
+  // zip64 locator fflate prefers. Patching the check each time left the structure, so the structure is gone: nothing
+  // on the member-file path calls fflate.unzipSync any more. _zipParse reads the central directory (and refuses
+  // anything ambiguous), _zipExtract decodes every entry once, bounded by its declared size, and the entries it returns
+  // are the ones the peek AND loadModuleBytes use. The check and the use are the same bytes because they are the same
+  // call. Where the line falls: a HOSTED catalogue module (fetchAndCacheModule) and a catalogue-pinned copy still go
+  // through loadModuleBytes' own unzipSync; those bytes come from our server or match a published hash.
+  //
+  // Refused (reason "unusable", or "too-big" for the size caps): no end record, MORE THAN ONE end record in the last 64 KB,
+  // a zip64 locator (fflate's exact test: signature 0x07064b50 at end-20, which sends fflate to a second directory),
+  // zip64 or multi-disk markers (a zip under 50 MB never needs them), the two entry counts disagreeing, more than 2,000
+  // entries, a declared inflated total over 128 MB, an encrypted entry, a local header that is not where the
+  // directory says, a method other than stored/deflate, a stored entry whose sizes differ, and a deflate stream that
+  // yields more or fewer bytes than the directory declared.
+  function _zipParse(u8){
+    const bad = { refuse: "unusable" };
+    const len = u8.length;
+    if(len < 22) return bad;
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    let e = -1; const low = Math.max(0, len - 65558);
+    for(let i = len - 22; i >= low; i--) if(dv.getUint32(i, true) === 0x06054b50){ if(e >= 0) return bad; e = i; }
+    if(e < 0) return bad;
+    if(e >= 20 && dv.getUint32(e - 20, true) === 0x07064b50) return bad;
+    const count = dv.getUint16(e + 10, true), cdSize = dv.getUint32(e + 12, true), cdOff = dv.getUint32(e + 16, true);
+    if(dv.getUint16(e + 8, true) !== count || dv.getUint16(e + 4, true) !== 0 || dv.getUint16(e + 6, true) !== 0) return bad;
+    if(count === 0xffff || cdSize === 0xffffffff || cdOff === 0xffffffff || cdOff + cdSize > e) return bad;
+    if(count > INSTALL_MAX_ENTRIES) return bad;
+    const entries = []; let p = cdOff, total = 0;
+    for(let i = 0; i < count; i++){
+      if(p + 46 > len || dv.getUint32(p, true) !== 0x02014b50) return bad;
+      const flags = dv.getUint16(p + 8, true), method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true);
+      const nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
+      if(csize === 0xffffffff || usize === 0xffffffff || lho === 0xffffffff || (flags & 1) || p + 46 + nl > len) return bad;
+      total += usize;
+      if(total > INSTALL_MAX_INFLATED) return { refuse: "too-big" };
+      const nb = u8.subarray(p + 46, p + 46 + nl);
+      entries.push({ name: (flags & 0x800) ? new TextDecoder("utf-8").decode(nb) : String.fromCharCode.apply(null, nb), method, csize, usize, lho });
+      p += 46 + nl + xl + cl;
+    }
+    return { entries, dv };
+  }
+  // Inflate into a buffer of EXACTLY the declared size, in 8 KB pushes (a deflate stream cannot expand more than ~1000:1, so
+  // each push is bounded work), and give up the moment the output would pass it. null on any failure.
+  function _inflateExact(data, size){
+    const out = new Uint8Array(size); let at = 0, over = false;
+    const inf = new fflate.Inflate();
+    inf.ondata = (chunk) => { if(at + chunk.length > size){ over = true; return; } out.set(chunk, at); at += chunk.length; };
+    try{ for(let i = 0; i < data.length && !over; i += 8192) inf.push(data.subarray(i, Math.min(i + 8192, data.length)), i + 8192 >= data.length); }
+    catch(e){ return null; }
+    return (!over && at === size) ? out : null;
+  }
+  // -> { files: {name: Uint8Array} } or { refuse: "unusable" | "too-big" }. The only place a member's zip is decoded.
+  function _zipExtract(u8){
+    const z = _zipParse(u8);
+    if(z.refuse) return z;
+    const files = Object.create(null), dv = z.dv;
+    // every entry's record (local header + data) must be its own bytes: 2,000 directory entries pointing at ONE deflate
+    // stream decode it 2,000 times (a 108 KB file made 125 MB of decode on every boot; re-audit 3, L3)
+    const spans = [];
+    for(const en of z.entries){
+      if(en.lho + 30 > u8.length || dv.getUint32(en.lho, true) !== 0x04034b50) return { refuse: "unusable" };
+      en.start = en.lho + 30 + dv.getUint16(en.lho + 26, true) + dv.getUint16(en.lho + 28, true);
+      if(en.start + en.csize > u8.length) return { refuse: "unusable" };
+      spans.push([en.lho, en.start + en.csize]);
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+    for(let i = 1; i < spans.length; i++) if(spans[i][0] < spans[i - 1][1]) return { refuse: "unusable" };
+    for(const en of z.entries){
+      const start = en.start;
+      const data = u8.subarray(start, start + en.csize);
+      if(en.method === 0){ if(en.csize !== en.usize) return { refuse: "unusable" }; files[en.name] = u8.slice(start, start + en.csize); }
+      else if(en.method === 8){ const out = _inflateExact(data, en.usize); if(!out) return { refuse: "unusable" }; files[en.name] = out; }
+      else return { refuse: "unusable" };
+    }
+    return { files };
+  }
+  let _installDepth = 0;      // installs in flight: the reconnect retry of autoLoad must not start a second default install under one
+  // Registration is one at a time across file installs AND hosted ones (fetchAndCacheModule): the name check and
+  // the registration it protects must not be interleaved with another module claiming the same name.
+  let _regTail = Promise.resolve();
+  function withReg(fn){ const run = _regTail.then(fn, fn); _regTail = run.then(() => {}, () => {}); return run; }
+  async function _installOne(u8, hint){
+    try{
+      try{ await _bootDone; }catch(e){}
+      if(!u8 || !u8.length) return _fail("unusable");
+      if(u8.length > INSTALL_MAX_RAW) return _fail("too-big");
+      hint = typeof hint === "string" ? hint : "";
+
+      // BYTES FIRST. Identical bytes (or the pinned catalogue copy of them) are "already here" BEFORE anything is
+      // parsed, so a re-delivered file costs a hash and nothing else.
+      const h = await sha256hex(u8), h12 = h.slice(0, 12);
+      const inst = getInstalled();
+      const heldKey = async (url) => { if(!url || !inst[url]) return null; const b = await cacheGet(url); return b ? url : null; };
+      let dupKey = null;
+      for(const k of Object.keys(inst)) if(k.indexOf("imported/" + h12 + "/") === 0 && await heldKey(k)){ dupKey = k; break; }
+      const pinned = await _pinnedEntry(h);
+      if(!dupKey && pinned) dupKey = await heldKey(pinned.url);
+      // the SAME bytes were stored and later quarantined: say so, never "already installed"
+      if(dupKey && inst[dupKey].quarantined) return { ok: false, reason: "quarantined", name: inst[dupKey].name || inst[dupKey].abbr || dupKey };
+      if(dupKey){ const r = inst[dupKey]; return { ok: true, already: true, kind: r.kind || (r.category === "commentaries" ? "comment" : r.category === "dictionaries" ? "dict" : r.category === "crossrefs" ? "crossref" : "bible"), abbr: r.abbr, name: r.name || r.abbr }; }
+      // a record whose bytes are gone is stale: drop it so this install can stand in its place
+      for(const k of Object.keys(inst)) if(k.indexOf("imported/" + h12 + "/") === 0){ const m = getInstalled(); delete m[k]; setInstalled(m); }
+
+      let files = null;
+      if(isZip(u8)){ const x = _zipExtract(u8); if(x.refuse) return _fail(x.refuse); files = x.files; }
+      let peek = null;
+      try{ peek = await _peekModule(u8, hint, files); }catch(e){ console.warn("install: not readable as a module", e); return _fail("unusable"); }
+      if(!peek || peek.unsafe) return _fail("unusable");
+
+      // names: a pinned copy takes its catalogue entry's; everything else may never take a held name
+      let abbr = pinned ? pinned.abbr : peek.abbr, name = pinned ? pinned.name : peek.name;
+      abbr = _cleanTitle(abbr).slice(0, 12) || "Module"; name = _cleanTitle(name) || abbr;
+      // an object-prototype name would rewrite the store's prototype (modules["__proto__"] = ...)
+      if(/^(__proto__|constructor|prototype)$/i.test(abbr) || /^(__proto__|constructor|prototype)$/i.test(name)) return _fail("unusable");
+      const reserved = pinned ? new Set() : await _reservedNames(peek.kind);
+      const cat = _CAT_OF_KIND[peek.kind];
+      return await withReg(async () => {
+        let renamed = false;
+        if(_taken(peek.kind, abbr, name, reserved)){
+          renamed = true;
+          const a0 = abbr, n0 = name;
+          abbr = a0 + "-F"; name = n0 + FROM_FILE;
+          for(let i = 2; _taken(peek.kind, abbr, name, reserved) && i < 1000; i++){ abbr = a0 + "-F" + i; name = n0 + " (from a file " + i + ")"; }
+        }
+        // A cross-reference file names itself INSIDE the json, and loadCrossrefsJSON trusts that over any meta,
+        // so a renamed one is rewritten (and the REWRITTEN bytes are what is saved, so a restart agrees).
+        let bytes = u8;
+        if(peek.kind === "crossref" && (renamed || abbr !== peek.abbr)){
+          const p = peek.parsed; p.meta = { ...p.meta, abbr, name };
+          bytes = new TextEncoder().encode(JSON.stringify(p));
+        }
+        let r;
+        try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }, peek.files); }
+        catch(e){ console.warn("install: loadModuleBytes refused the file", e); return _fail("unusable"); }
+        if(!r || !r.abbr) return _fail("unusable");
+        const shown = (r.kind === "bible" && modules[r.abbr] && modules[r.abbr].name) || (r.kind === "comment" && commentaries[r.abbr] && commentaries[r.abbr].name)
+          || (r.kind === "crossref" && crossrefs[r.abbr] && crossrefs[r.abbr].name) || name;
+        // Bytes that ARE a catalogue module (pinned) are filed as that catalogue module, so the Library shows it
+        // Installed and can never offer "Get" for a second copy (audit L2). Anything else goes under imported/.
+        const asCatalogue = !!(pinned && !renamed && bytes === u8 && pinned.url && catOf(pinned) === cat);   // only the very bytes that were received: a rewritten file is not the catalogue's pinned copy
+        const key = asCatalogue ? pinned.url : "imported/" + h12 + "/" + _cleanFileName(hint || shown) + peek.ext;
+        // SAVE FIRST. Only then does a record exist.
+        try{ await cachePut(key, bytes); }
+        catch(e){ console.warn("install: cachePut failed (full phone?)", e); _undoLoaded(r.kind, r.abbr); return _fail("no-space"); }
+        recordInstalled(asCatalogue
+          ? { url: key, id: pinned.id, abbr: r.abbr, name: shown, kind: r.kind, format: pinned.format, category: cat }
+          : { url: key, id: r.abbr, abbr: r.abbr, name: shown, kind: r.kind, category: cat });
+        if(!isInstalled(key)){ await cacheDelete(key); _undoLoaded(r.kind, r.abbr); return _fail("no-space"); }
+        { const m = getInstalled(); if(m[key]){ m[key].checked = true; setInstalled(m); } }   // it passed the unsafe-file check above: boot need not repeat it
+        noteLoadedFrom(key, r.abbr, cat);
+        notify();
+        return { ok: true, kind: r.kind, abbr: r.abbr, name: shown, renamed };
+      });
+    }catch(e){ console.error(e); return _fail("failed"); }
+  }
+  function installFromBytes(u8, hint){
+    const run = async () => { _installDepth++; try{ return await _installOne(u8, hint); } finally { _installDepth--; } };
+    const p = _installChain.then(run, run);
+    _installChain = p.then(() => {}, () => {});
+    return p;
+  }
+
+  // ── hidden file input (the browser's own picker; no `accept`, MySword files have no registered type) ──
   let fileInput = null, loadingFlag = false;
   function ensureInput(){
     if(fileInput) return fileInput;
@@ -1220,21 +1698,13 @@ window.safeImgUrl = function (v) {
       const f = e.target.files[0]; e.target.value = "";
       if(!f) return;
       loadingFlag = true; notify();
+      _emitFile({ phase: "installing" });
+      let result;
       try{
-        const u8 = new Uint8Array(await f.arrayBuffer());
-        const r = await loadModuleBytes(u8, f.name);
-        // persist an imported module so it survives a restart — the shared-Bible / fully-offline case
-        // (a module handed over by Quick Share must stick, not vanish when the app reopens).
-        if(r && r.abbr){
-          const url = "imported/" + f.name;
-          const cat = r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : r.kind === "crossref" ? "crossrefs" : "bibles";
-          try{ await cachePut(url, u8); }catch(e){ console.warn("cachePut failed for import (full phone?)", e); window.Bible._error = "Loaded " + r.abbr + " but couldn't save it — not enough space on this phone"; }
-          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: cat });
-          noteLoadedFrom(url, r.abbr, cat);
-        }
-      }
-      catch(err){ console.error(err); window.Bible._error = err.message; }
+        result = (f.size > INSTALL_MAX_RAW) ? _fail("too-big") : await installFromBytes(new Uint8Array(await f.arrayBuffer()), f.name);
+      }catch(err){ console.error(err); result = _fail("failed"); }
       finally{ loadingFlag = false; notify(); }
+      _emitFile({ phase: "result", result });
     });
     document.body.appendChild(fileInput);
     return fileInput;
@@ -1339,7 +1809,7 @@ window.safeImgUrl = function (v) {
     // unconditionally before urls existed here.
     const activeFrom = active ? urlOf[urlKey("bibles", active)] : null;
     const isTheActiveBible = (url && activeFrom) ? (url === activeFrom) : (abbr === active);
-    if(cat === "bibles" && active && isTheActiveBible) return false;
+    if(cat === "bibles" && active && isTheActiveBible && !(meta && meta.quarantined)) return false;   // a quarantined record never loaded, so it is never "the Bible being read" even if a loaded one shares its abbreviation
     if(url && installing.has(url)) return false;
     if(url){
       await cacheDelete(url);
@@ -1364,7 +1834,7 @@ window.safeImgUrl = function (v) {
     // bytes being freed were somebody else's. `urlOf` says where the loaded module of that name really came
     // from; when it came from somewhere else, nothing of ours is in memory and there is nothing to drop.
     const here = urlOf[urlKey(cat, abbr)];
-    const loadedHere = !url || !here || here === url;
+    const loadedHere = !url || (!(meta && meta.quarantined) && (!here || here === url));   // a quarantined record never loaded: nothing in memory is its own
     if(loadedHere){
       if(meta && meta.kind === "worddef") removeWorddefs(abbr);
       else if(meta && meta.kind === "original") removeOriginal(abbr);
@@ -1485,6 +1955,25 @@ window.safeImgUrl = function (v) {
   }
 
   // ── boot: restore installed modules, then optional ?module=<url> autoload ──
+  async function moduleLinkAllowed(url){
+    if(typeof url !== "string" || !url) return false;
+    if(url === DEFAULT_MODULE.url) return true;
+    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
+    try{ const m = await getMirror(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){}
+    return false;
+  }
+  // Can we READ the lists that say what is ours? (getCatalog resolves {categories:[]} on failure, getMirror null.)
+  async function _listsReadable(){
+    try{
+      const c = await getCatalog(); if(!(c && (c.categories || []).length)) return false;
+      const m = await getMirror(); return !!(m && (m.items || []).length);
+    }catch(e){ return false; }
+  }
+  // told by event if the app is already listening, else kept for takeLinkNotice() at mount (same shape as the quarantine notice)
+  let _linkRefusedPending = false;
+  const _linkRefusedSeen = new Set();   // reconnecting with no Bible loaded re-runs autoLoad on the SAME query string: once per link, not once per reconnect
+  function _noteLinkRefused(url){ if(_linkRefusedSeen.has(url)) return; _linkRefusedSeen.add(url); if(_fileSubs.size) _emitFile({ phase: "link-refused" }); else _linkRefusedPending = true; }
+  function takeLinkNotice(){ const v = _linkRefusedPending; _linkRefusedPending = false; return v; }
   async function autoLoad(){
     loadingFlag = true; notify();
     try{ await restoreInstalled(); }catch(e){ console.error(e); }
@@ -1501,7 +1990,12 @@ window.safeImgUrl = function (v) {
     // for one abbr and registers a DUPLICATE (DEEP -> DEEP2) — and the record written over the top of the
     // good one would name the duplicate. The member would then have one module twice in the reader and a
     // record pointing at the copy, which Remove would strip of its bytes while the other copy read on.
-    if(url && !isInstalled(url)){
+    // ?module=<url> OPENS ONLY WHAT WE PUBLISH (owner decision 2026-11-16). A link is a way to make a phone fetch somebody
+    // else's file, with no pin, from any https host. It is now accepted for a url that is in catalog.json, in the eBible
+    // mirror list the Library offers, or the default Bible; anything else is refused BEFORE a request is made, nothing is
+    // saved, and the member is told in plain words (_noteLinkRefused). Nothing in the app builds such a link, so no flow of ours changes.
+    if(url && !isInstalled(url) && !(await moduleLinkAllowed(url))){ _noteLinkRefused(url); }
+    else if(url && !isInstalled(url)){
       try{
         const r = await fetchAndCacheModule(url);
         if(r && r.abbr){
@@ -1542,7 +2036,7 @@ window.safeImgUrl = function (v) {
   window.Bible = {
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
-    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule,
+    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule, installFromBytes, onFileInstall, takeQuarantineNotices, takeLinkNotice,
     cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling, isLoaded,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },
@@ -1559,12 +2053,15 @@ window.safeImgUrl = function (v) {
   };
 
   // kick off autoload once the DOM + CDN libs are present
-  if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", autoLoad);
-  else autoLoad();
+  // installFromBytes waits on _bootDone, so a file opened on a cold start cannot race the boot restore
+  if(document.readyState === "loading") _bootDone = new Promise(res => document.addEventListener("DOMContentLoaded", () => { autoLoad().then(res, res); }));
+  else _bootDone = autoLoad().then(() => {}, () => {});
 
   // modules download on first run; if that first launch was offline, retry the moment we're back
   // online so the app self-heals into a readable state without a manual reload.
   if(typeof window !== "undefined") window.addEventListener("online", () => {
-    if(order.length === 0 && !loadingFlag){ window.Bible._error = null; autoLoad(); }
+    // not while a file install is in flight (it would race the default install into two copies of one Bible), and
+    // installFromBytes waits on the re-run exactly as on the first boot
+    if(order.length === 0 && !loadingFlag && _installDepth === 0){ window.Bible._error = null; _bootDone = autoLoad().then(() => {}, () => {}); }
   });
 })();

@@ -783,7 +783,7 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
         width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 10,
         padding: '13px 14px', borderRadius: 14, border: '1px dashed var(--line)', background: 'var(--surface-2)',
         cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
-        <Icon name="plus" size={18} /> Load from a file (MySword · USFM)
+        <Icon name="plus" size={18} /> Install a Bible from a file
       </button>
     </BottomSheet>
   );

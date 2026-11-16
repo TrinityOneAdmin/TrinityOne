@@ -1,7 +1,7 @@
 // share-app.jsx — "pass it on": hand the TrinityOne app to someone nearby with no relay, link, or internet on
 // THEIR side. The app shares its own APK through the OS share sheet (Quick Share / Bluetooth / Signal / Files).
 // A Bible or commentary is shared SEPARATELY, one file at a time, from Library → Installed (InstalledBrowser in
-// screens-library.jsx); the recipient installs the APK, then imports the module with Library → Import.
+// screens-library.jsx); the recipient installs the APK, then installs the module with Library → "Install a Bible from a file" (or by opening the file with TrinityOne, Android).
 //
 // EVERY SHARE IS ONE FILE. The app and a Bible used to go out together as one two-file share
 // (ACTION_SEND_MULTIPLE, typed */*). Signal's multi-file path keeps only images and videos, so it was left with
@@ -128,16 +128,17 @@ async function shareOneFile(opts, ctx) {
 window.shareOneFile = shareOneFile;
 
 // WHICH INSTALLED MODULES ARE OFFERED A SHARE: ONLY WHAT THE RECIPIENT CAN IMPORT. An allowlist — anything not
-// named here is false. The recipient's import is the engine's loadModuleBytes (via Library → Import), which takes
+// named here is false. The recipient installs with installFromBytes (engine.js), which runs the engine's loadModuleBytes and takes
 // a MySword SQLite DB, a zip of one or of USFM books, a USFM file, or a cross-reference JSON.
 //   · a catalogue Bible or commentary (.zip / .mybible / .cmt.mybible.zip) — imports on every pilot build;
 //   · a record under imported/ — it exists only because the same import accepted that very file once
-//     (ensureInput records it after loadModuleBytes returned). Bibles, commentaries and dictionaries only.
+//     (installFromBytes records it, after saving the bytes, once loadModuleBytes accepted it). Bibles, commentaries and dictionaries only.
 // NOT offered: JSON dictionaries / word definitions / original-language data (the import refuses them), cross-
 // references (only builds from 2026-11-03 import them — owner: not in v1), devotionals (no module bytes), and a
 // record with no or an unknown category.
 function isShareableModule(r) {
   if (!r || typeof r.url !== 'string' || !r.url) return false;
+  if (r.quarantined) return false;   // a file the app refused to open must never be handed on
   const cat = r.category;
   if (r.url.indexOf('imported/') === 0) return cat === 'bibles' || cat === 'commentaries' || cat === 'dictionaries';
   if (/\.json$/i.test(r.url)) return false;
@@ -242,7 +243,7 @@ function ShareAppSheet({ open, onClose, ctx }) {
       ) : null}
 
       <div style={{ display: 'flex', gap: 11, padding: '12px 14px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 16, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-        <Icon name="shield" size={18} color="var(--sage)" /><div>They may need to allow “install from unknown sources” the first time — normal for an app passed hand to hand. A Bible you send them separately goes in with <b>Library → Import</b>.</div>
+        <Icon name="shield" size={18} color="var(--sage)" /><div>They may need to allow “install from unknown sources” the first time — normal for an app passed hand to hand. A Bible you send them separately goes in with <b>Library → Install a Bible from a file</b>.</div>
       </div>
       <button onClick={go} disabled={busy} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: busy ? 0.75 : 1 }}>
         <Icon name="share" size={17} color="#fff" /> {busy ? (status || 'Preparing…') : 'Share the app'}</button>

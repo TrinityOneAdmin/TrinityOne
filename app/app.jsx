@@ -320,7 +320,7 @@ function EmptyState({ loading, error, onBrowse }) {
             <button onClick={() => window.Bible.pickFile()} style={{
               border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)',
               fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 14 }}>
-              or open a file from this device
+              or install a Bible from a file
             </button>
           </div>
         </React.Fragment>
@@ -665,6 +665,47 @@ function App() {
       if (AppP) {
         if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) apply(r.url, true); }).catch(() => {});
         if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) apply(e.url, false); }))
+          .then(h => { remove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
+      }
+    } catch (e) {}
+    return () => { if (remove) { try { remove(); } catch (e) {} } };
+  }, []);
+  // INSTALL A BIBLE FROM A FILE (app/install-bible.jsx). `ifs` is the one sheet's state: null (closed), or
+  // {phase:'confirm', url} / {phase:'installing'} / {phase:'result', result}. Two producers, both below:
+  //   · the engine, for a file the member PICKED (Bible.pickFile announces installing, then the result);
+  //   · the Android intent, for a file ANOTHER APP sent — which only opens the confirm step.
+  const [ifs, setIfs] = useA(null);
+  useAE(() => {
+    const B = window.Bible;
+    if (!B || typeof B.onFileInstall !== 'function') return undefined;
+    const off = B.onFileInstall((ev) => {
+      if (!ev) return;
+      if (ev.phase === 'installing') setIfs({ phase: 'installing' });
+      else if (ev.phase === 'result') setIfs({ phase: 'result', result: ev.result });
+      else if (ev.phase === 'link-refused') setIfs({ phase: 'result', result: { ok: false, reason: 'link-refused' } });
+      else if (ev.phase === 'quarantined') setIfs((prev) => {
+        // several saved files can be refused in one boot, one event each: the sheet names ALL of them
+        const had = prev && prev.result && prev.result.reason === 'quarantined' ? (prev.result.names || [prev.result.name]) : [];
+        const names = had.includes(ev.name) ? had : [...had, ev.name];
+        return { phase: 'result', result: { ok: false, reason: 'quarantined', name: names[0], names } };
+      });
+    });
+    // a stored file the boot restore refused to open (unsafe) BEFORE we were listening: told once, here
+    try { const names = typeof B.takeQuarantineNotices === 'function' ? B.takeQuarantineNotices() : []; if (names && names.length) setIfs({ phase: 'result', result: { ok: false, reason: 'quarantined', name: names[0], names: [...names] } }); } catch (e) {}
+    // a ?module= link that was refused before the app was listening
+    try { if (typeof B.takeLinkNotice === 'function' && B.takeLinkNotice()) setIfs({ phase: 'result', result: { ok: false, reason: 'link-refused' } }); } catch (e) {}
+    return off;
+  }, []);
+  // "Open with TrinityOne": a SECOND listener beside the join one above, for a disjoint scheme (the join
+  // handler accepts only https on our own host; this accepts only content:). It opens the CONFIRM step and reads
+  // nothing; getLaunchUrl() is the cold-start path and is de-duplicated across relaunches in localStorage.
+  useAE(() => {
+    let remove = null;
+    try {
+      const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (AppP) {
+        if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) handleIncomingFile(r.url, true, setIfs); }).catch(() => {});
+        if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) handleIncomingFile(e.url, false, setIfs); }))
           .then(h => { remove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
       }
     } catch (e) {}
@@ -2809,6 +2850,9 @@ function App() {
         {/* module store — available in both the loaded and first-run states */}
         <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx} category={storeCat}
           initialView={storeView || (storeParam === 'language' ? 'language' : 'featured')} />
+
+        {/* install-a-Bible-from-a-file sheet: mounted here so it answers in the loaded AND first-run states, over the store */}
+        <InstallFromFileSheet state={ifs} onInstall={() => { if (ifs && ifs.url) ifsRunInstall(ifs.url, setIfs); }} onClose={() => setIfs(null)} ctx={ctx} />
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 
