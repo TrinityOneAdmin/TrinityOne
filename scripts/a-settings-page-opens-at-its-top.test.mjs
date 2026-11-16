@@ -32,7 +32,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const PORT = 8893, CDP = 9393;
+const PORT = 8919, CDP = 9399;
 const ROOT = new URL('..', import.meta.url).pathname;
 const DW = 900, DH = 600, PW = 360, PH = 730;
 const PIN = 'cedar-harbour-lamp-42';
@@ -259,6 +259,28 @@ test('desktop 900x600: re-picking Settings from the SIDEBAR while in Settings pu
   assert.ok(after.page, 're-picking Settings from the sidebar opened no page: ' + JSON.stringify(after));
   assert.ok(after.room >= pre.scrollTop, 'precondition: after the re-pick the console has ' + after.room + 'px of room, less than the ' + pre.scrollTop + 'px it was at, so a clamp alone would put it at 0');
   assert.equal(after.scrollTop, 0, 're-picking Settings from the sidebar left the console scrolled ' + after.scrollTop + 'px down: ' + JSON.stringify(after));
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+test('desktop 900x600: after a sidebar re-pick, leaving Settings and ARRIVING again does NOT move the console', SKIP, async () => {
+  // A re-pick marks the next DashSettings mount as "go to the top". That mark must be dropped when the console
+  // leaves Settings, or the next plain arrival — which the owner said must not move the console — resets too.
+  const side = (label) => evalIn(`(() => { const b = [...document.querySelectorAll('nav[aria-label="Console sections"] button')].filter(x => (x.textContent || '').trim() === ${JSON.stringify(label)}); if (b.length !== 1) return 'found ' + b.length; b[0].click(); return 'ok'; })()`);
+  assert.equal(await side('Settings'), 'ok', 're-anchor: expected exactly one "Settings" row in the desktop sidebar');   // a re-pick: already in Settings
+  await sleep(1000);
+  assert.ok((await state()).page, 're-anchor: not in Settings after the re-pick');
+  assert.equal(await side('Overview'), 'ok', 're-anchor: expected exactly one "Overview" row in the desktop sidebar');
+  await sleep(1200);
+  const y = await scrollMainTo(120);
+  await sleep(200);
+  assert.ok(y > 0, 'precondition: the Overview did not scroll at 900x600 (got ' + y + ')');
+  assert.equal(await side('Settings'), 'ok', 're-anchor: the sidebar "Settings" row went missing');
+  const s = await poll(v => !!v.page, 3000);
+  assert.ok(s.page, 're-anchor: Settings opened no page on arrival: ' + JSON.stringify(s));
+  assert.ok(s.room >= y, 'precondition: Settings has only ' + s.room + 'px of room, less than the ' + y + 'px the console was at, so the browser clamps it either way');
+  await sleep(600);
+  const later = await state();
+  assert.ok(Math.abs(later.scrollTop - y) <= 2, 'arriving at Settings after an earlier re-pick moved the console from ' + y + 'px to ' + later.scrollTop + 'px — the re-pick mark outlived leaving Settings');
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
