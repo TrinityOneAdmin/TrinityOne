@@ -1749,7 +1749,7 @@ window.safeImgUrl = function (v) {
     // unconditionally before urls existed here.
     const activeFrom = active ? urlOf[urlKey("bibles", active)] : null;
     const isTheActiveBible = (url && activeFrom) ? (url === activeFrom) : (abbr === active);
-    if(cat === "bibles" && active && isTheActiveBible) return false;
+    if(cat === "bibles" && active && isTheActiveBible && !(meta && meta.quarantined)) return false;   // a quarantined record never loaded, so it is never "the Bible being read" even if a loaded one shares its abbreviation
     if(url && installing.has(url)) return false;
     if(url){
       await cacheDelete(url);

@@ -59,6 +59,8 @@ test('A1 — THE ZIP64 LOCATOR FIXTURE (49 KB, 24 MB of decode) is refused, and 
   assert.equal(held(p.Bible), before); assert.equal(p.state.puts.length, puts); assert.equal(Object.keys(p.installed()).length, 0);
   assert.ok(Date.now() - t0 < 3000);
   assert.deepEqual([...calls], [], 'fflate.unzipSync was called on a received file: ' + calls);
+  // the decode STOPPED early: a 24 MB stream was abandoned after the first push that passed its declared size
+  assert.ok(p.inflates.out < 16 * 1024 * 1024, `the bounded decode ran on: ${p.inflates.out} bytes of a 24 MB stream were produced`);
   // the bomb's own directory with no locator is refused too (the earlier fix), also without unzipSync
   assert.deepEqual(await p.Bible.installFromBytes(bombOnly, 'b.zip'), { ok: false, reason: 'unusable' });
   assert.deepEqual([...calls], []);
@@ -165,8 +167,7 @@ test('A5 — A QUARANTINED FILE: the same bytes say "blocked", never "already in
   const again = await p.Bible.installFromBytes(bomb, 'old.bbl.mybible');
   assert.deepEqual(again, { ok: false, reason: 'quarantined', name: 'Old Import' }, 'the blocked file was reported as: ' + JSON.stringify(again));
   // a loaded module with the quarantined record's own abbreviation survives its removal
-  const keep = await p.Bible.installFromBytes(await bibleDb('OLD', 'Another Old Bible', 'kept'), 'k.bbl.mybible');
-  assert.equal(keep.ok, true);
+  await p.Bible.loadModuleBytes(await bibleDb('OLD', 'Another Old Bible', 'kept'), 'k.bbl.mybible');   // loaded, with no url recorded for it
   assert.equal(await p.Bible.removeModule(key), true, 'a quarantined record could not be removed');
   assert.ok(!st.stores.get('modules').has(key), 'its bytes are still stored');
   assert.equal(p.Bible.versions().length, 1, 'removing a quarantined record removed a loaded module');

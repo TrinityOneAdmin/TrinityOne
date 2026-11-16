@@ -69,8 +69,10 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
     createElement: () => fakeInput, body: { appendChild() {} },
   };
   const fflate = unzipCalls ? { ...realFflate, unzipSync: (u8, o) => { unzipCalls.push(o && o.filter ? 'filter' : 'full'); if (o && o.filter) { const f = o.filter; o = { ...o, filter: (i) => { unzipCalls.entryCount = (unzipCalls.entryCount || 0) + 1; return f(i); } }; } return realFflate.unzipSync(u8, o); } } : realFflate;
-  const inflates = { n: 0 };
-  const fflateOut = { ...fflate, Inflate: class extends realFflate.Inflate { constructor(...a) { super(...a); inflates.n++; } } };
+  const inflates = { n: 0, out: 0 };   // Inflate objects made, and bytes of output they produced
+  const fflateOut = { ...fflate, Inflate: class extends realFflate.Inflate { constructor(...a) { super(...a); inflates.n++; }
+    set ondata(f) { this._f = f && ((c, fin) => { inflates.out += c.length; return f(c, fin); }); }
+    get ondata() { return this._f; } } };
   const fetched = [];
   const fetch = async (url) => {
     fetched.push(String(url));
