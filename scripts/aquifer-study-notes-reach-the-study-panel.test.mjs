@@ -587,6 +587,8 @@ test('a verse share still offers "Share as image" and not the outside-the-app bu
 test('paragraphs keep a blank line, a footnote marker gets a space, and the cap never splits an emoji', async () => {
   const a = await tapShare(0, () => '<p>First.</p><p>Second<sup>1</sup> here.</p>');
   assert.equal(a.payload.text, 'First.\n\nSecond 1 here.');
+  const c = await tapShare(0, () => '<p>two<sup>3</sup>three</p>');
+  assert.equal(c.payload.text, 'two 3 three');
   // an emoji (surrogate pair) sitting exactly on the cut point
   const html = '<p>' + 'x'.repeat(4000 - '\u2026 [shortened]'.length - 1) + '\u{1F600}' + 'tail'.repeat(50) + '</p>';
   const b = await tapShare(0, () => html);
@@ -653,6 +655,12 @@ test('which imported licences warn: none, all-rights-reserved, (c); not CC / pub
   assert.equal(await mk('All Rights Reserved'), true);
   assert.equal(await mk('CC BY-SA 4.0'), false);
   assert.equal(await mk('Public Domain'), false);
-  assert.equal(await mk('\u00A9 2020 Some Press. Free to share with attribution.'), false);
+  // a restrictive marker WINS over an open one, and these were all missed by the first version
+  for (const l of ['Copyright 1995 Lockman Foundation', 'Copyrighted. Do not distribute', 'Used by permission. Not for redistribution.',
+    '\u00A9 2024 X. Free to use for personal study only, not to be shared', 'Public domain text, \u00A9 2019 Acme. All rights reserved.',
+    '(c) 1995 Acme Press', '\u00A9 2020 Some Press. Free to share with attribution.', 'CC BY 4.0 but copyright Smith, do not distribute'])
+    assert.equal(await mk(l), true, 'should warn: ' + l);
+  for (const l of ['CC-BY 4.0', 'Creative Commons Attribution', 'Public domain, no copyright', 'Notes (a)(b)(c) follow the text'])
+    assert.equal(await mk(l), false, 'should not warn: ' + l);
   assert.equal(await mk('Compiled by A. Person'), false);
 });
