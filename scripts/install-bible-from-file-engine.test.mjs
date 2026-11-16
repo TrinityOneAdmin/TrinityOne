@@ -97,6 +97,7 @@ test('E4 — INFLATE CAP: a small zip whose central directory claims > 128 MB is
   dv.setUint32(cd + 24, 200 * 1024 * 1024, true);   // declared uncompressed size
   assert.deepEqual(await p.Bible.installFromBytes(z, 'bomb.zip'), { ok: false, reason: 'too-big' });
   assert.deepEqual([...calls], [], 'fflate was asked to open the zip (the engine reads a member\'s zip itself): ' + calls);
+  assert.equal(p.inflates.n, 0, 'something was inflated before the declared-size cap refused the zip (' + p.inflates.n + ' inflaters made)');
 });
 
 test('E5 — ENTRY CAP: a zip of 2,001 tiny entries is refused before anything is inflated', async () => {

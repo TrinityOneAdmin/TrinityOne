@@ -968,7 +968,7 @@ function InstalledBrowser({ ctx, category, force }) {
   // carry a name no loaded module has, which is why the url is asked for first (window.Bible.activeUrl is
   // where the active module was really loaded from; the name is the fallback when nothing was).
   const activeUrl = window.Bible.activeUrl;
-  const isActiveRow = (r) => (r.category || 'bibles') === 'bibles' && (activeUrl ? r.url === activeUrl : r.abbr === active);
+  const isActiveRow = (r) => !r.quarantined && (r.category || 'bibles') === 'bibles' && (activeUrl ? r.url === activeUrl : r.abbr === active);   // a quarantined file was never opened, so it is never the Bible being read even if a loaded one shares its abbreviation
   let rows = Object.values(map);
   if (category) rows = rows.filter(r => { var rc = r.category || 'bibles'; return rc === category || (category === 'commentaries' && rc === 'crossrefs'); });
   rows.sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));

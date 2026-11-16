@@ -49,9 +49,9 @@ export const cached = (state, key) => ((state.stores.get('modules') || new Map()
 // ── the phone: the REAL engine.js ────────────────────────────────────────────────────────────────────────────
 // `readyState: 'loading'` holds boot (autoLoad) back until `boot()` is called, exactly as a page that has not yet
 // fired DOMContentLoaded does; that is what lets a test start an install DURING boot.
-export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, catalogJson = null, readyState = 'loading', unzipCalls = null } = {}) {
+export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, catalogJson = null, search = '', readyState = 'loading', unzipCalls = null } = {}) {
   const onlineCbs = [];
-  const win = { addEventListener(t, fn) { if (t === 'online') onlineCbs.push(fn); }, location: { search: '' } };
+  const win = { addEventListener(t, fn) { if (t === 'online') onlineCbs.push(fn); }, location: { search } };
   const net = { serveBsb };
   const sqlStats = { opened: 0, closed: 0 };
   const sqlJs = async (o) => {
@@ -88,7 +88,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
     throw new Error('no network in this test: ' + url);
   };
   const c = {
-    window: win, document, location: { search: '' }, navigator: undefined,
+    window: win, document, location: { search }, navigator: undefined,
     console: process.env.INSTALL_BIBLE_DEBUG ? console : { error() {}, warn() {}, log() {} }, TextDecoder, TextEncoder, URLSearchParams, URL,
     setTimeout, clearTimeout, Promise, Uint8Array, fflate: fflateOut, initSqlJs: sqlJs, crypto: webcrypto,
     indexedDB: fakeIndexedDB(state), localStorage: lsOf(state), fetch, DOMException,

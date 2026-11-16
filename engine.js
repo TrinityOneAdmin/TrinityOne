@@ -936,6 +936,20 @@ window.safeImgUrl = function (v) {
     throw last || new Error("could not fetch " + u);
   }
 
+  // The bytes of a downloaded module, read by the SAME bounded reader as a member's file (_zipExtract), never by
+  // fflate.unzipSync (re-audit 3, M2). `?module=<any https url>` and the eBible mirror fetch zips from hosts that are not
+  // ours, with no pin; they were decoded with no size limit and again on every boot. A zip the reader refuses, or (for a
+  // non-relative url) a database with a view/trigger/generated column, is refused HERE, before anything is saved.
+  async function _hostedFiles(u8, url){
+    let files;
+    if(isZip(u8)){ const x = _zipExtract(u8); if(x.refuse) throw new Error("module refused (" + x.refuse + "): " + url); files = x.files; }
+    if(/^https?:/i.test(url)){
+      let pk = null;
+      try{ pk = await _peekModule(u8, "", files); }catch(e){ throw new Error("module refused (unreadable): " + url); }
+      if(pk && pk.unsafe) throw new Error("module refused (unsafe database): " + url);
+    }
+    return files;
+  }
   async function fetchAndCacheModule(url, meta){
     const cached = await cacheGet(url);
     // A CACHE HIT IS ONLY GOOD IF IT IS THE PUBLISHED BUILD. This used to be an unconditional
@@ -945,7 +959,7 @@ window.safeImgUrl = function (v) {
     // copy is replaced rather than merely refused, and a phone that is offline keeps reading (the fetch
     // throws and the caller reports it, exactly as it does for a first install with no signal).
     if(cached && await cachedCopyIsCurrent(url, cached, meta && meta.sha256))
-      return withReg(() => loadModuleBytes(cached, url.split("/").pop(), meta));
+      return _hostedFiles(cached, url).then(files => withReg(() => loadModuleBytes(cached, url.split("/").pop(), meta, files)));
     const res = await fetchAsset(url);
     // SECURITY-AUDIT-2026-06-24 L4: size cap (matches the JSON branch in installModule). The
     // ceiling is well above any real module: BSB ≈ 3 MB, the KJV+S MySword ≈ 9 MB. A compromised
@@ -957,7 +971,8 @@ window.safeImgUrl = function (v) {
     await verifyIntegrity(url, u8, meta && meta.sha256);   // M3: verify before we cache/parse
     // saved and registered under the registration lock, so a file install that is checking names cannot run
     // between the two and then be replaced by this module when it registers
-    return withReg(async () => { await cachePut(url, u8); return loadModuleBytes(u8, url.split("/").pop(), meta); });
+    const files = await _hostedFiles(u8, url);   // refused => nothing below runs, nothing is saved
+    return withReg(async () => { await cachePut(url, u8); return loadModuleBytes(u8, url.split("/").pop(), meta, files); });
   }
 
   // generic cached asset fetch -> raw bytes (same IndexedDB cache + ASSET_BASE host as Bible modules).
@@ -1192,7 +1207,7 @@ window.safeImgUrl = function (v) {
         // refuses it or the check cannot finish (it throws), the file is quarantined, not loaded (re-audit L-e, A4). The
         // record stays listed and its bytes stay, so it can be removed in Library > Installed.
         let memberFiles = null;
-        if(url.indexOf("imported/") === 0 && (meta.format || "").toUpperCase() !== "JSON"){
+        if((url.indexOf("imported/") === 0 || /^https?:/i.test(url)) && (meta.format || "").toUpperCase() !== "JSON"){
           let bad = false;
           if(isZip(bytes)){ const x = _zipExtract(bytes); if(x.refuse) bad = true; else memberFiles = x.files; }
           if(!bad && !meta.checked){ try{ const pk = await _peekModule(bytes, "", memberFiles); bad = !!(pk && pk.unsafe); }catch(e){ bad = true; } }
@@ -1322,7 +1337,8 @@ window.safeImgUrl = function (v) {
   const _nameKey = (s) => {
     let o = "";
     // accents come off FIRST (Greek \u03cc and Cyrillic \u04e7, \u0451, \u0457, \u04d1 are an accented lookalike of a letter the table knows), then the map
-    for(const ch of String(s == null ? "" : s).normalize("NFKC").normalize("NFD").replace(/\p{M}/gu, "")){ const t = ch.codePointAt(0) >= 128 ? _confOf(ch.codePointAt(0)) : null; o += t || ch; }
+    // Mn (nonspacing) only: the Telugu, Kannada, Malayalam and Sinhala anusvara are SPACING marks (Mc) that look like "o", and the table maps them
+    for(const ch of String(s == null ? "" : s).normalize("NFKC").normalize("NFD").replace(/\p{Mn}/gu, "")){ const t = ch.codePointAt(0) >= 128 ? _confOf(ch.codePointAt(0)) : null; o += t || ch; }
     return o.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
   };
   const _deriveAbbr = (name) => {
@@ -1531,10 +1547,19 @@ window.safeImgUrl = function (v) {
     const z = _zipParse(u8);
     if(z.refuse) return z;
     const files = Object.create(null), dv = z.dv;
+    // every entry's record (local header + data) must be its own bytes: 2,000 directory entries pointing at ONE deflate
+    // stream decode it 2,000 times (a 108 KB file made 125 MB of decode on every boot; re-audit 3, L3)
+    const spans = [];
     for(const en of z.entries){
       if(en.lho + 30 > u8.length || dv.getUint32(en.lho, true) !== 0x04034b50) return { refuse: "unusable" };
-      const start = en.lho + 30 + dv.getUint16(en.lho + 26, true) + dv.getUint16(en.lho + 28, true);
-      if(start + en.csize > u8.length) return { refuse: "unusable" };
+      en.start = en.lho + 30 + dv.getUint16(en.lho + 26, true) + dv.getUint16(en.lho + 28, true);
+      if(en.start + en.csize > u8.length) return { refuse: "unusable" };
+      spans.push([en.lho, en.start + en.csize]);
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+    for(let i = 1; i < spans.length; i++) if(spans[i][0] < spans[i - 1][1]) return { refuse: "unusable" };
+    for(const en of z.entries){
+      const start = en.start;
       const data = u8.subarray(start, start + en.csize);
       if(en.method === 0){ if(en.csize !== en.usize) return { refuse: "unusable" }; files[en.name] = u8.slice(start, start + en.csize); }
       else if(en.method === 8){ const out = _inflateExact(data, en.usize); if(!out) return { refuse: "unusable" }; files[en.name] = out; }
