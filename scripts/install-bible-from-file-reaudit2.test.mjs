@@ -59,10 +59,11 @@ test('A1 — THE ZIP64 LOCATOR FIXTURE (49 KB, 24 MB of decode) is refused, and 
   assert.equal(held(p.Bible), before); assert.equal(p.state.puts.length, puts); assert.equal(Object.keys(p.installed()).length, 0);
   assert.ok(Date.now() - t0 < 3000);
   assert.deepEqual([...calls], [], 'fflate.unzipSync was called on a received file: ' + calls);
-  // the decode STOPPED early: a 24 MB stream was abandoned after the first push that passed its declared size
-  assert.ok(p.inflates.out < 16 * 1024 * 1024, `the bounded decode ran on: ${p.inflates.out} bytes of a 24 MB stream were produced`);
-  // the bomb's own directory with no locator is refused too (the earlier fix), also without unzipSync
+  // the bomb's own directory with no locator is refused too (the earlier fix), also without unzipSync...
+  const outBefore = p.inflates.out;
   assert.deepEqual(await p.Bible.installFromBytes(bombOnly, 'b.zip'), { ok: false, reason: 'unusable' });
+  // ...and the decode STOPPED early: a 24 MB stream was abandoned after the first push that passed its declared size
+  assert.ok(p.inflates.out - outBefore < 16 * 1024 * 1024, `the bounded decode ran on: ${p.inflates.out - outBefore} bytes of a 24 MB stream were produced`);
   assert.deepEqual([...calls], []);
 });
 
