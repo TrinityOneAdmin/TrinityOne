@@ -300,7 +300,7 @@ test('(g) removing the lock, removing the church, and restoring from 12 words ea
     // recorded here, so a removal that stopped wiping one of them fails too — not only a missing stub.
     const cleared = [];
     const rec = (name) => (arg) => { cleared.push([name, arg]); };
-    const o = liftMethod('removeKey() {', { localStorage: { removeItem() {} }, KEY_LS: 'k', encBlobRemove: async () => true, _stay: stay,
+    const o = liftMethod('removeKey() {', { localStorage: { removeItem() {} }, KEY_LS: 'k', encBlobRemove: async () => true, _stay: stay, _forgetStewardedScope: () => {},   // the helper-scope clear: not this file's question (see a-replacing-the-key-drops-the-old-churchs-identity)
       _minorsLastClear: rec('_minorsLastClear'), _sgClearClear: rec('_sgClearClear'), _finBookClear: rec('_finBookClear'), _seedSweep: rec('_seedSweep'),
       window: { Steward: {}, dispatchEvent() {} }, CustomEvent: class {} });
     await o.removeKey(); await new Promise(r => setImmediate(r));
@@ -311,7 +311,7 @@ test('(g) removing the lock, removing the church, and restoring from 12 words ea
   }
   {
     const { dev, stay } = await deviceWithRecord();
-    const o = liftMethod('restoreKey(mnemonic) {', { validateMnemonic: () => true, wordlist: [], setKey: () => {}, _resetChurchScopedState: () => {},
+    const o = liftMethod('restoreKey(mnemonic) {', { validateMnemonic: () => true, wordlist: [], setKey: () => {}, _resetChurchScopedState: () => {}, _forgetStewardedScope: () => {},
       _setNeedsPin: () => {}, _stay: stay, window: { Steward: {}, dispatchEvent() {} }, CustomEvent: class {} });
     o.restoreKey(SEED); await new Promise(r => setImmediate(r));
     assert.equal(dev.hw.map[SS_KEY], undefined, 'restoreKey (12 words) left the stay-open record');

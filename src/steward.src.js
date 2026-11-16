@@ -3761,6 +3761,17 @@ const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose
 // { me, done: Map(url -> unix s the broad read finished there), part: Map(url -> newest created_at a cut-off broad read
 // got to, to resume from) } — null after a lock.
 let _stewardedBroad = null;
+// THE CONSOLE'S OWN CHURCH IS ABOUT TO CHANGE: forget which churches the OLD key helped run, and that we were acting
+// for one. Without this a console that helped church B and then restored church C kept B in the Map and in
+// actingChurch, so identities() hid C's own row and every write was signed and stamped as B and refused.
+// Called ONLY where the key is replaced or removed (restoreKey, createKey, createKeyQuiet, removeKey) and NEVER
+// from setKey: a lock/unlock re-enters through setKey (_enterUnlocked) and must come back to the church the helper
+// was acting for. _stewardedBroad needs no clear (every reader checks .me); ACTIVE_ID_KEY is left alone on purpose.
+function _forgetStewardedScope() {
+  stewardedChurches.clear();
+  actingChurch = '';
+  try { window.Steward.actingChurch = ''; } catch (e) {}
+}
 // finalize a CHURCH-CONTENT event, stamping ['church',<cp>] when delegated so the relay accepts our key.
 // Signs with the active key `sk` (our own key in delegated mode; the church/network key otherwise).
 // WHO MAY SPEAK FOR THIS CHURCH, as this console sees it. The member app has _churchVoice for exactly this
@@ -8250,7 +8261,7 @@ window.Steward = {
     // memory only until setPin() persists the encrypted form. needsPin forces the UI to gate the
     // console behind a forced PIN-setup modal — there is NO state in which a freshly-created
     // church key sits as plaintext on disk.
-    const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
+    const m = generateSeedWords(); _forgetStewardedScope(); setKey(m); _setNeedsPin(true);
     _armRegGate();   // this church does not exist on any relay yet — hold its founding writes (R5-5)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
     return { npub: window.Steward.npub };
@@ -8259,7 +8270,7 @@ window.Steward = {
   // identity's "become a steward" code before the caller continues into the console (which fires it then).
   createKeyQuiet() {
     // Same posture as createKey: memory only, no plaintext on disk.
-    const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
+    const m = generateSeedWords(); _forgetStewardedScope(); setKey(m); _setNeedsPin(true);
     // A DURABLE MARK THAT THIS DEVICE MINTED THIS KEY AS A BARE HELPER KEY (audit of 496b8b21, MEDIUM 1). It is the only
     // thing that lets acknowledgeRemoval() discard a key: _ownKeyBlank() alone also describes a real church restored on
     // a device that has not yet read its name, so "looks blank" is never enough. A key minted before this mark existed
@@ -8440,27 +8451,68 @@ window.Steward = {
   // "Synced" into a borrowed "Catching up…"). With the branch gone a box-wide failure falls through to the final
   // `unknown` and the chip shows nothing rather than a borrowed red; the per-church signals that remain (running,
   // peers, a clean dated pass) still classify this church's own state honestly. DISPLAY ONLY — admits nothing.
-  relaySyncState(sync) {
+  //
+  // PER-CHURCH BLOCK (2026-11-14). `church` is the answer from the SIGNED GET /sync-status?church=<hex>:
+  // { peers, state: 'none'|'pending'|'reached'|'unreached'|'refused', reason: 'trust'|'time'|'', at, lastReachedAt,
+  // running, refusedPasses }. When it is present it is read INSTEAD of the box-wide block (a church with no partners
+  // reads "Not syncing" even while other churches on the same box synced), and:
+  //   · refused for 2+ passes in a row → "Needs attention" (reason 'time' → "Check the clock"); it OUTRANKS running,
+  //     so a church being refused is never softened to "Catching up…". One refused pass shows nothing red.
+  //   · running                         → "Catching up…"
+  //   · peers 0                         → "Not syncing"
+  //   · reached                         → "Synced" — and ONLY a reached pass says that
+  //   · unreached                       → a quiet "Couldn't reach your other relay last time", never "Synced"
+  //   · anything else (pending, one refused pass, a shape we do not know) → nothing.
+  // Counted in passes by the relay; no minutes appear here. Still advisory and display-only: it admits nothing.
+  relaySyncState(sync, church) {
+    if (church && typeof church === 'object' && typeof church.state === 'string') {
+      const base = { at: Number(church.at) || 0, lastReachedAt: Number(church.lastReachedAt) || 0, refusedPasses: Number(church.refusedPasses) || 0, reason: church.reason === 'time' ? 'time' : (church.reason ? 'trust' : '') };
+      if (church.state === 'refused' && base.refusedPasses >= 2) return base.reason === 'time' ? { state: 'clock', label: 'Check the clock', ...base } : { state: 'attention', label: 'Needs attention', ...base };
+      if (church.running) return { state: 'syncing', label: 'Catching up…', ...base };
+      if (!(Number(church.peers) > 0)) return { state: 'island', label: 'Not syncing', ...base };
+      if (church.state === 'reached' && base.at > 0) return { state: 'synced', label: 'Synced', ...base };
+      if (church.state === 'unreached' && base.at > 0) return { state: 'unreached', label: 'Couldn’t reach your other relay last time', ...base };
+      return { state: 'unknown', label: '', ...base };
+    }
     if (!sync || typeof sync !== 'object') return { state: 'unknown', label: '' };
     if (sync.running) return { state: 'syncing', label: 'Catching up…' };
     if (!(Number(sync.peers) > 0)) return { state: 'island', label: 'Not syncing' };
     if (sync.ok === true && Number(sync.at) > 0) return { state: 'synced', label: 'Synced' };
     return { state: 'unknown', label: '' };
   },
-  // Fetch each relay's PUBLIC /status.sync and classify it (relaySyncState). Returns [{ url, sync, state,
-  // label }] for the Relays list. Read-only: a GET to /status per relay, the SAME endpoint relayIdentities
-  // already reads for `online`; nothing here changes the relay list or admits anything. relays() (the gated
-  // publish list) is the right source — these are the addresses the console actually uses.
-  async relaySyncStates() {
-    const out = [];
-    for (const u of relays()) {
+  // Fetch each relay's sync state and classify it (relaySyncState). Returns [{ url, sync, church, state, label, ... }]
+  // for the Relays list. Read-only: a GET /status per relay (the SAME endpoint relayIdentities already reads) and, unless an
+  // owned NETWORK is the active identity, ONE signed GET /sync-status?church=<active church> per relay, signed by this
+  // console's own key (the church key, or a helper's own key naming the church it helps). relays() (the gated publish
+  // list) is the source: nothing here changes the relay list or admits anything.
+  //   · ALL RELAYS AT ONCE, NO WALL-CLOCK CUTOFF: a black-holed box must not stall every other row (the 2026-11-11
+  //     shape), and small pipes get no invented timeout. `onEach(entry)` is called as each relay's answer lands, so a
+  //     screen can paint rows as they arrive; the returned array is in relay order once all have settled.
+  //   · A NETWORK identity sends no per-church read (its key is not a church) and shows today's chip.
+  //   · A 404, HTML or unparseable answer (an older relay) is "no church block": today's box-wide classification.
+  async relaySyncStates(onEach) {
+    const net = _viewingNetwork();
+    const one = async (u) => {
       let base = String(u).replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
       base = base.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
-      let s = null; try { s = await (await fetch(base + '/status', { cache: 'no-store' })).json(); } catch {}
-      const sync = (s && s.sync) ? s.sync : null;
-      out.push({ url: u, sync, ...window.Steward.relaySyncState(sync) });
-    }
-    return out;
+      const readStatus = async () => { try { const s = await (await fetch(base + '/status', { cache: 'no-store' })).json(); return (s && s.sync) ? s.sync : null; } catch { return null; } };
+      const readChurch = async () => {
+        if (net || !sk || !pub) return null;
+        try {
+          const url = base + '/sync-status?church=' + encodeURIComponent(pub);
+          const r = await fetch(url, { cache: 'no-store', headers: { Authorization: _nip98(url) } });
+          if (!r.ok) return null;
+          const j = await r.json();
+          return (j && j.church && typeof j.church === 'object' && typeof j.church.state === 'string') ? j.church : null;
+        } catch { return null; }
+      };
+      const [sync, church] = await Promise.all([readStatus(), readChurch()]);
+      const entry = { url: u, sync, church, ...window.Steward.relaySyncState(sync, church) };
+      try { if (typeof onEach === 'function') onEach(entry); } catch {}
+      return entry;
+    };
+    const settled = await Promise.allSettled(relays().map(one));
+    return settled.filter(x => x.status === 'fulfilled').map(x => x.value);
   },
   // D2: make redundancy automatic. If the church already runs >=2 separate relay boxes and sync isn't already on,
   // switch it on — so a church that has taken the step of adding a real second relay gets live cross-relay backup
@@ -8647,7 +8699,9 @@ window.Steward = {
     // overwrites the old ciphertext anyway (S6's at-rest concern is still met), and setPin() removes KEY_LS
     // itself. An ABANDONED restore now leaves the previous key intact and openable, which is the safe
     // outcome — the steward keeps the church they had instead of losing both.
+    _forgetStewardedScope();   // validation has passed: this replaces the console's own church, so B's helper scope must not follow it to C
     setKey(m);
+    try { window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch: '' } })); } catch (e) {}
     // A KEY LOADED FROM WORDS IS NEVER A DISPOSABLE HELPER KEY (audit of 15dc0960 NIT 3; of 29a23952 NIT 1): a helper mark
     // left on this device for the same key — words taken from a helper key and made a church elsewhere — must not let a
     // removal notice discard it. Here, not in adoptChurch, so EVERY restore path is covered: the welcome screen's restore
@@ -8999,6 +9053,7 @@ window.Steward = {
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     _stay.clear();                  // …and so is a stay-open record that would open it
+    _forgetStewardedScope();        // no key left: no church it helped run, and nothing it was acting for
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
@@ -15650,7 +15705,7 @@ window.Steward = {
     const resolveName = (cp) => {
       if (closed || nameSubs.has(cp) || !dialled.length) return;
       nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
-        onevent(e) { try { const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
+        onevent(e) { try { if (churchPub !== me) return; const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
         oneose() {},
       }));
     };
@@ -15695,6 +15750,9 @@ window.Steward = {
       const record = () => { if (!_stewardedBroad || _stewardedBroad.me !== me) _stewardedBroad = { me, done: new Map(), part: new Map() }; return _stewardedBroad; };
       const handlers = {
         onevent(e) {
+          // A LATE EVENT FOR A KEY THIS CONSOLE NO LONGER HOLDS (restore-identity fix): this closure is for `me`; once the
+          // key has been replaced, a roster that lists the OLD key must not put its church back in the Map the restore just emptied.
+          if (churchPub !== me) return;
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           // A DEDICATED REVOCATION NOTICE the removed helper can still read (2026-11-05, helper-delegation). The
           // roster that would tell us we were dropped is no longer served to us once we are off it, so a ghost church
@@ -15794,7 +15852,7 @@ window.Steward = {
         const s = oneRelay(u, filters, {
           onevent: handlers.onevent,
           onanswer(genuine, why) {
-            if (closed || subs.get(u) !== s) return;
+            if (closed || churchPub !== me || subs.get(u) !== s) return;   // a late answer in the OLD key's closure must not replace the new key's _stewardedBroad
             cb([...stewardedChurches.keys()]);
             // every end counts here (an EOSE, a CLOSED, the library's timer): the question is only "has this relay said
             // all it is going to say for now", so a dead relay cannot hold a genuine removal back for ever

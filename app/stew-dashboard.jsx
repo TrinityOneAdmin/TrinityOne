@@ -2363,6 +2363,13 @@ function StewDashboard({ initial = 'overview' }) {
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action on that page (e.g. open the Set-PIN dialog)
   const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
+  // DEEP-LINK A RESOURCES VIEW, the same one-shot shape as openSettings. The Overview's "Verse prompt is live"
+  // card asks for 'verse'; a plain visit to Resources passes nothing and still opens on Reading plans.
+  const [resourcesView, setResourcesView] = React.useState(null);
+  const openResources = (view = null) => { setResourcesView(view); setTab('resources'); };
+  // A request that was never consumed (Resources padlocked, or snapped back to Overview) must not ambush the
+  // next plain visit to Resources, so it is dropped as soon as the console is on any other tab.
+  React.useEffect(() => { if (tab !== 'resources' && resourcesView) setResourcesView(null); }, [tab]);
   // PICKING "SETTINGS" WHILE ALREADY IN SETTINGS GOES BACK TO ITS INDEX. On a phone the list and a page are
   // never on screen together, and picking the section again from ☰ (or the avatar) is how a steward asks for
   // the list — it used to do nothing, because setTab('settings') on 'settings' is a no-op to React, so the
@@ -2371,7 +2378,11 @@ function StewDashboard({ initial = 'overview' }) {
   // and the first page in a browser. A remount rather than a prop on purpose: a revealed recovery phrase is
   // hidden again by it, which is the right side to fall on for "I pressed Settings".
   const [settingsEpoch, setSettingsEpoch] = React.useState(0);
-  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') setSettingsEpoch(n => n + 1); setTab(k); };
+  // `settingsRepick` tells the remounted DashSettings it was re-picked (so it opens at the top of the console),
+  // as opposed to arrived at from another section (which must not move the console). Owner, 2026-11-16.
+  const [settingsRepick, setSettingsRepick] = React.useState(false);
+  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') { setSettingsEpoch(n => n + 1); setSettingsRepick(true); } setTab(k); };
+  React.useEffect(() => { if (tab !== 'settings' && settingsRepick) setSettingsRepick(false); }, [tab]);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
@@ -2561,19 +2572,19 @@ function StewDashboard({ initial = 'overview' }) {
     <React.Fragment>
       <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
-      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onNewPost={() => setPosting(true)} />}
+      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
       {tab === 'rota' && (stewCapState('content').allowed ? <DashRota onNewTeam={() => setAddingTeam(true)} /> : <StewCapBlocked cap='content' />)}
       {tab === 'calendar' && (stewCapState('content').allowed ? <DashCalendar /> : <StewCapBlocked cap='content' />)}
       {tab === 'rooms' && (stewCapState('content').allowed ? <DashRooms /> : <StewCapBlocked cap='content' />)}
-      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources /> : <StewCapBlocked cap='content' />)}
+      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources initialView={resourcesView} onViewConsumed={() => setResourcesView(null)} /> : <StewCapBlocked cap='content' />)}
       {tab === 'members' && (stewCapState('members').allowed ? <DashMembers dmConvos={dmConvos} /> : <StewCapBlocked cap='members' />)}
       {tab === 'checkin' && (stewCapState('safeguarding').allowed ? <DashCheckin /> : <StewCapBlocked cap='safeguarding' />)}
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && (stewCapState('care').allowed ? <DashMeals /> : <StewCapBlocked cap='care' />)}
-      {tab === 'settings' && <DashSettings key={settingsEpoch} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
+      {tab === 'settings' && <DashSettings key={settingsEpoch} repicked={settingsRepick} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
   // "New post" and "New team" both write content, so both need the `content` capability — and both sat in the
@@ -2682,7 +2693,7 @@ function StewDashboard({ initial = 'overview' }) {
             {nav.map(n => {
               const on = n.key === tab;
               return (
-                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => pickTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
                   <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                   {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
                 </button>
@@ -3753,7 +3764,7 @@ function groupLiveSub(g, memberCount, rosters) {
   if (g.visibility === 'invite') return n(Array.isArray(g.members) ? g.members.length : 0) + ' · invite-only';
   return n(memberCount || 0);   // open group: every church member can join
 }
-function DashOverview({ onTab, onNewPost, onSettings }) {
+function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
   const goSettings = onSettings || ((s) => onTab('settings'));   // deep-links a settings PAGE when available (SETTINGS_GROUPS)
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
@@ -3949,7 +3960,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   var _ovHasSchedule = _ovVp && Array.isArray(_ovVp.schedule) && _ovVp.schedule.length > 0;
   var _ovAllFuture = _ovHasSchedule && _ovVp.schedule.every(function(s) { return s.at > Math.floor(Date.now() / 1000); });
   var verseBanner = (_ovVp && _ovVp.ref) ? (
-    <button onClick={function() { onTab('resources'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+    <button onClick={function() { onResources('verse'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: _ovAllFuture ? 'var(--clay)' : 'var(--sage)', color: _ovAllFuture ? 'var(--on-clay)' : 'var(--on-sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={_ovAllFuture ? 'clock' : 'book'} size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: _ovAllFuture ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{_ovAllFuture ? 'Verse prompt scheduled' : 'Verse prompt is live'}</div>
@@ -5666,6 +5677,9 @@ function useRelayBackupState() {
 //    touches once or never (add, auto-find, connect by name, copy history, keep in sync, run your own box)
 //    is its own page now; SETTINGS_GROUPS in DashSettings is the list of where each of them went.
 function DashRelaysCard() {
+  // The one optional prop (the parent's page switcher, for the Add a relay link). Read off `arguments`, NOT a destructured
+  // parameter, so the signature `function DashRelaysCard()` that fourteen screen tests slice on stays exactly as it was.
+  const onOpenPage = arguments[0] && arguments[0].onOpenPage;
   const { status, backup } = useRelayBackupState();
   // PER-RELAY SYNC INDICATOR (plan §3, work item A — the visible half). Each relay's PUBLIC /status.sync
   // block, classified by window.Steward.relaySyncState into "Synced" / "Catching up…" / "Not syncing". It is
@@ -5674,16 +5688,75 @@ function DashRelaysCard() {
   // without the engine method (and an older bundle) simply show no chip rather than throwing. Re-read when
   // the relay set changes.
   const [syncStates, setSyncStates] = React.useState(null);
+  // "Check again" only RE-READS (the relay's answer changes only after its own next copy round). It never calls
+  // /sync-now (admin-gated, runs every church) and never touches the sync switch.
+  const [recheck, setRecheck] = React.useState(0);
+  // WHICH relays are still being read, by normalised address. Per relay, so one relay that never answers (no cutoff is
+  // invented) cannot keep "Check again" waiting on every row: the button is never disabled, it only reads "Checking…"
+  // beside a relay whose own answer is still outstanding, and a click while that is so simply starts a fresh read.
+  const [pendingUrls, setPendingUrls] = React.useState([]);
+  const normUrl = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
   React.useEffect(() => {
     let ok = true;
-    (async () => { try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates() : null; if (ok) setSyncStates(m); } catch {} })();
+    const got = new Map();
+    // Rows paint as each relay's answer lands (relaySyncStates reads them all at once, with no time cutoff), so one
+    // black-holed relay never holds the others back. A re-read keeps the old rows until each is replaced.
+    const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e); setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
+    (async () => {
+      setPendingUrls(status.map(r => normUrl(r && r.url)));
+      try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates(onEach) : null; if (ok && m) setSyncStates(m); } catch {}
+      if (ok) setPendingUrls([]);
+    })();
     return () => { ok = false; };
-  }, [status.length]);
+  }, [status.length, recheck]);
   const syncByUrl = React.useMemo(() => {
     const m = new Map();
     for (const s of (syncStates || [])) m.set(String(s.url || '').trim().toLowerCase().replace(/\/+$/, ''), s);
     return m;
   }, [syncStates]);
+  // WORDING for the failed-sync states (owner-approved, MOCKUPS-sync-failure-display-2026-11-14). Plain text only; every
+  // apostrophe is the curly one on purpose (see the note at the Remove confirmation below). It never names the partner
+  // relay, never suggests editing a list or a key, and never suggests adding or removing a relay as the cure for a refusal.
+  const delegatedConsole = !!(window.Steward && window.Steward.isDelegated && window.Steward.isDelegated());
+  const lastChecked = (e) => {
+    const at = e && Number(e.at) || 0;
+    if (!at) return 'relay last checked: not yet';
+    const min = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
+    return 'relay last checked ' + (min < 1 ? 'less than a minute' : min + ' min') + ' ago';
+  };
+  const lastGood = (e) => {
+    const at = e && Number(e.lastReachedAt) || 0;
+    if (e && e.state === 'syncing') return 'Now';
+    if (!at) return 'Never reached';
+    const min = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
+    return min < 1 ? 'Less than a minute ago' : min + ' min ago';
+  };
+  const SYNC_COPY = {
+    attention: { head: 'Another of your relays is turning this one away.', body: 'Your messages are safe on every relay that’s answering. This usually means your church’s list of relays that copy each other is out of date, often after a relay was reinstalled.', todo: delegatedConsole ? 'ask the person who holds the church key to open Settings → Infrastructure → Move or copy history and press Re-sync now under “Keep your relays in sync”.' : 'when all your relays show Answering, open Settings → Infrastructure → Move or copy history and, under “Keep your relays in sync”, press Re-sync now.', tail: 'This row updates after the next copy round.' },
+    clock: { head: 'A clock looks wrong, so your relays are turning each other away.', body: 'Nothing is lost.', todo: 'on the computer running this relay, or your other one, switch on “Set time automatically” (Settings → Date & time). This row clears after the next copy round.', tail: '' },
+    island: { head: 'This relay isn’t copying to another one.', body: 'Either you have only one relay, or syncing is switched off.', todo: 'add a second relay your church runs, then switch on “Keep your relays in sync” (Settings → Infrastructure → Move or copy history).', tail: '', link: true },
+    syncing: { head: 'Copying the latest messages from your other relay.', body: 'This is normal after a relay has been switched off.', todo: '', tail: '' },
+    unreached: { head: 'We could not reach your other relay on the last copy round, so we are not saying “Synced”.', body: '', todo: '', tail: '' },
+  };
+  const SYNC_STATUS_WORD = { synced: 'Synced ✓', syncing: 'Catching up…', attention: 'Needs attention', clock: 'Check the clock', island: 'Not syncing', unreached: 'Couldn’t reach your other relay last time' };
+  // The "add a second relay" advice is said ONCE for the whole card, under the first Not-syncing row, not under every row and again in the detail.
+  const firstIslandUrl = (() => { for (const r of status) { const e = r.status === 'on' ? syncByUrl.get(normUrl(r.url)) : null; if (e && e.state === 'island') return normUrl(r.url); } return ''; })();
+  const syncExplain = (e, withActions) => {
+    const c = e && SYNC_COPY[e.state]; if (!c) return null;
+    return (
+      <div data-sync-detail={e.state} style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+        <div><b style={{ color: 'var(--ink)' }}>{c.head}</b>{c.body ? ' ' + c.body : ''}</div>
+        {c.todo ? <div><b style={{ color: 'var(--ink)' }}>What to do:</b> {c.todo}{c.link && onOpenPage ? <React.Fragment>{' '}<span role="button" tabIndex={0} onClick={() => onOpenPage('add-relay')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>Add a relay</span></React.Fragment> : null}</div> : null}
+        {c.tail ? <div style={{ color: 'var(--ink-3)' }}>{c.tail}</div> : null}
+        {withActions && (e.state === 'attention' || e.state === 'clock' || e.state === 'unreached') ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setRecheck(n => n + 1)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>{pendingUrls.includes(normUrl(e.url)) ? 'Checking…' : 'Check again'}</button>
+            <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{lastChecked(e)}. “Check again” only re-reads; it does not start a copy.</span>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
   // THE CONSOLE'S CLOCK, measured against the relays that store what it writes. Stage 1 of
   // reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md: measured and SHOWN, corrected nowhere. It belongs on
   // this card because the relays are the thing it is measured against and the thing a wrong clock breaks.
@@ -5931,11 +6004,18 @@ function DashRelaysCard() {
                       peers, "Catching up…" / "Not syncing" when it is behind or has no peer to pull from.
                       Advisory and display-only — classified by window.Steward.relaySyncState from the box's own
                       unauthenticated /status.sync; it admits nothing and changes no relay list. */}
-                  {relaySync && relaySync.label ? <span data-sync={relaySync.state} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: relaySync.state === 'synced' ? 'var(--sage-ink)' : 'var(--ink-3)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)' }} /> {relaySync.state === 'synced' ? 'Synced ✓' : relaySync.label}</span> : null}
+                  {relaySync && relaySync.label ? (relaySync.state === 'unreached'
+                    ? <span data-sync="unreached" style={{ fontSize: 12, color: 'var(--ink-3)' }}>{relaySync.label}</span>
+                    : <span data-sync={relaySync.state} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: relaySync.state === 'synced' ? 'var(--sage-ink)' : (relaySync.state === 'attention' || relaySync.state === 'clock') ? 'var(--clay-ink)' : 'var(--ink-3)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)' }} /> {relaySync.state === 'synced' ? 'Synced ✓' : relaySync.label}</span>) : null}
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
                   {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
                   {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
+                {relaySync && relaySync.state && SYNC_COPY[relaySync.state] && relaySync.state !== 'unreached' && (relaySync.state !== 'island' || normUrl(r.url) === firstIslandUrl) ? <div style={{ flexBasis: '100%', paddingTop: 8, borderTop: '1px solid var(--line)' }}>{syncExplain(relaySync, true)}</div> : null}
+                {relaySync && relaySync.state === 'unreached' ? <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button onClick={() => setRecheck(n => n + 1)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '3px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>{pendingUrls.includes(normUrl(relaySync.url)) ? 'Checking…' : 'Check again'}</button>
+                  <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{lastChecked(relaySync)}. “Check again” only re-reads; it does not start a copy.</span>
+                </div> : null}
                 {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
                     the name goes too, and that — not the address on screen — is what would bring it back. */}
                 {confirmDrop === r.url ? (
@@ -5957,6 +6037,30 @@ function DashRelaysCard() {
           })}
           {(dropping.length || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping.length ? 'Removing ' + dropping.join(', ') + '…' : dropNote}</div> : null}
         </div>
+        {/* OPTION C, THE DETAIL BEHIND THE ROW CHIP: one block per relay that gave a per-church reading, with the
+            full explanation and the last-good time. Only relays that answered the signed /sync-status appear (an older
+            relay gives nothing here, as it gives nothing on the row). Same data as the rows; it reads and decides nothing. */}
+        {(() => {
+          const rows = status.map(r => { const e = r.status === 'on' ? syncByUrl.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : null; return e && e.church && SYNC_STATUS_WORD[e.state] ? { r, e } : null; }).filter(Boolean);
+          if (!rows.length) return null;
+          return (
+            <div data-sync-section="detail" style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontWeight: 800, fontSize: 13, color: 'var(--ink)' }}>Sync</div>
+              {rows.map(({ r, e }) => (
+                <div key={r.url} style={{ padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere' }}>{rowName(r) || r.url}</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 14, rowGap: 3, fontSize: 12.5, color: 'var(--ink-2)' }}>
+                    <span style={{ color: 'var(--ink-3)' }}>Status</span><span data-sync-status={e.state} style={{ fontWeight: 700 }}>{SYNC_STATUS_WORD[e.state]}</span>
+                    <span style={{ color: 'var(--ink-3)' }}>Last good copy</span><span>{lastGood(e)}</span>
+                    <span style={{ color: 'var(--ink-3)' }}>Relay last checked</span><span>{e.at ? lastChecked(e).replace('relay last checked ', '') : 'never'}</span>
+                    <span style={{ color: 'var(--ink-3)' }}>Syncing switched on</span><span>{backup && backup.syncOn === true ? 'Yes' : backup && backup.syncOn === false ? 'No' : 'Checking…'}</span>
+                  </div>
+                  {e.state === 'synced' ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Your relays hold the same history. Nothing to do.</div> : e.state === 'island' ? null : syncExplain(e, true)}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
             one. The seconds are printed as a number on purpose — "in step" is a judgement, the figure is the
@@ -7691,8 +7795,11 @@ function BulkUploadModal({ kind, onClose }) {
   );
 }
 
-function DashResources() {
-  const [view, setView] = React.useState('plans');   // plans | devotionals
+const RESOURCES_VIEWS = ['plans', 'devotionals', 'media', 'verse'];
+function DashResources({ initialView, onViewConsumed } = {}) {
+  // initialView is a one-shot deep link (StewDashboard.openResources); anything unknown falls back to Reading plans.
+  const [view, setView] = React.useState(RESOURCES_VIEWS.includes(initialView) ? initialView : 'plans');   // plans | devotionals | media | verse
+  React.useEffect(() => { if (initialView && onViewConsumed) onViewConsumed(); }, []);   // clear the one-shot request, as DashSettings does
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
   const TAB_TIPS = { plans: 'Reading plans members can follow day by day', devotionals: 'Short devotionals you schedule for members to read', media: 'Sermon recordings and notes for members', verse: 'Set the verse members are prompted with' };
@@ -13351,7 +13458,7 @@ function DashBrandingPanel({ church }) {
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
       {/* live preview — the church header the way members' phones draw it (see the note above badgeCol) */}
       {church.banner ? (
-        <div data-brand-preview="banner" style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: mainCol || 'transparent' }}>
+        <div data-brand-preview="banner" style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', maxHeight: 150, borderRadius: 14, overflow: 'hidden', background: mainCol || 'transparent' }}>
           <div style={{ position: 'absolute', inset: 0, WebkitMaskImage: fade > 0 ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: fade > 0 ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
             <div style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url(${church.banner})` }} />
             <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
@@ -13925,7 +14032,7 @@ function settingsPageFor(wanted, visible, pages) {
   return (seen && seen.length) ? seen[0].k : (pages.length ? pages[0].k : null);
 }
 
-function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed }) {
+function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed, repicked }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
   const church = window.useStewardChurch();   // real church name + npub
@@ -13952,6 +14059,31 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [page, setPage] = React.useState(() => settingsPageFor(initialSection, groups, pages));
   const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
   const cur = pages.find(p => p.k === open) || null;
+  // A NEW SETTINGS PAGE OPENS AT ITS TOP. The console scrolls in its <main>, which outlives every page here, so
+  // picking another page after scrolling down one left the new page scrolled to wherever the old one was, with
+  // its top out of sight (owner, 2026-11-16, desktop). Owner decisions, 2026-11-16:
+  //   - switching page, or opening a page from the list, goes to the top (on a desktop the list beside it
+  //     scrolls up too; accepted);
+  //   - re-picking Settings while in Settings (StewDashboard remounts this with `repicked`) goes to the top;
+  //   - arriving at Settings from another section, or by a deep link, does NOT move the console;
+  //   - on a phone, "All settings" goes back to the list WHERE THE STEWARD LEFT IT, not to its top.
+  const shellRef = React.useRef(null);
+  const pageMounted = React.useRef(false);
+  const listScroll = React.useRef(null);   // the phone list's scroll offset when a page was opened from it
+  const settingsScroller = () => { const el = shellRef.current; return el && el.closest ? el.closest('main') : null; };
+  const openPage = (k) => {
+    if (!open) { const sc = settingsScroller(); listScroll.current = sc ? sc.scrollTop : null; }
+    setPage(k);
+  };
+  React.useEffect(() => {
+    const first = !pageMounted.current;
+    pageMounted.current = true;
+    if (first && !repicked) return;
+    const sc = settingsScroller();
+    if (!sc) return;
+    if (!first && open === null && listScroll.current != null) { sc.scrollTop = listScroll.current; listScroll.current = null; }
+    else sc.scrollTop = 0;
+  }, [open]);
   // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
   // THE DEFAULT IS SHUT. Owner, 2026-09-22, from a screenshot of the Suite's window: "Can we have the settings
   // groups minimized like this on default?" A steward who has never chosen (nothing stored) starts with every
@@ -14118,7 +14250,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
-      <div className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
+      <div ref={shellRef} className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
       {/* THE LIST. On a phone it is the whole first screen; in a browser it is the left-hand column, always
           on screen beside the page. Sixteen pages is a lot to scan and most stewards live in one or two
           groups, so each GROUP is a disclosure — owner, 2026-09-09, "that will help tidy it up".
@@ -14157,7 +14289,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
                     {/* WHICH PAGE IS OPEN IS NOT SAID IN COLOUR ALONE — the same rule the tab strip's filled
                         dot existed for. aria-current says it to a screen reader, and the heavier weight says
                         it to anyone who cannot separate clay from ink. */}
-                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => setPage(p.k)} onKeyDown={e => onNavKey(e, i)}
+                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => openPage(p.k)} onKeyDown={e => onNavKey(e, i)}
                       aria-current={sel ? 'page' : undefined} className={'set-item' + (sel ? ' set-item--on' : '')}>
                       <span className="set-item-n">{p.n}</span>
                       <span className="set-item-d">{p.d}</span>
@@ -14226,7 +14358,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'tags' ? <DashChatTagsPanel church={church} /> : null}
       {open === 'voice' ? <Panel title="Your name as a steward"><VoiceSetup onDelegated={() => setPage('delegated')} /></Panel> : null}
 
-      {open === 'relays' ? <DashRelaysCard /> : null}
+      {open === 'relays' ? <DashRelaysCard onOpenPage={setPage} /> : null}
       {open === 'add-relay' ? <DashAddRelayCard /> : null}
       {open === 'history' ? <DashRelayHistoryCard /> : null}
       {open === 'ownbox' ? <DashRunRelayCard /> : null}

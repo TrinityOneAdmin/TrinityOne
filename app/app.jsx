@@ -221,71 +221,14 @@ function verseShareUrl(v) {
   return base + '/v?' + p.toString();
 }
 function verseShareFull(v) { var t = verseShareText(v); var u = verseShareUrl(v); return u ? t + '\n\n' + u : t; }
-const CARD_STYLES = [
-  { id: 'clay', bg: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', fg: '#fff', serif: true },
-  { id: 'sage', bg: 'linear-gradient(155deg, #6BA17C, #3C6E57)', fg: '#fff', serif: true },
-  { id: 'paper', bg: 'var(--surface)', fg: 'var(--ink)', serif: true, bordered: true },
-  { id: 'night', bg: 'linear-gradient(155deg, #2a2218, #16120c)', fg: '#F3ECDC', serif: true },
-];
-function ShareCard({ verse, open, onClose, ctx }) {
-  const [style, setStyle] = useA(0);
-  useAE(() => { if (open) setStyle(0); }, [open]);
-  if (!verse) return null;
-  const s = CARD_STYLES[style];
-  return (
-    <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 50px)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px' }}>
-          <IconBtn name="chevL" onClick={onClose} />
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Share verse</span>
-          {/* These two used to be theatre: one toasted "Card ready to share" and the other "Saved to Photos",
-              and neither rendered, saved or shared anything. ctx.shareText is the real thing (native share
-              sheet, then Web Share, then clipboard), so share the verse itself rather than lie about a file. */}
-          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you', verseShareUrl(verse)); }} />
-        </div>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
-          <div style={{
-            width: '100%', aspectRatio: '4/5', borderRadius: 26, background: s.bg, color: s.fg,
-            border: s.bordered ? '1px solid var(--line)' : 'none', boxShadow: 'var(--shadow-lg)',
-            display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 30, position: 'relative', overflow: 'hidden',
-            transition: 'background .3s',
-          }}>
-            <div style={{ position: 'absolute', right: -20, top: -20, opacity: s.bordered ? .06 : .14 }}>
-              <Icon name="sparkle" size={130} stroke={1.3} color={s.fg} /></div>
-            <Icon name="sparkle" size={26} stroke={1.8} color={s.id === 'clay' ? '#fff' : 'var(--clay)'} />
-            <p style={{ fontFamily: s.serif ? 'var(--font-read)' : 'var(--font-ui)', fontSize: 25, lineHeight: 1.4,
-              fontWeight: 500, margin: '18px 0 20px', textWrap: 'pretty' }}>“{verse.text}”</p>
-            <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, letterSpacing: '.5px',
-              color: s.bordered ? 'var(--clay)' : s.fg, opacity: s.bordered ? 1 : .9 }}>{verse.ref} · {verse.version || 'WEB'}</div>
-            <div style={{ position: 'absolute', bottom: 16, right: 22, fontSize: 11, fontWeight: 700, letterSpacing: '1px', opacity: .5 }}>TRINITYONE</div>
-          </div>
-        </div>
-        <div style={{ padding: '4px 26px 8px' }}>
-          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 18 }}>
-            {CARD_STYLES.map((c, i) => (
-              <button key={c.id} onClick={() => setStyle(i)} style={{
-                width: 46, height: 46, borderRadius: 14, background: c.bg, cursor: 'pointer',
-                border: style === i ? '2.5px solid var(--clay)' : '1px solid var(--line)', flexShrink: 0,
-              }} />
-            ))}
-          </div>
-          <button onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you', verseShareUrl(verse)); }} style={{
-            width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
-            fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          }}><Icon name="share" size={18} color="#fff" /> Share this verse</button>
-        </div>
-      </div>
-    </Overlay>
-  );
-}
+// ShareCard and CARD_STYLES live in app/share-app.jsx (loaded before this file), where a test can draw them.
 
 // ── devotional overlay ──
 function DevotionalView({ open, onClose, ctx }) {
   const d = window.TrinityData.DEVOTIONAL;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 50px)', background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -377,7 +320,7 @@ function EmptyState({ loading, error, onBrowse }) {
             <button onClick={() => window.Bible.pickFile()} style={{
               border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-2)',
               fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 14 }}>
-              or open a file from this device
+              or install a Bible from a file
             </button>
           </div>
         </React.Fragment>
@@ -722,6 +665,47 @@ function App() {
       if (AppP) {
         if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) apply(r.url, true); }).catch(() => {});
         if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) apply(e.url, false); }))
+          .then(h => { remove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
+      }
+    } catch (e) {}
+    return () => { if (remove) { try { remove(); } catch (e) {} } };
+  }, []);
+  // INSTALL A BIBLE FROM A FILE (app/install-bible.jsx). `ifs` is the one sheet's state: null (closed), or
+  // {phase:'confirm', url} / {phase:'installing'} / {phase:'result', result}. Two producers, both below:
+  //   · the engine, for a file the member PICKED (Bible.pickFile announces installing, then the result);
+  //   · the Android intent, for a file ANOTHER APP sent — which only opens the confirm step.
+  const [ifs, setIfs] = useA(null);
+  useAE(() => {
+    const B = window.Bible;
+    if (!B || typeof B.onFileInstall !== 'function') return undefined;
+    const off = B.onFileInstall((ev) => {
+      if (!ev) return;
+      if (ev.phase === 'installing') setIfs({ phase: 'installing' });
+      else if (ev.phase === 'result') setIfs({ phase: 'result', result: ev.result });
+      else if (ev.phase === 'link-refused') setIfs({ phase: 'result', result: { ok: false, reason: 'link-refused' } });
+      else if (ev.phase === 'quarantined') setIfs((prev) => {
+        // several saved files can be refused in one boot, one event each: the sheet names ALL of them
+        const had = prev && prev.result && prev.result.reason === 'quarantined' ? (prev.result.names || [prev.result.name]) : [];
+        const names = had.includes(ev.name) ? had : [...had, ev.name];
+        return { phase: 'result', result: { ok: false, reason: 'quarantined', name: names[0], names } };
+      });
+    });
+    // a stored file the boot restore refused to open (unsafe) BEFORE we were listening: told once, here
+    try { const names = typeof B.takeQuarantineNotices === 'function' ? B.takeQuarantineNotices() : []; if (names && names.length) setIfs({ phase: 'result', result: { ok: false, reason: 'quarantined', name: names[0], names: [...names] } }); } catch (e) {}
+    // a ?module= link that was refused before the app was listening
+    try { if (typeof B.takeLinkNotice === 'function' && B.takeLinkNotice()) setIfs({ phase: 'result', result: { ok: false, reason: 'link-refused' } }); } catch (e) {}
+    return off;
+  }, []);
+  // "Open with TrinityOne": a SECOND listener beside the join one above, for a disjoint scheme (the join
+  // handler accepts only https on our own host; this accepts only content:). It opens the CONFIRM step and reads
+  // nothing; getLaunchUrl() is the cold-start path and is de-duplicated across relaunches in localStorage.
+  useAE(() => {
+    let remove = null;
+    try {
+      const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (AppP) {
+        if (AppP.getLaunchUrl) Promise.resolve(AppP.getLaunchUrl()).then(r => { if (r && r.url) handleIncomingFile(r.url, true, setIfs); }).catch(() => {});
+        if (AppP.addListener) Promise.resolve(AppP.addListener('appUrlOpen', (e) => { if (e && e.url) handleIncomingFile(e.url, false, setIfs); }))
           .then(h => { remove = (h && h.remove) ? () => h.remove() : null; }).catch(() => {});
       }
     } catch (e) {}
@@ -2875,6 +2859,9 @@ function App() {
         {/* module store — available in both the loaded and first-run states */}
         <ModuleStore open={store} onClose={() => setStore(false)} ctx={ctx} category={storeCat}
           initialView={storeView || (storeParam === 'language' ? 'language' : 'featured')} />
+
+        {/* install-a-Bible-from-a-file sheet: mounted here so it answers in the loaded AND first-run states, over the store */}
+        <InstallFromFileSheet state={ifs} onInstall={() => { if (ifs && ifs.url) ifsRunInstall(ifs.url, setIfs); }} onClose={() => setIfs(null)} ctx={ctx} />
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 

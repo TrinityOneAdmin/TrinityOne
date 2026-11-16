@@ -97,8 +97,14 @@ function chatList({ rooms = [ROOM, CAST], q = '' } = {}) {
   let tree = render();
   if (q) {
     // open the search box and type, so the search-results branch is the one under test
-    const open = find(tree, n => n.type === 'button' && n.props.title === 'Search');
-    assert.ok(open.length, 'the search control is gone from the Community screen — re-anchor');
+    // SEARCH LIVES BEHIND THE HEADER'S CHEVRON since 2026-11-16 (Messages stays in the bar): open the menu, then
+    // press its Search item — the same two taps a member makes.
+    const chev = find(tree, n => n.type === 'button' && n.props['data-hdr-more'] === 'chevron');
+    assert.ok(chev.length, 'the header chevron is gone from the Community screen — re-anchor');
+    chev[0].props.onClick();
+    tree = render();
+    const open = find(tree, n => n.type === 'button' && n.props['data-hdr-item'] === 'search');
+    assert.ok(open.length, 'the Search item is not in the Community header menu — re-anchor');
     open[0].props.onClick();
     tree = render();
     const box = find(tree, n => n.type === 'input' && /Search/i.test(String(n.props.placeholder || '')))[0];

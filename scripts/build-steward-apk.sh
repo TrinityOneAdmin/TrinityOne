@@ -16,6 +16,7 @@ ICON_BAK="$(mktemp -d)"
 
 # whatever happens, put the member project back (app id, name, icon, and the member www/)
 restore() {
+  bash scripts/manifest-member-only.sh restore 2>/dev/null || true   # the member-only intent-filter(s) come back
   sed -i 's/applicationId "com.trinityone.steward"/applicationId "com.trinityone.app"/' "$GRADLE" 2>/dev/null || true
   sed -i 's#<string name="app_name">TrinityOne Console</string>#<string name="app_name">TrinityOne</string>#' "$STRINGS" 2>/dev/null || true
   for d in $DENS; do cp "$ICON_BAK/mipmap-$d/"*.png "$RES/mipmap-$d/" 2>/dev/null || true; done
@@ -78,6 +79,11 @@ for f in "$WWW"/app/*.jsx; do
   rm "$f"
 done
 sed -i -e '/babel\.min\.js/d' -e 's#<script type="text/babel" src="\([^"]*\)\.jsx">#<script src="\1.js">#g' "$WWW/index.html"
+
+# 2a. take the MEMBER-ONLY intent-filter(s) out of the manifest (e.g. "Open with TrinityOne" for a Bible file): the
+# Console has no Library and no listener, so it must not be offered for every zip on the phone. The block sits
+# between BEGIN/END markers; restore() above puts the file back byte for byte (scripts/manifest-member-only.sh).
+bash scripts/manifest-member-only.sh strip
 
 # 2. swap to the Steward app identity (separate install from the member app)
 sed -i 's/applicationId "com.trinityone.app"/applicationId "com.trinityone.steward"/' "$GRADLE"

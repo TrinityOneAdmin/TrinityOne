@@ -133,9 +133,10 @@ function engineChain(probe = () => {}) {
      stripTags = function(){ probe('stripTags'); return _sT.apply(null, arguments); };`,
   ];
   const commentaries = {};
+  parts.push('const urlOf = {};');   // engine.js's module-origin map; getCommentary reads it to mark IMPORTED modules
   const factory = new Function('initSqlJs', 'SQLJS_BASE', 'commentaries', 'notify', 'src', 'probe',
     parts.join('\n') +
-    '\nreturn { BOOK_NAMES, openDb, detailsOf, buildCommentaryFromDb, addCommentary, getCommentary, buildFromUSFM };');
+    '\nreturn { BOOK_NAMES, openDb, detailsOf, buildCommentaryFromDb, addCommentary, getCommentary, buildFromUSFM, urlOf };');
   const api = factory(
     require(ROOT + 'vendor/sqljs/sql-wasm.js'),
     ROOT + 'vendor/sqljs/',
@@ -338,15 +339,15 @@ test('THE BIBLE STAYS LAZY — listing 66 books parses not one verse', () => {
 
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-async function studyPanel(loc, label = '2 John 1') {
+async function studyPanel(loc, label = '2 John 1', opts = {}) {
   const { eng } = await loadedNotes();
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const win = {
-    Bible: { getCommentary: eng.getCommentary, parseRef: () => null },
+    Bible: { getCommentary: (opts.eng || eng).getCommentary, parseRef: () => null },
     // the engine's real sanitiser needs a DOM; the panel's job here is to PUT the html on the screen, so
     // this stands in for it and the sanitiser is asserted separately (see the doesNotMatch above).
-    sanitizeHtml: h => h,
+    sanitizeHtml: opts.sanitize || (h => h),
     innerWidth: 360,
   };
   const globals = {
@@ -363,7 +364,7 @@ async function studyPanel(loc, label = '2 John 1') {
     IconBtn: Stub('IconBtn'), Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
   };
   const { CommentaryPanel } = loadScreen('app/screens-read.jsx', ['CommentaryPanel'], globals);
-  const ctx = { notes: {}, setNote() {}, gotoRef() {} };
+  const ctx = opts.ctx || { notes: {}, setNote() {}, gotoRef() {} };
   // TWO DRAWS, because that is what a phone does. CommentaryPanel asks getCommentary inside a useEffect, so
   // the first paint is the empty state and the notes arrive on the next one. A single draw here would assert
   // about a screen no member ever sees settled on -- and it is what makes "the empty state is gone" below a
@@ -454,4 +455,212 @@ test('a Details row with no licence column yields an EMPTY licence string, never
   const blocks = eng.getCommentary(63, 1);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].license, '', 'getCommentary invented a licence for a module that carries none');
+});
+
+// ── SHARING A COMMENTARY ENTRY (2026-11-16) ─────────────────────────────────────────────────────────────────
+// Point of use, both halves: the REAL CommentaryPanel over the REAL Aquifer module (tap an entry's share
+// button), then the REAL VerseShareSheet from app/screens-chat.jsx drawn with that very payload.
+// Text only, never an image card, and the source name + licence always travel with it.
+// Send limits found (not assumed): the relay's websocket maxPayload is 1 MiB (scripts/gateway.mjs, and it
+// advertises max_message_length 1 MiB in NIP-11); nip44 plaintext is capped at 65535 bytes; publishMessage and
+// sendDM add NO cap of their own. The entry text is therefore capped at 4000 characters with an ellipsis.
+
+async function tapShare(i = 0, sanitize, opts = {}) {
+  const sent = [];
+  const ctx = { notes: {}, setNote() {}, gotoRef() {}, openShareSheet: p => sent.push(p) };
+  const { tree } = await studyPanel(opts.loc || { book: 63, chap: 1 }, opts.label || '2 John 1', { ctx, sanitize, eng: opts.eng });
+  const btns = find(tree, n => n.type === 'button' && n.props['aria-label'] === 'Share this commentary');
+  assert.ok(btns.length >= 5, 'the panel shows ' + btns.length + ' share buttons for 2 John 1');
+  btns[i].props.onClick();
+  assert.equal(sent.length, 1, 'tapping share did not open the share sheet');
+  return { payload: sent[0], count: btns.length };
+}
+
+test('POINT OF USE: an entry\'s share button hands the sheet its text, its source and its licence', async () => {
+  const { payload } = await tapShare(0);
+  assert.equal(payload.type, 'commentary');
+  assert.match(payload.ref, /^2 John 1:1/);
+  assert.match(payload.source, /Aquifer Open Study Notes/);
+  assert.match(payload.text, /The elder: The apostle John calls himself/, 'the entry text is not in the payload');
+  assert.doesNotMatch(payload.text, /<[a-z\/]/i, 'the payload text still carries html tags');
+  const { eng, cmt } = await loadedNotes();
+  const real = eng.getCommentary(63, 1).find(b => b.abbr === cmt.abbr).license;
+  assert.ok(real.length > 10 && /CC BY-SA/.test(real), 'the real module has no licence to carry: ' + real);
+  assert.equal(payload.license, real, 'the payload licence is not the module\'s own licence string');
+});
+
+test('the shared text is the plain text of the SANITISED html, never the raw html', async () => {
+  const seen = [];
+  const { payload } = await tapShare(0, h => { seen.push(h); return '<p>SANITISED <em>body</em></p><p>second</p>'; });
+  assert.ok(seen.length > 0, 'the sanitiser was never asked');
+  assert.equal(payload.text, 'SANITISED body\n\nsecond');
+});
+
+test('a very long entry is capped under the limit with an ellipsis, short ones are untouched', async () => {
+  const long = '<p>' + 'word '.repeat(3000) + '</p>';
+  const { payload } = await tapShare(0, () => long);
+  assert.ok(payload.text.length <= 4000, 'length ' + payload.text.length);
+  assert.ok(payload.text.endsWith('\u2026 [shortened]'), 'a cut-off entry does not say it was shortened');
+  const { payload: short } = await tapShare(0, () => '<p>Brief.</p>');
+  assert.equal(short.text, 'Brief.');
+});
+
+function shareSheet(payload) {
+  const { React, draw } = miniReact();
+  const published = [], dms = [], shared = [], toasts = [];
+  const F = {
+    myPubkey: 'a'.repeat(64),
+    publishMessage: async (id, text, tags, o) => { published.push({ id, text }); return {}; },
+    sendDM: async (pk, text) => { dms.push({ pk, text }); return {}; },
+    subscribeChurchGroups: (_c, cb) => { cb([{ id: 'g1', name: 'Home group', kind: 'Group' }]); return () => {}; },
+    subscribeChurchMembers: (_c, cb) => { cb([{ pubkey: 'b'.repeat(64), name: 'Anna' }]); return () => {}; },
+    displayFor: () => ({ handle: 'Anna', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } }),
+  };
+  const mod = loadScreen('app/screens-chat.jsx', ['VerseShareSheet'], {
+    React,
+    window: { matchMedia: () => ({ matches: true }), Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
+    location: { search: '', href: 'https://app.trinityone.church/' },
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    lsGet: (_k, d) => d, lsSet: () => {}, todayISO: () => '2026-11-16',
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    IconBtn: ({ name, title, onClick }) => React.createElement('button', { title: title || name, onClick }),
+    Overlay: ({ children }) => children, ScreenScroll: ({ children }) => children,
+    ChurchPill: () => null, UserAvatar: () => null, SectionLabel: ({ children }) => children,
+    BottomSheet: ({ open, children }) => (open ? children : null),
+    safeCssColor: c => c, relTime: () => 'now', avOf: d => d.av, D: { GROUPS: [], RELAYS: [] },
+  });
+  const ctx = { toast: m => toasts.push(m), church: { npub: 'npub1church' }, canDMPeer: () => true,
+    shareText: (...a) => shared.push(a), openShare() { assert.fail('commentary must never open the image card'); } };
+  const props = { payload, open: true, onClose() {}, ctx };
+  draw(mod.VerseShareSheet, props);
+  return { tree: draw(mod.VerseShareSheet, props), published, dms, shared, toasts };
+}
+
+test('POINT OF USE: the share sheet for a tapped commentary entry sends text + source + licence to a group', async () => {
+  const { payload } = await tapShare(0);
+  const sheet = shareSheet(payload);
+  const words = texts(sheet.tree).join(' | ');
+  assert.match(words, /Share commentary/);
+  assert.doesNotMatch(words, /Share as image/, 'commentary must not offer an image card');
+  const grp = find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Home group'));
+  assert.equal(grp.length, 1);
+  grp[0].props.onClick();
+  assert.equal(sheet.published.length, 1);
+  const sent = sheet.published[0].text;
+  assert.ok(sent.includes(payload.text), 'the group message lacks the commentary text');
+  assert.ok(payload.license.length > 10 && sent.includes(payload.license), 'the group message lacks the licence');
+  assert.ok(sent.includes(payload.source), 'the group message lacks the source name');
+});
+
+test('POINT OF USE: a commentary sent to a person carries the licence too', async () => {
+  const { payload } = await tapShare(0);
+  const sheet = shareSheet(payload);
+  find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Anna'))[0].props.onClick();
+  assert.equal(sheet.dms.length, 1);
+  assert.ok(payload.license.length > 10);
+  assert.ok(sheet.dms[0].text.includes(payload.text) && sheet.dms[0].text.includes(payload.license));
+});
+
+test('POINT OF USE: "Share outside the app" shares the text with its licence and NO link', async () => {
+  const { payload } = await tapShare(0);
+  const sheet = shareSheet(payload);
+  const b = find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Share outside the app'));
+  assert.equal(b.length, 1, 'no "Share outside the app" button on the commentary sheet');
+  b[0].props.onClick();
+  assert.equal(sheet.shared.length, 1);
+  const [text, , url] = sheet.shared[0];
+  assert.equal(url, undefined, 'a link was passed to shareText');
+  assert.ok(payload.license.length > 10);
+  assert.ok(text.includes(payload.text) && text.includes(payload.license) && text.includes(payload.source));
+  assert.doesNotMatch(text, /https?:\/\//, 'the shared text carries a URL');
+});
+
+test('a verse share still offers "Share as image" and not the outside-the-app button', () => {
+  const sheet = shareSheet({ type: 'verse', text: 'In the beginning', ref: 'Genesis 1:1', version: 'BSB' });
+  const words = texts(sheet.tree).join(' | ');
+  assert.match(words, /Share as image/);
+  assert.doesNotMatch(words, /Share outside the app/);
+});
+
+// ── LOW fixes + the imported-licence warning (2026-11-16) ───────────────────────────────────────────────────
+test('paragraphs keep a blank line, a footnote marker gets a space, and the cap never splits an emoji', async () => {
+  const a = await tapShare(0, () => '<p>First.</p><p>Second<sup>1</sup> here.</p>');
+  assert.equal(a.payload.text, 'First.\n\nSecond 1 here.');
+  const c = await tapShare(0, () => '<p>two<sup>3</sup>three</p>');
+  assert.equal(c.payload.text, 'two 3 three');
+  // an emoji (surrogate pair) sitting exactly on the cut point
+  const html = '<p>' + 'x'.repeat(4000 - '\u2026 [shortened]'.length - 1) + '\u{1F600}' + 'tail'.repeat(50) + '</p>';
+  const b = await tapShare(0, () => html);
+  assert.ok(b.payload.text.length <= 4000);
+  assert.doesNotMatch(b.payload.text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, 'a lone high surrogate was left at the cut');
+  assert.ok(b.payload.text.endsWith('\u2026 [shortened]'));
+});
+
+test('the share button is a 44px tap target', async () => {
+  const { tree } = await studyPanel({ book: 63, chap: 1 }, '2 John 1', { ctx: { notes: {}, setNote() {}, gotoRef() {}, openShareSheet() {} } });
+  const b = find(tree, n => n.type === 'button' && n.props['aria-label'] === 'Share this commentary')[0];
+  assert.ok(b.props.style.width >= 44 && b.props.style.height >= 44);
+});
+
+async function mhEngine(imported) {
+  const eng = engineChain();
+  const zip = unzipSync(new Uint8Array(readFileSync(ROOT + 'modules/matthew-henry.cmt.mybible.zip')));
+  const name = Object.keys(zip).find(n => /\.mybible$/i.test(n) && !n.startsWith('__MACOSX'));
+  const cmt = eng.buildCommentaryFromDb(await eng.openDb(zip[name]), name);
+  assert.ok(cmt, 'Matthew Henry did not load');
+  eng.addCommentary(cmt);
+  if (imported) eng.urlOf['commentaries|' + cmt.abbr] = 'imported/matthew-henry.cmt.mybible.zip';
+  return eng;
+}
+const GEN = { loc: { book: 1, chap: 1 }, label: 'Genesis 1' };
+
+test('POINT OF USE: an IMPORTED commentary with no licence warns on the share sheet, and still shares', async () => {
+  const eng = await mhEngine(true);
+  const { payload } = await tapShare(0, undefined, { eng, ...GEN });
+  assert.equal(payload.license, '', 'this fixture is meant to have no licence');
+  assert.equal(payload.warnLicence, true);
+  const sheet = shareSheet(payload);
+  assert.match(texts(sheet.tree).join(' | '), /copyright may not allow sharing/);
+  find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Home group'))[0].props.onClick();
+  assert.equal(sheet.published.length, 1, 'the warning must not block sharing');
+});
+
+test('POINT OF USE: the BUNDLED Matthew Henry (no licence column) does NOT warn', async () => {
+  const eng = await mhEngine(false);
+  const { payload } = await tapShare(0, undefined, { eng, ...GEN });
+  assert.equal(payload.license, '');
+  assert.equal(payload.warnLicence, false);
+  assert.doesNotMatch(texts(shareSheet(payload).tree).join(' | '), /copyright may not allow sharing/);
+});
+
+test('the engine marks a commentary imported only when it was loaded from imported/', async () => {
+  const { eng, cmt } = await loadedNotes();
+  const flag = () => eng.getCommentary(63, 1).find(b => b.abbr === cmt.abbr).imported;
+  assert.equal(flag(), false);
+  eng.urlOf['commentaries|' + cmt.abbr] = 'imported/x.zip';
+  assert.equal(flag(), true);
+  eng.urlOf['commentaries|' + cmt.abbr] = 'modules/aquifer-osn-eng.cmt.mybible.zip';
+  assert.equal(flag(), false);
+});
+
+test('which imported licences warn: none, all-rights-reserved, (c); not CC / public domain / a plain name', async () => {
+  const mk = async (license) => {
+    const eng = await mhEngine(true);
+    for (const a of Object.keys(eng.commentaries)) eng.commentaries[a].license = license;
+    return (await tapShare(0, undefined, { eng, ...GEN })).payload.warnLicence;
+  };
+  assert.equal(await mk(''), true);
+  assert.equal(await mk('\u00A9 2020 Some Press. All rights reserved.'), true);
+  assert.equal(await mk('All Rights Reserved'), true);
+  assert.equal(await mk('CC BY-SA 4.0'), false);
+  assert.equal(await mk('Public Domain'), false);
+  // a restrictive marker WINS over an open one, and these were all missed by the first version
+  for (const l of ['Copyright 1995 Lockman Foundation', 'Copyrighted. Do not distribute', 'Used by permission. Not for redistribution.',
+    '\u00A9 2024 X. Free to use for personal study only, not to be shared', 'Public domain text, \u00A9 2019 Acme. All rights reserved.',
+    '(c) 1995 Acme Press', '\u00A9 2020 Some Press. Free to share with attribution.', 'CC BY 4.0 but copyright Smith, do not distribute'])
+    assert.equal(await mk(l), true, 'should warn: ' + l);
+  for (const l of ['CC-BY 4.0', 'Creative Commons Attribution', 'Public domain, no copyright', 'Notes (a)(b)(c) follow the text'])
+    assert.equal(await mk(l), false, 'should not warn: ' + l);
+  assert.equal(await mk('Compiled by A. Person'), false);
 });

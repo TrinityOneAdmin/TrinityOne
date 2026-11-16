@@ -250,6 +250,9 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
     avOf: () => ({}), relTime: () => '', searchableText: () => '',
     safeCssColor: (c) => c,
     Icon: stub('Icon'), IconBtn: stub('IconBtn'), UserAvatar: stub('UserAvatar'),
+    // the Community header's chevron (app/header-more.jsx) is a free identifier in ChatScreen since 2026-11-16: a closed, inert one
+    useHeaderMore: () => ({ open: false, toggle() {}, close() {}, focusChevron() {} }),
+    HeaderMoreChevron: stub('HeaderMoreChevron'), HeaderMorePanel: stub('HeaderMorePanel'),
     ChurchPill: stub('ChurchPill'), NostrSheet: stub('NostrSheet'), ServingEntry: stub('ServingEntry'),
     GivingView: stub('GivingView'), ChatRoom: stub('ChatRoom'),
     SectionLabel: function SectionLabel(p, ...k) { return h('SectionLabel', p, ...k); },

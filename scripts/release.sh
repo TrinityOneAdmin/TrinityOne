@@ -37,6 +37,13 @@ if [[ -n "$dirty" ]]; then
   exit 1
 fi
 
+# 1a. THE MEMBER MANIFEST must be in its member form BEFORE anything is bumped or committed. A Console build killed hard
+#     (no trap) leaves the "Open with TrinityOne" filter stripped out of it, and a member APK built from that would ship
+#     without it. Refusing here leaves nothing half-done; the message says what to run (restore).
+if [[ $DO_APK == 1 ]]; then
+  bash scripts/manifest-member-only.sh check || exit 1
+fi
+
 # 1b. THE GATE. SECURITY-AUDIT-2026-07-20 H1/H2: this script rebuilt no vendor bundle and ran no test, while
 #     BOTH packaging paths consume vendor/ verbatim (sync-web.sh copies it; build-pages.sh and
 #     build-strict-tgz.sh `git archive` it). So "did I rebuild the bundle?" was a human step with no

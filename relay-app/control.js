@@ -713,7 +713,20 @@
       out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
         (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
         // while an Attention line shows, do not invite turning updates back on (audit a1cc6eff L4)
-        (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.' : ', so automatic updates were turned off. Turn them on to try the next release.') : ''));
+        (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.'
+          : suite.lastOutcome !== 'rolledback' ? ', so automatic updates were turned off. Turn them on to try the next release.'
+          // Only a rollback that really wrote quarantine-sha skips the release; an old shell sends no field = not quarantined.
+          // ACCEPTED (audit 93619117 L3): an older shell that DID ban shows "tried again" here. The failed release's sha is not
+          // recorded anywhere /update can read (state.json holds the REVERTED identity; quarantine-sha holds only the latest
+          // ban, which may be an older release's), so it cannot be told apart. The Last-check line says "skipped" once updates are on.
+          // The rollback sentence ends with what turning updates back on does: on last-good it also brings that download back.
+          : suite.quarantined === true
+            ? (suite.running === 'update'
+              ? ', so automatic updates were turned off and that release will be skipped. Turn them on to try the next release; that also brings back the update running now, at the next start.'
+              : ', so automatic updates were turned off and that release will be skipped. Turn them on to try the next release.')
+            : (suite.running === 'update'
+              ? ', so automatic updates were turned off. If you turn updates back on, this release will be tried again and the update running now comes back at the next start.'
+              : ', so automatic updates were turned off. This release will be tried again if you turn updates back on.')) : ''));
     } else if (suite.lastOutcome === 'stuck') {
       out.push('The last update went wrong and could not be stopped' + (suite.lastReason ? ' (' + suite.lastReason + ')' : ''));
     } else if (suite.lastOutcome === 'not-applied') {
@@ -733,7 +746,7 @@
         out.push('Last check' + hm + ': ' + (SUITE_CHECK_REASON[suite.check.reason] || suite.check.reason));
       }
     } else if (suite.running === 'update') {
-      out.push('Off: at the next start the Suite goes back to the version it came with' + (suite.shippedVersion ? ' (' + suite.shippedVersion + ')' : ''));
+      out.push('Off: fully close and reopen the app and the Suite goes back to the version it came with' + (suite.shippedVersion ? ' (' + suite.shippedVersion + ')' : ''));
     }
     return out.join(' · ');
   }

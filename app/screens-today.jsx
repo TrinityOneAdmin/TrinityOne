@@ -2489,6 +2489,35 @@ function TodayScreen({ ctx }) {
     try { Promise.resolve(W.publishVotd({ days: votdWidgetDays(D.VOTD_POOL, Bible, now, 60, pickedVerse) })).catch(() => {}); } catch (e) {}
   }, [widgetOn, votdToday, votd.ref, votd.text, votd.version]);   // eslint-disable-line
   const votdQ = votdQuoteMarks(votd.text);
+  // THE HEART files the verse under a "Favourites" tag, keyed by the CANONICAL key ("43.3.16"), the one the
+  // reader and Library match on, not votd.ref ("John 3:16"), which the reader would never light up. Filled =
+  // bookmarked AND tagged Favourites. Un-favouriting keeps a bookmark that has other tags, drops one that has none.
+  // No resolvable reference, no heart.
+  // The verse ACTUALLY SHOWN (votd.ref === pick.ref — the day's verse, or an "Another verse" pick). The widget branch
+  // moved the translation lookup into votdInTranslation(), which used to leave this local behind; parse it here.
+  const vloc = Bible.parseRef(votd.ref);
+  const votdKey = (vloc && vloc.verse != null) ? Bible.refKey(vloc, vloc.verse) : null;
+  // An OLD-spelling bookmark ("John 3:16", saved before keys were canonical) is the same verse: match on the
+  // canonical form like the reader does, then operate on THAT item's own stored id, never a second copy.
+  const votdCanon = (r) => { const s = String(r == null ? '' : r); if (/^\d+\.\d+\.\d+$/.test(s)) return s; try { const q = Bible.parseRef(s); if (q && q.verse != null) return Bible.refKey(q, q.verse); } catch (err) {} return s; };
+  const votdItems = votdKey ? (ctx.bookmarkItems || []).filter(b => b && (votdCanon(b.ref) === votdKey || votdCanon(b.id) === votdKey)) : [];
+  const votdItem = votdItems.find(b => Array.isArray(b.tags) && b.tags.includes('Favourites')) || votdItems[0] || null;
+  const votdId = votdItem ? votdItem.id : votdKey;
+  const votdTags = (votdItem && votdItem.tags) || [];
+  const votdSaved = !!votdItem && votdTags.includes('Favourites');
+  const votdHeart = (e) => {
+    e.stopPropagation();
+    if (!votdKey) return;
+    if (votdSaved) {
+      const rest = votdTags.filter(t => t !== 'Favourites');
+      if (rest.length) ctx.setBookmarkTags(votdId, rest); else ctx.toggleBookmark(votdId);
+      ctx.toast('Removed from Favourites');
+    } else {
+      if (!votdItem) ctx.toggleBookmark(votdKey);
+      ctx.setBookmarkTags(votdId, [...votdTags, 'Favourites']);
+      ctx.toast('Added to Favourites');
+    }
+  };
   // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) paints the verse-of-the-day and featured-sermon cards. Unset,
   // each card keeps its exact clay gradient and white ink.
   const mainC = (typeof churchMainColor === 'function') ? churchMainColor(ctx.church) : null;
@@ -2692,11 +2721,19 @@ function TodayScreen({ ctx }) {
   const servNew = servingNewCount(ctx, ctx.servingSeenTs);
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
 
+  // THE HEADER CHEVRON (owner decisions 2026-11-16, PLAN-today-header-narrow). The row keeps the TrinityOne logo +
+  // wordmark and the bell (with its unread dot); Search, Listen (only a church with an audio feed) and Dark/Light
+  // fold behind ONE chevron at EVERY width, for every church. The open/Escape/outside-tap/focus rules are shared
+  // with Community and live in app/header-more.jsx. The panel is rendered only while open and sits OUTSIDE the
+  // header row (the row's text must stay exactly "TrinityOne" and one line tall: todays-header-fits-the-phone).
+  const hm = useHeaderMore();
+
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <SafetyBanner ctx={ctx} />
       <RecoveryNudge ctx={ctx} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', animation: 'trinityFade .5s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 16 }}>
           <svg viewBox="0 0 100 100" aria-label="TrinityOne" style={{ width: 28, height: 28, flexShrink: 0 }}>
             <path d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" fill="none" stroke="var(--ink)" strokeWidth="7" strokeLinecap="round" />
@@ -2706,28 +2743,21 @@ function TodayScreen({ ctx }) {
           </svg>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink)' }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {(() => {
-            const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
+            // 44px, the same target as the chevron beside it (it was 40)
+            const hdrBtn = { width: 44, height: 44, borderRadius: 14, border: '1px solid var(--line)',
               background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' };
             const unread = (D.NOTIFICATIONS || []).some(n => n.unread) || (ctx.netUnread > 0);
             return (
-              <React.Fragment>
-                <button onClick={ctx.openSearch} aria-label="Search" style={hdrBtn}><Icon name="search" size={19} /></button>
-                {ctx.church && ctx.church.audioFeed ? <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button> : null}
-                <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
-                  <Icon name="bell" size={19} />
-                  {unread ? <span style={{ position: 'absolute', top: 9, right: 10, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
-                </button>
-              </React.Fragment>
+              <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
+                <Icon name="bell" size={19} />
+                {unread ? <span style={{ position: 'absolute', top: 11, right: 12, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
+              </button>
             );
           })()}
-          <button onClick={ctx.toggleDark} aria-label={ctx.dark ? 'Switch to light mode' : 'Switch to dark mode'} style={{
-            width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
-            background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}><Icon name={ctx.dark ? 'sun' : 'moon'} size={19} /></button>
+          <HeaderMoreChevron hm={hm} />
           {/* NO READING-STREAK PILL. The flame + count sat here until 2026-10-09 and the owner asked for
               it off: they never asked for it in the first place, and it was the fourth control in a row
               that cannot wrap and cannot shrink. Measured on the owner's Oppo (CPH2477, 360 CSS px) the
@@ -2741,6 +2771,14 @@ function TodayScreen({ ctx }) {
               state and removing only the UI is the smaller change, and leaves the count there for
               whatever surface the owner does ask for. */}
         </div>
+      </div>
+      <HeaderMorePanel hm={hm} style={{ marginTop: 12 }} items={[
+        { id: 'search', label: 'Search', icon: 'search', onPick: () => ctx.openSearch() },
+        ...(ctx.church && ctx.church.audioFeed ? [{ id: 'listen', label: 'Listen', icon: 'headphones', onPick: () => ctx.openListen() }] : []),
+        // the old control's name, kept whole: "Dark"/"Light" is the visible word (label-in-name), the sun/moon sense is the header's own
+        { id: 'mode', label: ctx.dark ? 'Light' : 'Dark', ariaLabel: ctx.dark ? 'Switch to light mode' : 'Switch to dark mode',
+          icon: ctx.dark ? 'sun' : 'moon', onPick: () => ctx.toggleDark(), refocus: true },
+      ]} />
       </div>
 
       {/* MY OWN CHILDREN AT TODAY'S SESSION, FIRST AMONG THE CARDS — a pickup code is needed at a door, now,
@@ -2996,12 +3034,16 @@ function TodayScreen({ ctx }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
             <div style={{ display: 'flex', gap: 8 }}>
-              {['heart', 'share'].map(n => (
-                <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+              {votdKey ? (
+                <button type="button" onClick={votdHeart} aria-label={votdSaved ? 'Remove from Favourites' : 'Add to Favourites'} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)', border: 'none', padding: 0, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-                  <Icon name={n} size={17} stroke={2} color={onMain} />
-                </div>
-              ))}
+                  <Icon name="heart" size={17} stroke={2} color={onMain} fill={votdSaved} />
+                </button>
+              ) : null}
+              <div style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                <Icon name="share" size={17} stroke={2} color={onMain} />
+              </div>
             </div>
           </div>
         </div>

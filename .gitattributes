@@ -67,3 +67,10 @@ capacitor.config.json  export-ignore
 .github                export-ignore
 relay-app/desktop      export-ignore
 design             export-ignore
+
+# ── the confusables data and its generator are build-time only (install-from-file name labelling) ──────────────────
+# The 760 KB Unicode file and the script that turns it into the table inside engine.js are reproducibility material,
+# not runtime: the relay bundle.tgz and the Suite payload are `git archive`s and must not carry them. The Unicode licence
+# text stays beside the data in the repository.
+scripts/data/** export-ignore
+scripts/gen-confusables-table.py export-ignore

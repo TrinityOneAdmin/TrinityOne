@@ -1100,6 +1100,7 @@ struct StateRec<'a> {
     auto_off: bool,
     address_before: &'a str, // the quick-tunnel address before this apply restarted the relay ("" = none)
     restore_failed: &'a str, // non-empty when a rollback could not put the church's data back (why + where the copy is)
+    quarantined: bool, // true only when this write follows a rollback that wrote quarantine-sha (the release is skipped from now on)
 }
 
 fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
@@ -1116,7 +1117,7 @@ fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
         r.restore_failed
     };
     let json = format!(
-        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{},\"addressBefore\":{},\"restoreFailed\":{}}}\n",
+        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{},\"addressBefore\":{},\"restoreFailed\":{},\"quarantined\":{}}}\n",
         jstr(r.sha),
         jstr(r.version),
         jstr(r.date),
@@ -1126,6 +1127,7 @@ fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
         if r.auto_off { "true" } else { "false" },
         jstr(r.address_before),
         jstr(restore_failed),
+        if r.quarantined { "true" } else { "false" },
     );
     let _ = write_file_atomic(&suite_dir.join("state.json"), &json, log);
 }
@@ -1552,7 +1554,7 @@ fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
 // (audit M7); with `backup`, first restore the church's data from it (audit M5). ASSUMES the relay is stopped. Keeps the church ONLINE on known-good code. Does NOT write
 // quarantine — the caller decides that, since a retain failure is a local-disk problem, not a bad bundle.
 #[allow(clippy::too_many_arguments)]
-fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>, stopped: bool, address_before: &str) {
+fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>, stopped: bool, address_before: &str, quarantined: bool) {
     let suite_dir = env.suite_dir;
     // [audit M5] The new code ran against the church's data; put the pre-update copy back before anything reads it
     // — but only once the bad relay is confirmed stopped (audit 5ad96e13 LOW). A restore that does not happen, or
@@ -1583,7 +1585,7 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
         let why = format!("{reason}; the church's data could not be put back or undone, so the relay was NOT restarted. Restart this computer: the Suite puts the original data back before it starts");
         write_state(suite_dir, &StateRec {
             sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
-            outcome: "stuck", reason: &why, auto_off: true, address_before, restore_failed: &restore_failed,
+            outcome: "stuck", reason: &why, auto_off: true, address_before, restore_failed: &restore_failed, quarantined,
         }, env.log);
         applog(env.log, "suite: ROLLBACK HELD — original data files are set aside; no relay started until the next start's recovery");
         return;
@@ -1599,7 +1601,7 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
         let why = format!("{reason}, and it could not be stopped — it is still running. Restart this computer; the Suite will then start the version it came with");
         write_state(suite_dir, &StateRec {
             sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
-            outcome: "stuck", reason: &why, auto_off: true, address_before, restore_failed: &restore_failed,
+            outcome: "stuck", reason: &why, auto_off: true, address_before, restore_failed: &restore_failed, quarantined,
         }, env.log);
         applog(env.log, "suite: ROLLBACK BLOCKED — the bad relay did not stop; nothing restarted on top of it");
         return;
@@ -1634,7 +1636,7 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
     let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
     write_state(suite_dir, &StateRec {
         sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
-        outcome: "rolledback", reason, auto_off: true, address_before, restore_failed: &restore_failed,
+        outcome: "rolledback", reason, auto_off: true, address_before, restore_failed: &restore_failed, quarantined,
     }, env.log);
 }
 
@@ -1779,7 +1781,7 @@ fn startup_with(env: &ApplyEnv, allow_apply: bool) -> RunState {
                 write_state(env.suite_dir, &StateRec {
                     sha: "", version: "", date: "", last_applied: &la, outcome: "launch-failed",
                     reason: "the downloaded update would not start, so the Suite went back to the version it came with",
-                    auto_off: true, address_before: "", restore_failed: "",
+                    auto_off: true, address_before: "", restore_failed: "", quarantined: false,
                 }, env.log);
             } else {
                 write_state(env.suite_dir, &StateRec {
@@ -1788,7 +1790,7 @@ fn startup_with(env: &ApplyEnv, allow_apply: bool) -> RunState {
                     date: &json_str_value(&prev_raw, "installedDate").unwrap_or_default(),
                     last_applied: &la, outcome: "launch-slow",
                     reason: "the downloaded update was too slow to start this time; it will be tried again at the next start",
-                    auto_off: false, address_before: "", restore_failed: "",
+                    auto_off: false, address_before: "", restore_failed: "", quarantined: false,
                 }, env.log);
             }
             let payload = env.payload.to_path_buf();
@@ -1838,7 +1840,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             version: &json_str_value(prev_state_raw, "installedVersion").unwrap_or_default(),
             date: &json_str_value(prev_state_raw, "installedDate").unwrap_or_default(),
             last_applied: day, outcome, reason,
-            auto_off: false, address_before: "", restore_failed: "",
+            auto_off: false, address_before: "", restore_failed: "", quarantined: false,
         }, log);
     };
 
@@ -2010,7 +2012,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     if !promoted {
         applog(log, "suite: APPLY FAILED — could not put the update in place; rolling back to last-good/payload");
         let _ = std::fs::remove_dir_all(&active_new);
-        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None, true, &address_before);
+        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None, true, &address_before, false);
         finish_snapshot(suite_dir, r_sha);
         applog(log, "suite: rollback complete (promote failure)");
         return;
@@ -2039,7 +2041,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             let outcome = if store_degraded { "applied-store-degraded" } else { "applied" };
             write_state(suite_dir, &StateRec {
                 sha: r_sha, version: r_version, date: r_date, last_applied: day, outcome, reason: "", auto_off: false,
-                address_before: &address_before, restore_failed: "",
+                address_before: &address_before, restore_failed: "", quarantined: false,
             }, log);
             finish_snapshot(suite_dir, r_sha);
             let short = short_sha(r_sha);
@@ -2054,8 +2056,10 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
                 "suite: APPLY health check FAILED (boot={boot:?} reachable={reachable} version_match={version_match} ok={ok}) — rolling back{}",
                 if quarantine { " and quarantining sha" } else { " (not quarantined: it may only have been slow)" }
             ));
-            if quarantine {
-                let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
+            // [audit 93619117 L2] state.json says "quarantined" only if the skip list was really written
+            let banned = quarantine && write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log).is_ok();
+            if quarantine && !banned {
+                applog(log, "suite: could not write quarantine-sha; the release is NOT skipped and the panel will not say it is");
             }
             // Stop the freshly-started (bad) relay — closing its tunnel cleanly first (audit 00aadeed N4) — then roll
             // back, restore the data, restart on known-good code.
@@ -2073,7 +2077,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             } else {
                 "the update started but reported a problem"
             };
-            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), stopped, &address_before);
+            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), stopped, &address_before, banned);
             finish_snapshot(suite_dir, r_sha);
             applog(log, "suite: rollback complete");
         }
@@ -2133,7 +2137,7 @@ fn repair_interrupted_restore(suite_dir: &Path, data_dir: &Path, log: &Path) {
                 version: &json_str_value(&prev, "installedVersion").unwrap_or_default(),
                 date: &json_str_value(&prev, "installedDate").unwrap_or_default(),
                 last_applied: &json_str_value(&prev, "lastApplied").unwrap_or_default(),
-                outcome: "recovered", reason: &note, auto_off: true, address_before: "", restore_failed: "",
+                outcome: "recovered", reason: &note, auto_off: true, address_before: "", restore_failed: "", quarantined: false,
             }, log);
         }
     }
@@ -2298,9 +2302,8 @@ fn reject_fresh_update(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, 
     let day = json_str_value(&now_raw, "lastApplied").unwrap_or_default();
     let address_before = json_str_value(&now_raw, "addressBefore").unwrap_or_default();
     applog(env.log, &format!("suite: FAILED UPDATE {} — {why}; rolling back and quarantining it", short_sha(&sha)));
-    if !sha.is_empty() {
-        let _ = write_file_atomic(&env.suite_dir.join("quarantine-sha"), &format!("{sha}\n"), env.log);
-    }
+    // [audit 93619117 L2] recorded as quarantined only if the skip list was really written
+    let banned = !sha.is_empty() && write_file_atomic(&env.suite_dir.join("quarantine-sha"), &format!("{sha}\n"), env.log).is_ok();
     let _ = prepare_restart(env.data_dir, env.log);
     env.host.stop_relay();
     let stopped = wait_stopped(&st.alive, Duration::from_secs(20));
@@ -2309,7 +2312,7 @@ fn reject_fresh_update(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, 
         .ok()
         .and_then(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().parse::<i64>().ok()).max())
         .map(|n| env.suite_dir.join("db-backup").join(n.to_string()));
-    rollback_and_restart(env, st, prev_state_raw, &day, why, backup.as_deref(), stopped, &address_before);
+    rollback_and_restart(env, st, prev_state_raw, &day, why, backup.as_deref(), stopped, &address_before, banned);
 }
 
 // The auto-update's three capabilities, on the launcher's own process.
