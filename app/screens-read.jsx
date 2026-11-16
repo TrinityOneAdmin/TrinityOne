@@ -1054,6 +1054,39 @@ function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
   );
 }
 
+// Plain text of ONE commentary entry, for sharing. The input is the SANITISED html (the caller runs
+// window.sanitizeHtml first), never the raw module html. Capped well under any send limit (the relay's frame
+// limit is 1 MiB and nip44 plaintext 65535 bytes; nothing in the client caps a message) so a long entry cannot
+// fail to send; the source and licence are added by the sheet AFTER this, so they are never the part cut off.
+function commentaryPlainText(html, max) {
+  let t = String(html || '').replace(/<\s*sup\b[^>]*>/gi, ' ').replace(/<\s*\/\s*sup\s*>(?=[A-Za-z])/gi, ' ').replace(/<\s*\/\s*(p|div|blockquote)\s*>/gi, '\n\n').replace(/<\s*(br|\/li|hr)\b[^>]*>/gi, '\n').replace(/<[^>]*>/g, '');
+  t = t.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  t = t.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  const cap = max || 4000, mark = '\u2026 [shortened]';
+  if (t.length <= cap) return t;
+  if (cap <= mark.length) return mark.slice(0, Math.max(0, cap));
+  let cut = cap - mark.length;
+  const c = t.charCodeAt(cut - 1);
+  if (c >= 0xD800 && c <= 0xDBFF) cut--;   // never split an emoji's surrogate pair
+  return t.slice(0, cut).replace(/\s+$/, '') + mark;
+}
+
+// Should the share sheet warn that this commentary's copyright may not allow sharing? Only a commentary the
+// member IMPORTED themselves can (the engine marks it; bundled and catalogue modules are vetted and some, like
+// Matthew Henry, have no licence column at all). Warn when its licence is empty, or claims rights without an
+// open-licence marker. A warning only; sharing still works.
+function commentaryLicenceWarns(license, imported) {
+  if (!imported) return false;
+  const l = String(license || '').trim();
+  if (!l) return true;
+  // Any RESTRICTIVE marker warns and wins over an open one ("public domain ... (c) ... all rights reserved").
+  // "no copyright" is a claim of freedom, not a restriction. (No lookbehind: older iOS WebViews reject it.)
+  const claim = l.replace(/\b(no|not under|out of|without)\s+copyright\b/gi, '');
+  if (/all rights reserved|do not distribute|not for (re)?distribution|not to be (shared|redistributed|copied|distributed)|(personal|private) (use|study) only|used by permission|copyright|\u00A9/i.test(claim)) return true;
+  if (/\(c\)\s*(\d{4}|[A-Z])/.test(claim)) return true;   // "(c) 1995" / "(c) Acme", never the list item "(a)(b)(c)"
+  return false;
+}
+
 function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, readerVerse }) {
   const panelScrollRef = useR(null);
   // Scroll the cross-ref list so verse N's group sits near the top — how the panel "follows" the reader.
@@ -1399,7 +1432,10 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             <div key={si} style={{ marginBottom: 22 }}>
               {srcBlk.rows.map((b, i) => (
                 <div key={i} style={{ marginBottom: 14 }}>
-                  <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 6 }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block' }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
+                  {ctx && ctx.openShareSheet ? <button type="button" aria-label="Share this commentary" title="Share this commentary" onClick={() => ctx.openShareSheet({ type: 'commentary', ref: label + (b.v ? ':' + b.v + (b.vTo && b.vTo > b.v ? '-' + b.vTo : '') : ''), source: srcBlk.name || srcBlk.abbr || '', text: commentaryPlainText(window.sanitizeHtml(b.html)), license: srcBlk.license || '', warnLicence: commentaryLicenceWarns(srcBlk.license, srcBlk.imported) })} style={{ width: 44, height: 44, margin: '-11px -12px -11px 0', position: 'relative', zIndex: 1, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}><Icon name="share" size={16} /></button> : null}
+                  </div>
                   <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(b.html) }} />
                 </div>
               ))}

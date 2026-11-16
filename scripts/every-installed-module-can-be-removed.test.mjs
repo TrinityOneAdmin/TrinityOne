@@ -239,6 +239,9 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
      const publishedPins = async () => ({});`,
     fnBody(ENGINE, 'async function installModule(item){'),
     fnBody(ENGINE, 'async function restoreInstalled(){'),
+    // the file-IMPORT path: the change handler inside ensureInput is the shipped one, over a fake <input>
+    'let fileInput = null;',
+    fnBody(ENGINE, 'function ensureInput(){'),
     stmt(ENGINE, 'const DEFAULT_MODULE = {'),
     'let loadingFlag = false;',
     fnBody(ENGINE, 'async function autoLoad(){'),
@@ -268,16 +271,17 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
     fnBody(ENGINE, 'function searchDict(query, cap){'),
   ];
   const win = { Bible: {}, addEventListener() {}, removeEventListener() {} };
+  const fakeDoc = { createElement: () => { const el = { style: {}, listeners: {}, addEventListener(t, f) { el.listeners[t] = f; }, click() {} }; return el; }, body: { appendChild() {} } };
   const loc = { search };   // mutable, so a test can drive a second launch with a different query string
-  const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location',
+  const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location', 'document',
     parts.join('\n') +
     '\nreturn { worddefs, modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
     ' addCommentary, addSource, cacheGet, cachePut, cacheKeys, cacheDelete, getInstalled, recordInstalled,' +
     ' isInstalled, isLoaded, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule, setInstalled,' +
     ' noteLoadedFrom, activeUrl: () => (active && urlOf[urlKey("bibles", active)]) || null,' +
-    ' restoreInstalled, autoLoad, subscribe: _sub.subscribe,' +
+    ' restoreInstalled, ensureInput, autoLoad, subscribe: _sub.subscribe,' +
     ' order: () => order, active: () => active, setActive: (a) => { active = a; } };'
-  )(idb, fakeLocalStorage(), console, fixture, win, undefined, loc);
+  )(idb, fakeLocalStorage(), console, fixture, win, undefined, loc, fakeDoc);
   // The vacuity counter goes through the engine's OWN notify/subscribe, so it also proves the harness is
   // running engine.js's pub/sub rather than a stand-in.
   let notified = 0;
@@ -1411,4 +1415,42 @@ test('WORDDEF: after a relaunch restoreInstalled loads it into worddefs, not the
   e2._ensureDicts();
   assert.equal(e2.dicts.some(d => d.abbr === 'WN'), false, 'restore queued it as a Strong\'s dictionary');
   assert.equal(e2.isLoaded(WORDDEF.url), true);
+});
+
+// ── IMPORTED COMMENTARIES ARE MARKED, through the shipped paths (2026-11-16) ────────────────────────────────
+// getCommentary flags a block `imported` from urlOf, which only noteLoadedFrom writes. The share sheet warns
+// about an imported commentary's copyright on that flag, so BOTH ways a module becomes "imported" must set it:
+// the file-import handler and the relaunch restore. Each is driven here through the engine's own code, and
+// each noteLoadedFrom line was removed in turn to see the matching test go red.
+const IMPORTED_NAME = 'my-notes.cmt.mybible.zip';
+FIXTURE.set(IMPORTED_NAME, { kind: 'comment', bytes: new Uint8Array(1000), declares: 'MYN' });
+const blockOf = (e) => {
+  for (const a of Object.keys(e.commentaries)) e.commentaries[a].getComment = () => [{ v: 1, html: 'x' }];
+  return e.getCommentary(1, 1);
+};
+
+test('a commentary IMPORTED from a file is marked imported', async () => {
+  const e = engine();
+  const input = e.ensureInput();
+  await input.listeners.change({ target: { files: [{ name: IMPORTED_NAME, arrayBuffer: async () => new Uint8Array(1000).buffer }], value: '' } });
+  assert.deepEqual(Object.keys(e.commentaries), ['MYN'], 'the import handler did not load the module');
+  const b = blockOf(e);
+  assert.equal(b.length, 1);
+  assert.equal(b[0].imported, true);
+});
+
+test('an imported commentary is STILL marked imported after a relaunch (restoreInstalled)', async () => {
+  const e = engine();
+  await e.cachePut('imported/' + IMPORTED_NAME, new Uint8Array(1000));
+  e.setInstalled({ ['imported/' + IMPORTED_NAME]: { url: 'imported/' + IMPORTED_NAME, id: 'MYN', abbr: 'MYN', name: 'MYN', kind: 'comment', category: 'commentaries' } });
+  await e.restoreInstalled();
+  assert.deepEqual(Object.keys(e.commentaries), ['MYN'], 'the relaunch did not reload the module');
+  assert.equal(blockOf(e)[0].imported, true);
+});
+
+test('a CATALOGUE commentary is not marked imported, installed or restored', async () => {
+  const e = await phone({ modules: [CMT] });
+  assert.equal(blockOf(e)[0].imported, false);
+  await e.restoreInstalled();
+  assert.equal(blockOf(e).every(b => b.imported === false), true);
 });

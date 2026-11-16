@@ -1390,7 +1390,7 @@ window.safeImgUrl = function (v) {
     // `license` rides along with the block, not fetched separately by the panel: the notice has to appear
     // WHEREVER these words appear, and one object per source is the only shape in which the panel cannot
     // draw a module's words without its credit beside them.
-    for(const abbr in commentaries){ const s = commentaries[abbr]; let rows = []; try { rows = s.getComment(b, c); } catch(e){} if(rows && rows.length) out.push({ abbr, name: s.name, kind: "module", license: s.license || "", rows }); }
+    for(const abbr in commentaries){ const s = commentaries[abbr]; let rows = []; try { rows = s.getComment(b, c); } catch(e){} if(rows && rows.length) out.push({ abbr, name: s.name, kind: "module", license: s.license || "", imported: typeof urlOf !== "undefined" && String(urlOf["commentaries|" + abbr] || "").indexOf("imported/") === 0, rows }); }
     const s = src(version);
     if(s && s.footnotes){ let fn = []; try { fn = s.footnotes(b, c); } catch(e){} if(fn.length) out.push({ abbr: s.abbr, name: s.name + " — footnotes", kind: "footnotes", rows: fn.map(f => ({ v: f.v, vTo: f.v, html: f.notes.map(t => "<p>" + t + "</p>").join("") })) }); }
     return out;

@@ -2289,6 +2289,16 @@ function SharePreview({ p, type }) {
       </div>
     );
   }
+  if (type === 'commentary') {
+    return (
+      <div style={{ borderRadius: 18, padding: '16px 18px', background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 18 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 7 }}>COMMENTARY · {p.ref}{p.source ? ' · ' + p.source : ''}</div>
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink)', textWrap: 'pretty', display: '-webkit-box', WebkitLineClamp: 6, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{p.text}</p>
+        {p.license ? <div style={{ fontSize: 10.5, lineHeight: 1.4, color: 'var(--ink-3)' }}>{p.license}</div> : null}
+        {p.warnLicence ? <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--ink-2)', marginTop: 8 }}>This commentary's copyright may not allow sharing.</div> : null}
+      </div>
+    );
+  }
   if (type === 'note') {
     return (
       <div style={{ borderRadius: 18, padding: '16px 18px', background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 18 }}>
@@ -2325,7 +2335,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   if (!payload) return null;
   const type = payload.type || 'verse';
   const live = !!(FS && FS.publishMessage);
-  const heading = type === 'devotional' ? 'Share devotional' : type === 'note' ? 'Share note' : 'Share verse';
+  const heading = type === 'devotional' ? 'Share devotional' : type === 'note' ? 'Share note' : type === 'commentary' ? 'Share commentary' : 'Share verse';
   const myPub = FS && FS.myPubkey;
   // groups I can post to — hide invite-only groups I'm not a member of (the relay enforces posting too)
   const postable = (groups || []).filter(g => g && g.id && (g.kind || '').toLowerCase() !== 'broadcast' && (g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub))));
@@ -2335,7 +2345,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const pName = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || ((FS && FS.displayFor) ? FS.displayFor(m.pubkey).handle : 'Member');
   const peopleShown = pql ? people.filter(m => pName(m).toLowerCase().includes(pql) || (m.nip05 || '').toLowerCase().includes(pql)) : people;
   // a verse/devotional/note sent to a person goes as a readable DM (DMs don't render the card payload)
-  const asText = payload.text ? ('“' + payload.text + '” — ' + payload.ref + (payload.version ? ' · ' + payload.version : ''))
+  const asText = type === 'commentary' ? (payload.ref + (payload.source ? ' — ' + payload.source : '') + '\n\n' + (payload.text || '') + (payload.license ? '\n\n' + payload.license : ''))
+    : payload.text ? ('“' + payload.text + '” — ' + payload.ref + (payload.version ? ' · ' + payload.version : ''))
     : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
@@ -2408,6 +2419,17 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           <Icon name="share" size={20} color="var(--clay)" />
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
+          <Icon name="chevR" size={17} color="var(--ink-3)" />
+        </button>
+      ) : null}
+
+      {type === 'commentary' ? (
+        <button onClick={() => { ctx.shareText(asText + (comment.trim() ? '\n\n' + comment.trim() : ''), payload.ref); onClose(); }} style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+          border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
+          <Icon name="share" size={20} color="var(--clay)" />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share outside the app</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>The text, with its source and licence</div></div>
           <Icon name="chevR" size={17} color="var(--ink-3)" />
         </button>
       ) : null}
