@@ -2618,6 +2618,14 @@ function TodayScreen({ ctx }) {
   // widget is configured once a relay is proved, and its addresses are REWRITTEN when one is added or refused.
   const [relaysTick, setRelaysTick] = React.useState(0);
   React.useEffect(() => { const h = () => setRelaysTick(n => n + 1); window.addEventListener('trinity-relays-verified', h); return () => window.removeEventListener('trinity-relays-verified', h); }, []);
+  // …and when the widget's church settings were cleared from ELSEWHERE (lock, "Ask for my PIN again", a church switch
+  // — TrinityIdentity.widgetForgetChurch), the hourly throttle must not stop Today putting them back (audit re-check
+  // R3: church A -> B -> A within the hour left A unwritten). Forget the throttle and run the writer again.
+  React.useEffect(() => {
+    const h = () => { for (const k of Object.keys(homeWidgetProbed)) delete homeWidgetProbed[k]; setRelaysTick(n => n + 1); };
+    window.addEventListener('trinity-widget-forgot-church', h);
+    return () => window.removeEventListener('trinity-widget-forgot-church', h);
+  }, []);
   React.useEffect(() => {
     const W = trinityHomeWidget();
     if (!W || !W.publishPrompt || !W.clearPrompt) return;
@@ -2641,24 +2649,20 @@ function TodayScreen({ ctx }) {
       const probeKey = where.npub + '|' + bases.join(',') + '|' + vpRefsKey;
       const last = homeWidgetProbed[widgetChurch];
       if (last && last.key === probeKey && nowS - last.at < 3600) return;
-      let cached = null, saw404 = false, sawFail = false;
-      for (const b of bases) {
-        try {
-          // redirect:'error' — the widget's own fetch never follows one either (audit F5); and the answer must come
-          // from the address asked, not somewhere it was sent on to.
-          const r = await fetch(b + '/public/' + where.npub + '/verse-prompt.json', { cache: 'no-store', redirect: 'error' });
-          if (r && r.url && !String(r.url).startsWith(b + '/')) { sawFail = true; continue; }
-          if (r && r.status === 200) { const j = await r.json(); if (j && typeof j === 'object' && (!cached || (Number(j.ts) || 0) > (Number(cached.ts) || 0))) cached = j; }
-          else if (r && r.status === 404) saw404 = true;
-          else sawFail = true;
-        } catch (e) { sawFail = true; }
-      }
+      // THE PROBE IS NATIVE (audit re-check R1). On the APK the webview's fetch goes through Capacitor's
+      // https://localhost/_capacitor_http_interceptor_ proxy (CapacitorHttp is enabled), so this page can neither
+      // refuse a redirect nor tell which address answered. TrinityWidget.probe runs the background job's own GET:
+      // https only, no redirects, timed out, size-capped, refs-only. 'absent' = EVERY base answered 404 (audit F8).
+      if (!W.probe) return;
+      let res = null;
+      try { res = await W.probe({ npub: where.npub, bases }); } catch (e) { res = null; }
       if (cancelled) return;
+      const outcome = res && res.outcome;
+      const cached = (outcome === 'found' && res.copy && typeof res.copy === 'object') ? res.copy : null;
       homeWidgetProbed[widgetChurch] = { key: probeKey, at: nowS };
-      // No copy anywhere: a 404 from EVERY base means "not shared" -> clear. A 404 beside a base that could not be
-      // reached is not proof (audit F8: an old relay 404s while the church's own box is briefly offline) -> leave
-      // what is there; its validUntil still bounds it.
-      if (!cached) { if (saw404 && !sawFail) clear(true); else delete homeWidgetProbed[widgetChurch]; return; }
+      // Not shared anywhere -> clear (keep the hourly throttle). Unreachable / unknown -> leave what is there, bounded
+      // by its validUntil, and ask again next time.
+      if (!cached) { if (outcome === 'absent') clear(true); else delete homeWidgetProbed[widgetChurch]; return; }
       // The member's own translation for every passage the copy names, so the widget can show the words, not just
       // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
       const texts = {};

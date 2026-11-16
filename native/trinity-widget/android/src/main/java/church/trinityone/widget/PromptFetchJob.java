@@ -71,16 +71,8 @@ public class PromptFetchJob extends JobService {
         String npub = cfg.optString("npub", "");
         JSONArray bases = cfg.optJSONArray("bases");
         if (!npub.matches("^npub1[a-z0-9]{58}$") || bases == null) return;
-        JSONObject best = null; boolean saw404 = false, saw200 = false, sawFail = false;
-        for (int i = 0; i < bases.length(); i++) {
-            String base = bases.optString(i, "");
-            if (!base.startsWith("https://")) continue;   // never cleartext
-            int[] code = new int[] { 0 };
-            JSONObject got = get(base + "/public/" + npub + "/verse-prompt.json", code);
-            if (code[0] == 404) saw404 = true;
-            else if (code[0] != 200 || got == null) sawFail = true;
-            if (got != null) { saw200 = true; if (best == null || got.optLong("ts", 0) > best.optLong("ts", 0)) best = got; }
-        }
+        Probe pr = probe(npub, bases);
+        JSONObject best = pr.best; boolean saw404 = pr.saw404, saw200 = pr.saw200, sawFail = pr.sawFail;
         try {
             JSONObject cur = cfg.optJSONObject("cached");
             if (saw200) {
@@ -95,6 +87,30 @@ public class PromptFetchJob extends JobService {
             WidgetStore.write(c, WidgetStore.K_PROMPT, cfg);
         } catch (Exception e) { return; }
         WidgetStore.refresh(c);
+    }
+
+    /** What one pass over the bases found. */
+    static final class Probe { JSONObject best; boolean saw200, saw404, sawFail; }
+
+    /**
+     * ONE pass over the bases — the ONLY network code that reads the public verse prompt, used by the background job
+     * AND by the app's probe (TrinityWidgetPlugin.probe). Done natively on purpose (audit re-check R1): on the APK the
+     * webview's fetch is routed through Capacitor's https://localhost/_capacitor_http_interceptor_ proxy, so a page
+     * can neither refuse a redirect nor see which address really answered. Here: https only, no redirects, 8 s
+     * timeouts, 64 KB cap, and only { ts, ref, schedule } survives (sanitise).
+     */
+    static Probe probe(String npub, JSONArray bases) {
+        Probe p = new Probe();
+        for (int i = 0; i < bases.length(); i++) {
+            String base = bases.optString(i, "");
+            if (!base.startsWith("https://")) continue;   // never cleartext
+            int[] code = new int[] { 0 };
+            JSONObject got = get(base + "/public/" + npub + "/verse-prompt.json", code);
+            if (code[0] == 404) p.saw404 = true;
+            else if (code[0] != 200 || got == null) p.sawFail = true;
+            if (got != null) { p.saw200 = true; if (p.best == null || got.optLong("ts", 0) > p.best.optLong("ts", 0)) p.best = got; }
+        }
+        return p;
     }
 
     /** GET → the validated public copy, or null. code[0] = the HTTP status (0 on a network failure). */

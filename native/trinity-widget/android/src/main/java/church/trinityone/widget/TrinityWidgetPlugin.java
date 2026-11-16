@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager;
 import android.content.Context;
 import android.os.Build;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -23,6 +24,7 @@ import org.json.JSONObject;
  *   clearPrompt()           → back to the daily verse only; stops the background fetch
  *   clear()                 → forget everything
  *   requestPin()            → Android 8+: ask the launcher to place the widget
+ *   probe({ npub, bases })  → the app's one-off check of the public verse prompt (native GET, see PromptFetchJob)
  */
 @CapacitorPlugin(name = "TrinityWidget")
 public class TrinityWidgetPlugin extends Plugin {
@@ -76,6 +78,27 @@ public class TrinityWidgetPlugin extends Plugin {
         PromptFetchJob.schedule(ctx());
         WidgetStore.refresh(ctx());
         call.resolve();
+    }
+
+    /**
+     * probe({ npub, bases }) → { outcome: 'found' | 'absent' | 'unreachable', copy? }. The app's one-off check of the
+     * public verse prompt, run with the SAME native GET as the background job (PromptFetchJob.probe): https only, no
+     * redirects, timed out, size-capped, sanitised. 'absent' only when EVERY base asked answered 404.
+     */
+    @PluginMethod
+    public void probe(final PluginCall call) {
+        final String npub = call.getString("npub", "");
+        final JSArray bases = call.getArray("bases");
+        if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$") || bases == null) { call.reject("bad probe"); return; }
+        new Thread(() -> {
+            JSObject r = new JSObject();
+            try {
+                PromptFetchJob.Probe p = PromptFetchJob.probe(npub, bases);
+                r.put("outcome", p.saw200 ? "found" : (p.saw404 && !p.sawFail ? "absent" : "unreachable"));
+                if (p.saw200 && p.best != null) r.put("copy", p.best);
+            } catch (Throwable t) { r.put("outcome", "unreachable"); }
+            call.resolve(r);
+        }).start();
     }
 
     @PluginMethod

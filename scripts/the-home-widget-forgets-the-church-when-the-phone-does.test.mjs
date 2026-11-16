@@ -94,6 +94,8 @@ test('F1 POINT OF USE: "Ask for my PIN again" on the security sheet clears the w
   assert.equal(idn.secure.has('trinityone.nostr.remember'), false, 're-anchor: forgetDevice did not forget the phone');
   assert.ok(calls.includes('clearPrompt'),
     'the member said "ask for my PIN" and the home-screen widget KEPT the church\'s npub and relays (polled hourly with the app closed)');
+  assert.ok(idn.events.includes('trinity-widget-forgot-church'),
+    'Today is not told the settings were cleared, so its hourly throttle can stop it writing them again (re-check R3)');
 });
 
 test('F1: every path that ends a remembered state goes through rememberClear — and it clears the widget', () => {
@@ -167,4 +169,37 @@ test('F4: the switch shows the NATIVE state — a lost stored flag over an enabl
   assert.equal(sw.length, 1);
   assert.equal(sw[0].props['aria-checked'], true, 'the switch says Off while the widget is enabled on the home screen');
   assert.equal(s.store.get('trinityone.widget'), '1', 'the stored flag was not repaired');
+});
+
+// ── R2 (audit re-check): the SAME adult coming back with their own words keeps the widget ─────────────────────────
+// The SHIPPED importMnemonic (vendor/identity.js, bundle names) is run with its storage stubbed and a recording
+// widgetOffForNewAccount. It is reached by the forgot-PIN unlock (unlockWithMnemonic — own words only), a transfer
+// and a backup restore as well as by a handover, so it must ask whose words these are BEFORE anything is cleared.
+function importWith(answer) {
+  const body = liftOnce('async importMnemonic(words) {');
+  const calls = [];
+  const scope = {
+    validateMnemonic2: () => true, wordlist2: [],
+    window: { TrinityIdentity: { whoseMnemonic: () => { calls.push('whose'); if (answer instanceof Error) throw answer; return answer; }, current: {} } },
+    clearEnc: async () => { calls.push('clearEnc'); }, rememberClear: async () => { calls.push('rememberClear'); },
+    widgetOffForNewAccount: () => { calls.push('widgetOff'); }, secureSet: async () => {}, apply: () => {},
+    deriveProfile: () => ({}), isEphemeral: () => false,
+  };
+  const api = new Function(...Object.keys(scope), 'let sessionMnemonic = null;\nreturn ({' + body + '});')(...Object.values(scope));
+  return { run: () => api.importMnemonic('word '.repeat(12)), calls };
+}
+
+test('R2: the SAME person\'s own words (forgot-PIN unlock, own transfer, own backup) do NOT switch the widget off', async () => {
+  const t = importWith('match');
+  await t.run();
+  assert.equal(t.calls.includes('widgetOff'), false, 'an adult recovering with their OWN words lost their home-screen widget');
+  assert.ok(t.calls.indexOf('whose') < t.calls.indexOf('clearEnc'), 'whose words these are was asked AFTER the reference could be cleared');
+});
+
+test('R2: a DIFFERENT person\'s words — or words that cannot be checked — DO switch it off (a handover, a reseat)', async () => {
+  for (const answer of ['different', 'unknown', new Error('boom')]) {
+    const t = importWith(answer);
+    await t.run();
+    assert.ok(t.calls.includes('widgetOff'), `whoseMnemonic -> ${String(answer)}: the previous person's widget opt-in carried over`);
+  }
 });

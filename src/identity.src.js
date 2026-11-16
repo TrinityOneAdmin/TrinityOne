@@ -182,10 +182,14 @@ function _widgetPlugin() {
 function widgetForgetChurch() {
   const W = _widgetPlugin();
   if (W && W.clearPrompt) { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} }
+  // Today keeps an hourly probe throttle; tell it the settings are gone so it writes them again when allowed
+  // (audit re-check R3).
+  try { window.dispatchEvent(new CustomEvent('trinity-widget-forgot-church')); } catch (e) {}
 }
-// A NEW ACCOUNT ON THIS PHONE (regenerate / importMnemonic — which is what a handover to a young person, or a
-// reseat, comes down to) does not inherit the previous person's opt-in: the widget is switched OFF and its data
-// cleared. The new person turns it on themselves if they want it (audit F4).
+// A NEW ACCOUNT ON THIS PHONE — a DIFFERENT PERSON (regenerate, or importMnemonic of words that are not this phone's
+// account: a handover to a young person, a reseat, another person's transfer) — does not inherit the previous
+// person's opt-in: the widget is switched OFF and its data cleared (audit F4). The SAME adult coming back in with
+// their own words (forgot-PIN unlock, their own transfer, their own backup) keeps it (audit re-check R2).
 function widgetOffForNewAccount() {
   try { localStorage.removeItem('trinityone.widget'); } catch (e) {}
   const W = _widgetPlugin();
@@ -652,9 +656,13 @@ window.TrinityIdentity = {
   async importMnemonic(words) {
     const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
+    // Asked BEFORE anything is cleared: is this the person already on the phone? 'unknown' (no reference) counts as
+    // a different person, the same way whoseMnemonic's other callers read it.
+    let samePerson = false;
+    try { samePerson = window.TrinityIdentity.whoseMnemonic(m) === 'match'; } catch (e) { samePerson = false; }
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     await rememberClear();   // this device is no longer that account — do not leave its seed remembered
-    widgetOffForNewAccount();   // …nor its home-screen widget opt-in (audit F4: a handover must not carry it)
+    if (!samePerson) widgetOffForNewAccount();   // a DIFFERENT person does not inherit the widget opt-in (F4, R2)
     sessionMnemonic = null;
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: isEphemeral() });

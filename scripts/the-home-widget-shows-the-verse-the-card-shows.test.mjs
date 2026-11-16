@@ -40,7 +40,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [];
+  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [], probed = [];
   const win = {
     addEventListener(t, h) { (listeners[t] = listeners[t] || []).push(h); }, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
@@ -53,7 +53,13 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
       loaded: true, books: () => [43], getVerses: (b, c) => (b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
     },
-    Capacitor: plugin ? { Plugins: { TrinityWidget: { status: () => Promise.resolve(nativeEnabled == null ? { supported: true } : { supported: true, enabled: nativeEnabled }), publishVotd: (a) => { published.push(a); return Promise.resolve(); },
+    Capacitor: plugin ? { Plugins: { TrinityWidget: { status: () => Promise.resolve(nativeEnabled == null ? { supported: true } : { supported: true, enabled: nativeEnabled }),
+      // PromptFetchJob.probe's contract: https only, NO redirects (a redirecting base is a failure), found / absent
+      // (EVERY base 404) / unreachable.
+      probe: async ({ npub, bases }) => { probed.push({ npub, bases: [...bases] }); let best = null, n404 = 0, fail = 0;
+        for (const b of bases) { if (!/^https:\/\//.test(b)) continue; if (unreachable.includes(b) || redirectTo[b]) { fail++; continue; }
+          if (feed[b] && npub === CHURCH_NPUB) { if (!best || (feed[b].ts || 0) > (best.ts || 0)) best = feed[b]; } else n404++; }
+        return best ? { outcome: 'found', copy: best } : (n404 && !fail ? { outcome: 'absent' } : { outcome: 'unreachable' }); }, publishVotd: (a) => { published.push(a); return Promise.resolve(); },
       publishPrompt: (a) => { prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
   };
   let pickStore = null;
@@ -70,10 +76,14 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     useTrinityAudio: () => ({ track: null, playing: false }),
     todayISO: () => localISO(date),
     Date: class extends Date { constructor(...a) { super(...(a.length ? a : [date])); } static now() { return date.getTime(); } },
-    fetch: async (url, init) => { fetched.push(String(url)); fetchInits.push(init || {}); const base = Object.keys({ ...feed, ...redirectTo }).concat(unreachable).find(b => String(url).startsWith(b + '/'));
+    // THE WEBVIEW'S fetch AS IT IS ON THE APK (audit re-check R1): CapacitorHttp is enabled, so every external GET goes
+    // through https://localhost/_capacitor_http_interceptor_?u=… and the response's url is THAT, never the relay's.
+    fetch: async (url, init) => { fetched.push(String(url)); fetchInits.push(init || {});
+      const iurl = 'https://localhost/_capacitor_http_interceptor_?u=' + encodeURIComponent(String(url));
+      const base = Object.keys({ ...feed, ...redirectTo }).concat(unreachable).find(b => String(url).startsWith(b + '/'));
       if (base && unreachable.includes(base)) throw new Error('unreachable');
-      if (base && redirectTo[base]) return { status: 200, ok: true, url: redirectTo[base], json: async () => ({ ts: 9, ref: 'ELSEWHERE 1:1', schedule: [] }) };
-      const hit = Object.keys(feed).find(b => String(url) === b + '/public/' + CHURCH_NPUB + '/verse-prompt.json'); return hit ? { status: 200, ok: true, json: async () => feed[hit] } : { status: 404, ok: false, json: async () => ({}) }; },
+      if (base && redirectTo[base]) return { status: 200, ok: true, url: iurl, json: async () => ({ ts: 9, ref: 'ELSEWHERE 1:1', schedule: [] }) };
+      const hit = Object.keys(feed).find(b => String(url) === b + '/public/' + CHURCH_NPUB + '/verse-prompt.json'); return hit ? { status: 200, ok: true, url: iurl, json: async () => feed[hit] } : { status: 404, ok: false, url: iurl, json: async () => ({}) }; },
   };
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const ctx = {
@@ -83,7 +93,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {},
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, opts, store,
+  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, probed, opts, store,
     fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
@@ -238,7 +248,8 @@ test('1b: Today hands the widget ONLY admitted https relays, the npub, a week\'s
   assert.equal(p.npub, CHURCH_NPUB);
   assert.deepEqual(p.bases, ['https://box.example', 'https://a8.example'],
     'the widget was handed an address that is not an admitted https relay from Fellowship.widgetFeedBases (CLAUDE.md rule 10)');
-  for (const u of s.fetched) assert.ok(u.startsWith('https://box.example/') || u.startsWith('https://a8.example/'), 'Today probed an address it was not given: ' + u);
+  assert.equal(s.probed.length, 1);
+  assert.deepEqual(s.probed[0].bases, ['https://box.example', 'https://a8.example'], 'Today asked the native probe about an address it was not given');
   assert.equal(p.validUntil, s.nowS + 7 * 86400, 'with no PIN the config must expire in a week, enforced natively');
   assert.equal(p.cached.ref, 'John 3:16');
   assert.equal(p.texts['John 3:16'], TRANSLATED, 'the widget does not get the member\'s own translation of the prompt');
@@ -275,7 +286,7 @@ test('1b: before any relay is admitted, Today writes NO address (and does not cl
   const s = todayScreen({ church: 'grace', feedBases: [], feed: {} });
   s.draw(); await settle();
   assert.equal(s.prompts.length, 0);
-  assert.equal(s.fetched.length, 0, 'Today probed something although no relay was admitted');
+  assert.equal(s.probed.length + s.fetched.length, 0, 'Today probed something although no relay was admitted');
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────
@@ -286,11 +297,18 @@ test('F4: Today follows the NATIVE state — a lost stored flag over an enabled 
   assert.ok(s.published.length >= 1, 'the widget is on the home screen but Today never wrote its table (it believed the stored flag)');
 });
 
-test('F5: the probe never follows a redirect, and an answer from another address is refused', async () => {
-  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], redirectTo: { 'https://a8.example': 'https://elsewhere.example/x.json' } });
+test('F5 / R1: the probe is NATIVE — no JS fetch (on the APK it would go through the Capacitor interceptor)', async () => {
+  // With the APK-shaped fetch above, the 016bd45d code (a JS fetch + a check that the answer's url starts with the
+  // base) rejected EVERY answer and the widget was never configured. The probe now runs natively.
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY } });
   s.draw(); await settle();
-  assert.ok(s.fetchInits.length >= 1 && s.fetchInits.every(i => i.redirect === 'error'), 'the probe follows redirects: ' + JSON.stringify(s.fetchInits));
-  assert.equal(s.prompts.length, 0, 'a copy answered from a DIFFERENT address was handed to the widget');
+  assert.equal(s.fetched.length, 0, 'Today fetched the feed from the webview: ' + s.fetched.join(', '));
+  assert.equal(s.probed.length, 1, 'Today did not ask the native probe');
+  assert.equal(s.prompts.length, 1, 'ON THE APK the widget is never configured with the church prompt');
+  const r = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], redirectTo: { 'https://a8.example': 'https://elsewhere.example/x.json' } });
+  r.draw(); await settle();
+  assert.equal(r.prompts.length, 0, 'a redirecting relay\'s answer was handed to the widget');
+  assert.equal(r.cleared.length, 0, 'a redirecting (unreachable) relay is not proof of "not shared"');
 });
 
 test('F6/F7: admission finishing AFTER Today drew still configures the widget, with the new addresses', async () => {
@@ -302,9 +320,9 @@ test('F6/F7: admission finishing AFTER Today drew still configures the widget, w
   s.draw(); await settle();
   assert.equal(s.prompts.length, 1, 'a relay proved after Today drew never reached the widget — nothing re-ran the writer');
   assert.deepEqual(s.prompts[0].bases, ['https://a8.example']);
-  const n = s.fetched.length;
+  const n = s.probed.length;
   s.fire('trinity-relays-verified'); s.draw(); await settle();
-  assert.equal(s.fetched.length, n, 'the same church, addresses and prompt were probed again within the hour (small pipes)');
+  assert.equal(s.probed.length, n, 'the same church, addresses and prompt were probed again within the hour (small pipes)');
 });
 
 test('F8: a 404 beside a base that could not be reached does NOT clear the widget\'s prompt', async () => {
@@ -312,4 +330,16 @@ test('F8: a 404 beside a base that could not be reached does NOT clear the widge
   s.draw(); await settle();
   assert.equal(s.cleared.length, 0, 'one old relay\'s 404 wiped the prompt while the church\'s own box was only unreachable');
   assert.equal(s.prompts.length, 0);
+});
+
+test('R3: when the widget\'s church settings are cleared from ELSEWHERE, the hourly throttle does not stop Today rewriting them', async () => {
+  // Church A -> B -> A within the hour: app.jsx clears on every change (TrinityIdentity.widgetForgetChurch), which
+  // fires 'trinity-widget-forgot-church'. Today must forget its throttle and write A again.
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1);
+  s.fire('trinity-widget-forgot-church');
+  s.draw(); await settle();
+  assert.equal(s.probed.length, 2, 'after a clear from elsewhere Today did not probe again (throttled for up to an hour)');
+  assert.equal(s.prompts.length, 2, 'after a clear from elsewhere the widget was left with no church prompt');
 });

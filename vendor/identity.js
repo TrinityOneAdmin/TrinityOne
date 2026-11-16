@@ -12061,6 +12061,10 @@ zoo`.split("\n"));
       } catch (e) {
       }
     }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-widget-forgot-church"));
+    } catch (e) {
+    }
   }
   function widgetOffForNewAccount() {
     try {
@@ -12515,9 +12519,15 @@ zoo`.split("\n"));
     async importMnemonic(words) {
       const m = String(words || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
+      let samePerson = false;
+      try {
+        samePerson = window.TrinityIdentity.whoseMnemonic(m) === "match";
+      } catch (e) {
+        samePerson = false;
+      }
       await clearEnc();
       await rememberClear();
-      widgetOffForNewAccount();
+      if (!samePerson) widgetOffForNewAccount();
       sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });

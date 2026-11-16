@@ -9834,6 +9834,7 @@ window.Steward = {
     const next = new Set((list || []).filter(Boolean));
     if (next.size || !_careRosterKnown) _careRoster = next;
     _reCheckCareKeyPending();
+    try { _webQueueSync(); } catch (e) {}   // the public verse-prompt copy is chosen by roster (_webVersePrompt; audit re-check)
   },
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
