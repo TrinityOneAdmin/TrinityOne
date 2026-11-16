@@ -470,7 +470,7 @@ test('L4b — coming back to the app while the file is still being PREPARED does
 // and the plugins/browser above. window.Fellowship.relays is SET, so the old code WOULD have added a link.
 const VERSE = { ref: 'John 3:16', version: 'WEB', text: 'For God so loved the world, that he gave his one and only Son.' };
 const CANVAS_BYTES = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 1, 2, 3]);
-function fakeCanvas(drawn, { noBlob = false } = {}) {
+function fakeCanvas(drawn, { noBlob = false, tag = null } = {}) {
   let font = '10px serif', fill = '#000000';
   const cx = {
     get font() { return font; }, set font(v) { font = v; },
@@ -482,7 +482,8 @@ function fakeCanvas(drawn, { noBlob = false } = {}) {
     fillRect() {}, strokeRect() {}, save() {}, restore() {}, translate() {}, scale() {}, stroke() {},
     createLinearGradient: () => ({ addColorStop() {} }),
   };
-  return { width: 0, height: 0, getContext: () => cx, toBlob: (cb, type) => cb(noBlob ? null : new Blob([CANVAS_BYTES], { type })) };
+  const bytes = tag == null ? CANVAS_BYTES : Uint8Array.from([...CANVAS_BYTES, tag]);
+  return { width: 0, height: 0, getContext: () => cx, toBlob: (cb, type) => cb(noBlob ? null : new Blob([bytes], { type })) };
 }
 let VERSE_SHARE_TEXT = null;
 function realVerseShareText() {
@@ -494,14 +495,14 @@ function realVerseShareText() {
   }).verseShareText;
   return VERSE_SHARE_TEXT;
 }
-function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false, fontsHang = false, verse = VERSE } = {}) {
+function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false, fontsHang = false, verse = VERSE, fonts = null, numbered = false } = {}) {
   const { React, draw } = miniReact();
   const toasts = [], textShares = [], drawn = [], canvases = [];
   const win = { Capacitor: cap ? cap.Capacitor : undefined, Fellowship: { relays: ['wss://relay.example.org/relay'] } };
   // fontsHang: the font never finishes loading; then only the 2.5s timer lets the drawing go on — so the timer
   // here fires at once, and it is the ONLY timer that does (the download's 60s revoke is not run)
-  const document = { ...browser.document, fonts: { load: fontsHang ? () => new Promise(() => {}) : async () => [] },
-    createElement: (tag) => { if (tag !== 'canvas') return browser.document.createElement(tag); const c = fakeCanvas(drawn, { noBlob }); canvases.push(c); return c; } };
+  const document = { ...browser.document, fonts: fonts || { load: fontsHang ? () => new Promise(() => {}) : async () => [] },
+    createElement: (tag) => { if (tag !== 'canvas') return browser.document.createElement(tag); const c = fakeCanvas(drawn, { noBlob, tag: numbered ? canvases.length + 1 : null }); canvases.push(c); return c; } };
   const timers = [];
   const S = loadScreen('app/share-app.jsx', ['ShareCard', 'shareOneFile'], {
     React, window: win, btoa, File, Blob, fetch: apkFetch(), console: { warn() {}, log() {}, error() {} },
@@ -807,4 +808,27 @@ test('C16 (MEDIUM) — ShareCard ignores a `comment` it is handed: only shareTho
   const sh = verseSheet({ shareThoughts: SENDERS });
   find(sh.render(), n => n.type === 'button' && texts(n).join(' ').includes('Share as image'))[0].props.onClick();
   assert.equal(sh.opened[0].shareThoughts, '', 'a shareThoughts the payload arrived with survived the sheet');
+});
+
+test('C17 (audit LOW 1) — a card drawn before the fonts arrived is drawn again when they do, and THAT one is shared', async () => {
+  let fontsIn = false;
+  const listeners = [];
+  const fonts = { load: () => new Promise(() => {}), check: () => fontsIn,
+    addEventListener: (ev, fn) => listeners.push([ev, fn]), removeEventListener() {} };
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap, fonts, fontsHang: true, numbered: true });
+  await v.settle();
+  assert.equal(v.canvases.length, 1, 're-anchor: the card was not drawn on opening');
+  const done = listeners.filter(([ev]) => ev === 'loadingdone');
+  assert.equal(done.length >= 1, true, 'the card does not listen for the fonts arriving');
+  fontsIn = true;
+  done.forEach(([, fn]) => fn());
+  await v.settle();
+  assert.equal(v.canvases.length, 2, 'the card was not drawn again once the fonts arrived');
+  await v.buttons().main.props.onClick();
+  assert.equal(cap.writes[0].bytes[cap.writes[0].bytes.length - 1], 2, 'the fallback-font picture was shared, not the one drawn with the fonts');
+  // a font-ready picture is not drawn again
+  done.forEach(([, fn]) => fn());
+  await v.settle();
+  assert.equal(v.canvases.length, 2, 'a picture already drawn with the fonts was drawn again');
 });

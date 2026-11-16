@@ -369,10 +369,17 @@ async function shareCardFonts() {
   } catch (e) {}
 }
 
-// Draw the card for `verse` in style `st` (a CARD_STYLES entry). Returns { bytes (PNG), layout }. Throws if the
+// Are the card's fonts in? false if the drawing went ahead on the timeout, with the fallback fonts.
+function shareCardFontsIn() {
+  try { const f = document.fonts; if (!f || !f.check) return true; return ['500 64px Newsreader', '700 32px Sora', '400 32px Sora'].every(x => f.check(x)); }
+  catch (e) { return true; }
+}
+
+// Draw the card for `verse` in style `st` (a CARD_STYLES entry). Returns { bytes (PNG), layout, fontsOk }. Throws if the
 // canvas cannot produce one. `comment`: the member's thoughts, drawn under the reference ('' for none).
 async function shareCardRender(verse, st, probe, comment) {
   await shareCardFonts();
+  const fontsOk = shareCardFontsIn();
   const G = SHARECARD_GEOM;
   const quote = '“' + String(verse.text || '').trim() + '”';
   const ref = String(verse.ref || '').trim() + ' · ' + (verse.version || 'WEB');
@@ -429,7 +436,7 @@ async function shareCardRender(verse, st, probe, comment) {
 
   const blob = await new Promise((res) => { try { cv.toBlob(res, 'image/png'); } catch (e) { res(null); } });
   if (!blob) throw new Error('the canvas made no PNG');
-  return { bytes: new Uint8Array(await blob.arrayBuffer()), layout: L };
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), layout: L, fontsOk };
 }
 // The PNG bytes alone (the card with no thoughts).
 async function shareCardPng(verse, st, probe) { return (await shareCardRender(verse, st, probe, '')).bytes; }
@@ -480,10 +487,23 @@ function ShareCard({ verse, open, onClose, ctx }) {
   const [png, setPng] = React.useState(null);   // { key, bytes, url, truncated } drawn ahead of the tap; or { key, failed }
   const cardRef = React.useRef(null);
   const busyRef = React.useRef(false);          // a ref, not `busy`: two taps before a redraw both see busy=false
+  const [fontGen, setFontGen] = React.useState(0);   // bumped when the fonts arrive after a fallback-font drawing
   const openRef = React.useRef(open);
   openRef.current = open;
+  const pngRef = React.useRef(null);
+  pngRef.current = png;
+  // A PICTURE DRAWN BEFORE THE FONTS ARRIVED (the 2.5s wait ran out — a slow first start) IS DRAWN AGAIN WHEN THEY
+  // DO, so what is shared is not in the fallback serif. At most twice per opening, so a font that keeps failing
+  // cannot loop.
+  React.useEffect(() => {
+    const f = typeof document !== 'undefined' && document.fonts;
+    if (!open || !f || !f.addEventListener) return;
+    const again = () => { const p = pngRef.current; if (p && p.fontsOk === false && shareCardFontsIn()) setFontGen(g => (g < 2 ? g + 1 : g)); };
+    f.addEventListener('loadingdone', again);
+    return () => { try { f.removeEventListener('loadingdone', again); } catch (e) {} };
+  }, [open]);
   React.useEffect(() => { if (open) setStyle(0); }, [open]);
-  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text, verse.shareThoughts || ''].join('\u0001') : '';
+  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text, verse.shareThoughts || '', fontGen].join('\u0001') : '';
   // DRAW THE PICTURE AS SOON AS THE CARD OPENS (and again when the style changes), so the tap shares at once.
   React.useEffect(() => {
     if (!pngKey) return;
@@ -493,7 +513,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
         if (!live) return;
         let url = null;
         try { url = URL.createObjectURL(new Blob([r.bytes], { type: 'image/png' })); } catch (e) {}
-        setPng((prev) => { try { prev && prev.url && URL.revokeObjectURL(prev.url); } catch (e) {} return { key: pngKey, bytes: r.bytes, url, truncated: r.layout.truncated }; });
+        setPng((prev) => { try { prev && prev.url && URL.revokeObjectURL(prev.url); } catch (e) {} return { key: pngKey, bytes: r.bytes, url, truncated: r.layout.truncated, fontsOk: r.fontsOk }; });
       }, (e) => { try { console.warn('shareCardRender: ' + ((e && e.message) || e)); } catch (e2) {} if (live) setPng({ key: pngKey, failed: true }); });
     return () => { live = false; };
   }, [pngKey]);
