@@ -435,7 +435,7 @@ async function shareCardRender(verse, st, probe, comment) {
 async function shareCardPng(verse, st, probe) { return (await shareCardRender(verse, st, probe, '')).bytes; }
 
 // THE SHARE BUTTON: the card as a PNG plus the verse words (verseShareText, app/app.jsx — words and reference,
-// no link) and the member's thoughts, if any (`verse.comment`, from VerseShareSheet's "Add thoughts"). If the picture cannot be made, the words alone go, still with no link, and the member is told.
+// no link) and the member's own thoughts, if any (`verse.shareThoughts`, from VerseShareSheet's "Add thoughts"). If the picture cannot be made, the words alone go, still with no link, and the member is told.
 // `opts.ready`: PNG bytes ShareCard drew when the card opened (or the style changed). With them, nothing is
 // awaited before the share sheet is asked for — a browser only allows navigator.share close to the tap, and
 // the font wait + toBlob could outlast that. Without them the card is drawn now (slower, still correct).
@@ -443,8 +443,11 @@ async function shareCardPng(verse, st, probe) { return (await shareCardRender(ve
 // The share's title (Android EXTRA_SUBJECT; an email's subject) is the reference, not a made-up label.
 async function shareCardShare(verse, st, probe, ctx, opts) {
   const o = opts || {};
-  // the member's thoughts ("Add thoughts" in VerseShareSheet) go under the verse, as the group/DM sends put them
-  const thoughts = String(verse.comment || '').trim();
+  // the member's thoughts ("Add thoughts" in VerseShareSheet) go under the verse, as the group/DM sends put them.
+  // ONLY `shareThoughts`, a field nothing but VerseShareSheet's "Share as image" button sets — never `comment`,
+  // which a RECEIVED chat verse carries with its SENDER's thoughts (evtToMsg keeps every field of the event):
+  // reading that would send someone else's words, maybe a child's, out of the app under this member's name.
+  const thoughts = String(verse.shareThoughts || '').trim();
   const text = verseShareText(verse) + (thoughts ? '\n\n' + thoughts : '');
   let bytes = o.ready || null;
   if (!bytes) {
@@ -480,12 +483,12 @@ function ShareCard({ verse, open, onClose, ctx }) {
   const openRef = React.useRef(open);
   openRef.current = open;
   React.useEffect(() => { if (open) setStyle(0); }, [open]);
-  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text, verse.comment || ''].join('\u0001') : '';
+  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text, verse.shareThoughts || ''].join('\u0001') : '';
   // DRAW THE PICTURE AS SOON AS THE CARD OPENS (and again when the style changes), so the tap shares at once.
   React.useEffect(() => {
     if (!pngKey) return;
     let live = true;
-    Promise.resolve().then(() => shareCardRender(verse, CARD_STYLES[style], cardRef.current, verse.comment || ''))
+    Promise.resolve().then(() => shareCardRender(verse, CARD_STYLES[style], cardRef.current, verse.shareThoughts || ''))
       .then((r) => {
         if (!live) return;
         let url = null;

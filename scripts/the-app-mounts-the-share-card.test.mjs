@@ -38,7 +38,7 @@ test('App mounts ShareCard, closed; ctx.openShare opens it with the verse and th
   const cards = () => nodes(tree).filter(n => n.type === m.ShareCard);
   assert.equal(cards().length, 1, 'App does not mount <ShareCard> — "Share as image" would open nothing');
   assert.equal(cards()[0].props.open, false, 'the card is open before anything was shared');
-  const payload = { type: 'verse', ref: 'John 3:16', version: 'WEB', text: 'For God so loved the world.', comment: 'This got me through March.' };
+  const payload = { type: 'verse', ref: 'John 3:16', version: 'WEB', text: 'For God so loved the world.', shareThoughts: 'This got me through March.' };
   ctxOf(tree).openShare(payload);
   m.draw(); tree = m.draw();
   assert.equal(cards().length, 1);
