@@ -36,7 +36,7 @@ function lift(anchor) {
 
 // ── CHANGE 1: relaySyncState, lifted from the bundle and run (BUNDLE name is the object-method name, kept) ───
 function relaySyncState() {
-  const body = lift('relaySyncState(sync) {');
+  const body = lift('relaySyncState(sync, church) {');
   return new Function('Number', 'return (function ' + body + ')')(Number);
 }
 

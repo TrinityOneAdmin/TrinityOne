@@ -1256,7 +1256,16 @@ function _unauthBody(req, dflt) { return req && req._authWhy === 'time' ? _TIME_
 // logged once an hour per peer, and reported through _lastSync. Peer addresses are shown only to an admin (see /status).
 const _peerRefused = new Map();   // peerBase -> { at, logged }
 let _passRefused = 0;
-function _notePeer401(peerBase, r) {
+// PER-CHURCH SYNC RESULT (plan 2026-11-14, sync-failure display). The box-wide _passRefused / _lastSync.ok above stay as
+// they were (/status is byte-identical); on top of them each church gets its own three-way result per pass, keyed by the
+// CHURCH (never by the partner), so one church's bad partner cannot redden another church that shares that partner.
+//   _churchPass  : cp -> { refused, reason, reached } for the pass in progress, written at the call sites below
+//   _churchSync  : cp -> { state, reason, at, lastReachedAt, running, refusedPasses } as of the last finished pass
+// Served ONLY by the signed GET /sync-status. No peer address or key is ever stored in it.
+const _churchPass = new Map();
+const _churchSync = new Map();
+const _TIME_PHRASE = 'timestamp is outside the allowed window';   // the stable part of _TIME_REFUSAL (that string has a curly apostrophe)
+async function _notePeer401(cp, peerBase, r) {
   if (!r || r.status !== 401) return;
   const t = Math.floor(Date.now() / 1000);
   const k = String(peerBase);
@@ -1264,6 +1273,11 @@ function _notePeer401(peerBase, r) {
   e.at = t; _passRefused++;
   if (t - e.logged >= 3600) { e.logged = t; console.log('[sync] ' + k + ' refused our proof (401) - its trust list or a clock may be wrong'); }
   _peerRefused.set(k, e);
+  // WHY: read the 401 body, only on a 401, capped at ~1 KB. Anything unreadable, long or different stays 'trust'.
+  let reason = 'trust';
+  try { const body = await readCapped(r, 1024); if (String(body).includes(_TIME_PHRASE)) reason = 'time'; } catch {}
+  const p = _churchPass.get(cp);
+  if (p) { p.reason = (p.refused && p.reason === 'trust') ? 'trust' : reason; p.refused = true; }
 }
 function _exportAuth(req, host, path) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
@@ -1326,6 +1340,23 @@ function _syncAuth(req, host, path) {
   const trusted = TRUSTED_RELAYS.get(cp);
   if (trusted && trusted.has(ev.pubkey)) return cp;              // a relay the church authorised -> full corpus
   if (ev.pubkey === cp) return cp;                               // and the church's own key, as on /export
+  return null;
+}
+
+// /sync-status gate: a fresh NIP-98 proof (+-300 s, bound to this host and path) by the church key, or by a steward of the
+// church named in its `church` tag. Returns cp or null. Deliberately does NOT call _noteTimeRefusal: an unauthenticated
+// caller must not be able to raise the box's clockSuspect through this route, and the refusal must not say why.
+function _syncStatusAuth(req, host, path) {
+  const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
+  let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
+  if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;
+  const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
+  try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
+  const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || '';
+  if (!cp || !CHURCH_PUBS.has(cp)) return null;
+  if (ev.pubkey === cp) return cp;
+  if (stewardCan(ev.pubkey, cp, 'any') && !blockedBy(ev.pubkey, cp)) return cp;
   return null;
 }
 
@@ -8049,6 +8080,26 @@ function serveStatic(req, res) {
     createReadStream(file).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);   // stream, don't buffer a 200MB blob in RAM
     return;
   }
+  // PER-CHURCH SYNC STATUS (plan 2026-11-14). GET /sync-status?church=<64hex>, a fresh NIP-98 proof bound to this URL, signed by
+  // the church key or a steward of that church (a status boolean, NOT corpus export, so the steward branch that _syncAuth
+  // deliberately lacks is fine here). ONE identical answer — same status, same body — for unsigned, wrong signer, unknown
+  // church and a church this box does not host, with no clock hint: the sibling routes name a time refusal, this one must not.
+  // Answered only while CHURCH_PUBS holds the church. /status is untouched. No peer address or key is ever in the reply.
+  if (route === '/sync-status') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
+    if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
+    const refuse = () => { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); };
+    if (req.method !== 'GET') { refuse(); return; }
+    const cp = _syncStatusAuth(req, req.headers['host'] || '', route);
+    const q = new URL(req.url, 'http://x').searchParams;
+    if (!cp || q.get('church') !== cp || !CHURCH_PUBS.has(cp)) { refuse(); return; }
+    const bases = _syncPeerBases(cp, _ownSyncHosts());
+    const c = _churchSync.get(cp);
+    const out = { peers: bases.length, state: bases.length ? (c ? c.state : 'pending') : 'none', reason: c && c.reason || '', at: c ? c.at : 0, lastReachedAt: c ? c.lastReachedAt : 0, running: !!(c && c.running), refusedPasses: c ? c.refusedPasses : 0 };
+    if (!bases.length) { out.reason = ''; out.refusedPasses = 0; out.running = false; }
+    res.writeHead(200, H); res.end(JSON.stringify({ church: out }));
+    return;
+  }
   // negentropy resync (digest): per-bucket fingerprints of the church's event set, so a trusted peer can see which
   // buckets differ without pulling anything (finds old gaps a forward cursor misses). Same trust gate as /sync.
   if (route === '/sync-digest' && req.method === 'GET') {
@@ -9579,7 +9630,7 @@ async function syncChurchFromPeer(cp, peerBase) {
     for (let page = 0; page < 100000; page++) {
       const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since + '&limit=' + SYNC_PAGE + (after ? '&after=' + after : '');
       const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
-      if (!r.ok) { _notePeer401(peerBase, r); status = r.status; failed = true; break; }
+      if (!r.ok) { await _notePeer401(cp, peerBase, r); status = r.status; failed = true; break; }
       await forEachNdjsonLine(r, MAX_IMPORT, onLine);   // stream the page line-by-line (bounded memory)
       // A server that predates paging ignores `limit` and sent everything in one body: nothing more to ask for.
       if (!r.headers.get('x-sync-limit')) break;
@@ -9619,7 +9670,7 @@ function _bucketDigest(cp) {
 // ours, and pull only the events we're missing. Runs ALONGSIDE the v1 cursor pull (kept as a correctness backstop).
 async function reconcileChurchWithPeer(cp, peerBase) {
   const digUrl = peerBase + '/sync-digest?church=' + encodeURIComponent(cp);
-  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); return 0; } peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
+  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) { await _notePeer401(cp, peerBase, r); return 0; } peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
   const mine = _bucketDigest(cp), missing = [];
   // PERF (audit 2026-07-24): this used to call store.churchEventIds(cp) — the church's ENTIRE id list —
   // once per mismatched bucket, inside the loop. Buckets are the first two hex chars of an event id, so there
@@ -9638,7 +9689,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (const b in peerBuckets) {
     if (mine[b] && mine[b].fp === peerBuckets[b].fp) continue;   // bucket identical on both sides -> nothing to do
     const idsUrl = peerBase + '/sync-ids?church=' + encodeURIComponent(cp) + '&bucket=' + b;
-    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); continue; } peerIds = (await r.json()).ids || []; } catch { continue; }
+    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) { await _notePeer401(cp, peerBase, r); continue; } peerIds = (await r.json()).ids || []; } catch { continue; }
     const have = haveIn(b);
     for (const id of peerIds) if (/^[0-9a-f]{64}$/.test(id) && !have.has(id)) missing.push(id);
   }
@@ -9646,7 +9697,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   let imported = 0;
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
-    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) { _notePeer401(peerBase, r); continue; } body = await readCapped(r, MAX_IMPORT); } catch { continue; }
+    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) { await _notePeer401(cp, peerBase, r); continue; } body = await readCapped(r, MAX_IMPORT); } catch { continue; }
     for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
@@ -9661,7 +9712,7 @@ async function syncMediaFromPeer(cp, peerBase) {
   // uploading to a peer it controls and letting trusted-relay sync pull them — bypassing the PUT-gate.
   if (mediaRequiresHost() && !MEDIA_HOSTS.has(cp)) return 0;
   const manUrl = peerBase + '/sync-media?church=' + encodeURIComponent(cp);
-  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); return 0; } man = await r.json(); } catch { return 0; }
+  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) { await _notePeer401(cp, peerBase, r); return 0; } man = await r.json(); } catch { return 0; }
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
     if (!b || !/^[0-9a-f]{64}$/.test(b.sha)) continue;
@@ -9688,7 +9739,7 @@ async function syncMediaFromPeer(cp, peerBase) {
     const tmp = join(BLOB_DIR, '.dl-' + randomBytes(12).toString('hex') + '.tmp');
     try {
       const r = await fetch(blobUrl, { headers: { Authorization: relayProof(blobUrl, 'GET', cp) } });
-      if (!r.ok) _notePeer401(peerBase, r);
+      if (!r.ok) await _notePeer401(cp, peerBase, r);
       if (!r.ok || !r.body) continue;
       // stream to a temp file, hashing as it flows — never buffer a 200MB blob in RAM, and never write straight to
       // the final <sha> path (a crash there wedges a truncated file that existsSync skips forever with no self-heal).
@@ -9748,21 +9799,50 @@ function _ownSyncHosts() {
   }
   return hosts;
 }
+// The peers THIS box pulls a church from, as http(s) bases: the church's synced list minus ourselves (by identity key, and by
+// any address we declare). ONE function for the pull loop and for /sync-status, so the "peers" a steward is told about is
+// exactly the set that is actually pulled. Reads PEER_URLS only; decides nothing about which relays a church talks to.
+function _syncPeerBases(cp, selfHosts) {
+  const out = [];
+  const peers = PEER_URLS.get(cp); if (!peers || !peers.size) return out;
+  for (const [peer, peerPub] of peers) {
+    if (peerPub && RELAY_PUB && peerPub === RELAY_PUB) continue;   // our OWN identity key in the church's list — never sync from ourselves
+    const base = String(peer).replace(/^ws/i, 'http').replace(/\/+$/, '');
+    let host = ''; try { host = new URL(base).host; } catch { continue; }
+    if (selfHosts.has(host)) continue;   // …or an address we ourselves declare (covers a list entry that carries a url but no pubkey)
+    out.push(base);
+  }
+  return out;
+}
+// Close one church's pass: refused if ANY request for it got a 401; reached if a peer answered the cursor pull and none refused;
+// otherwise unreached. refusedPasses counts refused passes in a row: an UNREACHED pass (the partner could not be asked, so
+// nothing was learned) neither adds to it nor resets it (owner, 2026-11-16); a reached pass, or no partner, resets it to 0
+// (counted in passes, never minutes). The console shows red only from 2.
+function _finishChurchPass(cp, npeers) {
+  const p = _churchPass.get(cp) || { refused: false, reason: '', reached: false };
+  const prev = _churchSync.get(cp) || { refusedPasses: 0, lastReachedAt: 0 };
+  const at = Math.floor(Date.now() / 1000);
+  const state = !npeers ? 'none' : p.refused ? 'refused' : p.reached ? 'reached' : 'unreached';
+  _churchSync.set(cp, { state, reason: state === 'refused' ? (p.reason || 'trust') : '', at, lastReachedAt: state === 'reached' ? at : (prev.lastReachedAt || 0), running: false, refusedPasses: state === 'refused' ? (prev.refusedPasses || 0) + 1 : state === 'unreached' ? (prev.refusedPasses || 0) : 0 });
+  _churchPass.delete(cp);
+}
 async function syncAllChurches() {
   if (!CHURCH_PUBS.size) return 0;
   const selfHosts = _ownSyncHosts();   // recognise ourselves by identity key + declared address, NOT by ORIGIN (the update source)
+  for (const k of [..._churchSync.keys()]) if (!CHURCH_PUBS.has(k)) _churchSync.delete(k);   // bounded by CHURCH_PUBS
   let total = 0;
   for (const cp of CHURCH_PUBS) {
-    const peers = PEER_URLS.get(cp); if (!peers || !peers.size) continue;
-    for (const [peer, peerPub] of peers) {
-      if (peerPub && RELAY_PUB && peerPub === RELAY_PUB) continue;   // our OWN identity key in the church's list — never sync from ourselves
-      const base = String(peer).replace(/^ws/i, 'http').replace(/\/+$/, '');
-      let host = ''; try { host = new URL(base).host; } catch { continue; }
-      if (selfHosts.has(host)) continue;   // …or an address we ourselves declare (covers a list entry that carries a url but no pubkey)
-      try { const r = await syncChurchFromPeer(cp, base); if (r.ok && r.imported) { total += r.imported; console.log(`[sync] +${r.imported} from ${base} for church ${cp.slice(0, 8)}`); } } catch {}
-      try { const g = await reconcileChurchWithPeer(cp, base); if (g) { total += g; console.log(`[sync] +${g} via reconcile from ${base} for church ${cp.slice(0, 8)}`); } } catch {}   // negentropy: backfill any old gaps the cursor missed
-      try { const m = await syncMediaFromPeer(cp, base); if (m) console.log(`[sync] +${m} media from ${base} for church ${cp.slice(0, 8)}`); } catch {}   // paced media pass
-    }
+    const bases = _syncPeerBases(cp, selfHosts);
+    if (!bases.length) { if (PEER_URLS.get(cp) && PEER_URLS.get(cp).size) _finishChurchPass(cp, 0); continue; }
+    _churchPass.set(cp, { refused: false, reason: '', reached: false });
+    const cur = _churchSync.get(cp); if (cur) cur.running = true; else _churchSync.set(cp, { state: 'pending', reason: '', at: 0, lastReachedAt: 0, running: true, refusedPasses: 0 });
+    try {
+      for (const base of bases) {
+        try { const r = await syncChurchFromPeer(cp, base); if (r.ok) { const p = _churchPass.get(cp); if (p) p.reached = true; } if (r.ok && r.imported) { total += r.imported; console.log(`[sync] +${r.imported} from ${base} for church ${cp.slice(0, 8)}`); } } catch {}
+        try { const g = await reconcileChurchWithPeer(cp, base); if (g) { total += g; console.log(`[sync] +${g} via reconcile from ${base} for church ${cp.slice(0, 8)}`); } } catch {}   // negentropy: backfill any old gaps the cursor missed
+        try { const m = await syncMediaFromPeer(cp, base); if (m) console.log(`[sync] +${m} media from ${base} for church ${cp.slice(0, 8)}`); } catch {}   // paced media pass
+      }
+    } finally { _finishChurchPass(cp, bases.length); }
   }
   saveCursors();   // one atomic write per pass, only if any cursor advanced
   return total;
