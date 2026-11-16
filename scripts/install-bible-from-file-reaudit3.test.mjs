@@ -69,6 +69,20 @@ test('M2 — A LINK\'S ZIP (?module=<https url>) IS READ BY THE BOUNDED READER: 
   assert.equal(Object.keys(q.installed()).length, 0);
 });
 
+test('M2c — each half of the hosted check stands alone: a bomb at a RELATIVE (catalogue-style) url is refused by the reader, and a bare view-bomb database at an https url is refused by the database check; neither is saved', async () => {
+  const bomb = await lyingZip();
+  const viewBomb = await sqliteBytes(`CREATE VIEW Details AS WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 3000000) SELECT 'EVIL' AS Abbreviation, count(*) AS Description FROM c;
+    CREATE TABLE Bible (Book INT, Chapter INT, Verse INT, Scripture TEXT); INSERT INTO Bible VALUES (1, 1, 1, 'x');`);
+  const REL = 'modules/bomb.zip', VIEW_URL = 'https://example.invalid/view.bbl.mybible';
+  const p = phone({ hosted: { [REL]: bomb, [VIEW_URL]: viewBomb } }); await p.boot(); p.Bible._error = null;
+  const t0 = Date.now();
+  await assert.rejects(p.Bible.installModule({ id: 'b', abbr: 'B', name: 'Bomb', kind: 'bible', format: 'USFM', category: 'bibles', url: REL }));
+  await assert.rejects(p.Bible.installModule({ id: 'v', abbr: 'V', name: 'View', kind: 'bible', format: 'MYBIBLE', category: 'bibles', url: VIEW_URL }));
+  assert.ok(Date.now() - t0 < 2500, 'the hostile download ran (' + (Date.now() - t0) + ' ms)');
+  assert.ok(!p.state.puts.includes(REL) && !p.state.puts.includes(VIEW_URL), 'refused bytes were saved: ' + p.state.puts);
+  assert.equal(Object.keys(p.installed()).length, 0); assert.equal(p.Bible.versions().length, 0);
+});
+
 test('M2b — THE HONEST LINK STILL WORKS, and its record is read by the bounded reader at every boot (never unzipSync); an OLD stored record of a bomb is quarantined, not decoded', async () => {
   const honest = realFflate.zipSync({ 'ok.bbl.mybible': await bibleDb('HL', 'Honest Link Bible', 'fine') });
   const URL_OK = 'https://example.invalid/honest.zip';
