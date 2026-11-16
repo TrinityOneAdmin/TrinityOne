@@ -338,7 +338,7 @@ test('THE BIBLE STAYS LAZY — listing 66 books parses not one verse', () => {
 
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-async function studyPanel(loc, label = '2 John 1') {
+async function studyPanel(loc, label = '2 John 1', opts = {}) {
   const { eng } = await loadedNotes();
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
@@ -346,7 +346,7 @@ async function studyPanel(loc, label = '2 John 1') {
     Bible: { getCommentary: eng.getCommentary, parseRef: () => null },
     // the engine's real sanitiser needs a DOM; the panel's job here is to PUT the html on the screen, so
     // this stands in for it and the sanitiser is asserted separately (see the doesNotMatch above).
-    sanitizeHtml: h => h,
+    sanitizeHtml: opts.sanitize || (h => h),
     innerWidth: 360,
   };
   const globals = {
@@ -363,7 +363,7 @@ async function studyPanel(loc, label = '2 John 1') {
     IconBtn: Stub('IconBtn'), Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
   };
   const { CommentaryPanel } = loadScreen('app/screens-read.jsx', ['CommentaryPanel'], globals);
-  const ctx = { notes: {}, setNote() {}, gotoRef() {} };
+  const ctx = opts.ctx || { notes: {}, setNote() {}, gotoRef() {} };
   // TWO DRAWS, because that is what a phone does. CommentaryPanel asks getCommentary inside a useEffect, so
   // the first paint is the empty state and the notes arrive on the next one. A single draw here would assert
   // about a screen no member ever sees settled on -- and it is what makes "the empty state is gone" below a
@@ -454,4 +454,126 @@ test('a Details row with no licence column yields an EMPTY licence string, never
   const blocks = eng.getCommentary(63, 1);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].license, '', 'getCommentary invented a licence for a module that carries none');
+});
+
+// ── SHARING A COMMENTARY ENTRY (2026-11-16) ─────────────────────────────────────────────────────────────────
+// Point of use, both halves: the REAL CommentaryPanel over the REAL Aquifer module (tap an entry's share
+// button), then the REAL VerseShareSheet from app/screens-chat.jsx drawn with that very payload.
+// Text only, never an image card, and the source name + licence always travel with it.
+// Send limits found (not assumed): the relay's websocket maxPayload is 1 MiB (scripts/gateway.mjs, and it
+// advertises max_message_length 1 MiB in NIP-11); nip44 plaintext is capped at 65535 bytes; publishMessage and
+// sendDM add NO cap of their own. The entry text is therefore capped at 4000 characters with an ellipsis.
+
+async function tapShare(i = 0, sanitize) {
+  const sent = [];
+  const ctx = { notes: {}, setNote() {}, gotoRef() {}, openShareSheet: p => sent.push(p) };
+  const { tree } = await studyPanel({ book: 63, chap: 1 }, '2 John 1', { ctx, sanitize });
+  const btns = find(tree, n => n.type === 'button' && n.props['aria-label'] === 'Share this commentary');
+  assert.ok(btns.length >= 5, 'the panel shows ' + btns.length + ' share buttons for 2 John 1');
+  btns[i].props.onClick();
+  assert.equal(sent.length, 1, 'tapping share did not open the share sheet');
+  return { payload: sent[0], count: btns.length };
+}
+
+test('POINT OF USE: an entry\'s share button hands the sheet its text, its source and its licence', async () => {
+  const { payload } = await tapShare(0);
+  assert.equal(payload.type, 'commentary');
+  assert.match(payload.ref, /^2 John 1:1/);
+  assert.match(payload.source, /Aquifer Open Study Notes/);
+  assert.match(payload.text, /The elder: The apostle John calls himself/, 'the entry text is not in the payload');
+  assert.doesNotMatch(payload.text, /<[a-z\/]/i, 'the payload text still carries html tags');
+  assert.match(payload.license, /CC BY-SA|Creative Commons|licen/i, 'the licence line is not in the payload');
+  assert.ok(payload.license.length > 10);
+});
+
+test('the shared text is the plain text of the SANITISED html, never the raw html', async () => {
+  const seen = [];
+  const { payload } = await tapShare(0, h => { seen.push(h); return '<p>SANITISED <em>body</em></p><p>second</p>'; });
+  assert.ok(seen.length > 0, 'the sanitiser was never asked');
+  assert.equal(payload.text, 'SANITISED body\nsecond');
+});
+
+test('a very long entry is capped under the limit with an ellipsis, short ones are untouched', async () => {
+  const long = '<p>' + 'word '.repeat(3000) + '</p>';
+  const { payload } = await tapShare(0, () => long);
+  assert.ok(payload.text.length <= 4000, 'length ' + payload.text.length);
+  assert.ok(payload.text.endsWith('\u2026'));
+  const { payload: short } = await tapShare(0, () => '<p>Brief.</p>');
+  assert.equal(short.text, 'Brief.');
+});
+
+function shareSheet(payload) {
+  const { React, draw } = miniReact();
+  const published = [], dms = [], shared = [], toasts = [];
+  const F = {
+    myPubkey: 'a'.repeat(64),
+    publishMessage: async (id, text, tags, o) => { published.push({ id, text }); return {}; },
+    sendDM: async (pk, text) => { dms.push({ pk, text }); return {}; },
+    subscribeChurchGroups: (_c, cb) => { cb([{ id: 'g1', name: 'Home group', kind: 'Group' }]); return () => {}; },
+    subscribeChurchMembers: (_c, cb) => { cb([{ pubkey: 'b'.repeat(64), name: 'Anna' }]); return () => {}; },
+    displayFor: () => ({ handle: 'Anna', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } }),
+  };
+  const mod = loadScreen('app/screens-chat.jsx', ['VerseShareSheet'], {
+    React,
+    window: { matchMedia: () => ({ matches: true }), Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
+    location: { search: '', href: 'https://app.trinityone.church/' },
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    lsGet: (_k, d) => d, lsSet: () => {}, todayISO: () => '2026-11-16',
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    IconBtn: ({ name, title, onClick }) => React.createElement('button', { title: title || name, onClick }),
+    Overlay: ({ children }) => children, ScreenScroll: ({ children }) => children,
+    ChurchPill: () => null, UserAvatar: () => null, SectionLabel: ({ children }) => children,
+    BottomSheet: ({ open, children }) => (open ? children : null),
+    safeCssColor: c => c, relTime: () => 'now', avOf: d => d.av, D: { GROUPS: [], RELAYS: [] },
+  });
+  const ctx = { toast: m => toasts.push(m), church: { npub: 'npub1church' }, canDMPeer: () => true,
+    shareText: (...a) => shared.push(a), openShare() { assert.fail('commentary must never open the image card'); } };
+  const props = { payload, open: true, onClose() {}, ctx };
+  draw(mod.VerseShareSheet, props);
+  return { tree: draw(mod.VerseShareSheet, props), published, dms, shared, toasts };
+}
+
+test('POINT OF USE: the share sheet for a tapped commentary entry sends text + source + licence to a group', async () => {
+  const { payload } = await tapShare(0);
+  const sheet = shareSheet(payload);
+  const words = texts(sheet.tree).join(' | ');
+  assert.match(words, /Share commentary/);
+  assert.doesNotMatch(words, /Share as image/, 'commentary must not offer an image card');
+  const grp = find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Home group'));
+  assert.equal(grp.length, 1);
+  grp[0].props.onClick();
+  assert.equal(sheet.published.length, 1);
+  const sent = sheet.published[0].text;
+  assert.ok(sent.includes(payload.text), 'the group message lacks the commentary text');
+  assert.ok(sent.includes(payload.license), 'the group message lacks the licence');
+  assert.ok(sent.includes(payload.source), 'the group message lacks the source name');
+});
+
+test('POINT OF USE: a commentary sent to a person carries the licence too', async () => {
+  const { payload } = await tapShare(0);
+  const sheet = shareSheet(payload);
+  find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Anna'))[0].props.onClick();
+  assert.equal(sheet.dms.length, 1);
+  assert.ok(sheet.dms[0].text.includes(payload.text) && sheet.dms[0].text.includes(payload.license));
+});
+
+test('POINT OF USE: "Share outside the app" shares the text with its licence and NO link', async () => {
+  const { payload } = await tapShare(0);
+  const sheet = shareSheet(payload);
+  const b = find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Share outside the app'));
+  assert.equal(b.length, 1, 'no "Share outside the app" button on the commentary sheet');
+  b[0].props.onClick();
+  assert.equal(sheet.shared.length, 1);
+  const [text, , url] = sheet.shared[0];
+  assert.equal(url, undefined, 'a link was passed to shareText');
+  assert.ok(text.includes(payload.text) && text.includes(payload.license) && text.includes(payload.source));
+  assert.doesNotMatch(text, /https?:\/\//, 'the shared text carries a URL');
+});
+
+test('a verse share still offers "Share as image" and not the outside-the-app button', () => {
+  const sheet = shareSheet({ type: 'verse', text: 'In the beginning', ref: 'Genesis 1:1', version: 'BSB' });
+  const words = texts(sheet.tree).join(' | ');
+  assert.match(words, /Share as image/);
+  assert.doesNotMatch(words, /Share outside the app/);
 });
