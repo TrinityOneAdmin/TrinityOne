@@ -25,20 +25,22 @@ async function refusedZip() {
   const loc = Buffer.alloc(20); loc.writeUInt32LE(0x07064b50, 0);
   return new Uint8Array(Buffer.concat([good.subarray(0, at), loc, good.subarray(at)]));
 }
-const seed = (key, bytes, name = 'Legacy') => {
+const seed = (key, bytes, name = 'Legacy', checked = false) => {
   const st = newStores(); st.stores.set('modules', new Map([[key, bytes]]));
-  st.ls.set('trinityone.installed', JSON.stringify({ [key]: { url: key, id: 'OK', abbr: 'OK', name, kind: 'bible', category: 'bibles' } }));
+  st.ls.set('trinityone.installed', JSON.stringify({ [key]: { url: key, id: 'OK', abbr: 'OK', name, kind: 'bible', category: 'bibles', ...(checked ? { checked: true } : {}) } }));
   return st;
 };
 
 test('R4-1 — BOOT: a record under ANY url that is not an exact catalogue url is read by the bounded reader and quarantined if refused: //host, a leading space or tab before https:, HTTPS:, and a bare name', async () => {
   const refused = await refusedZip();
   for (const key of ['https://evil.example/x.zip', 'HTTPS://evil.example/x.zip', '//evil.example/x.zip', ' https://evil.example/x.zip', '\thttps://evil.example/x.zip', 'evil.zip', 'modules/not-ours.zip']) {
-    const st = seed(key, refused);
-    const calls = []; const p = phone({ state: st, unzipCalls: calls }); await p.boot(); await sleep(80);
-    assert.equal(!!JSON.parse(st.ls.get('trinityone.installed'))[key].quarantined, true, `${JSON.stringify(key)}: not quarantined`);
-    assert.equal(p.Bible.versions().length, 0, `${JSON.stringify(key)}: loaded`);
-    assert.deepEqual([...calls], [], `${JSON.stringify(key)}: unzipSync ran`);
+    for (const checked of [false, true]) {   // checked:true leaves ONLY the reader's refusal to catch it
+      const st = seed(key, refused, 'Legacy', checked);
+      const calls = []; const p = phone({ state: st, unzipCalls: calls }); await p.boot(); await sleep(80);
+      assert.equal(!!JSON.parse(st.ls.get('trinityone.installed'))[key].quarantined, true, `${JSON.stringify(key)} checked=${checked}: not quarantined`);
+      assert.equal(p.Bible.versions().length, 0, `${JSON.stringify(key)} checked=${checked}: loaded`);
+      assert.deepEqual([...calls], [], `${JSON.stringify(key)} checked=${checked}: unzipSync ran`);
+    }
   }
   // controls: an honest zip under such a key loads through the reader (no unzipSync); an exact catalogue url keeps the catalogue path
   const honest = realFflate.zipSync({ 'ok.bbl.mybible': await bibleDb('OK', 'Ok Bible', 'x') });
@@ -75,7 +77,8 @@ test('R4-3 — THE LICENCE NOTICE SHIPS WITH THE TABLE: the Unicode License v3 t
 
 test('R4-4 — the "import" filter that CAN be tested is tested: a dictionary file whose name is the Library\'s own import row ("Import a dictionary…") is not mistaken for a published module', async () => {
   const p = phone({}); await p.boot(); p.Bible._error = null;
-  const r = await p.Bible.installFromBytes(await (await import('./install-bible-harness.mjs')).dictDb('IMP', 'Import a dictionary…'), '');
+  // an import ROW has no kind of module, so catOf files it under "bibles": a BIBLE file with its name is the one that would be wrongly held
+  const r = await p.Bible.installFromBytes(await bibleDb('IMP', 'Import a dictionary…', 'x'), '');
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.renamed, false, 'a catalogue import ROW (not a module) reserved a name: ' + JSON.stringify(r));
 });
