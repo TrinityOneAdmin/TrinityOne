@@ -2421,6 +2421,32 @@ function TodayScreen({ ctx }) {
     if (row) votd = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
   }
   const votdQ = votdQuoteMarks(votd.text);
+  // THE HEART files the verse under a "Favourites" tag, keyed by the CANONICAL key ("43.3.16"), the one the
+  // reader and Library match on, not votd.ref ("John 3:16"), which the reader would never light up. Filled =
+  // bookmarked AND tagged Favourites. Un-favouriting keeps a bookmark that has other tags, drops one that has none.
+  // No resolvable reference, no heart.
+  const votdKey = (vloc && vloc.verse != null) ? Bible.refKey(vloc, vloc.verse) : null;
+  // An OLD-spelling bookmark ("John 3:16", saved before keys were canonical) is the same verse: match on the
+  // canonical form like the reader does, then operate on THAT item's own stored id, never a second copy.
+  const votdCanon = (r) => { const s = String(r == null ? '' : r); if (/^\d+\.\d+\.\d+$/.test(s)) return s; try { const q = Bible.parseRef(s); if (q && q.verse != null) return Bible.refKey(q, q.verse); } catch (err) {} return s; };
+  const votdItems = votdKey ? (ctx.bookmarkItems || []).filter(b => b && (votdCanon(b.ref) === votdKey || votdCanon(b.id) === votdKey)) : [];
+  const votdItem = votdItems.find(b => Array.isArray(b.tags) && b.tags.includes('Favourites')) || votdItems[0] || null;
+  const votdId = votdItem ? votdItem.id : votdKey;
+  const votdTags = (votdItem && votdItem.tags) || [];
+  const votdSaved = !!votdItem && votdTags.includes('Favourites');
+  const votdHeart = (e) => {
+    e.stopPropagation();
+    if (!votdKey) return;
+    if (votdSaved) {
+      const rest = votdTags.filter(t => t !== 'Favourites');
+      if (rest.length) ctx.setBookmarkTags(votdId, rest); else ctx.toggleBookmark(votdId);
+      ctx.toast('Removed from Favourites');
+    } else {
+      if (!votdItem) ctx.toggleBookmark(votdKey);
+      ctx.setBookmarkTags(votdId, [...votdTags, 'Favourites']);
+      ctx.toast('Added to Favourites');
+    }
+  };
   // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) paints the verse-of-the-day and featured-sermon cards. Unset,
   // each card keeps its exact clay gradient and white ink.
   const mainC = (typeof churchMainColor === 'function') ? churchMainColor(ctx.church) : null;
@@ -2856,12 +2882,16 @@ function TodayScreen({ ctx }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
             <div style={{ display: 'flex', gap: 8 }}>
-              {['heart', 'share'].map(n => (
-                <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+              {votdKey ? (
+                <button type="button" onClick={votdHeart} aria-label={votdSaved ? 'Remove from Favourites' : 'Add to Favourites'} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)', border: 'none', padding: 0, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-                  <Icon name={n} size={17} stroke={2} color={onMain} />
-                </div>
-              ))}
+                  <Icon name="heart" size={17} stroke={2} color={onMain} fill={votdSaved} />
+                </button>
+              ) : null}
+              <div style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                <Icon name="share" size={17} stroke={2} color={onMain} />
+              </div>
             </div>
           </div>
         </div>
