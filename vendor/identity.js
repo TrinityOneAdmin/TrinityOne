@@ -12044,7 +12044,47 @@ zoo`.split("\n"));
       return false;
     }
   }
+  function _widgetPlugin() {
+    try {
+      const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
+      return W || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function widgetForgetChurch() {
+    const W = _widgetPlugin();
+    if (W && W.clearPrompt) {
+      try {
+        Promise.resolve(W.clearPrompt()).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+  }
+  function widgetOffForNewAccount() {
+    try {
+      localStorage.removeItem("trinityone.widget");
+    } catch (e) {
+    }
+    const W = _widgetPlugin();
+    if (W && W.setEnabled) {
+      try {
+        Promise.resolve(W.setEnabled({ on: false })).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-widget-changed", { detail: false }));
+    } catch (e) {
+    }
+  }
   async function rememberClear() {
+    try {
+      widgetForgetChurch();
+    } catch (e) {
+    }
     if (!isNative()) return;
     try {
       const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
@@ -12319,6 +12359,7 @@ zoo`.split("\n"));
       const mnemonic = generateSeedWords();
       await clearEnc();
       await rememberClear();
+      widgetOffForNewAccount();
       sessionMnemonic = null;
       await secureSet(mnemonic);
       apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -12476,6 +12517,7 @@ zoo`.split("\n"));
       if (!validateMnemonic2(m, wordlist2)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase.");
       await clearEnc();
       await rememberClear();
+      widgetOffForNewAccount();
       sessionMnemonic = null;
       await secureSet(m);
       apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -12594,6 +12636,11 @@ zoo`.split("\n"));
     async forgetDevice() {
       await rememberClear();
       return true;
+    },
+    // The home-screen widget's church settings — cleared by the app when the member leaves or switches church
+    // (app/app.jsx). Lock/forget/PIN changes clear them through rememberClear() above.
+    widgetForgetChurch() {
+      widgetForgetChurch();
     },
     // For the profile screen: 0 when not remembered, else the unix second it lapses.
     async rememberedUntil() {

@@ -25,7 +25,9 @@ const TRANSLATED = 'BSB-TEXT For God so loved the world that He gave His one and
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const localISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
-function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true } = {}) {
+function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {} } = {}) {
+  const listeners = {};
+  const opts = { feedBases };
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { ChurchBadge } = loadScreen('app/screens-church.jsx', ['ChurchBadge'],
@@ -38,11 +40,11 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [], prompts = [], cleared = [], fetched = [];
+  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [];
   const win = {
-    addEventListener() {}, removeEventListener() {}, innerWidth: 360, localStorage,
+    addEventListener(t, h) { (listeners[t] = listeners[t] || []).push(h); }, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
-      widgetFeedBases: (np) => (feedBases && np === church ? { npub: CHURCH_NPUB, bases: feedBases } : null) },
+      widgetFeedBases: (np) => (opts.feedBases && np === church ? { npub: CHURCH_NPUB, bases: opts.feedBases } : null) },
     TrinityIdentity: { rememberedUntil: async () => rememberedUntil },
     ChurchBadge,
     TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: POOL },
@@ -51,7 +53,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
       loaded: true, books: () => [43], getVerses: (b, c) => (b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
     },
-    Capacitor: plugin ? { Plugins: { TrinityWidget: { publishVotd: (a) => { published.push(a); return Promise.resolve(); },
+    Capacitor: plugin ? { Plugins: { TrinityWidget: { status: () => Promise.resolve(nativeEnabled == null ? { supported: true } : { supported: true, enabled: nativeEnabled }), publishVotd: (a) => { published.push(a); return Promise.resolve(); },
       publishPrompt: (a) => { prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
   };
   let pickStore = null;
@@ -68,7 +70,10 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     useTrinityAudio: () => ({ track: null, playing: false }),
     todayISO: () => localISO(date),
     Date: class extends Date { constructor(...a) { super(...(a.length ? a : [date])); } static now() { return date.getTime(); } },
-    fetch: async (url) => { fetched.push(String(url)); const hit = Object.keys(feed).find(b => String(url) === b + '/public/' + CHURCH_NPUB + '/verse-prompt.json'); return hit ? { status: 200, ok: true, json: async () => feed[hit] } : { status: 404, ok: false, json: async () => ({}) }; },
+    fetch: async (url, init) => { fetched.push(String(url)); fetchInits.push(init || {}); const base = Object.keys({ ...feed, ...redirectTo }).concat(unreachable).find(b => String(url).startsWith(b + '/'));
+      if (base && unreachable.includes(base)) throw new Error('unreachable');
+      if (base && redirectTo[base]) return { status: 200, ok: true, url: redirectTo[base], json: async () => ({ ts: 9, ref: 'ELSEWHERE 1:1', schedule: [] }) };
+      const hit = Object.keys(feed).find(b => String(url) === b + '/public/' + CHURCH_NPUB + '/verse-prompt.json'); return hit ? { status: 200, ok: true, json: async () => feed[hit] } : { status: 404, ok: false, json: async () => ({}) }; },
   };
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const ctx = {
@@ -78,7 +83,8 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {},
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
+  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, opts, store,
+    fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
 // The verse the CARD shows, read off the rendered tree: which pool ref's label is on screen, and the text.
@@ -270,4 +276,40 @@ test('1b: before any relay is admitted, Today writes NO address (and does not cl
   s.draw(); await settle();
   assert.equal(s.prompts.length, 0);
   assert.equal(s.fetched.length, 0, 'Today probed something although no relay was admitted');
+});
+
+// ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────
+test('F4: Today follows the NATIVE state — a lost stored flag over an enabled widget still gets the table', async () => {
+  const s = todayScreen({ widget: null, nativeEnabled: true });
+  s.draw(); await settle(); s.draw(); await settle();
+  assert.equal(s.store.get('trinityone.widget'), '1', 'the stored flag was not repaired from the native state');
+  assert.ok(s.published.length >= 1, 'the widget is on the home screen but Today never wrote its table (it believed the stored flag)');
+});
+
+test('F5: the probe never follows a redirect, and an answer from another address is refused', async () => {
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], redirectTo: { 'https://a8.example': 'https://elsewhere.example/x.json' } });
+  s.draw(); await settle();
+  assert.ok(s.fetchInits.length >= 1 && s.fetchInits.every(i => i.redirect === 'error'), 'the probe follows redirects: ' + JSON.stringify(s.fetchInits));
+  assert.equal(s.prompts.length, 0, 'a copy answered from a DIFFERENT address was handed to the widget');
+});
+
+test('F6/F7: admission finishing AFTER Today drew still configures the widget, with the new addresses', async () => {
+  const s = todayScreen({ church: 'grace', feedBases: [], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 0);
+  s.opts.feedBases = ['https://a8.example'];
+  s.fire('trinity-relays-verified');
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'a relay proved after Today drew never reached the widget — nothing re-ran the writer');
+  assert.deepEqual(s.prompts[0].bases, ['https://a8.example']);
+  const n = s.fetched.length;
+  s.fire('trinity-relays-verified'); s.draw(); await settle();
+  assert.equal(s.fetched.length, n, 'the same church, addresses and prompt were probed again within the hour (small pipes)');
+});
+
+test('F8: a 404 beside a base that could not be reached does NOT clear the widget\'s prompt', async () => {
+  const s = todayScreen({ church: 'grace', feedBases: ['https://old.example', 'https://own.example'], feed: {}, unreachable: ['https://own.example'] });
+  s.draw(); await settle();
+  assert.equal(s.cleared.length, 0, 'one old relay\'s 404 wiped the prompt while the church\'s own box was only unreachable');
+  assert.equal(s.prompts.length, 0);
 });

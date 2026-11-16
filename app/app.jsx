@@ -838,6 +838,15 @@ function App() {
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
+  // THE HOME-SCREEN WIDGET'S CHURCH SETTINGS GO WHEN THE CHURCH DOES (audit F1). Leaving, switching church and a
+  // confirmed block all move activeChurch — on whatever tab the member is on, not only Today — so the widget's
+  // stored npub/relays are dropped here; Today writes the new church's when it is next shown (if allowed).
+  const widgetChurchRef = useAR(activeChurch);
+  useAE(() => {
+    if (widgetChurchRef.current === activeChurch) return;
+    widgetChurchRef.current = activeChurch;
+    try { if (window.TrinityIdentity && window.TrinityIdentity.widgetForgetChurch) window.TrinityIdentity.widgetForgetChurch(); } catch (e) {}
+  }, [activeChurch]);
   // churches the member follows persist across reloads (a scanned QR / pasted npub should stick).
   // Stored set = the real followed churches (npub ids); merged with the built-in sample churches.
   const [churchesStored, setChurches] = useA(() => {

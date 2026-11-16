@@ -122,6 +122,18 @@ test('only the church\'s own key, naming itself, writes the public copy', async 
   assert.equal((await get(FEED(NPUB_B))).status, 404, 'St Mark\'s has a feed it never switched on');
 });
 
+test('a same-second tie between two copies serves the LOWEST event id, whichever arrived last (audit F10)', async () => {
+  assert.equal((await publish(ws, share(grace, ap, { versePrompt: true, optOut: [], address: 'own' })))[0], true);
+  const at = next();
+  const mk = (ref) => finalizeEvent({ kind: 30078, created_at: at, tags: [['d', D.PUBVERSE + ap], ['t', NET]], content: JSON.stringify({ ref }) }, grace.sk);
+  const [x, y] = [mk('Tie 1:1'), mk('Tie 2:2')].sort((p, q) => (p.id < q.id ? -1 : 1));   // x has the lower id
+  await publish(ws, x);
+  await publish(ws, y);   // later arrival, higher id — the store keeps x
+  await sleep(200);
+  const j = JSON.parse(await (await get(FEED(NPUB))).text());
+  assert.equal(j.ref, JSON.parse(x.content).ref, 'the feed serves the later-arriving copy of a same-second tie, not the one the store keeps');
+});
+
 test('INGEST: a fresh relay replaying a store that already holds the documents serves the copy (no roster needed)', async () => {
   await stopRelay();
   const fresh = mkdtempSync(join(tmpdir(), 'trin-versefeed-fresh-'));

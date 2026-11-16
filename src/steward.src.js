@@ -7594,7 +7594,7 @@ function _webEnsure(restart) {
                      events: carried ? carried.events : new Map(), versions: carried ? carried.versions : new Map(), eventsKnown: !!(carried && carried.eventsKnown),
                      copies: carried ? carried.copies : new Map(), copyTs: carried ? carried.copyTs : new Map(), copiesKnown: !!(carried && carried.copiesKnown),
                      from: carried ? carried.from : { share: new Map(), corpus: new Map() },
-                     vprompt: carried ? carried.vprompt : null, vpromptTs: carried ? carried.vpromptTs : 0,
+                     vprompts: carried ? carried.vprompts : new Map(),
                      vcopy: carried ? carried.vcopy : null, vcopyTs: carried ? carried.vcopyTs : 0, vbusy: false, vfail: null,
                      subs: [], listeners, busy: false, again: false, timer: null,
                      stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub), stuckAt: _webStuckLoad(pub),
@@ -7773,14 +7773,15 @@ function _publicVerseBody(p) {
   return JSON.stringify({ ref, schedule });
 }
 // THE VERSE PROMPT and its public copy, as the corpus stream delivers them (reference/PLAN-phone-widget-2026-11-16.html
-// §4b). Newest wins for each. The prompt may be a delegated steward's (it reaches the stream through its ['church', pub]
-// tag, and the relay's write gate already required a steward to write it); the copy is the church's own only.
-// Returns true when the event was one of these two (and has been taken).
+// §4b). The copy is the church's own only, newest wins. THE PROMPT is kept PER AUTHOR (each steward who ever sent one
+// has their own singleton) and the one to publish is chosen at mirror time by _webVersePrompt — so a roster that
+// arrives AFTER the prompts still decides who counts (audit F2). Returns true when the event was one of these two.
 function _webVerseNote(w, e, d) {
   if (d === VERSE_PROMPT_D) {
-    if (e.created_at < w.vpromptTs) return true; w.vpromptTs = e.created_at;
+    const prev = w.vprompts.get(e.pubkey);
+    if (prev && (prev.ts > e.created_at || (prev.ts === e.created_at && String(prev.id || '') <= String(e.id || '')))) return true;
     let c = null; if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { c = JSON.parse(e.content); } catch {} }
-    w.vprompt = (c && typeof c === 'object') ? c : null;
+    w.vprompts.set(e.pubkey, { ts: e.created_at, id: String(e.id || ''), c: (c && typeof c === 'object') ? c : null });
     _webQueueSync();
     return true;
   }
@@ -7792,11 +7793,25 @@ function _webVerseNote(w, e, d) {
   }
   return false;
 }
+// WHICH PROMPT IS THE CHURCH'S — THE SAME RULE A MEMBER'S PHONE APPLIES (audit F2). Members read the prompt through
+// subscribeChurchVersePrompt (src/fellowship.src.js), which trusts only _churchVoice: the church key or a steward
+// still on the church's signed roster; newest wins, and on an exact same-second tie the LOWEST event id (the relay's
+// replaceable-event rule). Here: the church key, or an author on this console's roster (_careRoster) once it is
+// known — before that, the church's own copy only, because a public copy must never be built from an author the
+// members would refuse. A tombstone from a trusted author is a "no prompt" that can win.
+function _webVersePrompt(w) {
+  let best = null;
+  for (const [by, rec] of w.vprompts) {
+    if (!(by === pub || (_careRosterKnown && _careRoster.has(by)))) continue;
+    if (!best || rec.ts > best.ts || (rec.ts === best.ts && rec.id < best.id)) best = rec;
+  }
+  return best ? best.c : null;
+}
 // NAMED SO IT IS NOT A PREFIX-MATCH FOR _webSync — tests slice `async function _webSync` out of the bundle by name.
 async function _webVerseMirror(w) {
   if (!w || w.pub !== pub || !sk || actingChurch) return;          // owner mode only, like _webSync
   if (!w.shareKnown || !w.copiesKnown || w.vbusy) return;
-  const desired = w.share.versePrompt ? _publicVerseBody(w.vprompt) : null;
+  const desired = w.share.versePrompt ? _publicVerseBody(_webVersePrompt(w)) : null;
   if (desired === w.vcopy) return;
   // A RELAY THAT REFUSED THIS EXACT WRITE IS NOT ASKED AGAIN FOR A MINUTE — an older relay has no rule for
   // pubverse: and every _webSync (any relay traffic) would otherwise re-send it.
@@ -12673,6 +12688,7 @@ window.Steward = {
         _careRosterKnown = true;
         _careRosterSeen = true;   // a real roster DOCUMENT, as opposed to the oneose below — see _consoleDisplay
         _stewardRosterChanged(_rosterBefore, cur, e.created_at);   // remember who left it (and when), and re-filter the open Members lists
+        try { _webQueueSync(); } catch (err) {}   // the public verse-prompt copy is chosen by roster (_webVersePrompt)
         onList(cur);
       },
       oneose() {

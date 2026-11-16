@@ -25,7 +25,9 @@ import java.net.URL;
  * would be read (stale), not fed. It never reads a note field (the public copy carries none).
  *
  * Outcome rules: any 200 → keep the newest `ts` ever seen (never let an older copy replace a newer one);
- * no 200 but a 404 → the prompt was withdrawn or the switch turned off → drop it (daily verse only);
+ * no 200, a 404 from EVERY base asked → the prompt was withdrawn or the switch turned off → drop it (daily verse only);
+ * a 404 beside a base that could not be reached is NOT proof (an old relay without the route 404s while the
+ *   church's own box is briefly offline — audit F8) → keep what we have;
  * only network failures → keep what we have.
  */
 public class PromptFetchJob extends JobService {
@@ -69,20 +71,21 @@ public class PromptFetchJob extends JobService {
         String npub = cfg.optString("npub", "");
         JSONArray bases = cfg.optJSONArray("bases");
         if (!npub.matches("^npub1[a-z0-9]{58}$") || bases == null) return;
-        JSONObject best = null; boolean saw404 = false, saw200 = false;
+        JSONObject best = null; boolean saw404 = false, saw200 = false, sawFail = false;
         for (int i = 0; i < bases.length(); i++) {
             String base = bases.optString(i, "");
             if (!base.startsWith("https://")) continue;   // never cleartext
             int[] code = new int[] { 0 };
             JSONObject got = get(base + "/public/" + npub + "/verse-prompt.json", code);
             if (code[0] == 404) saw404 = true;
+            else if (code[0] != 200 || got == null) sawFail = true;
             if (got != null) { saw200 = true; if (best == null || got.optLong("ts", 0) > best.optLong("ts", 0)) best = got; }
         }
         try {
             JSONObject cur = cfg.optJSONObject("cached");
             if (saw200) {
                 if (cur == null || best.optLong("ts", 0) >= cur.optLong("ts", 0)) cfg.put("cached", best);
-            } else if (saw404) {
+            } else if (saw404 && !sawFail) {
                 cfg.put("cached", JSONObject.NULL);
             } else {
                 return;

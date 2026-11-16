@@ -20920,8 +20920,7 @@ zoo`.split("\n");
       copyTs: carried ? carried.copyTs : /* @__PURE__ */ new Map(),
       copiesKnown: !!(carried && carried.copiesKnown),
       from: carried ? carried.from : { share: /* @__PURE__ */ new Map(), corpus: /* @__PURE__ */ new Map() },
-      vprompt: carried ? carried.vprompt : null,
-      vpromptTs: carried ? carried.vpromptTs : 0,
+      vprompts: carried ? carried.vprompts : /* @__PURE__ */ new Map(),
       vcopy: carried ? carried.vcopy : null,
       vcopyTs: carried ? carried.vcopyTs : 0,
       vbusy: false,
@@ -21078,8 +21077,8 @@ zoo`.split("\n");
   }
   function _webVerseNote(w, e, d) {
     if (d === VERSE_PROMPT_D) {
-      if (e.created_at < w.vpromptTs) return true;
-      w.vpromptTs = e.created_at;
+      const prev = w.vprompts.get(e.pubkey);
+      if (prev && (prev.ts > e.created_at || prev.ts === e.created_at && String(prev.id || "") <= String(e.id || ""))) return true;
       let c = null;
       if (!(e.tags.some((t) => t[0] === "deleted") || !e.content)) {
         try {
@@ -21087,7 +21086,7 @@ zoo`.split("\n");
         } catch {
         }
       }
-      w.vprompt = c && typeof c === "object" ? c : null;
+      w.vprompts.set(e.pubkey, { ts: e.created_at, id: String(e.id || ""), c: c && typeof c === "object" ? c : null });
       _webQueueSync();
       return true;
     }
@@ -21100,10 +21099,18 @@ zoo`.split("\n");
     }
     return false;
   }
+  function _webVersePrompt(w) {
+    let best = null;
+    for (const [by, rec] of w.vprompts) {
+      if (!(by === pub || _careRosterKnown && _careRoster.has(by))) continue;
+      if (!best || rec.ts > best.ts || rec.ts === best.ts && rec.id < best.id) best = rec;
+    }
+    return best ? best.c : null;
+  }
   async function _webVerseMirror(w) {
     if (!w || w.pub !== pub || !sk || actingChurch) return;
     if (!w.shareKnown || !w.copiesKnown || w.vbusy) return;
-    const desired = w.share.versePrompt ? _publicVerseBody(w.vprompt) : null;
+    const desired = w.share.versePrompt ? _publicVerseBody(_webVersePrompt(w)) : null;
     if (desired === w.vcopy) return;
     if (w.vfail && w.vfail.body === desired && now() - w.vfail.at < 60) return;
     w.vbusy = true;
@@ -25950,6 +25957,10 @@ zoo`.split("\n");
           _careRosterKnown = true;
           _careRosterSeen = true;
           _stewardRosterChanged(_rosterBefore, cur, e.created_at);
+          try {
+            _webQueueSync();
+          } catch (err2) {
+          }
           onList(cur);
         },
         oneose() {

@@ -164,6 +164,12 @@ test('Settings → Your website → Verse prompts → the switch: the prompt is 
   assert.equal(await evalIn(`document.querySelector(${JSON.stringify(SWITCH)}).getAttribute('aria-checked')`), 'false', 'the switch is on before anyone touched it — it must default OFF');
   assert.equal(await evalIn(clickSel(SWITCH)), 'ok');
   await waitFor(`document.querySelector(${JSON.stringify(SWITCH)}).getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
+  // OWNER 2026-11-16 (audit F9): the moment it is on, the screen must WARN that the passages AND their scheduled
+  // times are public on the internet. Read off the rendered page, not the source.
+  const warn = await evalIn(`(() => { const w = document.querySelector('[role="alert"][data-verse-public-warning]'); if (!w) return null; const r = w.getBoundingClientRect(); return { text: w.textContent || '', shown: r.height > 0 && r.width > 0 }; })()`);
+  assert.ok(warn && warn.shown, 'with verse prompts switched on there is NO visible warning that they are public on the internet');
+  assert.match(warn.text, /public/i);
+  assert.match(warn.text, /times/i, 'the warning does not say the SCHEDULED TIMES are public too');
   const share = heldBy(churchPub, 'trinityone/share:').find(r => !r.tombstone);
   assert.ok(share && JSON.parse(share.content).versePrompt === true, 'the switch did not write versePrompt into the church\'s share: document');
   const got = await pollFeed(r => r.status === 200);

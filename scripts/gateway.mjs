@@ -4261,10 +4261,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // a tombstone or an empty body clears it. Only refs and times are kept — a note never reaches the map.
   else if (d.startsWith(PUBVERSE_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(PUBVERSE_D.length) === e.pubkey) {
     const prev = PUBVERSE.get(e.pubkey);
-    if (!prev || prev.ts <= e.created_at) {
+    // Newest wins; on an exact same-second tie the LOWEST event id, as the store keeps it (audit F10), so the map and
+    // the stored copy cannot disagree after a replay.
+    if (!prev || prev.ts < e.created_at || (prev.ts === e.created_at && String(e.id || '') < String(prev.id || ''))) {
       let c = null; if (!removed && e.content) { try { c = JSON.parse(e.content); } catch {} }
       const f = c ? publicVersePromptFields(c) : null;
-      if (f) PUBVERSE.set(e.pubkey, { fields: f, ts: e.created_at }); else PUBVERSE.set(e.pubkey, { fields: null, ts: e.created_at });
+      PUBVERSE.set(e.pubkey, { fields: f || null, ts: e.created_at, id: String(e.id || '') });
     }
   }
   else if (d.startsWith(PUBEVENT_D) && CHURCH_PUBS.has(e.pubkey)) {

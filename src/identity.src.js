@@ -169,7 +169,31 @@ async function rememberWrite(m, until) {
     return true;
   } catch (e) { console.warn('[identity] remember write failed', e); return false; }
 }
+// ── THE HOME-SCREEN WIDGET'S CHURCH SETTINGS LIVE OUTSIDE THE APP'S LOCK (reference/PLAN-phone-widget-2026-11-16.html
+// §4b; AUDIT-phone-widget-c60c0f72 F1/F4). The widget may hold the church's npub and relay addresses only while
+// "remember me" (or no PIN) holds, and app/screens-today.jsx writes them only then — but it can only clear them
+// while Today is on screen. So the clear ALSO lives here, in rememberClear(), which every path that ends a
+// remembered state reaches: lock (and "Lock now"), forgetDevice ("Ask for my PIN again"), setPin, removePin, a
+// new or imported identity, a remembered record that expired or no longer matches the account. Leaving or
+// switching church is the app's business, not identity's: app/app.jsx calls widgetForgetChurch() on that.
+function _widgetPlugin() {
+  try { const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget; return W || null; } catch (e) { return null; }
+}
+function widgetForgetChurch() {
+  const W = _widgetPlugin();
+  if (W && W.clearPrompt) { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} }
+}
+// A NEW ACCOUNT ON THIS PHONE (regenerate / importMnemonic — which is what a handover to a young person, or a
+// reseat, comes down to) does not inherit the previous person's opt-in: the widget is switched OFF and its data
+// cleared. The new person turns it on themselves if they want it (audit F4).
+function widgetOffForNewAccount() {
+  try { localStorage.removeItem('trinityone.widget'); } catch (e) {}
+  const W = _widgetPlugin();
+  if (W && W.setEnabled) { try { Promise.resolve(W.setEnabled({ on: false })).catch(() => {}); } catch (e) {} }
+  try { window.dispatchEvent(new CustomEvent('trinity-widget-changed', { detail: false })); } catch (e) {}
+}
 async function rememberClear() {
+  try { widgetForgetChurch(); } catch (e) {}
   if (!isNative()) return;
   try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
   catch (e) { console.warn('[identity] remember clear failed', e); }
@@ -497,6 +521,7 @@ window.TrinityIdentity = {
     // a brand-new identity starts with no PIN — clear any stale lock so the fresh key persists plainly
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     await rememberClear();   // …and never leave the PREVIOUS identity's seed remembered on this device
+    widgetOffForNewAccount();   // …nor the previous person's home-screen widget opt-in (audit F4)
     sessionMnemonic = null;
     await secureSet(mnemonic);
     apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -629,6 +654,7 @@ window.TrinityIdentity = {
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     await rememberClear();   // this device is no longer that account — do not leave its seed remembered
+    widgetOffForNewAccount();   // …nor its home-screen widget opt-in (audit F4: a handover must not carry it)
     sessionMnemonic = null;
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -741,6 +767,9 @@ window.TrinityIdentity = {
   // Does NOT lock the current session: the member is looking at the app, and throwing them out for changing
   // a preference would be its own bug. The next launch will ask for the PIN.
   async forgetDevice() { await rememberClear(); return true; },
+  // The home-screen widget's church settings — cleared by the app when the member leaves or switches church
+  // (app/app.jsx). Lock/forget/PIN changes clear them through rememberClear() above.
+  widgetForgetChurch() { widgetForgetChurch(); },
   // For the profile screen: 0 when not remembered, else the unix second it lapses.
   async rememberedUntil() { const r = await rememberRead(); return (r && r.until > nowSec()) ? r.until : 0; },
 

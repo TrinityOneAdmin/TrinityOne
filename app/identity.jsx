@@ -1521,6 +1521,12 @@ function VotdToggle() {
 function HomeWidgetToggle() {
   const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
   const [on, setOn] = React.useState(() => { try { return localStorage.getItem('trinityone.widget') === '1'; } catch { return false; } });
+  // THE NATIVE PROVIDER IS THE TRUTH (audit F4): if the stored flag was lost while the widget is still enabled, the
+  // switch must not say "Off" over a widget that is on the home screen. (Today does the same: homeWidgetReconcile.)
+  React.useEffect(() => {
+    if (!W || !W.status) return;
+    try { Promise.resolve(W.status()).then(st => { if (st && typeof st.enabled === 'boolean') { try { localStorage.setItem('trinityone.widget', st.enabled ? '1' : '0'); } catch {} setOn(st.enabled); } }).catch(() => {}); } catch {}
+  }, []);
   if (!W) return null;
   const flip = () => {
     const nv = !on;

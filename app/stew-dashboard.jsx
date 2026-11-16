@@ -12438,6 +12438,13 @@ function DashWebsitePanel({ church }) {
             </button>
           </div>
           {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+          {/* OWNER, 2026-11-16 (audit F9): future scheduled times stay public, but the switch must SAY so, plainly, the
+              moment it is on — a weekly schedule can show anyone when the church meets. */}
+          {verseOn ? (
+            <div role="alert" data-verse-public-warning="1" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--clay-ink)', fontSize: 13, fontWeight: 600, lineHeight: 1.45 }}>
+              Public on the internet: the passages you send AND the times you schedule them, including times still to come. Anyone with the address can read them — a regular schedule could show when your church meets.
+            </div>
+          ) : null}
           {verseOn ? <div className="set-desc" style={{ color: 'var(--ink-2)', marginTop: 8 }}>A prompt sent by another steward reaches home screens the next time the church{'\u2019'}s own console (this one) is open.</div> : null}
         </React.Fragment>
       ) : null}

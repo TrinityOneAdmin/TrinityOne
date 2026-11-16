@@ -2371,6 +2371,20 @@ function trinityHomeWidget() {
   const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
   return P || null;
 }
+// Per-session memory of the last verse-prompt probe, per church: { key, at } (audit F6 — probe at most hourly).
+const homeWidgetProbed = {};
+// Make the stored switch agree with the native provider's real state (audit F4). Shared by Today and the Settings
+// switch (app/identity.jsx HomeWidgetToggle). `set` receives the native answer.
+function homeWidgetReconcile(W, set) {
+  if (!W || !W.status) return;
+  try {
+    Promise.resolve(W.status()).then(st => {
+      if (!st || typeof st.enabled !== 'boolean') return;
+      try { localStorage.setItem('trinityone.widget', st.enabled ? '1' : '0'); } catch (e) {}
+      set(st.enabled);
+    }).catch(() => {});
+  } catch (e) {}
+}
 function homeWidgetIsOn() { try { return localStorage.getItem('trinityone.widget') === '1'; } catch (e) { return false; } }
 
 function TodayScreen({ ctx }) {
@@ -2379,6 +2393,9 @@ function TodayScreen({ ctx }) {
   // The home-screen widget switch (Settings → HomeWidgetToggle) — re-read when it flips.
   const [widgetOn, setWidgetOn] = React.useState(homeWidgetIsOn);
   React.useEffect(() => { const h = () => setWidgetOn(homeWidgetIsOn()); window.addEventListener('trinity-widget-changed', h); return () => window.removeEventListener('trinity-widget-changed', h); }, []);
+  // THE NATIVE SIDE IS THE TRUTH about whether the widget is on (audit F4): the stored flag can be lost (a restore)
+  // while the provider is still enabled, and then the widget would sit on a frozen table. Ask once on mount.
+  React.useEffect(() => { homeWidgetReconcile(trinityHomeWidget(), setWidgetOn); }, []);
   // U6: the pinned-sermon card can be dismissed (per sermon id, persisted) and stops saying "New" once it ages,
   // so it doesn't hold the prime Today slot forever. A newly-pinned sermon (different id) reappears.
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
@@ -2597,11 +2614,17 @@ function TodayScreen({ ctx }) {
   const widgetLocked = !!ctx.commLocked;
   const widgetHasPin = !!ctx.hasCommunityPin;
   const vpRefsKey = versePrompt ? [versePrompt.ref || ''].concat((versePrompt.schedule || []).map(s => (s && s.ref) || '')).join('|') : '';
+  // RELAY ADMISSION OFTEN FINISHES AFTER TODAY HAS DRAWN (audit F6/F7): re-run when the admitted set changes, so the
+  // widget is configured once a relay is proved, and its addresses are REWRITTEN when one is added or refused.
+  const [relaysTick, setRelaysTick] = React.useState(0);
+  React.useEffect(() => { const h = () => setRelaysTick(n => n + 1); window.addEventListener('trinity-relays-verified', h); return () => window.removeEventListener('trinity-relays-verified', h); }, []);
   React.useEffect(() => {
     const W = trinityHomeWidget();
     if (!W || !W.publishPrompt || !W.clearPrompt) return;
     let cancelled = false;
-    const clear = () => { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} };
+    // A clear forgets the probe throttle too, so turning the widget back on (or unlocking) probes again at once —
+    // except the "not shared anywhere" answer below, which keeps it (no reason to ask again within the hour).
+    const clear = (keepThrottle) => { if (!keepThrottle) delete homeWidgetProbed[widgetChurch]; try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} };
     if (!widgetOn || !widgetChurch || widgetLocked || !resourcesOn) { clear(); return; }
     (async () => {
       const F = window.Fellowship;
@@ -2614,15 +2637,28 @@ function TodayScreen({ ctx }) {
         try { until = Number(await window.TrinityIdentity.rememberedUntil()) || 0; } catch (e) { until = 0; }
         if (until <= nowS) { if (!cancelled) clear(); return; }
       }
-      let cached = null;
+      // SMALL PIPES (audit F6): the same church, addresses and prompt are probed at most once an hour per session.
+      const probeKey = where.npub + '|' + bases.join(',') + '|' + vpRefsKey;
+      const last = homeWidgetProbed[widgetChurch];
+      if (last && last.key === probeKey && nowS - last.at < 3600) return;
+      let cached = null, saw404 = false, sawFail = false;
       for (const b of bases) {
         try {
-          const r = await fetch(b + '/public/' + where.npub + '/verse-prompt.json', { cache: 'no-store' });
+          // redirect:'error' — the widget's own fetch never follows one either (audit F5); and the answer must come
+          // from the address asked, not somewhere it was sent on to.
+          const r = await fetch(b + '/public/' + where.npub + '/verse-prompt.json', { cache: 'no-store', redirect: 'error' });
+          if (r && r.url && !String(r.url).startsWith(b + '/')) { sawFail = true; continue; }
           if (r && r.status === 200) { const j = await r.json(); if (j && typeof j === 'object' && (!cached || (Number(j.ts) || 0) > (Number(cached.ts) || 0))) cached = j; }
-        } catch (e) {}
+          else if (r && r.status === 404) saw404 = true;
+          else sawFail = true;
+        } catch (e) { sawFail = true; }
       }
       if (cancelled) return;
-      if (!cached) { clear(); return; }
+      homeWidgetProbed[widgetChurch] = { key: probeKey, at: nowS };
+      // No copy anywhere: a 404 from EVERY base means "not shared" -> clear. A 404 beside a base that could not be
+      // reached is not proof (audit F8: an old relay 404s while the church's own box is briefly offline) -> leave
+      // what is there; its validUntil still bounds it.
+      if (!cached) { if (saw404 && !sawFail) clear(true); else delete homeWidgetProbed[widgetChurch]; return; }
       // The member's own translation for every passage the copy names, so the widget can show the words, not just
       // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
       const texts = {};
@@ -2631,7 +2667,7 @@ function TodayScreen({ ctx }) {
       try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(() => {}); } catch (e) {}
     })();
     return () => { cancelled = true; };
-  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded]);   // eslint-disable-line
+  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, relaysTick]);   // eslint-disable-line
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;
