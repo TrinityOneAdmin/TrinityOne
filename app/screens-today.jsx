@@ -2331,9 +2331,54 @@ function votdQuoteMarks(text) {
   const t = String(text || '').trim();
   return { open: /^[“‘"]/.test(t) ? '' : '“', close: /[”’"]$/.test(t) ? '' : '”' };
 }
+// ── VERSE OF THE DAY: THE PICK, AS FUNCTIONS — shared by the card and the home-screen widget's table ─────────
+// reference/PLAN-phone-widget-2026-11-16.html §4.
+//
+// ⚠ KNOWN FINDING, DELIBERATELY UNCHANGED HERE (plan §4, owner to decide): the day-of-year below measures from
+// local midnight on 31 Dec in WINTER time, so during summer time the hour 00:00-00:59 still returns the
+// PREVIOUS day (measured under TZ=Europe/London: 2026-07-01 00:30 -> doy 181, not 182). This is the card's
+// formula exactly as it was; the widget table avoids it by evaluating every day at local NOON.
+function votdDayPick(pool, date) {
+  const doy = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 864e5);
+  return pool[doy % pool.length];
+}
+// The pick in the member's active translation when that translation has the verse, else the pool's WEB text.
+function votdInTranslation(pick, Bible) {
+  let out = { ref: pick.ref, text: pick.text, version: 'WEB' };
+  const loc = Bible && Bible.parseRef ? Bible.parseRef(pick.ref) : null;
+  if (loc && Bible.loaded && Bible.books().includes(loc.book)) {
+    const row = Bible.getVerses(loc.book, loc.chap).find(v => String(v.v) === String(loc.verse));
+    if (row) out = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
+  }
+  return out;
+}
+function votdLocalISO(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+// The widget's table: { 'YYYY-MM-DD': { ref, text, version } } for `days` local days from `from`. Each day is
+// evaluated at LOCAL NOON through the card's own votdDayPick, so the widget shows what the card shows (see the
+// finding above). `todayPick` (an "Another verse" pick, or null) replaces TODAY only — tomorrow on is the rule.
+function votdWidgetDays(pool, Bible, from, days, todayPick) {
+  const out = {};
+  for (let i = 0; i < days; i++) {
+    const d = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i, 12, 0, 0);
+    out[votdLocalISO(d)] = votdInTranslation(i === 0 && todayPick ? todayPick : votdDayPick(pool, d), Bible);
+  }
+  return out;
+}
+// The native widget plugin (native/trinity-widget), or null on the web / iOS / an APK without it.
+function trinityHomeWidget() {
+  const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
+  return P || null;
+}
+function homeWidgetIsOn() { try { return localStorage.getItem('trinityone.widget') === '1'; } catch (e) { return false; } }
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
+  // The home-screen widget switch (Settings → HomeWidgetToggle) — re-read when it flips.
+  const [widgetOn, setWidgetOn] = React.useState(homeWidgetIsOn);
+  React.useEffect(() => { const h = () => setWidgetOn(homeWidgetIsOn()); window.addEventListener('trinity-widget-changed', h); return () => window.removeEventListener('trinity-widget-changed', h); }, []);
   // U6: the pinned-sermon card can be dismissed (per sermon id, persisted) and stops saying "New" once it ages,
   // so it doesn't hold the prime Today slot forever. A newly-pinned sermon (different id) reappears.
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
@@ -2385,9 +2430,10 @@ function TodayScreen({ ctx }) {
     setStreak(count);
   }, []);
 
-  // verse of the day — rotate by day-of-year; render from the active translation when possible
-  const doy = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
-  const dayPick = D.VOTD_POOL[doy % D.VOTD_POOL.length];
+  // verse of the day — rotate by day-of-year; render from the active translation when possible.
+  // votdDayPick / votdInTranslation (above TodayScreen) are ALSO what builds the home-screen widget's table, so
+  // the card and the widget cannot disagree.
+  const dayPick = votdDayPick(D.VOTD_POOL, now);
   // "ANOTHER VERSE" (owner 2026-11-13): a tap swaps in a random pool verse, kept on THIS phone for the rest of
   // the day under trinityone.votd-pick = { day, ref }. The REF is stored, not an index, so a later edit of the
   // pool cannot shift a pick onto a different verse. It is trusted only when it is an object, its day is today
@@ -2414,12 +2460,17 @@ function TodayScreen({ ctx }) {
     setVotdPick(val);
     try { lsSet('trinityone.votd-pick', val); } catch (err) {}
   };
-  let votd = { ref: pick.ref, text: pick.text, version: 'WEB' };
-  const vloc = Bible.parseRef(pick.ref);
-  if (vloc && Bible.loaded && Bible.books().includes(vloc.book)) {
-    const row = Bible.getVerses(vloc.book, vloc.chap).find(v => String(v.v) === String(vloc.verse));
-    if (row) votd = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
-  }
+  const votd = votdInTranslation(pick, Bible);
+  // THE HOME-SCREEN WIDGET'S TABLE (reference/PLAN-phone-widget-2026-11-16.html §4). Only when the member has
+  // switched the widget on in Settings (trinityone.widget = '1', HomeWidgetToggle in app/identity.jsx) and only
+  // on the APK (the plugin is absent on the web and on iOS). Rewritten whenever what the card shows could have
+  // changed: a new day, an "Another verse" pick (today's entry must match the card), a translation change.
+  React.useEffect(() => {
+    if (!widgetOn) return;
+    const W = trinityHomeWidget();
+    if (!W || !W.publishVotd) return;
+    try { Promise.resolve(W.publishVotd({ days: votdWidgetDays(D.VOTD_POOL, Bible, now, 60, pickedVerse) })).catch(() => {}); } catch (e) {}
+  }, [widgetOn, votdToday, votd.ref, votd.text, votd.version]);   // eslint-disable-line
   const votdQ = votdQuoteMarks(votd.text);
   // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) paints the verse-of-the-day and featured-sermon cards. Unset,
   // each card keeps its exact clay gradient and white ink.

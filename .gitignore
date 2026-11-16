@@ -7,6 +7,11 @@ www/
 # android/ + ios/ native projects — regenerate with `npx cap add android` / `npx cap add ios`
 android/
 ios/
+# …EXCEPT the home-screen widget's native sources, which are a tracked local Capacitor plugin pulled into the
+# generated android/ project by `npx cap sync` (reference/PLAN-phone-widget-2026-11-16.html). Its Gradle
+# output stays ignored.
+!/native/trinity-widget/android/
+/native/trinity-widget/android/build/
 *.apk
 dist/
 *.log

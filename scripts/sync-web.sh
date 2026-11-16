@@ -91,6 +91,15 @@ echo "www/ populated:"; du -sh "$WWW"
 
 # if the native project exists, copy assets in
 if [ -d "$ROOT/android" ]; then
+  # THE HOME-SCREEN WIDGET is a LOCAL Capacitor plugin tracked in git (native/trinity-widget), declared in
+  # package.json as "file:native/trinity-widget". `npm install`/`npm ci` links it into node_modules; a tree
+  # whose node_modules predates that (this box's main tree until its next npm install, a worktree made with
+  # `cp -al`) has no link, and `cap sync` would then FAIL ("Unable to find node_modules/@trinityone/widget").
+  # Make the same relative link npm makes — never an absolute path (see CLAUDE.md on symlinked node_modules).
+  if [ -d "$ROOT/native/trinity-widget" ] && [ ! -e "$ROOT/node_modules/@trinityone/widget" ]; then
+    mkdir -p "$ROOT/node_modules/@trinityone"
+    ln -s ../../native/trinity-widget "$ROOT/node_modules/@trinityone/widget"
+  fi
   npx cap sync android
   # WebView debugging is now controlled by the Gradle BUILD VARIANT, not by the Capacitor config.
   # MainActivity overrides setWebContentsDebuggingEnabled() at runtime using BuildConfig.WEB_DEBUG:

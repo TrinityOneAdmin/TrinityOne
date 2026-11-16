@@ -1,0 +1,11 @@
+{
+  "name": "@trinityone/widget",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TrinityOne home-screen widget (Android). Local Capacitor plugin: tracked in git, pulled into the gitignored android/ project by `npx cap sync android` (scripts/sync-web.sh). See reference/PLAN-phone-widget-2026-11-16.html.",
+  "license": "UNLICENSED",
+  "files": ["android/src/main/", "android/build.gradle"],
+  "capacitor": {
+    "android": { "src": "android" }
+  }
+}

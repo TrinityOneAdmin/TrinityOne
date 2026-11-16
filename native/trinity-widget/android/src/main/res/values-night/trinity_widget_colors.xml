@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="trinity_widget_bg">#241C14</color>
+    <color name="trinity_widget_ink">#F3EADF</color>
+    <color name="trinity_widget_ink2">#BFAF9C</color>
+    <color name="trinity_widget_accent">#E0946A</color>
+</resources>

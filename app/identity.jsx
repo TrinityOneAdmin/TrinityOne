@@ -1513,6 +1513,41 @@ function VotdToggle() {
   );
 }
 
+// HOME-SCREEN WIDGET (reference/PLAN-phone-widget-2026-11-16.html). OPT-IN: off until the member turns it on,
+// and until then the widget is not even in the phone's widget list (the native provider ships disabled). A
+// verse on the home screen is visible to anyone who sees the phone, which is not something every member wants
+// (DOMAIN.md: persecuted-church first) — so this says so, plainly, and never nags. Shown only where the native
+// plugin exists (the member APK); absent on the web and on iOS, where there is no widget yet.
+function HomeWidgetToggle() {
+  const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
+  const [on, setOn] = React.useState(() => { try { return localStorage.getItem('trinityone.widget') === '1'; } catch { return false; } });
+  if (!W) return null;
+  const flip = () => {
+    const nv = !on;
+    setOn(nv);
+    try { localStorage.setItem('trinityone.widget', nv ? '1' : '0'); } catch {}
+    try {
+      Promise.resolve(W.setEnabled({ on: nv })).then(() => {
+        // Today republishes the verse table on this event; when switching on, also ask the launcher to place it.
+        try { window.dispatchEvent(new CustomEvent('trinity-widget-changed', { detail: nv })); } catch {}
+        if (nv && W.requestPin) Promise.resolve(W.requestPin()).catch(() => {});
+      }).catch(() => {});
+    } catch {}
+  };
+  return (
+    <div onClick={flip} style={{ cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--clay-soft)', color: 'var(--clay)' }}>
+        <Icon name="sparkle" size={19} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>Home-screen widget</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 1 }}>{on ? 'Today’s verse on your home screen — anyone who sees your phone can see it' : 'Off — nothing from TrinityOne on your home screen'}</div>
+      </div>
+      <button onClick={(e) => { e.stopPropagation(); flip(); }} role="switch" aria-checked={on} aria-label={'Home-screen widget' + (on ? ' (on)' : ' (off)')} style={{ flexShrink: 0, width: 46, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', padding: 3, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+        <div style={{ width: 22, height: 22, borderRadius: 999, background: '#fff', boxShadow: 'var(--shadow)', transform: on ? 'translateX(18px)' : 'translateX(0)', transition: 'transform .15s' }} /></button>
+    </div>
+  );
+}
+
 function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const D = window.TrinityData;
   const [edit, setEdit] = useId(false);
@@ -1752,6 +1787,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <Row icon="bell" label="Notifications" sub="Choose what you're alerted about" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openNotifSettings(); }} />
           <Row icon="bolt" label="Currency" sub={(() => { const c = window.TrinityLN && window.TrinityLN.currency && window.TrinityLN.currency(); return c ? `Show giving amounts in ${c.label} (${c.symbol})` : 'Currency for giving amounts'; })()} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openCurrency(); }} />
           <VotdToggle />
+          <HomeWidgetToggle />
         </Group>
 
         {/* share the app — pass it on hand to hand (Quick Share / Bluetooth), no internet needed.
