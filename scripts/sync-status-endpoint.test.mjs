@@ -145,7 +145,7 @@ test('5 CLOCK vs TRUST: a refusal whose 401 body names the time window records "
 });
 
 // ---- the two bookkeeping claims the commit made: the reset rule, and pruning to CHURCH_PUBS ----------------------
-test('6 RESET RULE: any pass that is not refused drops refusedPasses to 0 (an unreached pass in between breaks "in a row")', async () => {
+test('6 COUNT RULE: unreached neither adds nor resets; refused, unreached, refused is two in a row; a reached pass resets', async () => {
   const R = H.key();
   const s2 = await H.startRelay({ name: 'rS', churches: [R.pub] });
   const p2 = await H.startRelay({ name: 'rP', churches: [R.pub] });
@@ -157,10 +157,15 @@ test('6 RESET RULE: any pass that is not refused drops refusedPasses to 0 (an un
   let c = await get(); assert.equal(c.state, 'refused'); assert.equal(c.refusedPasses, 1);
   await H.publishAll(s2, [H.relaysDoc(R, [s2, dead], t++)]);   // the only partner is now unreachable
   await H.syncNow(s2).catch(() => {});
-  c = await get(); assert.equal(c.state, 'unreached'); assert.equal(c.refusedPasses, 0, 'a non-refused pass resets the count');
+  c = await get(); assert.equal(c.state, 'unreached'); assert.equal(c.refusedPasses, 1, 'an unreached pass learned nothing: it must not reset the count');
   await H.publishAll(s2, [H.relaysDoc(R, [s2, p2], t++)]);     // back to a partner that refuses
   await H.syncNow(s2).catch(() => {});
-  c = await get(); assert.equal(c.state, 'refused'); assert.equal(c.refusedPasses, 1, 'refused, unreached, refused is NOT two in a row');
+  c = await get(); assert.equal(c.state, 'refused'); assert.equal(c.refusedPasses, 2, 'refused, unreached, refused is two refusals');
+  const row = (await liftSteward({ sk: R.sk, pub: R.pub, relays: () => [s2.wsUrl], fetch }).Steward.relaySyncStates())[0];
+  assert.equal(row.state, 'attention', 'two refusals with an unreached pass between still turn the row red');
+  await H.publishAll(p2, [H.relaysDoc(R, [s2, p2], t++)]);     // the church re-saves its list: p2 now trusts s2
+  await H.syncNow(s2).catch(() => {});
+  c = await get(); assert.equal(c.state, 'reached'); assert.equal(c.refusedPasses, 0, 'a reached pass resets the count');
 });
 
 test('7 PRUNING: a church removed from CHURCH_PUBS loses its per-church record at the next pass; re-added it starts clean', async () => {

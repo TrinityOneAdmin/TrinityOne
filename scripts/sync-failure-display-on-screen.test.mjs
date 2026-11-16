@@ -145,7 +145,7 @@ test('a church refused two passes in a row shows "Needs attention" on its row, w
   const d = textOf(detail(c.tree, 'attention'));
   assert.match(d, /Another of your relays is turning this one away\./);
   assert.match(d, /Your messages are safe on every relay that’s answering\./);
-  assert.match(d, /when all your relays show Answering, open Settings → Relays → Keep relays in sync and save it again\./);
+  assert.match(d, /when all your relays show Answering, open Settings → Infrastructure → Move or copy history and, under “Keep your relays in sync”, press Re-sync now\./);
   assert.doesNotMatch(d, /ask the person who holds the church key/, 'the owner\'s console is not told to ask somebody else');
   assert.match(d, /This row updates after the next copy round\./);
   assert.doesNotMatch(d, /few minutes|fixes itself|add a relay|remove|edit/i, 'no promise of a time, and never an add/remove/edit cure for a refusal');
@@ -162,7 +162,7 @@ test('the request really was signed for the ACTIVE church and bound to its URL (
 test('a helper\'s console is told to ask the church-key holder, not to do it itself', async () => {
   const c = await card({ delegated: true, blocks: { [boxOf(X)]: block({ state: 'refused', reason: 'trust', refusedPasses: 2 }) }, relays: [X] });
   const d = textOf(detail(c.tree, 'attention'));
-  assert.match(d, /ask the person who holds the church key to open Settings → Relays → Keep relays in sync and save it again\./);
+  assert.match(d, /ask the person who holds the church key to open Settings → Infrastructure → Move or copy history and press Re-sync now under “Keep your relays in sync”\./);
   assert.doesNotMatch(d, /when all your relays show Answering/);
 });
 
@@ -254,6 +254,7 @@ test('"Not syncing" links to the existing Add a relay page and to nothing else',
   assert.equal(links.length, 1, 'the add-a-relay advice is said ONCE, not under the row and again in the Settings detail');
   opened = null; links[0].props.onClick(); assert.equal(opened, 'add-relay', 'it must open the existing Add a relay page and nothing else');
   assert.equal(find(c.tree, n => n && n.props && n.props['data-sync-detail'] === 'island').length, 1, 'one explanation in the whole card');
+  assert.match(textOf(detail(c.tree, 'island')), /then switch on “Keep your relays in sync” \(Settings → Infrastructure → Move or copy history\)\./);
 });
 
 test('two Not-syncing relays still say the add-a-relay advice only once', async () => {

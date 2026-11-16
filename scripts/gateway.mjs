@@ -9815,14 +9815,15 @@ function _syncPeerBases(cp, selfHosts) {
   return out;
 }
 // Close one church's pass: refused if ANY request for it got a 401; reached if a peer answered the cursor pull and none refused;
-// otherwise unreached. refusedPasses counts CONSECUTIVE refused passes and drops to 0 on any pass that was not refused
+// otherwise unreached. refusedPasses counts refused passes in a row: an UNREACHED pass (the partner could not be asked, so
+// nothing was learned) neither adds to it nor resets it (owner, 2026-11-16); a reached pass, or no partner, resets it to 0
 // (counted in passes, never minutes). The console shows red only from 2.
 function _finishChurchPass(cp, npeers) {
   const p = _churchPass.get(cp) || { refused: false, reason: '', reached: false };
   const prev = _churchSync.get(cp) || { refusedPasses: 0, lastReachedAt: 0 };
   const at = Math.floor(Date.now() / 1000);
   const state = !npeers ? 'none' : p.refused ? 'refused' : p.reached ? 'reached' : 'unreached';
-  _churchSync.set(cp, { state, reason: state === 'refused' ? (p.reason || 'trust') : '', at, lastReachedAt: state === 'reached' ? at : (prev.lastReachedAt || 0), running: false, refusedPasses: state === 'refused' ? (prev.refusedPasses || 0) + 1 : 0 });
+  _churchSync.set(cp, { state, reason: state === 'refused' ? (p.reason || 'trust') : '', at, lastReachedAt: state === 'reached' ? at : (prev.lastReachedAt || 0), running: false, refusedPasses: state === 'refused' ? (prev.refusedPasses || 0) + 1 : state === 'unreached' ? (prev.refusedPasses || 0) : 0 });
   _churchPass.delete(cp);
 }
 async function syncAllChurches() {
