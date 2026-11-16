@@ -2363,6 +2363,13 @@ function StewDashboard({ initial = 'overview' }) {
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action on that page (e.g. open the Set-PIN dialog)
   const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
+  // DEEP-LINK A RESOURCES VIEW, the same one-shot shape as openSettings. The Overview's "Verse prompt is live"
+  // card asks for 'verse'; a plain visit to Resources passes nothing and still opens on Reading plans.
+  const [resourcesView, setResourcesView] = React.useState(null);
+  const openResources = (view = null) => { setResourcesView(view); setTab('resources'); };
+  // A request that was never consumed (Resources padlocked, or snapped back to Overview) must not ambush the
+  // next plain visit to Resources, so it is dropped as soon as the console is on any other tab.
+  React.useEffect(() => { if (tab !== 'resources' && resourcesView) setResourcesView(null); }, [tab]);
   // PICKING "SETTINGS" WHILE ALREADY IN SETTINGS GOES BACK TO ITS INDEX. On a phone the list and a page are
   // never on screen together, and picking the section again from ☰ (or the avatar) is how a steward asks for
   // the list — it used to do nothing, because setTab('settings') on 'settings' is a no-op to React, so the
@@ -2561,13 +2568,13 @@ function StewDashboard({ initial = 'overview' }) {
     <React.Fragment>
       <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
-      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onNewPost={() => setPosting(true)} />}
+      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
       {tab === 'rota' && (stewCapState('content').allowed ? <DashRota onNewTeam={() => setAddingTeam(true)} /> : <StewCapBlocked cap='content' />)}
       {tab === 'calendar' && (stewCapState('content').allowed ? <DashCalendar /> : <StewCapBlocked cap='content' />)}
       {tab === 'rooms' && (stewCapState('content').allowed ? <DashRooms /> : <StewCapBlocked cap='content' />)}
-      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources /> : <StewCapBlocked cap='content' />)}
+      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources initialView={resourcesView} onViewConsumed={() => setResourcesView(null)} /> : <StewCapBlocked cap='content' />)}
       {tab === 'members' && (stewCapState('members').allowed ? <DashMembers dmConvos={dmConvos} /> : <StewCapBlocked cap='members' />)}
       {tab === 'checkin' && (stewCapState('safeguarding').allowed ? <DashCheckin /> : <StewCapBlocked cap='safeguarding' />)}
       {tab === 'finance' && <DashFinance />}
@@ -3753,7 +3760,7 @@ function groupLiveSub(g, memberCount, rosters) {
   if (g.visibility === 'invite') return n(Array.isArray(g.members) ? g.members.length : 0) + ' · invite-only';
   return n(memberCount || 0);   // open group: every church member can join
 }
-function DashOverview({ onTab, onNewPost, onSettings }) {
+function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
   const goSettings = onSettings || ((s) => onTab('settings'));   // deep-links a settings PAGE when available (SETTINGS_GROUPS)
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
@@ -3949,7 +3956,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   var _ovHasSchedule = _ovVp && Array.isArray(_ovVp.schedule) && _ovVp.schedule.length > 0;
   var _ovAllFuture = _ovHasSchedule && _ovVp.schedule.every(function(s) { return s.at > Math.floor(Date.now() / 1000); });
   var verseBanner = (_ovVp && _ovVp.ref) ? (
-    <button onClick={function() { onTab('resources'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+    <button onClick={function() { onResources('verse'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: _ovAllFuture ? 'var(--clay)' : 'var(--sage)', color: _ovAllFuture ? 'var(--on-clay)' : 'var(--on-sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={_ovAllFuture ? 'clock' : 'book'} size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: _ovAllFuture ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{_ovAllFuture ? 'Verse prompt scheduled' : 'Verse prompt is live'}</div>
@@ -7691,8 +7698,11 @@ function BulkUploadModal({ kind, onClose }) {
   );
 }
 
-function DashResources() {
-  const [view, setView] = React.useState('plans');   // plans | devotionals
+const RESOURCES_VIEWS = ['plans', 'devotionals', 'media', 'verse'];
+function DashResources({ initialView, onViewConsumed } = {}) {
+  // initialView is a one-shot deep link (StewDashboard.openResources); anything unknown falls back to Reading plans.
+  const [view, setView] = React.useState(RESOURCES_VIEWS.includes(initialView) ? initialView : 'plans');   // plans | devotionals | media | verse
+  React.useEffect(() => { if (initialView && onViewConsumed) onViewConsumed(); }, []);   // clear the one-shot request, as DashSettings does
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
   const TAB_TIPS = { plans: 'Reading plans members can follow day by day', devotionals: 'Short devotionals you schedule for members to read', media: 'Sermon recordings and notes for members', verse: 'Set the verse members are prompted with' };
