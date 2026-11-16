@@ -326,7 +326,17 @@ function ChatScreen({ ctx }) {
   const [activity, setActivity] = useC({});   // gid -> { text, ts }
   const [unread, setUnread] = useC({});        // gid -> count
   const [q, setQ] = useC('');                  // chat search query
-  const [searchOpen, setSearchOpen] = useC(false);   // search bar is hidden until the ⌕ in the header is tapped
+  const [searchOpen, setSearchOpen] = useC(false);   // search bar is hidden until Search is picked from the header's chevron menu
+  // THE HEADER CHEVRON (owner decisions 2026-11-16): Messages (with its unread dot) stays in the bar; Search and
+  // Profile fold behind ONE chevron, the same hook and parts as the Today header (app/header-more.jsx).
+  const hm = useHeaderMore();
+  // The Search item only ever OPENS the bar and never clears the query (the bar's own X closes it). The input's
+  // autoFocus fires on mount only, so when the bar is ALREADY open focus has to be moved explicitly.
+  const [searchFocusTick, setSearchFocusTick] = useC(0);
+  useCE(() => {
+    if (!searchFocusTick) return;
+    try { const el = document.querySelector('[data-chat-search-input]'); if (el && el.focus) el.focus(); } catch (e) {}
+  }, [searchFocusTick]);
   const [realGroups, setRealGroups] = useC([]); // the active church's REAL groups (steward console)
   const [cats, setCats] = useC([]);             // the church's group categories (named containers)
   const [collapsed, setCollapsed] = useC({});   // folded group categories — the member can collapse sections
@@ -501,36 +511,59 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 5px)">
-      {/* TOP BAR. A church with a brand BANNER keeps the full-bleed 3:1 image, with the three icons in their own right-aligned
-          row beneath it (the image cannot sit inline). A church WITHOUT one gets ONE row: the church selector takes the
-          remaining width and ellipsises its name, the three icons keep their size on the right. */}
+      {/* TOP BAR. A church with a brand BANNER keeps the full-bleed 3:1 image (capped at 150px tall on a wide screen), with
+          Messages + the chevron floating over it. A church WITHOUT one gets ONE row: the church selector takes the
+          remaining width and ellipsises its name on ONE line, Messages + the chevron keep their size on the right. */}
       {(() => {
+        // MESSAGES stays visible (it is the one control here that carries an alert, so it plays the bell's part on Today);
+        // its dot is a bare span, so the button's NAME says "unread" for a screen reader. 44px, same as the chevron.
         const topIcons = (
         <div data-top-icons="1" style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
-          <IconBtn name="search" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
           <span style={{ position: 'relative', display: 'inline-flex' }}>
-            <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
-            {ctx.dmUnread ? <span style={{ position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)', pointerEvents: 'none' }} /> : null}
+            <IconBtn name="send" onClick={() => ctx.openDMInbox()} title={ctx.dmUnread ? 'Direct messages, unread' : 'Direct messages'} style={{ width: 44, minWidth: 44, height: 44 }} />
+            {ctx.dmUnread ? <span style={{ position: 'absolute', top: 5, right: 5, width: 10, height: 10, borderRadius: 999, background: 'var(--clay)', border: '2px solid var(--surface)', pointerEvents: 'none' }} /> : null}
           </span>
-          <button onClick={() => ctx.openProfile()} title="Your anonymous identity" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 999, lineHeight: 0, position: 'relative' }}>
-            <UserAvatar av={myAvatar(id)} name={myName(id)} size={38} />
-            <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
-          </button>
+          <HeaderMoreChevron hm={hm} />
         </div>
         );
+        const menuItems = [
+          // OPEN-ONLY: the old header handler toggled and cleared the query, which would silently erase what a person typed.
+          { id: 'search', label: 'Search', icon: 'search', onPick: () => { setSearchOpen(true); setSearchFocusTick(t => t + 1); } },
+          // visible word + an accessible name; the avatar keeps the identity cue the folded button used to show
+          { id: 'profile', label: 'Profile', ariaLabel: 'Profile', title: 'Your anonymous identity', onPick: () => ctx.openProfile(),
+            iconNode: <span style={{ position: 'relative', lineHeight: 0 }}><UserAvatar av={myAvatar(id)} name={myName(id)} size={28} /></span> },
+        ];
         const topMb = (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20);
         const hasBanner = !!(ctx.church && ctx.church.banner);
         return hasBanner ? (
-          <div data-top-bar="banner" style={{ position: 'relative', marginBottom: topMb, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
-            <ChurchPill ctx={ctx} />
-            {/* the three icons FLOAT OVER the banner, in line with the church name at its top (ChurchPill reserves their width) */}
+          <div data-top-bar="banner" style={{ position: 'relative', marginBottom: topMb, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both',
+            // WHILE THE MENU IS OPEN the banner block is raised above the cards below it. This block's fade-in `animation`
+            // makes it a stacking context, so the menu's own zIndex is trapped INSIDE it and a later sibling card paints
+            // over the menu's lower edge (at a 59px notch inset, over the centres of Search and Profile: a tap opened
+            // "What's happening"). 7 is above anything the list draws.
+            zIndex: hm.open ? 7 : undefined }}>
+            {/* 121 = 14 edge + Messages 44 + 9 gap + chevron 44 + 10 air (the ChurchPill default 156 stays for any other caller) */}
+            <ChurchPill ctx={ctx} reserveRight={121} />
+            {/* DMs + the chevron FLOAT OVER the banner, in line with the church name at its top (ChurchPill reserves their width) */}
             <div data-top-icons-float="1" style={{ position: 'absolute', right: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>{topIcons}</div>
+            {/* BANNER MODE: the menu opens DIRECTLY under the chevron, over the banner, on a solid surface (not under the
+                image, up to 150px away from the thumb). It overlays; it does not push the cards down. */}
+            {hm.open ? (
+              <div data-top-menu-float="1" style={{ position: 'absolute', right: 14, width: 'calc(100% - 28px)', maxWidth: 360, zIndex: 6,
+                top: 'calc(env(safe-area-inset-top, 0px) + 8px + 44px + 8px)' }}>
+                <HeaderMorePanel hm={hm} items={menuItems} style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, padding: 8, boxShadow: 'var(--shadow)' }} />
+              </div>
+            ) : null}
           </div>
         ) : (
-          <div data-top-bar="one-row" style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: topMb, animation: 'trinityFade .5s ease both' }}>
-            <div style={{ flex: 1, minWidth: 0 }}><ChurchPill ctx={ctx} /></div>
-            {topIcons}
-          </div>
+          <React.Fragment>
+            <div data-top-bar="one-row" style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: hm.open ? 10 : topMb, animation: 'trinityFade .5s ease both' }}>
+              <div style={{ flex: 1, minWidth: 0 }}><ChurchPill ctx={ctx} /></div>
+              {topIcons}
+            </div>
+            {/* NO BANNER: the menu is a full-width row in the flow, under the bar */}
+            <HeaderMorePanel hm={hm} items={menuItems} style={{ marginBottom: topMb }} />
+          </React.Fragment>
         );
       })()}
       {(ctx.requireFullName && !(ctx.joinState && ctx.joinState.isPending) && (myName(id) || '').trim().split(/\s+/).filter(Boolean).length < 2) ? (
@@ -649,7 +682,7 @@ function ChatScreen({ ctx }) {
       {searchOpen ? (
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 46, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 18, animation: 'trinityFade .25s ease both' }}>
         <Icon name="search" size={19} color="var(--ink-3)" />
-        <input value={q} onChange={e => setQ(e.target.value)} autoFocus placeholder="Search messages & groups…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+        <input value={q} onChange={e => setQ(e.target.value)} autoFocus data-chat-search-input="1" placeholder="Search messages & groups…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
         <button onClick={() => { setQ(''); setSearchOpen(false); }} title="Close search" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={17} /></button>
       </div>
       ) : null}
