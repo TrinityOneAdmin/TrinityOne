@@ -244,6 +244,24 @@ test('desktop 900x600: re-picking Settings while in Settings puts the console ba
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
+test('desktop 900x600: re-picking Settings from the SIDEBAR while in Settings puts the console back at its top (the owner\'s case)', SKIP, async () => {
+  // Owner, 2026-11-16: "scroll down a Settings page on desktop, click Settings in the sidebar again" — "yes,
+  // that's the case I wanted fixed". The sidebar row, not the avatar.
+  const s0 = await state();
+  assert.ok(s0.page, 're-anchor: not on a settings page before the re-pick: ' + JSON.stringify(s0));
+  await scrollMainTo('bottom');
+  await sleep(300);
+  const pre = await state();
+  assert.ok(pre.scrollTop > 0, 'precondition: <main> did not scroll: ' + JSON.stringify(pre));
+  const r = await evalIn(`(() => { const b = [...document.querySelectorAll('nav[aria-label="Console sections"] button')].filter(x => (x.textContent || '').trim() === 'Settings'); if (b.length !== 1) return 'found ' + b.length; b[0].click(); return 'ok'; })()`);
+  assert.equal(r, 'ok', 're-anchor: expected exactly one "Settings" row in the desktop sidebar: ' + r);
+  const after = await poll(v => !!v.page && v.scrollTop === 0, 4000);
+  assert.ok(after.page, 're-picking Settings from the sidebar opened no page: ' + JSON.stringify(after));
+  assert.ok(after.room >= pre.scrollTop, 'precondition: after the re-pick the console has ' + after.room + 'px of room, less than the ' + pre.scrollTop + 'px it was at, so a clamp alone would put it at 0');
+  assert.equal(after.scrollTop, 0, 're-picking Settings from the sidebar left the console scrolled ' + after.scrollTop + 'px down: ' + JSON.stringify(after));
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
 test('phone 360x730: a page tapped from a scrolled settings list opens at its top', SKIP, async () => {
   // THE DECISIVE CASE ONLY. A page shorter than the list's scroll position is clamped to 0 by the browser
   // whether or not the console resets it (measured: tapping the last row from the bottom of the list passed
