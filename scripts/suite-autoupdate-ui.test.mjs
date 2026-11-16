@@ -162,6 +162,33 @@ test('wiring is idempotent — a second wire keeps the single handler but re-ren
   assert.match(els.suiteAutoStatus.textContent, /rolled back/i, 'but the status re-renders from the fresh payload');
 });
 
+// [audit f4baad21] "skipped" is said ONLY when the shell really quarantined the release (state.json quarantined:true).
+// The four wordings of a clean rollback, on each side of "still running the downloaded last-good" / "on the installer code".
+const ROLLED = { enabled: false, autoOff: true, lastOutcome: 'rolledback', lastReason: 'the update did not answer in time', shippedVersion: 'aaaaaaa' };
+test('[audit f4baad21] rollback onto the INSTALLER code, release quarantined: says skipped, no close-and-reopen sentence (nothing to go back to)', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'shipped', quarantined: true });
+  assert.match(els.suiteAutoStatus.textContent, /\(the update did not answer in time\), so automatic updates were turned off and that release will be skipped\. Turn them on to try the next release\.$/);
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /close and reopen|running now/);
+});
+test('[audit f4baad21] rollback onto the INSTALLER code, NOT quarantined: says it will be tried again, never skipped', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'shipped', quarantined: false });
+  assert.match(els.suiteAutoStatus.textContent, /so automatic updates were turned off\. This release will be tried again if you turn updates back on\.$/);
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /skipped/i);
+});
+test('[audit f4baad21] rollback onto the downloaded last-good: both wordings, and a missing quarantined field is NOT "skipped"', () => {
+  let { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'update', runningVersion: 'bbbbbbb', quarantined: true });
+  assert.match(els.suiteAutoStatus.textContent, /that release will be skipped\. Turn them on to try the next release; that also brings back the update running now, at the next start\./);
+  ({ doc, els } = fakeDom());
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'update', runningVersion: 'bbbbbbb', quarantined: false });
+  assert.match(els.suiteAutoStatus.textContent, /If you turn updates back on, this release will be tried again and the update running now comes back at the next start\./);
+  ({ doc, els } = fakeDom());
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { ...ROLLED, running: 'update', runningVersion: 'bbbbbbb' });   // an older shell: no field
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /skipped/i);
+});
+
 test('[audit M5/M7] an update skipped because the data could not be backed up says so', () => {
   const { doc, els } = fakeDom();
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '03:00', windowEnd: '05:00', lastOutcome: 'not-applied',
@@ -173,7 +200,7 @@ test('[audit H3] switched off while running a downloaded update: says it goes ba
   const { doc, els } = fakeDom();
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, running: 'update', runningVersion: 'bbbbbbb', shippedVersion: 'aaaaaaa' });
   assert.match(els.suiteAutoStatus.textContent, /Running a downloaded update \(bbbbbbb\)/);
-  assert.match(els.suiteAutoStatus.textContent, /at the next start the Suite goes back to the version it came with \(aaaaaaa\)/);
+  assert.match(els.suiteAutoStatus.textContent, /Off: fully close and reopen the app and the Suite goes back to the version it came with \(aaaaaaa\)/);
 });
 
 test('[audit 6630e30d LOW 1] "Updated to X" is not claimed when the Suite is no longer running the update', () => {

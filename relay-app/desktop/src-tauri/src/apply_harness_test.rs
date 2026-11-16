@@ -495,6 +495,12 @@ fn end_to_end_apply_harness() {
     scenario_u_failed_unpack_is_tried_once_per_window();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (u)");
 
+    scenario_x_a_ban_that_could_not_be_written_is_not_called_a_ban();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (x)");
+
+    scenario_y_an_update_that_could_not_be_put_in_place_is_not_banned();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (y)");
+
     scenario_v_a_relay_that_cannot_be_started_is_not_a_bad_release();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (v)");
 
@@ -886,6 +892,24 @@ fn scenario_p_slow_but_progressing_start_is_kept() {
 
 // (q) [M4] An update whose relay stays alive but never listens and prints nothing: rolled back, but NOT
 //     quarantined (it may only have been slow on this computer), with the reason recorded.
+// The state.json a real rollback wrote, compared with the fixture scripts/fixtures/<name> that the Node chain test
+// (scripts/suite-autoupdate-rollback-chain.test.mjs) renders through the gateway and the panel. restoreFailed is
+// blanked first: this harness box has no store, so it always carries a machine-specific "could not put the data back"
+// path; a clean rollback writes "". A stale fixture FAILS here. Regenerate with TRIN_WRITE_FIXTURES=1.
+fn assert_state_matches_fixture(suite_dir: &Path, name: &str) {
+    let raw = std::fs::read_to_string(suite_dir.join("state.json")).unwrap();
+    let key = "\"restoreFailed\":\"";
+    let at = raw.find(key).expect("state.json has restoreFailed") + key.len();
+    let mut end = at;
+    let b = raw.as_bytes();
+    while b[end] != b'"' { if b[end] == b'\\' { end += 1; } end += 1; }
+    let clean = format!("{}{}", &raw[..at], &raw[end..]);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/fixtures").join(name);
+    if std::env::var("TRIN_WRITE_FIXTURES").map(|v| v == "1").unwrap_or(false) { std::fs::write(&path, &clean).unwrap(); }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(have, clean, "scripts/fixtures/{name} is stale: re-run with TRIN_WRITE_FIXTURES=1 and commit it");
+}
+
 fn scenario_q_silent_start_rolls_back_without_quarantine() {
     eprintln!("── scenario (q): a silent, never-listening start rolls back without a ban ──");
     let fx = fresh_box("q", "2026-01-01T00:00:00Z");
@@ -900,6 +924,9 @@ fn scenario_q_silent_start_rolls_back_without_quarantine() {
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
     assert_eq!(read_state_field(&fx.suite_dir, "lastReason").as_deref(), Some("the update did not answer in time"));
     assert!(!fx.suite_dir.join("quarantine-sha").exists(), "a merely slow/silent start must not be quarantined");
+    // the panel reads this: no quarantine-sha means state.json must say "quarantined":false (so it never says "skipped")
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":false"), "rollback without a ban must record quarantined:false");
+    assert_state_matches_fixture(&fx.suite_dir, "suite-rollback-state-not-quarantined.json");
     host.stop_relay();
     eprintln!("   (q) OK — rolled back, reason recorded, not quarantined");
 }
@@ -950,6 +977,49 @@ fn scenario_t_slow_or_contested_start_keeps_the_update() {
     host2.stop_relay();
     squatter.stop_relay();
     eprintln!("   (t) OK — silent start: fell back this run, kept; contested port: nothing concluded");
+}
+
+// (x) [audit 93619117 L2] A health failure that SHOULD be banned, where the skip list cannot be written (here a
+//     directory sits where the file goes): the rollback still happens, but state.json must say quarantined:false so
+//     the panel never claims "skipped" for a release that is not skipped.
+fn scenario_x_a_ban_that_could_not_be_written_is_not_called_a_ban() {
+    eprintln!("── scenario (x): quarantine-sha cannot be written → quarantined:false ──");
+    let fx = fresh_box("x", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    write(&fx.suite_dir.join("quarantine-sha").join("in-the-way"), "a directory where the skip list goes");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v1", Duration::from_secs(15)), "not back on v1");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert_eq!(read_state_field(&fx.suite_dir, "lastReason").as_deref(), Some("the update started but reported the wrong version"));
+    assert!(fx.suite_dir.join("quarantine-sha").is_dir(), "re-anchor: the skip list was written after all");
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":false"), "a ban that was not written must not be recorded as one");
+    host.stop_relay();
+    eprintln!("   (x) OK — rolled back, ban unwritable, recorded quarantined:false");
+}
+
+// (y) [audit 93619117 L1] The new code cannot be put in place (a non-empty directory sits where active.tgz goes): the
+//     apply rolls back WITHOUT a ban, so state.json says quarantined:false and no quarantine-sha is written.
+fn scenario_y_an_update_that_could_not_be_put_in_place_is_not_banned() {
+    eprintln!("── scenario (y): promote failure rolls back without a ban ──");
+    let fx = fresh_box("y", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    write(&fx.suite_dir.join("active.tgz").join("in-the-way"), "a directory where the tarball goes");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v1", Duration::from_secs(15)), "not back on v1");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert_eq!(read_state_field(&fx.suite_dir, "lastReason").as_deref(), Some("this computer could not put the update in place"));
+    assert!(!fx.suite_dir.join("quarantine-sha").exists(), "a swap failure must not ban the release");
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":false"), "a swap failure must record quarantined:false");
+    host.stop_relay();
+    eprintln!("   (y) OK — rolled back, no ban, quarantined:false");
 }
 
 // (u) [audit 6630e30d MEDIUM 1] An apply that aborts after stopping the relay (here: the unpack fails) must not
@@ -1025,7 +1095,7 @@ fn scenario_w_rollback_to_an_unusable_last_good_runs_the_shipped_code() {
     let clock = clock_at(IN_WINDOW);
     let env = env_for(&host, &fx, &log, &clock);
     let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
-    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, true, "");
+    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, true, "", false);
     assert_eq!(st.code_dir, fx.payload, "rolled back into an empty folder");
     assert!(wait_for_served("v1", Duration::from_secs(10)), "the relay was left down");
     host.stop_relay();
@@ -1323,7 +1393,7 @@ fn a_restore_warning_and_its_backup_survive_until_dealt_with() {
     let _ = std::fs::remove_dir_all(&root);
     let (data, suite, log) = (root.join("data"), root.join("data").join("suite"), root.join("log"));
     std::fs::create_dir_all(&suite).unwrap();
-    let rec = |rf: &'static str| StateRec { sha: "", version: "", date: "", last_applied: "d", outcome: "x", reason: "", auto_off: false, address_before: "", restore_failed: rf };
+    let rec = |rf: &'static str| StateRec { sha: "", version: "", date: "", last_applied: "d", outcome: "x", reason: "", auto_off: false, address_before: "", restore_failed: rf, quarantined: false };
     // a Windows path with backslashes (audit 6f9b2ec0 M2: each carry-over used to double them)
     write_state(&suite, &rec(r"COPY AT C:\Users\x\db-backup\1"), &log);
     for _ in 0..3 {
@@ -1727,6 +1797,8 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     let q = std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default();
     assert_eq!(q.trim(), SHA3, "v3 must be quarantined");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":true"), "a quarantining rollback must record quarantined:true");
+    assert_state_matches_fixture(&fx.suite_dir, "suite-rollback-state-quarantined.json");
     assert_eq!(read_state_field(&fx.suite_dir, "installedVersion").as_deref(), Some("v2"), "installed identity must stay v2");
     assert!(!fx.staging.join("READY").exists(), "v3's staging must be discarded");
     host.stop_relay();
@@ -2348,6 +2420,8 @@ fn fresh_case(fc: &FreshCase) -> (Fixture, Vec<String>) {
 fn assert_bad_release(fx: &Fixture, tag: &str) {
     assert_eq!(std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default().trim(), SHA2, "({tag}) the bad release must be quarantined");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"), "({tag})");
+    // [audit 93619117 L1] reject_fresh_update (identity proof) wrote the ban, so it must say so: the panel reads this
+    assert!(std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap().contains("\"quarantined\":true"), "({tag}) an identity-proof rejection must record quarantined:true");
     assert!(!fx.suite_dir.join("active").exists(), "({tag}) the update's code must be gone");
     assert!(!fx.data_dir.join("suite-autoupdate").exists(), "({tag}) auto-update must be switched off, as after any failed update");
     assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "STORE", "({tag})");
