@@ -1214,6 +1214,11 @@ window.safeImgUrl = function (v) {
           let bad = false;
           if(isZip(bytes)){ const x = _zipExtract(bytes); if(x.refuse) bad = true; else memberFiles = x.files; }
           if(!bad && !meta.checked){ try{ const pk = await _peekModule(bytes, "", memberFiles); bad = !!(pk && pk.unsafe); }catch(e){ bad = true; } }
+          // WHEN WE CANNOT READ OUR OWN LISTS (offline, short read, low memory) a published module looks like a stranger's file, and
+          // a transient failure must not brand it unsafe for good (re-audit round 5, R5-1). So a refusal then SKIPS the record for
+          // THIS boot only: not loaded (a record that is not ours never loads unless the reader accepts it), not quarantined, not
+          // marked, and tried again at the next boot. With the lists readable the refusal is permanent, as before.
+          if(bad && !(await _listsReadable())){ console.warn("restore: skipped (cannot yet tell whether it is ours)", url); continue; }
           const mm = getInstalled();
           if(bad){
             if(mm[url]){ mm[url].quarantined = true; mm[url].told = false; setInstalled(mm); }
@@ -1955,6 +1960,13 @@ window.safeImgUrl = function (v) {
     try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
     try{ const m = await getMirror(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){}
     return false;
+  }
+  // Can we READ the lists that say what is ours? (getCatalog resolves {categories:[]} on failure, getMirror null.)
+  async function _listsReadable(){
+    try{
+      const c = await getCatalog(); if(!(c && (c.categories || []).length)) return false;
+      const m = await getMirror(); return !!(m && (m.items || []).length);
+    }catch(e){ return false; }
   }
   // told by event if the app is already listening, else kept for takeLinkNotice() at mount (same shape as the quarantine notice)
   let _linkRefusedPending = false;
