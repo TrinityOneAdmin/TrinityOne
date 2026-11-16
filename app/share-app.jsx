@@ -29,31 +29,35 @@ function shareAppToBase64(u8) {
 }
 
 // SHARE EXACTLY ONE FILE. Returns 'shared' | 'dismissed' | 'failed'.
-//   opts: { bytes | uri, filename, mime, title, dialogTitle, onOpen, text }   — `mime` is used on web only (see
-//   the header); `onOpen()` is called just before the share sheet itself is asked for (after any file write)
+//   opts: { bytes | uri, filename, mime, title, dialogTitle, onOpen, text, slot }   — `mime` is used on web only
+//   (see the header); `onOpen()` is called just before the share sheet itself is asked for (after any file write)
 // `text` (optional, added 2026-11-16 for the verse card): words to go WITH the file. Without it — the APK and
 // module shares — nothing below changes: the share carries the file alone, for the reason in the next paragraph.
 // With it, native passes `text` to @capacitor/share (6.0.4 SharePlugin.java: one file + text and no url is ONE
 // ACTION_SEND with EXTRA_TEXT and EXTRA_STREAM, its type taken from the file — shareFiles() sets it after the
 // text/plain), and web passes it to navigator.share beside the file. A caller passing text accepts that Quick
 // Share / Bluetooth may then send only the text. Never pass a url here: a link brings back the link preview.
+// On the web WITH text, a refusal is said honestly: a browser that refuses the share (NotAllowedError — e.g. the
+// tap's permission ran out) gets "tap Share again", and a download says the words were not included.
 // Native: `bytes` are written to CACHE (the dir the app's FileProvider exposes) to get a uri; then ONE file goes
-// to the share sheet — never text or url alongside it (passing text makes Quick Share / Bluetooth send only the
-// text). Backing out of the sheet is not a failure: the plugin rejects "Share canceled" and that is 'dismissed',
+// to the share sheet, with no url, and no text unless the caller passed `text` (see above; passing text makes
+// Quick Share / Bluetooth send only the text). Backing out of the sheet is not a failure: the plugin rejects "Share canceled" and that is 'dismissed',
 // with no toast. Anything else that fails says "Couldn't share {name}" — the plugin's own text goes to the log,
 // not in front of the member.
 // A copy this function WROTE (from `bytes`; never a `uri` it was handed, so never the APK's cache-once copy) is
 // deleted at once ONLY if the share FAILED — then nothing was handed a uri. A 'shared' OR a 'dismissed' copy is
-// kept until the start of the NEXT module share: Quick Share and Bluetooth hand the file to a background transfer
+// kept until the start of the NEXT share IN THE SAME `slot` (default 'module'; the verse card uses 'verse', so a
+// verse card never deletes a module copy a Bluetooth transfer may still be reading, nor the other way round):
+// Quick Share and Bluetooth hand the file to a background transfer
 // that reads it AFTER the share sheet has returned, and "Share canceled" does not prove nothing is reading it —
 // the Android chooser reports it for a pick that opens an overlay, such as the Quick Share sheet. At most one such
-// copy is therefore left in CACHE (and the OS may clear CACHE itself); the pointer is in memory, so a restart
+// copy per slot is therefore left in CACHE (and the OS may clear CACHE itself); the pointer is in memory, so a restart
 // forgets it.
 // ACCEPTED, NOT FIXED (audit of 9e6c3b5c, LOW 2): sharing module B deletes A's copy, so if a slow Bluetooth
 // transfer of A is still running when B is shared, A's transfer can be cut short. Keeping every copy instead
 // would pile them up on a low-storage phone; the member can share A again.
 // Web / PWA: navigator.share with one File where the browser can, otherwise a download.
-let shareAppLastCopy = null;   // CACHE path of the last module copy shared or dismissed (deleted at the next one)
+const shareAppLastCopy = {};   // slot -> CACHE path of the last copy shared or dismissed (deleted at the next one in that slot)
 async function shareOneFile(opts, ctx) {
   const o = opts || {};
   const Cap = window.Capacitor, P = Cap && Cap.Plugins;
@@ -63,12 +67,15 @@ async function shareOneFile(opts, ctx) {
 
   if (!native) {
     if (!o.bytes) { toast('Couldn’t share ' + name); return 'failed'; }
+    const withText = typeof o.text === 'string' && o.text !== '';
     try {
       const file = new File([o.bytes], o.filename, { type: o.mime || 'application/octet-stream' });
-      const withText = typeof o.text === 'string' && o.text !== '';
       if (navigator.canShare && navigator.canShare(withText ? { files: [file], text: o.text } : { files: [file] })) {
         try { try { o.onOpen && o.onOpen(); } catch (e) {} await navigator.share(withText ? { files: [file], title: name, text: o.text } : { files: [file], title: name }); return 'shared'; }
-        catch (e) { if (e && e.name === 'AbortError') return 'dismissed'; }
+        catch (e) {
+          if (e && e.name === 'AbortError') return 'dismissed';
+          if (withText && e && e.name === 'NotAllowedError') { toast('The browser didn\u2019t open the share \u2014 tap Share again'); return 'failed'; }
+        }
       }
     } catch (e) {}
     try {
@@ -76,7 +83,7 @@ async function shareOneFile(opts, ctx) {
       const a = document.createElement('a'); a.href = href; a.download = o.filename;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => { try { URL.revokeObjectURL(href); } catch (e) {} }, 60000);
-      toast('Downloading ' + o.filename + ' — share the file from your device');
+      toast('Downloading ' + o.filename + (withText ? ' \u2014 the words were not included' : ' — share the file from your device'));
       return 'shared';
     } catch (e) { toast('Couldn’t share ' + name); return 'failed'; }
   }
@@ -84,10 +91,12 @@ async function shareOneFile(opts, ctx) {
   if (!(P && P.Share && P.Filesystem)) { toast('Sharing isn’t available on this device'); return 'failed'; }
   let uri = o.uri || null;
   let wrote = null;
+  const slot = o.slot || 'module';
   const drop = (path) => { try { Promise.resolve(P.Filesystem.deleteFile({ path, directory: 'CACHE' })).catch(() => {}); } catch (e) {} };
   if (!uri) {
-    if (shareAppLastCopy && shareAppLastCopy !== o.filename) drop(shareAppLastCopy);
-    shareAppLastCopy = null;
+    const last = shareAppLastCopy[slot];
+    if (last && last !== o.filename) drop(last);
+    shareAppLastCopy[slot] = null;
     try {
       const w = await P.Filesystem.writeFile({ path: o.filename, data: shareAppToBase64(o.bytes), directory: 'CACHE' });
       uri = w && w.uri;
@@ -113,7 +122,7 @@ async function shareOneFile(opts, ctx) {
   }
   // Accepted (audit N2): re-sharing the SAME module after a dismiss, and having that attempt fail, deletes the copy
   // the first (Quick Share overlay) attempt may still be reading — the write overwrote it under the same name.
-  if (wrote) { if (result === 'failed') drop(wrote); else shareAppLastCopy = wrote; }
+  if (wrote) { if (result === 'failed') drop(wrote); else shareAppLastCopy[slot] = wrote; }
   return result;
 }
 window.shareOneFile = shareOneFile;
@@ -376,16 +385,26 @@ async function shareCardPng(verse, st, probe) {
 
 // THE SHARE BUTTON: the card as a PNG plus the verse words (verseShareText, app/app.jsx — words and reference,
 // no link). If the picture cannot be made, the words alone go, still with no link, and the member is told.
-async function shareCardShare(verse, st, probe, ctx) {
+// `opts.ready`: PNG bytes ShareCard drew when the card opened (or the style changed). With them, nothing is
+// awaited before the share sheet is asked for — a browser only allows navigator.share close to the tap, and
+// the font wait + toBlob could outlast that. Without them the card is drawn now (slower, still correct).
+// `opts.stillOpen()`: false once the member has closed the card while it was being drawn — then nothing opens.
+// The share's title (Android EXTRA_SUBJECT; an email's subject) is the reference, not a made-up label.
+async function shareCardShare(verse, st, probe, ctx, opts) {
+  const o = opts || {};
   const text = verseShareText(verse);
-  let bytes = null;
-  try { bytes = await shareCardPng(verse, st, probe); }
-  catch (e) { try { console.warn('shareCardPng: ' + ((e && e.message) || e)); } catch (e2) {} }
+  let bytes = o.ready || null;
+  if (!bytes) {
+    try { bytes = await shareCardPng(verse, st, probe); }
+    catch (e) { try { console.warn('shareCardPng: ' + ((e && e.message) || e)); } catch (e2) {} }
+    if (o.stillOpen && !o.stillOpen()) return 'closed';
+  }
   if (!bytes) {
     try { ctx.toast && ctx.toast('Couldn\'t make the picture \u2014 sharing the words'); } catch (e) {}
     return ctx.shareText(text, 'A verse for you');
   }
-  return window.shareOneFile({ bytes, filename: 'TrinityOne-verse.png', mime: 'image/png', title: 'Verse card', dialogTitle: 'Share this verse', text }, ctx);
+  const title = String(verse.ref || '').trim() || 'A verse';
+  return window.shareOneFile({ bytes, filename: 'TrinityOne-verse.png', mime: 'image/png', title, dialogTitle: 'Share this verse', text, slot: 'verse' }, ctx);
 }
 
 // `cv`: the same look for the canvas — [colour, fallback] pairs; a var(--x) is resolved on the card on screen.
@@ -402,14 +421,28 @@ const CARD_STYLES = [
 function ShareCard({ verse, open, onClose, ctx }) {
   const [style, setStyle] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
+  const [png, setPng] = React.useState(null);   // { key, bytes } drawn ahead of the tap
   const cardRef = React.useRef(null);
+  const busyRef = React.useRef(false);          // a ref, not `busy`: two taps before a redraw both see busy=false
+  const openRef = React.useRef(open);
+  openRef.current = open;
   React.useEffect(() => { if (open) setStyle(0); }, [open]);
+  const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text].join('\u0001') : '';
+  // DRAW THE PICTURE AS SOON AS THE CARD OPENS (and again when the style changes), so the tap shares at once.
+  React.useEffect(() => {
+    if (!pngKey) return;
+    let live = true;
+    Promise.resolve().then(() => shareCardPng(verse, CARD_STYLES[style], cardRef.current))
+      .then((bytes) => { if (live) setPng({ key: pngKey, bytes }); }, () => {});
+    return () => { live = false; };
+  }, [pngKey]);
   if (!verse) return null;
   const s = CARD_STYLES[style];
   const share = async () => {
-    if (busy) return;
-    setBusy(true);
-    try { await shareCardShare(verse, s, cardRef.current, ctx); } finally { setBusy(false); }
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true);
+    try { await shareCardShare(verse, s, cardRef.current, ctx, { ready: png && png.key === pngKey ? png.bytes : null, stillOpen: () => openRef.current }); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   return (
     <Overlay open={open} onClose={onClose}>

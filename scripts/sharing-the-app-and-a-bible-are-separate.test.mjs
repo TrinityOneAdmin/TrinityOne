@@ -494,22 +494,26 @@ function realVerseShareText() {
   }).verseShareText;
   return VERSE_SHARE_TEXT;
 }
-function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false } = {}) {
+function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false, fontsHang = false, verse = VERSE } = {}) {
   const { React, draw } = miniReact();
-  const toasts = [], textShares = [], drawn = [];
+  const toasts = [], textShares = [], drawn = [], canvases = [];
   const win = { Capacitor: cap ? cap.Capacitor : undefined, Fellowship: { relays: ['wss://relay.example.org/relay'] } };
-  const document = { ...browser.document, fonts: { load: async () => [] },
-    createElement: (tag) => (tag === 'canvas' ? fakeCanvas(drawn, { noBlob }) : browser.document.createElement(tag)) };
-  const S = loadScreen('app/share-app.jsx', ['ShareCard'], {
+  // fontsHang: the font never finishes loading; then only the 2.5s timer lets the drawing go on — so the timer
+  // here fires at once, and it is the ONLY timer that does (the download's 60s revoke is not run)
+  const document = { ...browser.document, fonts: { load: fontsHang ? () => new Promise(() => {}) : async () => [] },
+    createElement: (tag) => { if (tag !== 'canvas') return browser.document.createElement(tag); const c = fakeCanvas(drawn, { noBlob }); canvases.push(c); return c; } };
+  const timers = [];
+  const S = loadScreen('app/share-app.jsx', ['ShareCard', 'shareOneFile'], {
     React, window: win, btoa, File, Blob, fetch: apkFetch(), console: { warn() {}, log() {}, error() {} },
-    navigator: browser.navigator, document, URL: browser.URL, setTimeout: () => 0,
+    navigator: browser.navigator, document, URL: browser.URL,
+    setTimeout: (fn, ms) => { timers.push(ms); if (fontsHang && ms === 2500) Promise.resolve().then(fn); return 0; },
     Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
     IconBtn: ({ name, onClick, title }) => React.createElement('button', { 'data-iconbtn': name, onClick, title }),
     Overlay: ({ open, children }) => (open ? children : null), BottomSheet: () => null,
     verseShareText: realVerseShareText(),
   });
   const ctx = { toast: (t) => toasts.push(t), shareText: async (...a) => { textShares.push(a); } };
-  const tree = () => draw(S.ShareCard, { verse: VERSE, open: true, onClose() {}, ctx });
+  const tree = (props = {}) => draw(S.ShareCard, { verse, open: true, onClose() {}, ctx, ...props });
   const buttons = () => {
     const t = tree();
     const main = find(t, n => n.type === 'button' && !n.props['data-iconbtn'] && texts(n).join(' ').includes('Share this verse'));
@@ -518,7 +522,9 @@ function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false } = {})
     assert.equal(icon.length, 1, 'no share icon in the card header — re-anchor this test');
     return { main: main[0], icon: icon[0] };
   };
-  return { toasts, textShares, drawn, buttons, win };
+  // let the drawing the card starts on open finish, and redraw so the button holds it
+  const settle = async () => { tree(); await ticks(); tree(); };
+  return { S, toasts, textShares, drawn, canvases, timers, buttons, tree, settle, win };
 }
 const noLink = (o) => { const s = JSON.stringify(o); return !/https?:|wss?:|\/v\?|relay\.example/i.test(s); };
 
@@ -571,6 +577,8 @@ test('C3 — a browser that cannot share files downloads the .png instead', asyn
   assert.equal(browser.shared.length, 0);
   assert.equal(browser.clicked.length, 1, 'nothing was downloaded');
   assert.match(browser.clicked[0].download, /\.png$/);
+  assert.equal(v.toasts.length, 1);
+  assert.match(v.toasts[0], /words were not included/, `a download that drops the words must say so: ${v.toasts[0]}`);
 });
 
 test('C4 — if the picture cannot be made, the words alone go (still no link) and the member is told', async () => {
@@ -582,4 +590,95 @@ test('C4 — if the picture cannot be made, the words alone go (still no link) a
   assert.ok(v.textShares[0][0].includes(VERSE.text));
   assert.ok(noLink(v.textShares[0]), `a link went with the words: ${JSON.stringify(v.textShares[0])}`);
   assert.equal(v.toasts.length, 1, 'the member was not told the picture failed');
+});
+
+// ═════════════════════ C, audit of b96d7c02 (2026-11-16): LOW 1-4 and the NITs ═════════════════════════════
+
+test('C5 (LOW 1) — a verse card never deletes a module copy a transfer may still be reading, and a module share never deletes the card', async () => {
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap });
+  await v.S.shareOneFile({ bytes: new Uint8Array([1, 2, 3]), filename: 'eng-kjv.zip', title: 'KJV' }, {});   // what InstalledBrowser calls
+  await v.buttons().main.props.onClick();
+  await ticks();
+  assert.equal(cap.shares.length, 2, 're-anchor: both shares should have opened');
+  assert.deepEqual(cap.deletes, [], `the verse card share deleted ${JSON.stringify(cap.deletes)} — a Bluetooth transfer of the Bible may be cut short`);
+  await v.S.shareOneFile({ bytes: new Uint8Array([4, 5]), filename: 'eng-web.zip', title: 'WEB' }, {});
+  await ticks();
+  assert.deepEqual(cap.deletes, [['eng-kjv.zip', 'CACHE']], 'a module share must clear the previous MODULE copy (unchanged) and nothing else');
+});
+
+test('C6 (LOW 3) — with no text, the web path is exactly as before: canShare({files}) then share({files, title}), no text key', async () => {
+  const browser = fakeBrowser();
+  const asked = [];
+  const can = browser.navigator.canShare;
+  browser.navigator.canShare = (d) => { asked.push(Object.keys(d).sort()); return can(d); };
+  const v = verseCard({ browser });
+  await v.S.shareOneFile({ bytes: new Uint8Array([1, 2, 3]), filename: 'eng-kjv.zip', title: 'KJV' }, { toast() {} });
+  assert.deepEqual(asked, [['files']], `canShare was asked ${JSON.stringify(asked)}`);
+  assert.equal(browser.shared.length, 1);
+  assert.deepEqual(Object.keys(browser.shared[0]).sort(), ['files', 'title'], `the module share carried ${JSON.stringify(Object.keys(browser.shared[0]))}`);
+  // and an EMPTY text is no text
+  await v.S.shareOneFile({ bytes: new Uint8Array([1]), filename: 'x.zip', title: 'X', text: '' }, { toast() {} });
+  assert.deepEqual(Object.keys(browser.shared[1]).sort(), ['files', 'title'], 'text: "" put a text key on the share');
+});
+
+test('C7 (LOW 2) — the picture is drawn when the card opens, so the tap reaches navigator.share with nothing awaited first', async () => {
+  const browser = fakeBrowser();
+  const v = verseCard({ browser });
+  await v.settle();
+  assert.equal(v.canvases.length, 1, 'the card did not draw its picture on opening');
+  const done = v.buttons().main.props.onClick();     // NOT awaited: a browser allows share() only close to the tap
+  assert.equal(browser.shared.length, 1, 'navigator.share was not called synchronously from the tap — the browser may refuse it');
+  await done;
+  assert.equal(v.canvases.length, 1, 'the tap drew the card again instead of using the one drawn on opening');
+  // a new style draws a new picture, and the tap uses THAT one
+  const t = v.tree();
+  const swatches = find(t, n => n.type === 'button' && !n.props['data-iconbtn'] && !texts(n).join(' ').includes('Share'));
+  assert.ok(swatches.length >= 2, 're-anchor: the style swatches are not buttons');
+  swatches[1].props.onClick();
+  await v.settle();
+  assert.equal(v.canvases.length, 2, 'changing the style did not draw a new picture');
+});
+
+test('C8 (LOW 2) — a browser that refuses the share (NotAllowedError) says "tap Share again", and does not quietly download', async () => {
+  const browser = fakeBrowser({ shareRejects: 'NotAllowedError' });
+  const v = verseCard({ browser });
+  await v.settle();
+  await v.buttons().main.props.onClick();
+  assert.equal(browser.clicked.length, 0, 'a refused share fell back to a download that drops the words');
+  assert.equal(v.toasts.length, 1);
+  assert.match(v.toasts[0], /tap Share again/);
+});
+
+test('C9 (LOW 4) — a font that never loads does not stop the share: after the wait the card is drawn anyway', async () => {
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap, fontsHang: true });
+  await v.buttons().main.props.onClick();
+  assert.ok(v.timers.includes(2500), 're-anchor: the font wait is not a 2.5s timer');
+  assert.equal(cap.shares.length, 1, 'with a font that never loads, nothing was shared');
+  assert.match(cap.shares[0].files[0], /\.png$/);
+});
+
+test('C10 (LOW 4) — two taps while "Preparing…" share once', async () => {
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap });
+  const b = v.buttons().main;
+  await Promise.all([b.props.onClick(), b.props.onClick()]);
+  assert.equal(cap.shares.length, 1, `two taps shared ${cap.shares.length} times`);
+});
+
+test('C11 (NIT) — closing the card while the picture is still being drawn opens no share sheet', async () => {
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap });
+  const p = v.buttons().main.props.onClick();     // nothing drawn yet: the tap draws it
+  v.tree({ verse: null, open: false });           // the member closes the card (App sets share to null)
+  await p;
+  assert.equal(cap.shares.length, 0, 'the share sheet opened over a card the member had closed');
+});
+
+test('C12 (NIT) — the share title (Android EXTRA_SUBJECT, an email subject) is the reference', async () => {
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap });
+  await v.buttons().main.props.onClick();
+  assert.equal(cap.shares[0].title, 'John 3:16');
 });
