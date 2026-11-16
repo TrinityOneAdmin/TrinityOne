@@ -67,6 +67,8 @@ test('shareCardPng makes a real 1080x1350 PNG in every style, with the verse pai
       for (const st of CARD_STYLES) out[st.id] = await read(await shareCardPng(verse, st, null));
       out.church = await read(await shareCardPng(verse, CARD_STYLES[0], document.getElementById('church')));
       out.long = await read(await shareCardPng(long, CARD_STYLES[0], null));
+      // the same card with no words: what the reference, the marks and the TRINITYONE line alone paint
+      out.empty = await read(await shareCardPng({ ...verse, text: '' }, CARD_STYLES[0], null));
       return JSON.stringify(out);
     })()`;
     const r = await send('Runtime.evaluate', { expression: probe, returnByValue: true, awaitPromise: true });
@@ -80,6 +82,9 @@ test('shareCardPng makes a real 1080x1350 PNG in every style, with the verse pai
       assert.equal(o.h, 1350, `${id}: height ${o.h}`);
       assert.ok(o.ink > 300, `${id}: almost nothing is painted on the card (${o.ink} ink samples) — the verse is not drawn`);
     }
+    // the words themselves are painted: far more ink than the same card with no words (measured 6549 vs 1142, ~5.7x)
+    assert.ok(out.clay.ink > out.empty.ink * 2, `the verse adds almost no ink (${out.clay.ink} vs ${out.empty.ink} with no words) — the words are not drawn`);
+    assert.ok(out.long.ink > out.clay.ink, `a long passage paints no more than a short verse (${out.long.ink} vs ${out.clay.ink})`);
     // the card's own colours at its top-left corner (where the 155deg gradient starts), with :root's theme
     assert.ok(near(out.clay.corner, [0xC2, 0x5A, 0x38]), `clay corner ${out.clay.corner}`);
     assert.ok(near(out.sage.corner, [0x6B, 0xA1, 0x7C]), `sage corner ${out.sage.corner}`);
