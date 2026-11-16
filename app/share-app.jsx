@@ -287,9 +287,32 @@ function shareCardColor(cx, value, fallback, probe) {
   return fallback;
 }
 
+// A word as the characters a reader sees (grapheme clusters), so a long word is never broken inside an emoji
+// sequence (family / skin tone / flag) or between a letter and its accent. Code points where Intl.Segmenter is missing.
+function shareCardGraphemes(word) {
+  try { if (typeof Intl !== 'undefined' && Intl.Segmenter) return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(word), x => x.segment); }
+  catch (e) {}
+  return Array.from(word);
+}
+// Right-to-left text (Hebrew, Arabic…): decided by the first letter with a direction, as a browser does.
+function shareCardIsRtl(text) {
+  const m = /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]|[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.exec(String(text || ''));
+  return !!(m && /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(m[0]));
+}
+
 // Words into lines no wider than `max`, measured with `measure(text)`. A single word wider than the line is
-// broken by characters.
+// broken between graphemes. A newline in the text starts a new line; a blank line is kept, once.
 function shareCardWrap(measure, text, max) {
+  const out = [];
+  const paras = String(text).split(/\r?\n/).map(x => x.trim());
+  paras.forEach((p, i) => {
+    if (!p) { if (out.length && out[out.length - 1] !== '' && i < paras.length - 1) out.push(''); return; }
+    out.push(...shareCardWrapLine(measure, p, max));
+  });
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out;
+}
+function shareCardWrapLine(measure, text, max) {
   const lines = []; let line = '';
   for (const word of String(text).split(/\s+/).filter(Boolean)) {
     const tryLine = line ? line + ' ' + word : word;
@@ -297,7 +320,7 @@ function shareCardWrap(measure, text, max) {
     if (line) lines.push(line);
     if (measure(word) <= max) { line = word; continue; }
     line = '';
-    for (const ch of word) { if (measure(line + ch) > max && line) { lines.push(line); line = ch; } else line += ch; }
+    for (const ch of shareCardGraphemes(word)) { if (measure(line + ch) > max && line) { lines.push(line); line = ch; } else line += ch; }
   }
   if (line) lines.push(line);
   return lines;
@@ -328,6 +351,7 @@ function shareCardFontSpec(size, cSize) {
 function shareCardLayout(measure, quote, comment) {
   const G = SHARECARD_GEOM, max = G.W - 2 * G.PAD;
   const hasC = !!(comment && String(comment).trim());
+  const rtl = shareCardIsRtl(quote), cRtl = hasC && shareCardIsRtl(comment);
   const cSizeFor = (size) => Math.max(30, Math.round(size * 0.62));
   const fixed = G.MARK + G.GAP1 + G.GAP2 + G.REF + (hasC ? G.GAP3 : 0);
   const wrapAt = (size) => {
@@ -341,7 +365,7 @@ function shareCardLayout(measure, quote, comment) {
     const room = H - 2 * G.PAD - G.FOOT;
     for (let size = 64; size >= 36; size -= 4) {
       const w = memo[size] || (memo[size] = wrapAt(size));
-      if (need(size, w) <= room) return { W: G.W, H, size, cSize: cSizeFor(size), fonts: w.f, lines: w.lines, cLines: w.cLines, truncated: false };
+      if (need(size, w) <= room) return { W: G.W, H, size, cSize: cSizeFor(size), fonts: w.f, lines: w.lines, cLines: w.cLines, truncated: false, rtl, cRtl };
     }
   }
   // nothing fits at 1080 x 1920, 36px: cut
@@ -357,7 +381,7 @@ function shareCardLayout(measure, quote, comment) {
   } else vN = Math.floor(room / vlh);
   return { W: G.W, H, size, cSize, fonts: w.f,
     lines: shareCardClip(t => measure(t, w.f.verse), w.lines, vN, max),
-    cLines: hasC ? shareCardClip(t => measure(t, w.f.comment), w.cLines, cN, max) : [], truncated: true };
+    cLines: hasC ? shareCardClip(t => measure(t, w.f.comment), w.cLines, cN, max) : [], truncated: true, rtl, cRtl };
 }
 
 // Wait (briefly) for the card's fonts, so the canvas does not draw in the fallback serif.
@@ -416,22 +440,27 @@ async function shareCardRender(verse, st, probe, comment) {
   let y = Math.max(PAD, Math.min((H - block) / 2, H - PAD - G.FOOT - block));
   sparkle(PAD, y, G.MARK, mark, 1, 1.8);
   y += G.MARK + G.GAP1;
-  cx.fillStyle = fg; cx.textBaseline = 'top'; cx.textAlign = 'left';
+  // right-to-left text (Hebrew…) is set from the right edge, and so is its reference
+  const side = (r) => { cx.textAlign = r ? 'right' : 'left'; try { cx.direction = r ? 'rtl' : 'ltr'; } catch (e) {} return r ? W - PAD : PAD; };
+  cx.fillStyle = fg; cx.textBaseline = 'top';
   cx.font = L.fonts.verse;
-  for (const ln of L.lines) { cx.fillText(ln, PAD, y + (vlh - L.size) / 2); y += vlh; }
+  let x = side(L.rtl);
+  for (const ln of L.lines) { cx.fillText(ln, x, y + (vlh - L.size) / 2); y += vlh; }
   y += G.GAP2;
   cx.font = '700 44px Sora, system-ui, sans-serif'; cx.fillStyle = refCol;
-  cx.globalAlpha = k.border ? 1 : 0.9; cx.fillText(ref, PAD, y); cx.globalAlpha = 1;
+  cx.globalAlpha = k.border ? 1 : 0.9; cx.fillText(ref, x, y); cx.globalAlpha = 1;
+  side(false);
   y += G.REF;
   if (L.cLines.length) {
     // the thoughts: a short rule, then the UI font — the member's words, set apart from Scripture's
     cx.fillStyle = refCol; cx.globalAlpha = 0.45; cx.fillRect(PAD, y + G.GAP3 / 2 - 2, 96, 4); cx.globalAlpha = 1;
     y += G.GAP3;
     cx.font = L.fonts.comment; cx.fillStyle = fg; cx.globalAlpha = 0.88;
-    for (const ln of L.cLines) { cx.fillText(ln, PAD, y + (clh - L.cSize) / 2); y += clh; }
-    cx.globalAlpha = 1;
+    const cxX = side(L.cRtl);
+    for (const ln of L.cLines) { if (ln) cx.fillText(ln, cxX, y + (clh - L.cSize) / 2); y += clh; }
+    cx.globalAlpha = 1; side(false);
   }
-  cx.font = '700 34px Sora, system-ui, sans-serif'; cx.fillStyle = fg; cx.globalAlpha = 0.5; cx.textAlign = 'right';
+  cx.font = '700 34px Sora, system-ui, sans-serif'; cx.fillStyle = fg; cx.globalAlpha = 0.5; side(false); cx.textAlign = 'right';
   cx.fillText('TRINITYONE', W - 70, H - 70 - 34); cx.globalAlpha = 1; cx.textAlign = 'left';
 
   const blob = await new Promise((res) => { try { cv.toBlob(res, 'image/png'); } catch (e) { res(null); } });
@@ -503,6 +532,13 @@ function ShareCard({ verse, open, onClose, ctx }) {
     return () => { try { f.removeEventListener('loadingdone', again); } catch (e) {} };
   }, [open]);
   React.useEffect(() => { if (open) setStyle(0); }, [open]);
+  // the preview's blob URL is let go when the card closes, and when ShareCard itself goes away
+  React.useEffect(() => {
+    if (open) return;
+    const p = pngRef.current;
+    if (p) { try { p.url && URL.revokeObjectURL(p.url); } catch (e) {} setPng(null); }
+  }, [open]);
+  React.useEffect(() => () => { const p = pngRef.current; try { p && p.url && URL.revokeObjectURL(p.url); } catch (e) {} }, []);
   const pngKey = open && verse ? [style, verse.ref, verse.version, verse.text, verse.shareThoughts || '', fontGen].join('\u0001') : '';
   // DRAW THE PICTURE AS SOON AS THE CARD OPENS (and again when the style changes), so the tap shares at once.
   React.useEffect(() => {

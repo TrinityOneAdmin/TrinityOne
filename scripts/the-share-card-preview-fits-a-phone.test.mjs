@@ -69,7 +69,7 @@ function solidPng(w, h) {
 }
 
 const VERSE = { ref: 'John 3:16', version: 'WEB', text: 'For God so loved the world, that he gave his one and only Son.' };
-async function cardWithPicture(w, h) {
+async function cardWithPicture(w, h, verse = VERSE) {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { IconBtn } = loadScreen('app/ui.jsx', ['IconBtn'], { React, window: {}, Icon });
@@ -84,7 +84,7 @@ async function cardWithPicture(w, h) {
   const URLx = { createObjectURL: () => dataUrl, revokeObjectURL: noop };
   const { ShareCard } = loadScreen('app/share-app.jsx', ['ShareCard'], { React, window: {}, Icon, IconBtn, Overlay, BottomSheet: noop, btoa, File, Blob, fetch: noop,
     console, navigator: {}, document, URL: URLx, setTimeout: () => 0, verseShareText: () => '' });
-  const props = { verse: VERSE, open: true, onClose: noop, ctx: { shareText: noop, toast: noop } };
+  const props = { verse, open: true, onClose: noop, ctx: { shareText: noop, toast: noop } };
   draw(ShareCard, props);
   await sleep(30);
   return draw(ShareCard, props);
@@ -148,4 +148,26 @@ test('at 320, 360 and 390px wide, the whole card shows (4:5 and 9:16) and the Sh
         assert.ok(m.h >= 200 && m.w >= 110, `${at}: the picture is shown too small to read (${Math.round(m.w)}x${Math.round(m.h)})`);
       }
     }
+    // A PASSAGE TOO LONG EVEN FOR 9:16 (audit NIT): the "card shows the start" note is on screen at 320px, between the
+    // picture and the style buttons, and the Share button is still on screen.
+    const long = { ref: 'Psalm 119', version: 'WEB', text: 'Blessed are those whose ways are blameless. '.repeat(120) };
+    const cut = await cardWithPicture(1080, 1920, long);
+    await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 1, mobile: true });
+    await send('Page.setDocumentContent', { frameId: frameTree.frame.id, html: page(cut) });
+    const expr2 = `(async () => {
+      const img = document.querySelector('img'); if (img && !img.complete) await new Promise(r => { img.onload = r; img.onerror = r; });
+      const note = [...document.querySelectorAll('div')].filter(d => d.textContent.trim().startsWith('The card shows the start')).pop();
+      if (!note) return JSON.stringify({ noNote: true });
+      const btns = [...document.querySelectorAll('button')];
+      const n = note.getBoundingClientRect(), i = img.getBoundingClientRect();
+      const swatch = btns.find(b => (b.getAttribute('aria-label') || '').startsWith('Card style')).getBoundingClientRect();
+      const share = btns.find(b => b.textContent.includes('Share this verse')).getBoundingClientRect();
+      return JSON.stringify({ top: n.top, bottom: n.bottom, left: n.left, right: n.right, h: n.height, imgBottom: i.bottom, imgH: i.height, swatchTop: swatch.top, shareBottom: share.bottom, scrollW: document.documentElement.scrollWidth }); })()`;
+    const r2 = await send('Runtime.evaluate', { expression: expr2, returnByValue: true, awaitPromise: true });
+    const n = JSON.parse(r2.result.result.value);
+    assert.ok(!n.noNote, '320x568: a cut card does not say it shows only the start');
+    assert.ok(n.h > 0 && n.top >= n.imgBottom - 0.5 && n.bottom <= n.swatchTop + 0.5, `320x568: the note is not between the picture and the style buttons (${JSON.stringify(n)})`);
+    assert.ok(n.left >= 0 && n.right <= 320 && n.scrollW <= 320, `320x568: the note runs off the side (${JSON.stringify(n)})`);
+    assert.ok(n.shareBottom <= 568, `320x568: the Share button is pushed off screen by the note (${n.shareBottom})`);
+    assert.ok(n.imgH >= 200, `320x568: the note squeezed the picture to ${n.imgH}px`);
   });

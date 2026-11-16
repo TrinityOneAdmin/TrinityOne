@@ -84,3 +84,28 @@ test('thoughts are laid out under the verse, and a long passage cannot squeeze t
   assert.ok(big.cLines[big.cLines.length - 1].endsWith('…'));
   assert.ok(big.lines.length >= 2);
 });
+
+// ── audit of c8334475, NITs ──
+test('a newline in the thoughts starts a new line on the card; a blank line is kept once', () => {
+  const L = shareCardLayout(measure, q('Jesus wept.'), 'First thought.\n\n\nSecond thought.\nThird.');
+  assert.deepEqual(L.cLines, ['First thought.', '', 'Second thought.', 'Third.']);
+});
+
+test('a long word is broken between graphemes — never inside an emoji sequence', () => {
+  const fam = '\u{1F468}‍\u{1F469}‍\u{1F467}', thumb = '\u{1F44D}\u{1F3FD}';
+  const word = (fam + thumb).repeat(120);
+  const L = shareCardLayout(measure, q('Rejoice.'), word);
+  assert.ok(L.cLines.length > 1, 're-anchor: the word did not need breaking');
+  const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  for (const ln of L.cLines) for (const g of Array.from(seg.segment(ln.replace(/…$/, '')), x => x.segment)) {
+    assert.ok(g === fam || g === thumb, `a line holds a broken emoji sequence: ${JSON.stringify(g)}`);
+  }
+});
+
+test('right-to-left text is flagged per block (verse and thoughts), by its first strong letter', () => {
+  const heb = 'בְּרֵאשִׁית בָּרָא אֱלֹהִים';
+  const a = shareCardLayout(measure, q(heb), 'Beautiful in the original.');
+  assert.equal(a.rtl, true); assert.equal(a.cRtl, false);
+  const b = shareCardLayout(measure, q('In the beginning'), heb);
+  assert.equal(b.rtl, false); assert.equal(b.cRtl, true);
+});

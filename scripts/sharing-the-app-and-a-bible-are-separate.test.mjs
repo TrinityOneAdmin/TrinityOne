@@ -478,7 +478,7 @@ function fakeCanvas(drawn, { noBlob = false, tag = null } = {}) {
     get fillStyle() { return fill; }, set fillStyle(v) { if (typeof v === 'object' || /^#[0-9a-f]{6}$/i.test(v) || /^rgba?\(/.test(v)) fill = v; },
     strokeStyle: '#000000', lineWidth: 1, globalAlpha: 1, textAlign: 'left', textBaseline: 'top', lineCap: '', lineJoin: '',
     measureText: (t) => ({ width: String(t).length * Number(/(\d+)px/.exec(font)[1]) * 0.5 }),
-    fillText: (t) => { drawn.push(String(t)); },
+    fillText: (t, x) => { drawn.push(String(t)); (drawn.pos || (drawn.pos = [])).push({ t: String(t), x, align: cx.textAlign }); },
     fillRect() {}, strokeRect() {}, save() {}, restore() {}, translate() {}, scale() {}, stroke() {},
     createLinearGradient: () => ({ addColorStop() {} }),
   };
@@ -831,4 +831,28 @@ test('C17 (audit LOW 1) — a card drawn before the fonts arrived is drawn again
   done.forEach(([, fn]) => fn());
   await v.settle();
   assert.equal(v.canvases.length, 2, 'a picture already drawn with the fonts was drawn again');
+});
+
+test('C18 (NIT) — Hebrew is set from the right edge of the card; English from the left', async () => {
+  const heb = '\u05D1\u05BC\u05B0\u05E8\u05B5\u05D0\u05E9\u05C1\u05B4\u05D9\u05EA \u05D1\u05BC\u05B8\u05E8\u05B8\u05D0';
+  for (const [text, x, align] of [[heb, 1080 - 104, 'right'], ['In the beginning', 104, 'left']]) {
+    const v = verseCard({ cap: fakeCapacitor(), verse: { ref: 'Genesis 1:1', version: 'WLC', text } });
+    await v.settle();
+    const line = (v.drawn.pos || []).find(d => d.t.includes(text.split(' ')[0]));
+    assert.ok(line, 're-anchor: the verse was not drawn');
+    assert.equal(line.align, align, `${align} text drawn aligned ${line.align}`);
+    assert.equal(line.x, x, `${align} text drawn at x=${line.x}`);
+  }
+});
+
+test('C19 (NIT) — closing the card lets go of the preview picture (its blob URL is revoked)', async () => {
+  const browser = fakeBrowser();
+  const made = [], revoked = [];
+  browser.URL = { createObjectURL: () => { const u = 'blob:fake/' + (made.length + 1); made.push(u); return u; }, revokeObjectURL: (u) => revoked.push(u) };
+  const v = verseCard({ browser });
+  await v.settle();
+  assert.equal(made.length, 1, 're-anchor: no preview URL was made');
+  v.tree({ verse: null, open: false });
+  v.tree({ verse: null, open: false });
+  assert.deepEqual(revoked, made, 'the preview blob URL was kept after the card closed');
 });
