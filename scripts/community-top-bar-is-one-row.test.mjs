@@ -82,7 +82,9 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const safeImgUrl = u => (typeof u === 'string' && u.startsWith('data:image/') ? u : '');
-  const { IconBtn } = loadScreen('app/ui.jsx', ['IconBtn'], { React, window: {}, Icon });
+  // ui.jsx on a window the test can reach: its useBackLayer + window.trinityGoBack ARE the app's hardware-Back stack
+  const uiWin = {};
+  const { IconBtn, useBackLayer } = loadScreen('app/ui.jsx', ['IconBtn', 'useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener() {}, removeEventListener() {} } });
   const { UserAvatar } = loadScreen('app/identity-avatar.jsx', ['UserAvatar'], { React, window: {}, safeImgUrl });
   const { ChurchBadge, ChurchPill } = loadScreen('app/screens-church.jsx', ['ChurchBadge', 'ChurchPill'],
     { React, window: {}, Icon, safeCssColor: (c, d) => d, safeImgUrl });
@@ -106,7 +108,7 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
     location: { search: '', href: 'https://app.trinityone.church/' },
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
     lsGet: (_k, d) => d, lsSet() {}, todayISO: () => '2026-10-15',
-    Icon, IconBtn, ChurchPill, UserAvatar, safeImgUrl,
+    Icon, IconBtn, useBackLayer, ChurchPill, UserAvatar, safeImgUrl,
     Overlay: ({ open, children }) => (open ? children : null),
     BottomSheet: ({ open, children }) => (open ? children : null),
     ScreenScroll: ({ children }) => children,
@@ -123,6 +125,7 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
   };
   const M = { ctx, calls, docL, focused, tree: null, ChurchPill,
     redraw() { M.tree = draw(ChatScreen, { ctx }); return M.tree; },
+    back: () => uiWin.trinityGoBack(), backLayers: () => uiWin.__trinityBackStack.length,
     mark() { docL.length = 0; focused.length = 0; },
     last(type) { const l = docL.filter(x => x.type === type); return l[l.length - 1] || null; },
     chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
@@ -448,4 +451,17 @@ test('A. ChatScreen gives the banner pill the right reserve (121) and the defaul
   const bare = M.ChurchPill({ ctx: M.ctx });
   const wrap = find(bare, n => n.props && n.props['data-banner-name'])[0];
   assert.equal(wrap.props.style.right, RESERVE_OLD, 'ChurchPill\'s default reserveRight is still 156');
+});
+
+test('A. Android hardware Back closes the open menu through the app\'s back stack (useBackLayer), instead of leaving the tab', () => {
+  for (const banner of [false, true]) {
+    const M = mountChat({ width: 360, banner });
+    assert.equal(M.backLayers(), 0, 'a closed bar registers no back layer');
+    openMenu(M);
+    assert.equal(M.backLayers(), 1, 'opening the menu registers ONE layer on the same stack the sheets use');
+    assert.equal(M.back(), true, `Back must be handled while the menu is open (banner=${banner})`);
+    M.redraw();
+    assert.equal(M.panel(), null, 'Back closes the menu');
+    assert.equal(M.calls.openProfile + M.calls.openDMInbox, 0, 'Back must not pick anything');
+  }
 });

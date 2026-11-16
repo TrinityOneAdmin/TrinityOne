@@ -42,6 +42,13 @@ function useHeaderMore() {
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+  // ANDROID HARDWARE BACK closes the menu instead of leaving the tab. The app's one mechanism for this is
+  // useBackLayer (app/ui.jsx): an open layer registers its close handler on window.__trinityBackStack and
+  // app.jsx's popstate handler calls window.trinityGoBack(), which closes the topmost one before it considers
+  // tab navigation. Same hook the sheets, overlays and the Read-screen popover use. `typeof` because this file
+  // is also loaded by test harnesses that do not inject ui.jsx; in the app the name is always defined, so the
+  // hook order never changes within one environment.
+  if (typeof useBackLayer === 'function') useBackLayer(open, () => setOpen(false));
   return {
     open,
     toggle: () => setOpen(o => !o),

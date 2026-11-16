@@ -203,6 +203,11 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
     Date: class extends Date { constructor(...a) { super(...(a.length ? a : [date])); } static now() { return date.getTime(); } },
     fetch: async () => ({ ok: false, json: async () => ({}) }),
   };
+  // THE APP'S REAL BACK STACK: ui.jsx's own useBackLayer + window.trinityGoBack, on a window the test can reach. The
+  // header menu registers on it so Android's hardware Back closes the menu (see app/header-more.jsx).
+  const uiWin = {};
+  const { useBackLayer } = loadScreen('app/ui.jsx', ['useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener() {}, removeEventListener() {} } });
+  globals.useBackLayer = useBackLayer;
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const calls = { openListen: 0, toggleDark: 0, openSearch: 0 };
   const ctx = {
@@ -216,6 +221,7 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
   };
   const M = { ctx, calls, docL, winL, focused, tree: null,
     redraw() { M.tree = draw(TodayScreen, { ctx }); return M.tree; },
+    back: () => uiWin.trinityGoBack(), backLayers: () => uiWin.__trinityBackStack.length,
     mark() { docL.length = 0; winL.length = 0; focused.length = 0; },
     last(list, type) { const l = list.filter(x => x.type === type); return l[l.length - 1] || null; },
     chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
@@ -800,4 +806,17 @@ test('A. every church has the chevron; the row still has no church name, and no 
     assert.ok(M.chevron(), `no chevron for audioFeed=${audioFeed}`);
     assert.equal(find(M.tree, n => n.props && typeof n.props.className === 'string' && /trn-hdr/.test(n.props.className)).length, 0);
   }
+});
+
+test('A. Android hardware Back closes the open menu through the app\'s back stack (useBackLayer), instead of leaving the tab', () => {
+  const M = mountToday({ audioFeed: true });
+  assert.equal(M.backLayers(), 0, 'a closed header registers no back layer');
+  assert.equal(M.back(), false, 'with nothing open, Back is not handled here: app.jsx then goes to Today / exits');
+  open(M);
+  assert.equal(M.backLayers(), 1, 'opening the menu registers ONE layer on the same stack the sheets use');
+  assert.equal(M.back(), true, 'Back must be handled (true) while the menu is open, so the tab is not left');
+  M.redraw();
+  assert.equal(M.panel(), null, 'Back closes the menu');
+  assert.equal(M.chevron().props['aria-expanded'], false);
+  assert.equal(M.calls.openListen + M.calls.openSearch + M.calls.toggleDark, 0, 'Back must not pick anything');
 });
