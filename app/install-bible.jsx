@@ -149,7 +149,8 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
       : [{ label: 'Open Library', primary: true, onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed', r.kind === 'dict' ? 'dictionaries' : 'commentaries'); } }, { label: 'Done', onClick: close }];
   } else if (s.phase === 'result') {
     tone = 'var(--clay-ink)'; icon = 'x';
-    if (r.reason === 'too-big') { title = 'That file is too big'; body = 'TrinityOne takes files up to 50 MB. Nothing was installed.'; buttons = [ok]; }
+    if (r.reason === 'quarantined') { title = 'A saved file was not opened'; name = r.name; body = 'It could freeze TrinityOne, so it was not loaded. It is still on this phone: you can remove it in Library, under Installed.'; buttons = [ok, { label: 'Open Library', onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed'); } }]; }
+    else if (r.reason === 'too-big') { title = 'That file is too big'; body = 'TrinityOne takes files up to 50 MB. Nothing was installed.'; buttons = [ok]; }
     else if (r.reason === 'no-space') { title = 'Not enough room on this phone'; body = 'Nothing was installed. Free some space and try again.'; buttons = [ok]; }
     else if (r.reason === 'unreadable') { title = 'TrinityOne couldn’t read that file'; body = 'Nothing was installed.'; buttons = [ok]; }
     else {

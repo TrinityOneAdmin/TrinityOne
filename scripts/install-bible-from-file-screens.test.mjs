@@ -291,6 +291,25 @@ test('S20 — N3: TWO URLS THAT COLLIDE UNDER THE OLD 32-BIT HASH are told apart
   assert.equal(i.mod.handleIncomingFile(pair[1], true, s => shown.push(s)), 'shown', 'a different file was taken for the one already handled');
 });
 
+test('S21 — L-e: THE QUARANTINE NOTICE: the sheet names the file that was not opened, as plain text, and the real App shows it from the engine\'s event and from the mount-time list', async () => {
+  const s = sheet();
+  const evil = '<img src=x onerror=alert(1)>';
+  const tree = s.render({ phase: 'result', result: { ok: false, reason: 'quarantined', name: evil } });
+  const w = words(tree);
+  assert.match(w, /stopped|not opened|wasn.t opened/i); assert.match(w, /Library/);
+  assert.ok(rtexts(tree).includes(evil), 'the file name is not on the sheet'); assert.equal(find(tree, n => n.type === 'img').length, 0);
+  assert.equal(find(tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0);
+  let fire = null;
+  const m = boot({ bible: { onFileInstall: (fn) => { fire = fn; return () => {}; }, takeQuarantineNotices: () => [] } });
+  await settle(m);
+  fire({ phase: 'quarantined', name: 'Old Import' });
+  const st = m.sheetProps(m.draw()).state;
+  assert.equal(st.phase, 'result'); assert.equal(st.result.reason, 'quarantined'); assert.equal(st.result.name, 'Old Import');
+  const m2 = boot({ bible: { onFileInstall: () => () => {}, takeQuarantineNotices: () => ['Boot Found'] } });
+  await settle(m2);
+  assert.equal(m2.sheetProps(m2.draw()).state.result.name, 'Boot Found');
+});
+
 // ════════════════════════════════ D. the REAL App: mount, listener, picker → sheet ══════════════════════════════
 
 const NPUB = 'npub1' + '0'.repeat(58);

@@ -49,7 +49,7 @@ export const cached = (state, key) => ((state.stores.get('modules') || new Map()
 // ── the phone: the REAL engine.js ────────────────────────────────────────────────────────────────────────────
 // `readyState: 'loading'` holds boot (autoLoad) back until `boot()` is called, exactly as a page that has not yet
 // fired DOMContentLoaded does; that is what lets a test start an install DURING boot.
-export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, readyState = 'loading', unzipCalls = null } = {}) {
+export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, catalogJson = null, readyState = 'loading', unzipCalls = null } = {}) {
   const onlineCbs = [];
   const win = { addEventListener(t, fn) { if (t === 'online') onlineCbs.push(fn); }, location: { search: '' } };
   const net = { serveBsb };
@@ -73,7 +73,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   const fetch = async (url) => {
     fetched.push(String(url));
     if (String(url) === 'catalog.json') { if (catalogDelay) await sleep(catalogDelay); }
-    if (String(url) === 'catalog.json') return { ok: true, json: async () => JSON.parse(readFileSync(ROOT + 'catalog.json', 'utf8')) };
+    if (String(url) === 'catalog.json') return { ok: true, json: async () => (catalogJson ? JSON.parse(JSON.stringify(catalogJson)) : JSON.parse(readFileSync(ROOT + 'catalog.json', 'utf8'))) };
     if (String(url) === 'ebible-catalog.json') return { ok: true, json: async () => JSON.parse(readFileSync(ROOT + 'ebible-catalog.json', 'utf8')) };
     if (hosted[String(url)]) { const b = hosted[String(url)]; return { ok: true, status: 200, headers: { get: () => String(b.length) }, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.length) }; }
     if (net.serveBsb && String(url).endsWith('modules/engbsb.zip')) {
@@ -85,7 +85,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   };
   const c = {
     window: win, document, location: { search: '' }, navigator: undefined,
-    console: { error() {}, warn() {}, log() {} }, TextDecoder, TextEncoder, URLSearchParams, URL,
+    console: process.env.INSTALL_BIBLE_DEBUG ? console : { error() {}, warn() {}, log() {} }, TextDecoder, TextEncoder, URLSearchParams, URL,
     setTimeout, clearTimeout, Promise, Uint8Array, fflate, initSqlJs: sqlJs, crypto: webcrypto,
     indexedDB: fakeIndexedDB(state), localStorage: lsOf(state), fetch, DOMException,
   };

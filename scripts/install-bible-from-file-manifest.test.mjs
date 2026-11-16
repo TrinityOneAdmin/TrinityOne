@@ -185,10 +185,21 @@ test('M6 — L8: the octet-stream filter is documented in the manifest as delibe
   assert.equal([...block.matchAll(/android:mimeType="application\/octet-stream"/g)].length, 1);
 });
 
-test('M7 — L3: release.sh refuses to build the member APK from a stripped manifest (it runs `check` before gradle)', () => {
+test('M7 — L3: release.sh refuses to build from a stripped manifest BEFORE it bumps anything (a refusal must leave nothing half-done)', () => {
   const rel = readFileSync(join(ROOT, 'scripts/release.sh'), 'utf8');
   const at = rel.indexOf('bash scripts/manifest-member-only.sh check');
-  const build = rel.indexOf('./gradlew assembleRelease -q )"\n  run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"');
   assert.ok(at > 0, 'release.sh never checks the member manifest');
-  assert.ok(build > at, 'the manifest check comes after the member build');
+  for (const later of ["Release: sw cache", "versionCode", './gradlew assembleRelease']) {
+    const i = rel.indexOf(later);
+    assert.ok(i > at, `the manifest check comes after "${later}" (${i} <= ${at}): a refusal would leave the release half-done`);
+  }
+  assert.equal([...rel.matchAll(/manifest-member-only\.sh check/g)].length, 1, 'check should run once, up front');
+});
+
+test('M8 — L-d: `restore` brings back a manifest that is MISSING when a backup exists', () => {
+  const k = killedBuild();
+  k.sh('strip');
+  rmSync(k.m);
+  assert.equal(k.sh('restore').status, 0);
+  assert.equal(k.read(), k.original, 'a deleted manifest was not recovered from the backup');
 });

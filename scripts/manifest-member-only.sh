@@ -52,7 +52,8 @@ case "$MODE" in
     strip_to "$BAK" "$M"
     ;;
   restore)
-    [ -f "$M" ] || exit 0
+    # a manifest that is MISSING comes back from its backup (the old code did; the first rewrite exited 0 and lost it)
+    if [ ! -f "$M" ]; then [ -f "$BAK" ] && mv "$BAK" "$M"; exit 0; fi
     settle_backup || exit 1
     ;;
   check)

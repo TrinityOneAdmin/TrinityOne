@@ -735,11 +735,15 @@ function App() {
   useAE(() => {
     const B = window.Bible;
     if (!B || typeof B.onFileInstall !== 'function') return undefined;
-    return B.onFileInstall((ev) => {
+    const off = B.onFileInstall((ev) => {
       if (!ev) return;
       if (ev.phase === 'installing') setIfs({ phase: 'installing' });
       else if (ev.phase === 'result') setIfs({ phase: 'result', result: ev.result });
+      else if (ev.phase === 'quarantined') setIfs({ phase: 'result', result: { ok: false, reason: 'quarantined', name: ev.name } });
     });
+    // a stored file the boot restore refused to open (unsafe) BEFORE we were listening: told once, here
+    try { const names = typeof B.takeQuarantineNotices === 'function' ? B.takeQuarantineNotices() : []; if (names && names.length) setIfs({ phase: 'result', result: { ok: false, reason: 'quarantined', name: names[0] } }); } catch (e) {}
+    return off;
   }, []);
   // "Open with TrinityOne": a SECOND listener beside the join one above, for a disjoint scheme (the join
   // handler accepts only https on our own host; this accepts only content:). It opens the CONFIRM step and reads
