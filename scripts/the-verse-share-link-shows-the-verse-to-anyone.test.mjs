@@ -4,7 +4,9 @@
 // Point of use (CLAUDE.md rule 1): a real scripts/gateway.mjs started as a child process, so
 // deleting the /v route from gateway.mjs fails HERE even though public-verse.mjs's own unit tests
 // stay green. The verseShareUrl/verseShareFull functions are lifted from app/app.jsx via test-slice
-// and run — so deleting the share link from the ShareCard also fails HERE.
+// and run. NOTE (2026-11-16): the ShareCard no longer sends this link — owner decision: "Share as image"
+// sends the picture plus the words and NO link, because the link brought the website preview into the
+// messenger. verseShareUrl/verseShareFull have no app caller now; the /v route still serves old links.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

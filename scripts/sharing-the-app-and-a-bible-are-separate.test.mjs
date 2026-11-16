@@ -460,3 +460,126 @@ test('L4b — coming back to the app while the file is still being PREPARED does
   await done;
   assert.equal(cap.shares.length, 1, 'the share did not go ahead once prepared');
 });
+
+// ═══════════════════════════ C. "Share as image" — the verse card (2026-11-16) ═══════════════════════════════
+// The card used to go out as text + a /v link, and the messenger showed the WEBSITE's link preview, not the card.
+// Owner (2026-11-16): send the PICTURE plus the verse words, and NO link. These drive the REAL ShareCard (app/
+// share-app.jsx) by pressing its buttons; verseShareText is the REAL one, compiled from app/app.jsx (whole).
+// FAKED, and named: the canvas (records every fillText; toBlob returns fixed bytes — that the real canvas code
+// makes a real PNG is proved in a browser by scripts/the-verse-card-is-a-real-png.test.mjs), Overlay/IconBtn,
+// and the plugins/browser above. window.Fellowship.relays is SET, so the old code WOULD have added a link.
+const VERSE = { ref: 'John 3:16', version: 'WEB', text: 'For God so loved the world, that he gave his one and only Son.' };
+const CANVAS_BYTES = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 1, 2, 3]);
+function fakeCanvas(drawn, { noBlob = false } = {}) {
+  let font = '10px serif', fill = '#000000';
+  const cx = {
+    get font() { return font; }, set font(v) { font = v; },
+    // like a real canvas: a colour it cannot parse (e.g. "var(--clay)") leaves fillStyle unchanged
+    get fillStyle() { return fill; }, set fillStyle(v) { if (typeof v === 'object' || /^#[0-9a-f]{6}$/i.test(v) || /^rgba?\(/.test(v)) fill = v; },
+    strokeStyle: '#000000', lineWidth: 1, globalAlpha: 1, textAlign: 'left', textBaseline: 'top', lineCap: '', lineJoin: '',
+    measureText: (t) => ({ width: String(t).length * Number(/(\d+)px/.exec(font)[1]) * 0.5 }),
+    fillText: (t) => { drawn.push(String(t)); },
+    fillRect() {}, strokeRect() {}, save() {}, restore() {}, translate() {}, scale() {}, stroke() {},
+    createLinearGradient: () => ({ addColorStop() {} }),
+  };
+  return { width: 0, height: 0, getContext: () => cx, toBlob: (cb, type) => cb(noBlob ? null : new Blob([CANVAS_BYTES], { type })) };
+}
+let VERSE_SHARE_TEXT = null;
+function realVerseShareText() {
+  if (VERSE_SHARE_TEXT) return VERSE_SHARE_TEXT;
+  const { React } = miniReact();
+  const noop = () => {};
+  VERSE_SHARE_TEXT = loadScreen('app/app.jsx', ['verseShareText'], {
+    React, window: {}, TrinityErrorBoundary: noop, ReactDOM: { createRoot: () => ({ render() {} }) }, document: { getElementById: () => null },
+  }).verseShareText;
+  return VERSE_SHARE_TEXT;
+}
+function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false } = {}) {
+  const { React, draw } = miniReact();
+  const toasts = [], textShares = [], drawn = [];
+  const win = { Capacitor: cap ? cap.Capacitor : undefined, Fellowship: { relays: ['wss://relay.example.org/relay'] } };
+  const document = { ...browser.document, fonts: { load: async () => [] },
+    createElement: (tag) => (tag === 'canvas' ? fakeCanvas(drawn, { noBlob }) : browser.document.createElement(tag)) };
+  const S = loadScreen('app/share-app.jsx', ['ShareCard'], {
+    React, window: win, btoa, File, Blob, fetch: apkFetch(), console: { warn() {}, log() {}, error() {} },
+    navigator: browser.navigator, document, URL: browser.URL, setTimeout: () => 0,
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    IconBtn: ({ name, onClick, title }) => React.createElement('button', { 'data-iconbtn': name, onClick, title }),
+    Overlay: ({ open, children }) => (open ? children : null), BottomSheet: () => null,
+    verseShareText: realVerseShareText(),
+  });
+  const ctx = { toast: (t) => toasts.push(t), shareText: async (...a) => { textShares.push(a); } };
+  const tree = () => draw(S.ShareCard, { verse: VERSE, open: true, onClose() {}, ctx });
+  const buttons = () => {
+    const t = tree();
+    const main = find(t, n => n.type === 'button' && !n.props['data-iconbtn'] && texts(n).join(' ').includes('Share this verse'));
+    const icon = find(t, n => n.type === 'button' && n.props['data-iconbtn'] === 'share');
+    assert.equal(main.length, 1, 'no single "Share this verse" button on the card — re-anchor this test');
+    assert.equal(icon.length, 1, 'no share icon in the card header — re-anchor this test');
+    return { main: main[0], icon: icon[0] };
+  };
+  return { toasts, textShares, drawn, buttons, win };
+}
+const noLink = (o) => { const s = JSON.stringify(o); return !/https?:|wss?:|\/v\?|relay\.example/i.test(s); };
+
+test('C1 — "Share as image" (both buttons) sends ONE .png — the drawn card — with the verse words beside it, and NO link', async () => {
+  for (const which of ['main', 'icon']) {
+    const cap = fakeCapacitor();
+    const v = verseCard({ cap });
+    await v.buttons()[which].props.onClick();
+    assert.equal(cap.shares.length, 1, `${which}: Share.share was called ${cap.shares.length} times`);
+    const s = cap.shares[0];
+    assert.ok(Array.isArray(s.files) && s.files.length === 1, `${which}: the share carried ${JSON.stringify(s.files)} — not exactly one file`);
+    assert.match(s.files[0], /\.png$/, `${which}: the shared file is not a .png`);
+    assert.equal(cap.writes.length, 1, `${which}: expected one file written`);
+    assert.match(cap.writes[0].path, /\.png$/);
+    assert.deepEqual([...cap.writes[0].bytes], [...CANVAS_BYTES], `${which}: the file shared is not the picture the canvas made`);
+    assert.deepEqual([...cap.writes[0].bytes.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'PNG signature');
+    assert.equal(typeof s.text, 'string', `${which}: the verse words are not beside the picture`);
+    assert.ok(s.text.includes(VERSE.text) && s.text.includes(VERSE.ref), `${which}: the text beside the picture is ${JSON.stringify(s.text)}`);
+    assert.equal(s.url, undefined, `${which}: a url went with the picture — that brings back the website preview`);
+    const { files, ...rest } = s;
+    assert.ok(noLink(rest), `${which}: a link is in the share: ${JSON.stringify(rest)}`);
+    assert.deepEqual(v.textShares, [], `${which}: the old text share also ran`);
+    const onCard = v.drawn.join(' ');
+    assert.ok(onCard.includes('John 3:16') && onCard.includes('WEB'), `${which}: the reference is not drawn on the card: ${onCard}`);
+    for (const w of ['loved', 'world', 'only', 'Son.']) assert.ok(onCard.includes(w), `${which}: "${w}" is not drawn on the card`);
+    assert.deepEqual(v.toasts, []);
+  }
+});
+
+test('C2 — on the web the picture goes to navigator.share as ONE image/png File, with the words and no link', async () => {
+  const browser = fakeBrowser();
+  const v = verseCard({ browser });
+  await v.buttons().main.props.onClick();
+  assert.equal(browser.shared.length, 1, 'navigator.share was not called once');
+  const d = browser.shared[0];
+  assert.equal(d.files.length, 1);
+  assert.equal(d.files[0].type, 'image/png');
+  assert.match(d.files[0].name, /\.png$/);
+  assert.deepEqual([...new Uint8Array(await d.files[0].arrayBuffer())], [...CANVAS_BYTES], 'the File is not the picture the canvas made');
+  assert.ok(typeof d.text === 'string' && d.text.includes(VERSE.text) && d.text.includes(VERSE.ref), `the words are not beside the picture: ${JSON.stringify(d.text)}`);
+  assert.equal(d.url, undefined, 'a url went with the picture');
+  const { files, ...rest } = d;
+  assert.ok(noLink(rest), `a link is in the share: ${JSON.stringify(rest)}`);
+});
+
+test('C3 — a browser that cannot share files downloads the .png instead', async () => {
+  const browser = fakeBrowser({ canShare: false });
+  const v = verseCard({ browser });
+  await v.buttons().main.props.onClick();
+  assert.equal(browser.shared.length, 0);
+  assert.equal(browser.clicked.length, 1, 'nothing was downloaded');
+  assert.match(browser.clicked[0].download, /\.png$/);
+});
+
+test('C4 — if the picture cannot be made, the words alone go (still no link) and the member is told', async () => {
+  const cap = fakeCapacitor();
+  const v = verseCard({ cap, noBlob: true });
+  await v.buttons().main.props.onClick();
+  assert.equal(cap.shares.length, 0, 'a share went out with no picture to send');
+  assert.equal(v.textShares.length, 1, 'the words were not shared');
+  assert.ok(v.textShares[0][0].includes(VERSE.text));
+  assert.ok(noLink(v.textShares[0]), `a link went with the words: ${JSON.stringify(v.textShares[0])}`);
+  assert.equal(v.toasts.length, 1, 'the member was not told the picture failed');
+});
