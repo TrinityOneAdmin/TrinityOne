@@ -2295,6 +2295,7 @@ function SharePreview({ p, type }) {
         <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 7 }}>COMMENTARY · {p.ref}{p.source ? ' · ' + p.source : ''}</div>
         <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink)', textWrap: 'pretty', display: '-webkit-box', WebkitLineClamp: 6, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{p.text}</p>
         {p.license ? <div style={{ fontSize: 10.5, lineHeight: 1.4, color: 'var(--ink-3)' }}>{p.license}</div> : null}
+        {p.warnLicence ? <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--ink-2)', marginTop: 8 }}>This commentary's copyright may not allow sharing.</div> : null}
       </div>
     );
   }
