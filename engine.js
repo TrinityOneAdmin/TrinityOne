@@ -1218,7 +1218,8 @@ window.safeImgUrl = function (v) {
           // a transient failure must not brand it unsafe for good (re-audit round 5, R5-1). So a refusal then SKIPS the record for
           // THIS boot only: not loaded (a record that is not ours never loads unless the reader accepts it), not quarantined, not
           // marked, and tried again at the next boot. With the lists readable the refusal is permanent, as before.
-          if(bad && !(await _listsReadable())){ console.warn("restore: skipped (cannot yet tell whether it is ours)", url); continue; }
+          // an imported/ key is a member's own file and can never be a published module, so no list can vouch for it: it is quarantined at once
+          if(bad && url.indexOf("imported/") !== 0 && !(await _listsReadable())){ console.warn("restore: skipped (cannot yet tell whether it is ours)", url); continue; }
           const mm = getInstalled();
           if(bad){
             if(mm[url]){ mm[url].quarantined = true; mm[url].told = false; setInstalled(mm); }

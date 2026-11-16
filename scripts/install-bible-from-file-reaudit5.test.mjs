@@ -73,3 +73,16 @@ test('R5-1e — EITHER list being unreadable is enough to skip (not quarantine) 
     assert.equal(p.Bible.versions().length, 0, `${down} down: a refused stranger loaded`);
   }
 });
+
+test('R5-1f — AN imported/ RECORD IS QUARANTINED AT ONCE even with the lists down (it can never be a published module); an absolute-url record is still only skipped', async () => {
+  const bad = await refusedZip();
+  const stI = seed('imported/mine.bbl.mybible.zip', bad, { name: 'My Import' });
+  const a = phone({ state: stI, catalogDown: true }); await a.boot(); await sleep(150);
+  assert.equal(recOf(stI, 'imported/mine.bbl.mybible.zip').quarantined, true, 'a refused imported/ record was only skipped, and would be retried on every boot');
+  assert.equal(a.Bible.versions().length, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(a.Bible.takeQuarantineNotices())), ['My Import']);
+  const url = 'https://evil.example/skip.zip';
+  const stA = seed(url, bad);
+  const b = phone({ state: stA, catalogDown: true }); await b.boot(); await sleep(150);
+  assert.ok(!recOf(stA, url).quarantined, 'an absolute-url record lost its skip-while-offline behaviour');
+});
