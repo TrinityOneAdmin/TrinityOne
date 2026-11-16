@@ -310,6 +310,20 @@ test('S21 — L-e: THE QUARANTINE NOTICE: the sheet names the file that was not 
   assert.equal(m2.sheetProps(m2.draw()).state.result.name, 'Boot Found');
 });
 
+test('S22 — A6: SEVERAL quarantine events in a row accumulate: the sheet names every file, not the last', async () => {
+  let fire = null;
+  const m = boot({ bible: { onFileInstall: (fn) => { fire = fn; return () => {}; }, takeQuarantineNotices: () => [] } });
+  await settle(m);
+  fire({ phase: 'quarantined', name: 'First Old' });
+  fire({ phase: 'quarantined', name: 'Second Old' });
+  const r = m.sheetProps(m.draw()).state.result;
+  assert.equal(r.reason, 'quarantined');
+  assert.deepEqual(plain(r.names), ['First Old', 'Second Old']);
+  const m2 = boot({ bible: { onFileInstall: () => () => {}, takeQuarantineNotices: () => ['One', 'Two', 'Three'] } });
+  await settle(m2);
+  assert.deepEqual(plain(m2.sheetProps(m2.draw()).state.result.names), ['One', 'Two', 'Three']);
+});
+
 // ════════════════════════════════ D. the REAL App: mount, listener, picker → sheet ══════════════════════════════
 
 const NPUB = 'npub1' + '0'.repeat(58);

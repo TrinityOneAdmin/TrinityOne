@@ -69,6 +69,8 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
     createElement: () => fakeInput, body: { appendChild() {} },
   };
   const fflate = unzipCalls ? { ...realFflate, unzipSync: (u8, o) => { unzipCalls.push(o && o.filter ? 'filter' : 'full'); if (o && o.filter) { const f = o.filter; o = { ...o, filter: (i) => { unzipCalls.entryCount = (unzipCalls.entryCount || 0) + 1; return f(i); } }; } return realFflate.unzipSync(u8, o); } } : realFflate;
+  const inflates = { n: 0 };
+  const fflateOut = { ...fflate, Inflate: class extends realFflate.Inflate { constructor(...a) { super(...a); inflates.n++; } } };
   const fetched = [];
   const fetch = async (url) => {
     fetched.push(String(url));
@@ -86,7 +88,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   const c = {
     window: win, document, location: { search: '' }, navigator: undefined,
     console: process.env.INSTALL_BIBLE_DEBUG ? console : { error() {}, warn() {}, log() {} }, TextDecoder, TextEncoder, URLSearchParams, URL,
-    setTimeout, clearTimeout, Promise, Uint8Array, fflate, initSqlJs: sqlJs, crypto: webcrypto,
+    setTimeout, clearTimeout, Promise, Uint8Array, fflate: fflateOut, initSqlJs: sqlJs, crypto: webcrypto,
     indexedDB: fakeIndexedDB(state), localStorage: lsOf(state), fetch, DOMException,
   };
   win.window = win; win.localStorage = c.localStorage;
@@ -99,7 +101,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   Bible.installFromBytes = async (...a) => JSON.parse(JSON.stringify(await rawInstall.apply(Bible, a)));
   Bible.onFileInstall = ((raw) => (fn) => raw((ev) => fn(JSON.parse(JSON.stringify(ev)))))(Bible.onFileInstall);
   const boot = async () => { bootCbs.splice(0).forEach(fn => fn()); await sleep(20); };
-  return { Bible, win, state, boot, fakeInput, fetched, net, sqlStats, goOnline: async () => { onlineCbs.slice().forEach(fn => fn()); await sleep(5); }, installed: () => records(state) };
+  return { Bible, win, state, boot, fakeInput, fetched, net, sqlStats, inflates, goOnline: async () => { onlineCbs.slice().forEach(fn => fn()); await sleep(5); }, installed: () => records(state) };
 }
 // a phone that has finished booting with nothing installed (the default BSB cannot download: no network)
 export async function readyPhone(opts) { const p = phone(opts); await p.boot(); p.Bible._error = null; return p; }   // boot's own failed default download is not the subject

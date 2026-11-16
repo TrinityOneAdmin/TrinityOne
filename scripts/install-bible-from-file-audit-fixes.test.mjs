@@ -49,7 +49,7 @@ test('E20 — M1: A ZIP64 HEADER CLAIMING MILLIONS OF ENTRIES is refused after a
   assert.ok(zip.length < 400, 'fixture is not a crafted header: ' + zip.length);
   const r = await p.Bible.installFromBytes(zip, 'x.zip');
   assert.equal(r.ok, false);
-  assert.ok((calls.entryCount || 0) <= 2002, `fflate walked ${calls.entryCount} claimed entries before the cap stopped it`);
+  assert.deepEqual([...calls], [], 'fflate was asked to walk the claimed entries: ' + calls);
 });
 
 const CTE = (n) => `(select max(x) from (with recursive c(x) as (select 1 union all select x+1 from c where x < ${n}) select x from c))`;

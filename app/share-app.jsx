@@ -120,6 +120,7 @@ window.shareOneFile = shareOneFile;
 // record with no or an unknown category.
 function isShareableModule(r) {
   if (!r || typeof r.url !== 'string' || !r.url) return false;
+  if (r.quarantined) return false;   // a file the app refused to open must never be handed on
   const cat = r.category;
   if (r.url.indexOf('imported/') === 0) return cat === 'bibles' || cat === 'commentaries' || cat === 'dictionaries';
   if (/\.json$/i.test(r.url)) return false;

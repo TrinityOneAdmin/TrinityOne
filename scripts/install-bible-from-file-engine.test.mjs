@@ -96,7 +96,7 @@ test('E4 — INFLATE CAP: a small zip whose central directory claims > 128 MB is
   assert.ok(cd > 0, 'no central directory header found in the fixture');
   dv.setUint32(cd + 24, 200 * 1024 * 1024, true);   // declared uncompressed size
   assert.deepEqual(await p.Bible.installFromBytes(z, 'bomb.zip'), { ok: false, reason: 'too-big' });
-  assert.deepEqual([...calls], ['filter'], 'something other than the header-only pass opened the zip: ' + calls);
+  assert.deepEqual([...calls], [], 'fflate was asked to open the zip (the engine reads a member\'s zip itself): ' + calls);
 });
 
 test('E5 — ENTRY CAP: a zip of 2,001 tiny entries is refused before anything is inflated', async () => {
@@ -105,12 +105,13 @@ test('E5 — ENTRY CAP: a zip of 2,001 tiny entries is refused before anything i
   const files = {}; for (let i = 0; i < 2001; i++) files['f' + i + '.txt'] = new Uint8Array([49]);
   const z = realFflate.zipSync(files, { level: 0 });
   assert.deepEqual(await p.Bible.installFromBytes(z, 'many.zip'), { ok: false, reason: 'unusable' });
-  assert.deepEqual([...calls], ['filter']);
-  // and exactly 2,000 passes this guard (then fails later as "not a module", never as a cap)
-  const f2 = {}; for (let i = 0; i < 2000; i++) f2['f' + i + '.txt'] = new Uint8Array([49]);
-  const calls2 = []; const p2 = await readyPhone({ unzipCalls: calls2 });
-  await p2.Bible.installFromBytes(realFflate.zipSync(f2, { level: 0 }), 'many.zip');
-  assert.ok(calls2.length > 1, 'a 2,000-entry zip was stopped by the entry cap — the cap is below 2,000');
+  assert.deepEqual([...calls], []);
+  // and exactly 2,000 entries passes this guard: a real Bible among 1,999 others installs
+  const f2 = {}; for (let i = 0; i < 1999; i++) f2['f' + i + '.txt'] = new Uint8Array([49]);
+  f2['real.bbl.mybible'] = await bibleDb('TWO', 'Two Thousand Bible', 'x');
+  const p2 = await readyPhone();
+  const ok2 = await p2.Bible.installFromBytes(realFflate.zipSync(f2, { level: 0 }), 'many.zip');
+  assert.equal(ok2.ok, true, 'a 2,000-entry zip was stopped by the entry cap: ' + JSON.stringify(ok2));
 });
 
 test('E6 — A VIEW OR A TRIGGER IS REFUSED, bare or inside a zip, fast; a normal module still installs', async () => {

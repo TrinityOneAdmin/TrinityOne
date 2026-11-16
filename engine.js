@@ -710,7 +710,13 @@ window.safeImgUrl = function (v) {
   function applyMeta(src, meta){ if(meta && meta.abbr) src.abbr = meta.abbr; if(meta && meta.name) src.name = meta.name; src.category = (meta && meta.category) || src.category || "bibles"; return src; }
 
   // Returns {kind:'bible', abbr} or {kind:'dict'}.
+  //
+  // `preFiles` (optional): the entries of a zip, ALREADY extracted. A file a member handed us is extracted by
+  // _zipExtract (one bounded, central-directory-driven reader, below) and passed here, so fflate.unzipSync is never
+  // run on it. A hosted catalogue module (fetchAndCacheModule) and a catalogue-pinned copy pass nothing and take the
+  // old path: those bytes come from our own server or match a published hash, they are not a stranger's.
   async function loadModuleBytes(u8, srcName, meta){
+    const preFiles = arguments[3];   // optional 4th argument (kept off the signature: tests lift this function by its exact first line)
     if(isSqlite(u8)){
       const db = await openDb(u8);
       if(db.has("Bible")) return { kind: "bible", abbr: addSource(applyMeta(buildBibleFromDb(db, srcName), meta)) };
@@ -721,7 +727,7 @@ window.safeImgUrl = function (v) {
       throw new Error("unsupported MySword module — no Bible, commentary or dictionary table");
     }
     if(isZip(u8)){
-      const files = fflate.unzipSync(u8);
+      const files = preFiles || fflate.unzipSync(u8);
       const names = Object.keys(files).filter(n => !n.startsWith("__MACOSX"));
       const dbName = names.find(n => /\.(bbl\.mybible|mybible|bbl|sqlite|db)$/i.test(n)) || names.find(n => isSqlite(files[n]));
       if(dbName){
@@ -1181,19 +1187,22 @@ window.safeImgUrl = function (v) {
         if(meta.quarantined) continue;   // an unsafe stored file: never loaded again; it stays listed so it can be removed
         const bytes = await cacheGet(url);
         if(!bytes) continue;  // cache cleared — user can re-download
-        // A FILE A MEMBER IMPORTED (imported/...) was never held to the install-time guards if an older build stored it, and
-        // boot used to hand it straight to loadModuleBytes: a view, trigger or generated column in it ran on EVERY launch
-        // (re-audit L-e). Check it once; quarantine it if it is unsafe, and record that it passed if it is not.
-        if(url.indexOf("imported/") === 0 && !meta.checked && (meta.format || "").toUpperCase() !== "JSON"){
+        // A FILE A MEMBER IMPORTED (imported/...) is read by the SAME bounded reader as at install time (never
+        // fflate.unzipSync), and a stored file an older build accepted unchecked is checked once. FAIL CLOSED: if the reader
+        // refuses it or the check cannot finish (it throws), the file is quarantined, not loaded (re-audit L-e, A4). The
+        // record stays listed and its bytes stay, so it can be removed in Library > Installed.
+        let memberFiles = null;
+        if(url.indexOf("imported/") === 0 && (meta.format || "").toUpperCase() !== "JSON"){
           let bad = false;
-          try{ const pk = isZip(bytes) ? (_zipRefusal(bytes) ? { unsafe: true } : await _peekModule(bytes, "")) : await _peekModule(bytes, ""); bad = !!(pk && pk.unsafe) || (isZip(bytes) && !!_zipRefusal(bytes)); }catch(e){ bad = false; }
+          if(isZip(bytes)){ const x = _zipExtract(bytes); if(x.refuse) bad = true; else memberFiles = x.files; }
+          if(!bad && !meta.checked){ try{ const pk = await _peekModule(bytes, "", memberFiles); bad = !!(pk && pk.unsafe); }catch(e){ bad = true; } }
           const mm = getInstalled();
           if(bad){
             if(mm[url]){ mm[url].quarantined = true; mm[url].told = false; setInstalled(mm); }
             _noticeQuarantine(url, meta.name || meta.abbr || url);
             continue;
           }
-          if(mm[url]){ mm[url].checked = true; setInstalled(mm); }
+          if(!meta.checked && mm[url]){ mm[url].checked = true; setInstalled(mm); }
         }
         if(!(await cachedCopyIsCurrent(url, bytes, pins[url]))){
           // The catalogue pins a different build: this module was republished after the phone installed
@@ -1234,7 +1243,7 @@ window.safeImgUrl = function (v) {
                  : loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr),
             isXr ? "crossrefs" : "dictionaries") });
         } else {
-          const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
+          const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category }, memberFiles);
           noteLoadedFrom(url, r && r.abbr, catOf(meta));
         }
       }catch(e){ console.error("restore failed for", url, e); }
@@ -1312,7 +1321,8 @@ window.safeImgUrl = function (v) {
   };
   const _nameKey = (s) => {
     let o = "";
-    for(const ch of String(s == null ? "" : s).normalize("NFKC")){ const t = ch.codePointAt(0) >= 128 ? _confOf(ch.codePointAt(0)) : null; o += t || ch; }
+    // accents come off FIRST (Greek \u03cc and Cyrillic \u04e7, \u0451, \u0457, \u04d1 are an accented lookalike of a letter the table knows), then the map
+    for(const ch of String(s == null ? "" : s).normalize("NFKC").normalize("NFD").replace(/\p{M}/gu, "")){ const t = ch.codePointAt(0) >= 128 ? _confOf(ch.codePointAt(0)) : null; o += t || ch; }
     return o.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
   };
   const _deriveAbbr = (name) => {
@@ -1392,7 +1402,7 @@ window.safeImgUrl = function (v) {
     } finally { db.close(); }   // the peek only READS the names; the module itself is opened (and kept) by loadModuleBytes
   }
   const _DBEXT = { bible: ".bbl.mybible", comment: ".cmt.mybible", dict: ".dct.mybible" };
-  async function _peekModule(u8, hint){
+  async function _peekModule(u8, hint, preFiles){
     const fb = String(hint || "");
     if(isSqlite(u8)){
       if(await _sqliteUnsafe(u8)) return { unsafe: true };
@@ -1400,18 +1410,17 @@ window.safeImgUrl = function (v) {
       return p && { ...p, ext: _DBEXT[p.kind] };
     }
     if(isZip(u8)){
-      // inflate only the database-named entries; with none, inflate the lot (still bounded by the pre-pass)
-      const live = (f) => !f.name.startsWith("__MACOSX");
-      let files = fflate.unzipSync(u8, { filter: (f) => live(f) && DB_NAME_RE.test(f.name) });
-      if(!Object.keys(files).length) files = fflate.unzipSync(u8, { filter: live });
-      const names = Object.keys(files);
+      // the zip is read ONCE, bounded, by _zipExtract; the same entries go on to loadModuleBytes (peek.files)
+      let files = preFiles;
+      if(!files){ const x = _zipExtract(u8); if(x.refuse) return { unsafe: true }; files = x.files; }
+      const names = Object.keys(files).filter(n => !n.startsWith("__MACOSX"));
       const dbNames = names.filter(n => DB_NAME_RE.test(n));
       const sqliteNames = dbNames.length ? dbNames.filter(n => isSqlite(files[n])) : names.filter(n => isSqlite(files[n]));
       for(const n of sqliteNames) if(await _sqliteUnsafe(files[n])) return { unsafe: true };
       const dbName = names.find(n => DB_NAME_RE.test(n)) || names.find(n => isSqlite(files[n]));
-      if(dbName){ const p = await _peekDb(files[dbName], fb); return p && { ...p, ext: _DBEXT[p.kind] + ".zip" }; }
+      if(dbName){ const p = await _peekDb(files[dbName], fb); return p && { ...p, ext: _DBEXT[p.kind] + ".zip", files }; }
       const name = _usfmName(files, fb);
-      return { kind: "bible", abbr: _deriveAbbr(name), name, ext: ".zip", usfm: true };
+      return { kind: "bible", abbr: _deriveAbbr(name), name, ext: ".zip", usfm: true, files };
     }
     const head = new TextDecoder().decode(u8.slice(0, 256));
     if(/\\id\s+\w+/.test(head) || /\\c\s+\d/.test(head)){
@@ -1465,76 +1474,73 @@ window.safeImgUrl = function (v) {
     notify();
   }
   const _fail = (reason) => ({ ok: false, reason });
-  // The central directory, read the way fflate reads it (and so the way loadModuleBytes' unzipSync does): the EOCD found
-  // by scanning back from the end, then each 46-byte record's method, sizes and LOCAL HEADER OFFSET. Returns null for
-  // anything odd, including every zip64 marker (a zip under 50 MB with under 2,000 entries never needs one).
-  function _zipCentralDirectory(u8){
+  // ONE ZIP READER FOR EVERYTHING A MEMBER HANDS US (re-audit 3, A1). Twice the install check read a zip one way and the
+  // loader read it another: first local headers against the central directory, then a classic end record against the
+  // zip64 locator fflate prefers. Patching the check each time left the structure, so the structure is gone: nothing
+  // on the member-file path calls fflate.unzipSync any more. _zipParse reads the central directory (and refuses
+  // anything ambiguous), _zipExtract decodes every entry once, bounded by its declared size, and the entries it returns
+  // are the ones the peek AND loadModuleBytes use. The check and the use are the same bytes because they are the same
+  // call. Where the line falls: a HOSTED catalogue module (fetchAndCacheModule) and a catalogue-pinned copy still go
+  // through loadModuleBytes' own unzipSync; those bytes come from our server or match a published hash.
+  //
+  // Refused (reason "unusable", or "too-big" for the size caps): no end record, MORE THAN ONE end record in the last 64 KB,
+  // a zip64 locator (fflate's exact test: signature 0x07064b50 at end-20, which sends fflate to a second directory),
+  // zip64 or multi-disk markers (a zip under 50 MB never needs them), the two entry counts disagreeing, more than 2,000
+  // entries, a declared inflated total over 128 MB, an encrypted entry, a local header that is not where the
+  // directory says, a method other than stored/deflate, a stored entry whose sizes differ, and a deflate stream that
+  // yields more or fewer bytes than the directory declared.
+  function _zipParse(u8){
+    const bad = { refuse: "unusable" };
+    const len = u8.length;
+    if(len < 22) return bad;
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    let e = u8.length - 22; const low = Math.max(0, u8.length - 65558);
-    for(; e >= low; e--) if(dv.getUint32(e, true) === 0x06054b50) break;
-    if(e < low) return null;
+    let e = -1; const low = Math.max(0, len - 65558);
+    for(let i = len - 22; i >= low; i--) if(dv.getUint32(i, true) === 0x06054b50){ if(e >= 0) return bad; e = i; }
+    if(e < 0) return bad;
+    if(e >= 20 && dv.getUint32(e - 20, true) === 0x07064b50) return bad;
     const count = dv.getUint16(e + 10, true), cdSize = dv.getUint32(e + 12, true), cdOff = dv.getUint32(e + 16, true);
-    if(count === 0xffff || cdSize === 0xffffffff || cdOff === 0xffffffff || cdOff > e) return null;
-    const out = []; let p = cdOff;
+    if(dv.getUint16(e + 8, true) !== count || dv.getUint16(e + 4, true) !== 0 || dv.getUint16(e + 6, true) !== 0) return bad;
+    if(count === 0xffff || cdSize === 0xffffffff || cdOff === 0xffffffff || cdOff + cdSize > e) return bad;
+    if(count > INSTALL_MAX_ENTRIES) return bad;
+    const entries = []; let p = cdOff, total = 0;
     for(let i = 0; i < count; i++){
-      if(p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) return null;
-      const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true), lho = dv.getUint32(p + 42, true);
-      if(csize === 0xffffffff || usize === 0xffffffff || lho === 0xffffffff) return null;
-      out.push({ method, csize, usize, lho });
-      p += 46 + dv.getUint16(p + 28, true) + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+      if(p + 46 > len || dv.getUint32(p, true) !== 0x02014b50) return bad;
+      const flags = dv.getUint16(p + 8, true), method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true);
+      const nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
+      if(csize === 0xffffffff || usize === 0xffffffff || lho === 0xffffffff || (flags & 1) || p + 46 + nl > len) return bad;
+      total += usize;
+      if(total > INSTALL_MAX_INFLATED) return { refuse: "too-big" };
+      const nb = u8.subarray(p + 46, p + 46 + nl);
+      entries.push({ name: (flags & 0x800) ? new TextDecoder("utf-8").decode(nb) : String.fromCharCode.apply(null, nb), method, csize, usize, lho });
+      p += 46 + nl + xl + cl;
     }
-    return out;
+    return { entries, dv };
   }
-  // Inflate with a STREAMING inflater in 8 KB pushes (a deflate stream cannot expand more than ~1000:1, so each push is
-  // bounded work) and give up the moment the output passes `limit`. Returns the output size, or -1.
-  function _boundedInflate(data, limit){
-    let got = 0, over = false;
+  // Inflate into a buffer of EXACTLY the declared size, in 8 KB pushes (a deflate stream cannot expand more than ~1000:1, so
+  // each push is bounded work), and give up the moment the output would pass it. null on any failure.
+  function _inflateExact(data, size){
+    const out = new Uint8Array(size); let at = 0, over = false;
     const inf = new fflate.Inflate();
-    inf.ondata = (chunk) => { got += chunk.length; if(got > limit) over = true; };
+    inf.ondata = (chunk) => { if(at + chunk.length > size){ over = true; return; } out.set(chunk, at); at += chunk.length; };
     try{ for(let i = 0; i < data.length && !over; i += 8192) inf.push(data.subarray(i, Math.min(i + 8192, data.length)), i + 8192 >= data.length); }
-    catch(e){ return -1; }
-    return over ? -1 : got;
+    catch(e){ return null; }
+    return (!over && at === size) ? out : null;
   }
-  // The pre-pass for a zip (audit H1, M1; re-audit R1). Returns null if it is within bounds, else the refusal reason.
-  //  1. a header-only walk (fflate's own, the one loadModuleBytes will follow) that THROWS the moment the entry count or
-  //     the declared inflated total passes its cap, so a zip64 header claiming billions of entries is never walked;
-  //  2. the central directory is read again here, and must describe EXACTLY the entries fflate's walk did (same count,
-  //     method, sizes): any disagreement is a zip the two readers see differently, and is refused;
-  //  3. every central-directory entry is then decoded from ITS OWN local header's data, with a streaming inflater that
-  //     stops the moment the output passes what that entry declared (and the running total passes 128 MB).
-  // Step 3 must follow the CENTRAL DIRECTORY, not the local headers in file order: the first version of this check
-  // walked local headers (fflate.Unzip), so a central-directory record pointing INSIDE another entry's stored data was
-  // never decoded here and was decoded, unbounded, by the loader (re-audit R1: 200 KB inflated to 200 MB on every
-  // boot). It does not hand the decoded bytes on to the loader (that would mean saving a re-zipped copy, whose hash
-  // is no longer the pinned catalogue's and no longer what the sender sent); it decodes the very ranges the loader
-  // will, with the loader's own arithmetic, so the check and the use are the same bytes.
-  function _zipRefusal(u8){
-    const walked = []; let n = 0, total = 0;
-    const stop = (why) => { const e = new Error(why); e._cap = why; throw e; };
-    try{
-      fflate.unzipSync(u8, { filter: (f) => {
-        n++; total += f.originalSize || 0;
-        if(n > INSTALL_MAX_ENTRIES) stop("unusable");
-        if(total > INSTALL_MAX_INFLATED) stop("too-big");
-        walked.push([f.compression, f.size, f.originalSize]);
-        return false;
-      } });
-    }catch(e){ return e && e._cap ? e._cap : "unusable"; }
-    const cd = _zipCentralDirectory(u8);
-    if(!cd || cd.length !== walked.length) return "unusable";
-    for(let i = 0; i < cd.length; i++) if(cd[i].method !== walked[i][0] || cd[i].csize !== walked[i][1] || cd[i].usize !== walked[i][2]) return "unusable";
-    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    for(const en of cd){
-      if(en.lho + 30 > u8.length || dv.getUint32(en.lho, true) !== 0x04034b50) return "unusable";
+  // -> { files: {name: Uint8Array} } or { refuse: "unusable" | "too-big" }. The only place a member's zip is decoded.
+  function _zipExtract(u8){
+    const z = _zipParse(u8);
+    if(z.refuse) return z;
+    const files = Object.create(null), dv = z.dv;
+    for(const en of z.entries){
+      if(en.lho + 30 > u8.length || dv.getUint32(en.lho, true) !== 0x04034b50) return { refuse: "unusable" };
       const start = en.lho + 30 + dv.getUint16(en.lho + 26, true) + dv.getUint16(en.lho + 28, true);
-      if(start + en.csize > u8.length) return "unusable";
+      if(start + en.csize > u8.length) return { refuse: "unusable" };
       const data = u8.subarray(start, start + en.csize);
-      // each entry may yield at most what it declared, and the declared sum was capped above, so the decoded total is too
-      if(en.method === 0){ if(en.csize !== en.usize) return "unusable"; }
-      else if(en.method === 8){ if(_boundedInflate(data, en.usize) < 0) return "unusable"; }
-      else return "unusable";
+      if(en.method === 0){ if(en.csize !== en.usize) return { refuse: "unusable" }; files[en.name] = u8.slice(start, start + en.csize); }
+      else if(en.method === 8){ const out = _inflateExact(data, en.usize); if(!out) return { refuse: "unusable" }; files[en.name] = out; }
+      else return { refuse: "unusable" };
     }
-    return null;
+    return { files };
   }
   let _installDepth = 0;      // installs in flight: the reconnect retry of autoLoad must not start a second default install under one
   // Registration is one at a time across file installs AND hosted ones (fetchAndCacheModule): the name check and
@@ -1557,13 +1563,16 @@ window.safeImgUrl = function (v) {
       for(const k of Object.keys(inst)) if(k.indexOf("imported/" + h12 + "/") === 0 && await heldKey(k)){ dupKey = k; break; }
       const pinned = await _pinnedEntry(h);
       if(!dupKey && pinned) dupKey = await heldKey(pinned.url);
+      // the SAME bytes were stored and later quarantined: say so, never "already installed"
+      if(dupKey && inst[dupKey].quarantined) return { ok: false, reason: "quarantined", name: inst[dupKey].name || inst[dupKey].abbr || dupKey };
       if(dupKey){ const r = inst[dupKey]; return { ok: true, already: true, kind: r.kind || (r.category === "commentaries" ? "comment" : r.category === "dictionaries" ? "dict" : r.category === "crossrefs" ? "crossref" : "bible"), abbr: r.abbr, name: r.name || r.abbr }; }
       // a record whose bytes are gone is stale: drop it so this install can stand in its place
       for(const k of Object.keys(inst)) if(k.indexOf("imported/" + h12 + "/") === 0){ const m = getInstalled(); delete m[k]; setInstalled(m); }
 
-      if(isZip(u8)){ const why = _zipRefusal(u8); if(why) return _fail(why); }
+      let files = null;
+      if(isZip(u8)){ const x = _zipExtract(u8); if(x.refuse) return _fail(x.refuse); files = x.files; }
       let peek = null;
-      try{ peek = await _peekModule(u8, hint); }catch(e){ console.warn("install: not readable as a module", e); return _fail("unusable"); }
+      try{ peek = await _peekModule(u8, hint, files); }catch(e){ console.warn("install: not readable as a module", e); return _fail("unusable"); }
       if(!peek || peek.unsafe) return _fail("unusable");
 
       // names: a pinned copy takes its catalogue entry's; everything else may never take a held name
@@ -1589,7 +1598,7 @@ window.safeImgUrl = function (v) {
           bytes = new TextEncoder().encode(JSON.stringify(p));
         }
         let r;
-        try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }); }
+        try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }, peek.files); }
         catch(e){ console.warn("install: loadModuleBytes refused the file", e); return _fail("unusable"); }
         if(!r || !r.abbr) return _fail("unusable");
         const shown = (r.kind === "bible" && modules[r.abbr] && modules[r.abbr].name) || (r.kind === "comment" && commentaries[r.abbr] && commentaries[r.abbr].name)
@@ -1765,7 +1774,7 @@ window.safeImgUrl = function (v) {
     // bytes being freed were somebody else's. `urlOf` says where the loaded module of that name really came
     // from; when it came from somewhere else, nothing of ours is in memory and there is nothing to drop.
     const here = urlOf[urlKey(cat, abbr)];
-    const loadedHere = !url || !here || here === url;
+    const loadedHere = !url || (!(meta && meta.quarantined) && (!here || here === url));   // a quarantined record never loaded: nothing in memory is its own
     if(loadedHere){
       if(meta && meta.kind === "worddef") removeWorddefs(abbr);
       else if(meta && meta.kind === "original") removeOriginal(abbr);

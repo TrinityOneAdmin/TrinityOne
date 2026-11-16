@@ -1058,7 +1058,7 @@ function InstalledBrowser({ ctx, category, force }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{r.name}</div>
               <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, margin: '2px 0 0' }}>
-                {[CAT_LABEL[r.category] || 'Module', r.abbr, isActive ? 'Active' : null].filter(Boolean).join('  ·  ')}
+                {[CAT_LABEL[r.category] || 'Module', r.abbr, isActive ? 'Active' : null, r.quarantined ? 'Not opened: unsafe' : null].filter(Boolean).join('  ·  ')}
               </div>
             </div>
             {/* Share sits ABOVE Remove, not beside it: side by side, at 360px the name was left 69px and

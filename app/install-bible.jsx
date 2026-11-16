@@ -125,7 +125,7 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
   const word = ifsKindWord(r.kind);
   const Word = word.charAt(0).toUpperCase() + word.slice(1);
 
-  let tone = 'var(--sage)', icon = 'check', title = '', name = null, body = '', buttons = [];
+  let tone = 'var(--sage)', icon = 'check', title = '', name = null, names = null, body = '', buttons = [];
   const ok = { label: 'OK', onClick: close };
   if (s.phase === 'confirm') {
     tone = 'var(--clay)'; icon = 'plus';
@@ -149,7 +149,13 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
       : [{ label: 'Open Library', primary: true, onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed', r.kind === 'dict' ? 'dictionaries' : 'commentaries'); } }, { label: 'Done', onClick: close }];
   } else if (s.phase === 'result') {
     tone = 'var(--clay-ink)'; icon = 'x';
-    if (r.reason === 'quarantined') { title = 'A saved file was not opened'; name = r.name; body = 'It could freeze TrinityOne, so it was not loaded. It is still on this phone: you can remove it in Library, under Installed.'; buttons = [ok, { label: 'Open Library', onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed'); } }]; }
+    if (r.reason === 'quarantined') {
+      const many = Array.isArray(r.names) && r.names.length > 1;
+      title = many ? 'Saved files were not opened' : 'A saved file was not opened';
+      name = many ? null : r.name; names = many ? r.names : null;
+      body = (many ? 'They' : 'It') + ' could freeze TrinityOne, so ' + (many ? 'they were' : 'it was') + ' not loaded. ' + (many ? 'They are' : 'It is') + ' still on this phone: you can remove ' + (many ? 'them' : 'it') + ' in Library, under Installed.';
+      buttons = [ok, { label: 'Open Library', onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed'); } }];
+    }
     else if (r.reason === 'too-big') { title = 'That file is too big'; body = 'TrinityOne takes files up to 50 MB. Nothing was installed.'; buttons = [ok]; }
     else if (r.reason === 'no-space') { title = 'Not enough room on this phone'; body = 'Nothing was installed. Free some space and try again.'; buttons = [ok]; }
     else if (r.reason === 'unreadable') { title = 'TrinityOne couldn’t read that file'; body = 'Nothing was installed.'; buttons = [ok]; }
@@ -169,6 +175,7 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
         </div>
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700, lineHeight: 1.2 }}>{title}</div>
         {name ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 17, fontWeight: 600, margin: '8px 0 0', overflowWrap: 'anywhere' }}>{name}</div> : null}
+        {names ? names.map((n, i) => <div key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 16, fontWeight: 600, margin: '6px 0 0', overflowWrap: 'anywhere' }}>{n}</div>) : null}
         <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '8px 0 18px', textWrap: 'pretty' }}>{body}</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9, width: '100%' }}>
           {buttons.map(b => (
