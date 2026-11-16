@@ -2583,6 +2583,55 @@ function TodayScreen({ ctx }) {
   const _tdFeat = (ctx.church && ctx.church.features) || {};
   const rotaOn = _tdFeat.rota !== false;
   const resourcesOn = _tdFeat.resources !== false;
+  // THE CHURCH'S PUBLIC VERSE PROMPT ON THE HOME-SCREEN WIDGET (reference/PLAN-phone-widget-2026-11-16.html §4b).
+  // The widget fetches /public/<npub>/verse-prompt.json in the background with the app CLOSED, so what this hands
+  // it — the church's npub and relay addresses — sits on the phone outside the app's lock. Hence:
+  //   · only while the widget is on, a church is followed, the community is unlocked and Resources is on;
+  //   · ADDRESSES: only Fellowship.widgetFeedBases(), i.e. relaysForChurch() after the admission gate (rule 10);
+  //   · validUntil, which the native side enforces on its own: with no PIN, a week; with a PIN, only while
+  //     "remember me" holds (its own expiry) — a PIN member without it gets NO prompt config, because the app
+  //     is locked again at its next start and no code runs at that moment to clear the widget;
+  //   · probe first: only a 200 configures the background fetch (a church that never switched it on is not
+  //     polled), and anything else CLEARS it — which is also what a lock, a leave or a church switch does here.
+  const widgetChurch = ctx.churchNpub || '';
+  const widgetLocked = !!ctx.commLocked;
+  const widgetHasPin = !!ctx.hasCommunityPin;
+  const vpRefsKey = versePrompt ? [versePrompt.ref || ''].concat((versePrompt.schedule || []).map(s => (s && s.ref) || '')).join('|') : '';
+  React.useEffect(() => {
+    const W = trinityHomeWidget();
+    if (!W || !W.publishPrompt || !W.clearPrompt) return;
+    let cancelled = false;
+    const clear = () => { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} };
+    if (!widgetOn || !widgetChurch || widgetLocked || !resourcesOn) { clear(); return; }
+    (async () => {
+      const F = window.Fellowship;
+      const where = (F && F.widgetFeedBases) ? F.widgetFeedBases(widgetChurch) : null;
+      const bases = (where && Array.isArray(where.bases)) ? where.bases.filter(b => /^https:\/\//i.test(String(b))) : [];
+      if (!where || !where.npub || !bases.length) return;   // nothing admitted yet: write no address, keep what is there
+      const nowS = Math.floor(Date.now() / 1000);
+      let until = nowS + 7 * 86400;
+      if (widgetHasPin) {
+        try { until = Number(await window.TrinityIdentity.rememberedUntil()) || 0; } catch (e) { until = 0; }
+        if (until <= nowS) { if (!cancelled) clear(); return; }
+      }
+      let cached = null;
+      for (const b of bases) {
+        try {
+          const r = await fetch(b + '/public/' + where.npub + '/verse-prompt.json', { cache: 'no-store' });
+          if (r && r.status === 200) { const j = await r.json(); if (j && typeof j === 'object' && (!cached || (Number(j.ts) || 0) > (Number(cached.ts) || 0))) cached = j; }
+        } catch (e) {}
+      }
+      if (cancelled) return;
+      if (!cached) { clear(); return; }
+      // The member's own translation for every passage the copy names, so the widget can show the words, not just
+      // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
+      const texts = {};
+      const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
+      refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = votdInTranslation({ ref: r, text: '' }, Bible); if (t.text) texts[r] = t.text; });
+      try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(() => {}); } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded]);   // eslint-disable-line
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;

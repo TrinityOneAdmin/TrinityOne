@@ -25,7 +25,7 @@ const TRANSLATED = 'BSB-TEXT For God so loved the world that He gave His one and
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const localISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
-function todayScreen({ widget = '1', plugin = true } = {}) {
+function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true } = {}) {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { ChurchBadge } = loadScreen('app/screens-church.jsx', ['ChurchBadge'],
@@ -38,10 +38,12 @@ function todayScreen({ widget = '1', plugin = true } = {}) {
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [];
+  const published = [], prompts = [], cleared = [], fetched = [];
   const win = {
     addEventListener() {}, removeEventListener() {}, innerWidth: 360, localStorage,
-    Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] },
+    Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
+      widgetFeedBases: (np) => (feedBases && np === church ? { npub: CHURCH_NPUB, bases: feedBases } : null) },
+    TrinityIdentity: { rememberedUntil: async () => rememberedUntil },
     ChurchBadge,
     TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: POOL },
     Bible: {
@@ -49,7 +51,8 @@ function todayScreen({ widget = '1', plugin = true } = {}) {
       loaded: true, books: () => [43], getVerses: (b, c) => (b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
     },
-    Capacitor: plugin ? { Plugins: { TrinityWidget: { publishVotd: (a) => { published.push(a); return Promise.resolve(); } } } } : undefined,
+    Capacitor: plugin ? { Plugins: { TrinityWidget: { publishVotd: (a) => { published.push(a); return Promise.resolve(); },
+      publishPrompt: (a) => { prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
   };
   let pickStore = null;
   const globals = {
@@ -65,16 +68,17 @@ function todayScreen({ widget = '1', plugin = true } = {}) {
     useTrinityAudio: () => ({ track: null, playing: false }),
     todayISO: () => localISO(date),
     Date: class extends Date { constructor(...a) { super(...(a.length ? a : [date])); } static now() { return date.getTime(); } },
-    fetch: async () => ({ ok: false, json: async () => ({}) }),
+    fetch: async (url) => { fetched.push(String(url)); const hit = Object.keys(feed).find(b => String(url) === b + '/public/' + CHURCH_NPUB + '/verse-prompt.json'); return hit ? { status: 200, ok: true, json: async () => feed[hit] } : { status: 404, ok: false, json: async () => ({}) }; },
   };
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const ctx = {
-    church: { name: 'Grace', initials: 'SB', npub: 'np1' },
+    church: { name: 'Grace', initials: 'SB', npub: 'np1', features: resources ? {} : { resources: false } },
+    churchNpub: church, commLocked: locked, hasCommunityPin: pin,
     openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
     toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {},
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, today: localISO(date) };
+  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
 // The verse the CARD shows, read off the rendered tree: which pool ref's label is on screen, and the text.
@@ -213,4 +217,57 @@ test('without the native plugin (web, iOS) there is no widget switch at all', ()
   const s = settingsSwitch({ plugin: false });
   const tree = s.draw();
   assert.equal(find(tree, n => n.type === 'button' && (n.props || {}).role === 'switch').length, 0);
+});
+
+// ── slice 1b: the church's PUBLIC verse prompt (plan §4b) ────────────────────────────────────────────────────
+const CHURCH_NPUB = 'npub1' + 'q'.repeat(58);
+const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+const COPY = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: 'John 3:16', schedule: [{ at: 1790000100, ref: 'Psalms 23:1' }] };
+
+test('1b: Today hands the widget ONLY admitted https relays, the npub, a week\'s validity and the member\'s translation', async () => {
+  const s = todayScreen({ church: 'grace', feedBases: ['https://box.example', 'wss://not-http.example', 'http://cleartext.example', 'https://a8.example'], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, `Today did not configure the widget's church verse prompt (publishPrompt called ${s.prompts.length} times)`);
+  const p = s.prompts[0];
+  assert.equal(p.npub, CHURCH_NPUB);
+  assert.deepEqual(p.bases, ['https://box.example', 'https://a8.example'],
+    'the widget was handed an address that is not an admitted https relay from Fellowship.widgetFeedBases (CLAUDE.md rule 10)');
+  for (const u of s.fetched) assert.ok(u.startsWith('https://box.example/') || u.startsWith('https://a8.example/'), 'Today probed an address it was not given: ' + u);
+  assert.equal(p.validUntil, s.nowS + 7 * 86400, 'with no PIN the config must expire in a week, enforced natively');
+  assert.equal(p.cached.ref, 'John 3:16');
+  assert.equal(p.texts['John 3:16'], TRANSLATED, 'the widget does not get the member\'s own translation of the prompt');
+});
+
+test('1b: a PIN without "remember me" gets NO church config (it would outlive the lock); with it, validity = its expiry', async () => {
+  let s = todayScreen({ church: 'grace', pin: true, rememberedUntil: 0, feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 0, 'a member with a PIN and no remember-me had the church written outside the lock');
+  assert.ok(s.cleared.length >= 1, 'and what was there was not cleared');
+  s = todayScreen({ church: 'grace', pin: true, rememberedUntil: 1800000000, feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1);
+  assert.equal(s.prompts[0].validUntil, 1800000000, 'validity is not the remember-me expiry');
+});
+
+test('1b: locked, no church, Resources off, widget off, or nothing shared — the church config is CLEARED, never written', async () => {
+  const cases = {
+    locked: { church: 'grace', locked: true },
+    'no church': { church: '' },
+    'resources off': { church: 'grace', resources: false },
+    'widget off': { church: 'grace', widget: '0' },
+    'nothing shared (404 everywhere)': { church: 'grace', feed: {} },
+  };
+  for (const [name, o] of Object.entries(cases)) {
+    const s = todayScreen({ feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY }, ...o });
+    s.draw(); await settle();
+    assert.equal(s.prompts.length, 0, `${name}: the church verse prompt was written to the widget`);
+    assert.ok(s.cleared.length >= 1, `${name}: the widget's church config was not cleared`);
+  }
+});
+
+test('1b: before any relay is admitted, Today writes NO address (and does not clear a good config)', async () => {
+  const s = todayScreen({ church: 'grace', feedBases: [], feed: {} });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 0);
+  assert.equal(s.fetched.length, 0, 'Today probed something although no relay was admitted');
 });

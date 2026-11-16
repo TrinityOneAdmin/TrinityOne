@@ -6917,6 +6917,23 @@ window.Fellowship = {
     });
   },
 
+  // ── WHERE A HOME-SCREEN WIDGET MAY FETCH THIS CHURCH'S PUBLIC VERSE PROMPT (reference/PLAN-phone-widget-
+  // 2026-11-16.html §4b; CLAUDE.md rule 10, reference/RELAY-ADMISSION.md) ──
+  // ONLY relays this church's read set ADMITTED: relaysForChurch(cp), which is the candidate list AFTER the
+  // admission gate (_netRelays -> _gate.admit). This adds no candidate and never reads churchRelaysRaw() (the
+  // deliberately UNGATED bootstrap list), so it cannot widen which machines a church talks to. wss:// only —
+  // turned into the https:// origin the relay serves /public/ on (the console's _webFeedBase does the same).
+  // An empty list (nothing proved yet) is an honest answer: the caller writes no address.
+  widgetFeedBases(churchNpub) {
+    const cp = toPub(churchNpub);
+    if (!cp) return null;
+    let list = [];
+    try { list = relaysForChurch(cp) || []; } catch (e) { list = []; }
+    const bases = [...new Set(list.map(u => String(u || '')).filter(u => /^wss:\/\//i.test(u))
+      .map(u => u.replace(/^wss:/i, 'https:').replace(/\/relay\/?$/i, '').replace(/\/+$/, '')))];
+    return { npub: npubEncode(cp), bases };
+  },
+
   // ── read the reading plans a church shares (kind-30078, d=plan:) ──
   subscribeChurchVersePrompt(churchNpub, cb) {
     const pubk = toPub(churchNpub);

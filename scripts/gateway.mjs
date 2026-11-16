@@ -27,7 +27,7 @@ import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, 
 import { buildCalendar, publicEventFields, PUB_IMG_MAX } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
 import { buildWidgetScript } from './public-widget.mjs';   // the embeddable calendar widget (pure: same script for every church)
 import { buildVersePage } from './public-verse.mjs';       // standalone verse page for public sharing (pure: no I/O, no store)
-import { buildSermonFeed, publicSermonFields, buildPlansFeed, publicPlanFields, buildDevosFeed, publicDevoFields } from './public-media.mjs';   // the church's PUBLIC sermon podcast feed (pure: no I/O, no policy)
+import { buildSermonFeed, publicSermonFields, buildPlansFeed, publicPlanFields, buildDevosFeed, publicDevoFields, publicVersePromptFields, buildVersePromptFeed } from './public-media.mjs';   // the church's PUBLIC sermon podcast feed (pure: no I/O, no policy)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -1536,6 +1536,7 @@ const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members 
 // this relay must READ them to build /public/<npub>/calendar.ics, which is the one thing it serves without auth.
 const SHARE_D = D.SHARE;         // d=share:<churchpub>, {calendar:bool, optOut:[eventIds], address:'own'} — the switches and the per-item opt-outs
 const PUBEVENT_D = D.PUBEVENT;   // d=pubevent:<eventId> — the plaintext public copy of one event; event: itself is sealed and unreadable here
+const PUBVERSE_D = D.PUBVERSE;   // d=pubverse:<churchpub> — the plaintext public copy of the church's verse prompt (refs + times, never the note), for members' home-screen widgets
 // RE-SEAT: a member lost their 12 words, so their old key is gone forever and they came back on a NEW one.
 // The church vouches that the two are the same person — d=reseat:<churchpub>, content {pairs:[{old,new,at}]}.
 // Nothing here recovers the old key (nobody has it); it only moves a member's SEAT — their name, their place
@@ -3660,6 +3661,7 @@ const PUBEVENTS = new Map();    // churchpub -> Map(eventId -> the noticeboard f
 const PUBSERMONS = new Map();   // churchpub -> Map(sermonId -> noticeboard fields, as publicSermonFields() admits them)
 const PUBPLANS = new Map();    // churchpub -> Map(planId -> plan fields, as publicPlanFields() admits them)
 const PUBDEVOS = new Map();    // churchpub -> Map(devoId -> devotional fields, as publicDevoFields() admits them)
+const PUBVERSE = new Map();    // churchpub -> { fields: publicVersePromptFields(), ts } — the church's public verse prompt (one per church)
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
@@ -4031,7 +4033,7 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS, PUBVERSE]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -4250,7 +4252,19 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       const sermonLimit = (c && typeof c.sermonLimit === 'number' && c.sermonLimit >= 0 && c.sermonLimit <= 100) ? Math.floor(c.sermonLimit) : 10;
       const planLimit = (c && typeof c.planLimit === 'number' && c.planLimit >= 0 && c.planLimit <= 100) ? Math.floor(c.planLimit) : 0;
       const devoLimit = (c && typeof c.devoLimit === 'number' && c.devoLimit >= 0 && c.devoLimit <= 100) ? Math.floor(c.devoLimit) : 0;
-      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), sermons: !!(c && c.sermons === true), plans: !!(c && c.plans === true), devos: !!(c && c.devos === true), optOut, horizonMonths, calName, detail, sermonFeedName, sermonLimit, planLimit, devoLimit });
+      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), sermons: !!(c && c.sermons === true), plans: !!(c && c.plans === true), devos: !!(c && c.devos === true), versePrompt: !!(c && c.versePrompt === true), optOut, horizonMonths, calName, detail, sermonFeedName, sermonLimit, planLimit, devoLimit });
+    }
+  }
+  // THE PUBLIC VERSE PROMPT (reference/PLAN-phone-widget-2026-11-16.html §4b). Same rule as share: above — the
+  // church's OWN key, naming ITSELF in the d-tag, decided from author + d-tag + CHURCH_PUBS alone (this branch
+  // replays on /import before any roster is read: memory ingest-rules-cannot-consult-hydrated-maps). Newest wins;
+  // a tombstone or an empty body clears it. Only refs and times are kept — a note never reaches the map.
+  else if (d.startsWith(PUBVERSE_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(PUBVERSE_D.length) === e.pubkey) {
+    const prev = PUBVERSE.get(e.pubkey);
+    if (!prev || prev.ts <= e.created_at) {
+      let c = null; if (!removed && e.content) { try { c = JSON.parse(e.content); } catch {} }
+      const f = c ? publicVersePromptFields(c) : null;
+      if (f) PUBVERSE.set(e.pubkey, { fields: f, ts: e.created_at }); else PUBVERSE.set(e.pubkey, { fields: null, ts: e.created_at });
     }
   }
   else if (d.startsWith(PUBEVENT_D) && CHURCH_PUBS.has(e.pubkey)) {
@@ -4872,6 +4886,7 @@ function accept(e) {
     // in phase 1: the Settings page is owner-only and the console mirrors only in owner mode.
     if (d.startsWith(SHARE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(SHARE_D.length) === e.pubkey;
     if (d.startsWith(PUBEVENT_D)) return CHURCH_PUBS.has(e.pubkey);
+    if (d.startsWith(PUBVERSE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(PUBVERSE_D.length) === e.pubkey;   // owner-only and self-named, like share:
     // THE CHURCH'S RELAY-NETWORK MEMBERSHIP. Owner-only, like the roster: this document is the sole thing
     // that admits a self-hosted or third-party-hosted relay to a church's network, so the authority that
     // gatekeeps writes is the authority that decides it. Not delegated to stewards — nothing asked for that
@@ -7063,6 +7078,7 @@ const EVENT_IMAGES_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/event-images\.json$/
 const SERMON_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/sermons\.xml$/;
 const PLANS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/plans\.json$/;
 const DEVOS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/devotionals\.json$/;
+const VERSE_PROMPT_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/verse-prompt\.json$/;
 const PUBLIC_MEDIA_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/media\/([0-9a-f]{64})$/;
 // Built once — the script is identical for every church, so there is nothing per-church to rebuild per request.
 let _widgetJs = null;
@@ -7235,6 +7251,27 @@ function publicFeed(req, res, route) {
       'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
     });
     res.end(req.method === 'HEAD' ? undefined : pbody);
+    return;
+  }
+  // THE VERSE PROMPT — /public/<npub>/verse-prompt.json, read by members' home-screen widgets in the background
+  // (reference/PLAN-phone-widget-2026-11-16.html §4b). Same gate pattern as the other feeds: a church this relay
+  // holds, its versePrompt switch on, and a live public copy — or the identical 404. The body is rebuilt from the
+  // admitted fields, so it carries references and times only: no note, no church name.
+  const vpm = VERSE_PROMPT_ROUTE.exec(route);
+  if (vpm) {
+    const vcp = toHexPub(vpm[1]);
+    if (!vcp || !CHURCH_PUBS.has(vcp)) return notFound();
+    const vshare = SHARE_BY.get(vcp);
+    if (!vshare || !vshare.versePrompt) return notFound();
+    const vp = PUBVERSE.get(vcp);
+    if (!vp || !vp.fields) return notFound();
+    const vbody = Buffer.from(buildVersePromptFeed(vp.fields, vp.ts), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8', 'Content-Length': vbody.length,
+      'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : vbody);
     return;
   }
   // DEVOTIONALS FEED — /public/<npub>/devotionals.json. Same gate pattern as plans.

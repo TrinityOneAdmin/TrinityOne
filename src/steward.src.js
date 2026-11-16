@@ -572,6 +572,7 @@ const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d
 // THE CHURCH'S WEBSITE (reference/DESIGN-embeddable-church-info.md, phase 1). Both PLAINTEXT on purpose and
 // church-key-only: the relay must read them to serve /public/<npub>/calendar.ics. See _webSync below.
 const SHARE_D = 'trinityone/share:';           // the switches + per-item opt-outs, d=share:<churchpub>
+const PUBVERSE_D = 'trinityone/pubverse:';     // the public copy of the VERSE PROMPT, d=pubverse:<churchpub> — refs + times only, never the note
 const PUBEVENT_D = 'trinityone/pubevent:';     // the public copy of ONE event — noticeboard fields only, d=pubevent:<eventId>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
 const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who was <old> is now <new>", d=reseat:<churchpub>
@@ -7038,7 +7039,7 @@ let _reqSeq = 0;
 // fourth setting the design names and is deliberately NOT here — events are floating-time and this app has
 // never stored one; inventing one would be a guess, not a default.
 const WEB_HORIZON_OK = new Set([3, 6, 12]);
-const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: 'own', horizonMonths: 6, calName: '', sermonFeedName: '', sermonLimit: 10, detail: 'full' });
+const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, versePrompt: false, optOut: [], optIn: [], address: 'own', horizonMonths: 6, calName: '', sermonFeedName: '', sermonLimit: 10, detail: 'full' });
 const WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
 const _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
 function _webNormalise(c) {
@@ -7076,7 +7077,7 @@ function _webNormalise(c) {
   const planLimit = (typeof o.planLimit === 'number' && o.planLimit >= 0 && o.planLimit <= 100) ? Math.floor(o.planLimit) : 0;
   const devoLimit = (typeof o.devoLimit === 'number' && o.devoLimit >= 0 && o.devoLimit <= 100) ? Math.floor(o.devoLimit) : 0;
   const sermonLimit = (typeof o.sermonLimit === 'number' && o.sermonLimit >= 0 && o.sermonLimit <= 100) ? Math.floor(o.sermonLimit) : 10;
-  return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own', horizonMonths, calName, sermonFeedName, sermonLimit, detail, planLimit, devoLimit };
+  return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, versePrompt: o.versePrompt === true, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own', horizonMonths, calName, sermonFeedName, sermonLimit, detail, planLimit, devoLimit };
 }
 // THE TWO LISTS MUST NEVER HOLD THE SAME ID (AUDIT-feeds-round5-2026-09-22 F1). `optOut` holds the
 // whole-church events a steward ticked OFF; `optIn` the GROUP events a steward ticked ON. An id in both is
@@ -7593,6 +7594,8 @@ function _webEnsure(restart) {
                      events: carried ? carried.events : new Map(), versions: carried ? carried.versions : new Map(), eventsKnown: !!(carried && carried.eventsKnown),
                      copies: carried ? carried.copies : new Map(), copyTs: carried ? carried.copyTs : new Map(), copiesKnown: !!(carried && carried.copiesKnown),
                      from: carried ? carried.from : { share: new Map(), corpus: new Map() },
+                     vprompt: carried ? carried.vprompt : null, vpromptTs: carried ? carried.vpromptTs : 0,
+                     vcopy: carried ? carried.vcopy : null, vcopyTs: carried ? carried.vcopyTs : 0, vbusy: false, vfail: null,
                      subs: [], listeners, busy: false, again: false, timer: null,
                      stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub), stuckAt: _webStuckLoad(pub),
                      stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [] };
@@ -7628,6 +7631,9 @@ function _webEnsure(restart) {
         _webQueueSync();
         return;
       }
+      // 2c. THE VERSE PROMPT and its public copy — see _webVerseNote. (typeof: several tests lift this handler out of
+      // the bundle with a hand-listed scope; in the shipped bundle the function always exists.)
+      if (typeof _webVerseNote === 'function' && _webVerseNote(w, e, d)) return;
       // 2b. a calendar event, opened with the name key
       if (!d.startsWith(EVENT_D)) return;
       const id = d.slice(EVENT_D.length);
@@ -7753,9 +7759,62 @@ function _webDesired(w) {
   }
   return out;
 }
+// THE PUBLIC COPY OF THE VERSE PROMPT (reference/PLAN-phone-widget-2026-11-16.html §4b; owner 2026-11-16).
+// REFERENCES AND TIMES ONLY — the note is never copied. Exists while the share: document's versePrompt switch is on
+// and the church has a prompt; tombstoned when either goes. Owner mode only (the caller checks), and only once both
+// streams it reads have genuinely answered, so a half-loaded view never withdraws a live copy.
+function _publicVerseBody(p) {
+  if (!p || typeof p !== 'object') return null;
+  const ref = String(p.ref || '').trim();
+  const schedule = (Array.isArray(p.schedule) ? p.schedule : [])
+    .map(x => (x && typeof x === 'object') ? { at: Math.floor(Number(x.at)), ref: String(x.ref || '').trim() } : null)
+    .filter(x => x && Number.isFinite(x.at) && x.at > 0 && x.ref);
+  if (!ref && !schedule.length) return null;
+  return JSON.stringify({ ref, schedule });
+}
+// THE VERSE PROMPT and its public copy, as the corpus stream delivers them (reference/PLAN-phone-widget-2026-11-16.html
+// §4b). Newest wins for each. The prompt may be a delegated steward's (it reaches the stream through its ['church', pub]
+// tag, and the relay's write gate already required a steward to write it); the copy is the church's own only.
+// Returns true when the event was one of these two (and has been taken).
+function _webVerseNote(w, e, d) {
+  if (d === VERSE_PROMPT_D) {
+    if (e.created_at < w.vpromptTs) return true; w.vpromptTs = e.created_at;
+    let c = null; if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { c = JSON.parse(e.content); } catch {} }
+    w.vprompt = (c && typeof c === 'object') ? c : null;
+    _webQueueSync();
+    return true;
+  }
+  if (d === PUBVERSE_D + pub) {
+    if (e.pubkey !== pub || e.created_at < w.vcopyTs) return true; w.vcopyTs = e.created_at;
+    w.vcopy = (e.tags.some(t => t[0] === 'deleted') || !e.content) ? null : String(e.content);
+    _webQueueSync();
+    return true;
+  }
+  return false;
+}
+// NAMED SO IT IS NOT A PREFIX-MATCH FOR _webSync — tests slice `async function _webSync` out of the bundle by name.
+async function _webVerseMirror(w) {
+  if (!w || w.pub !== pub || !sk || actingChurch) return;          // owner mode only, like _webSync
+  if (!w.shareKnown || !w.copiesKnown || w.vbusy) return;
+  const desired = w.share.versePrompt ? _publicVerseBody(w.vprompt) : null;
+  if (desired === w.vcopy) return;
+  // A RELAY THAT REFUSED THIS EXACT WRITE IS NOT ASKED AGAIN FOR A MINUTE — an older relay has no rule for
+  // pubverse: and every _webSync (any relay traffic) would otherwise re-send it.
+  if (w.vfail && w.vfail.body === desired && now() - w.vfail.at < 60) return;
+  w.vbusy = true;
+  try {
+    const at = Math.max(now(), (w.vcopyTs || 0) + 1);
+    const tags = desired ? [['d', PUBVERSE_D + pub], ['t', NET]] : [['d', PUBVERSE_D + pub], ['t', NET], ['deleted', '1']];
+    const ok = await publish(feChurch({ kind: 30078, created_at: at, tags, content: desired || '' }, sk));
+    if (_web !== w) return;
+    if (ok) { w.vcopy = desired; w.vcopyTs = at; w.vfail = null; } else w.vfail = { body: desired, at: now() };
+  } catch (e) { w.vfail = { body: desired, at: now() }; }
+  finally { w.vbusy = false; }
+}
 async function _webSync() {
   const w = _web;
   if (!w || w.pub !== pub || !sk || actingChurch) return;          // owner mode only: the relay accepts these from the church key alone
+  if (typeof _webVerseMirror === 'function') _webVerseMirror(w);    // independent of the calendar's readiness below (typeof: see 2c above)
   if (w.busy) { w.again = true; return; }
   const want = _webDesired(w);
   if (want === null) return;                                        // a stream has not finished; its oneose will come back here
