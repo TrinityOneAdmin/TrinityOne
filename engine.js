@@ -1920,6 +1920,17 @@ window.safeImgUrl = function (v) {
   }
 
   // ── boot: restore installed modules, then optional ?module=<url> autoload ──
+  async function moduleLinkAllowed(url){
+    if(typeof url !== "string" || !url) return false;
+    if(url === DEFAULT_MODULE.url) return true;
+    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import" && it.url === url) return true; }catch(e){}
+    try{ const m = await getMirror(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){}
+    return false;
+  }
+  // told by event if the app is already listening, else kept for takeLinkNotice() at mount (same shape as the quarantine notice)
+  let _linkRefusedPending = false;
+  function _noteLinkRefused(){ if(_fileSubs.size) _emitFile({ phase: "link-refused" }); else _linkRefusedPending = true; }
+  function takeLinkNotice(){ const v = _linkRefusedPending; _linkRefusedPending = false; return v; }
   async function autoLoad(){
     loadingFlag = true; notify();
     try{ await restoreInstalled(); }catch(e){ console.error(e); }
@@ -1936,7 +1947,12 @@ window.safeImgUrl = function (v) {
     // for one abbr and registers a DUPLICATE (DEEP -> DEEP2) — and the record written over the top of the
     // good one would name the duplicate. The member would then have one module twice in the reader and a
     // record pointing at the copy, which Remove would strip of its bytes while the other copy read on.
-    if(url && !isInstalled(url)){
+    // ?module=<url> OPENS ONLY WHAT WE PUBLISH (owner decision 2026-11-16). A link is a way to make a phone fetch somebody
+    // else's file, with no pin, from any https host. It is now accepted for a url that is in catalog.json, in the eBible
+    // mirror list the Library offers, or the default Bible; anything else is refused BEFORE a request is made, nothing is
+    // saved, and the member is told in plain words (_noteLinkRefused). Nothing in the app builds such a link, so no flow of ours changes.
+    if(url && !isInstalled(url) && !(await moduleLinkAllowed(url))){ _noteLinkRefused(); }
+    else if(url && !isInstalled(url)){
       try{
         const r = await fetchAndCacheModule(url);
         if(r && r.abbr){
@@ -1977,7 +1993,7 @@ window.safeImgUrl = function (v) {
   window.Bible = {
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
-    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule, installFromBytes, onFileInstall, takeQuarantineNotices,
+    loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule, installFromBytes, onFileInstall, takeQuarantineNotices, takeLinkNotice,
     cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling, isLoaded,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },

@@ -324,6 +324,21 @@ test('S22 — A6: SEVERAL quarantine events in a row accumulate: the sheet names
   assert.deepEqual(plain(m2.sheetProps(m2.draw()).state.result.names), ['One', 'Two', 'Three']);
 });
 
+test('S23 — A REFUSED ?module= LINK: the sheet says so in plain words, and the real App shows it from the engine\'s event and from the mount-time notice', async () => {
+  const s = sheet();
+  const tree = s.render({ phase: 'result', result: { ok: false, reason: 'link-refused' } });
+  const w = words(tree);
+  assert.match(w, /can.t open that link/i); assert.match(w, /nothing was downloaded/i); assert.doesNotMatch(w, /http|module=/i);
+  let fire = null;
+  const m = boot({ bible: { onFileInstall: (fn) => { fire = fn; return () => {}; }, takeQuarantineNotices: () => [], takeLinkNotice: () => false } });
+  await settle(m);
+  fire({ phase: 'link-refused' });
+  assert.equal(m.sheetProps(m.draw()).state.result.reason, 'link-refused');
+  const m2 = boot({ bible: { onFileInstall: () => () => {}, takeQuarantineNotices: () => [], takeLinkNotice: () => true } });
+  await settle(m2);
+  assert.equal(m2.sheetProps(m2.draw()).state.result.reason, 'link-refused');
+});
+
 // ════════════════════════════════ D. the REAL App: mount, listener, picker → sheet ══════════════════════════════
 
 const NPUB = 'npub1' + '0'.repeat(58);

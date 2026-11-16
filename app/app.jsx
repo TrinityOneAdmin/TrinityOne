@@ -739,6 +739,7 @@ function App() {
       if (!ev) return;
       if (ev.phase === 'installing') setIfs({ phase: 'installing' });
       else if (ev.phase === 'result') setIfs({ phase: 'result', result: ev.result });
+      else if (ev.phase === 'link-refused') setIfs({ phase: 'result', result: { ok: false, reason: 'link-refused' } });
       else if (ev.phase === 'quarantined') setIfs((prev) => {
         // several saved files can be refused in one boot, one event each: the sheet names ALL of them
         const had = prev && prev.result && prev.result.reason === 'quarantined' ? (prev.result.names || [prev.result.name]) : [];
@@ -748,6 +749,8 @@ function App() {
     });
     // a stored file the boot restore refused to open (unsafe) BEFORE we were listening: told once, here
     try { const names = typeof B.takeQuarantineNotices === 'function' ? B.takeQuarantineNotices() : []; if (names && names.length) setIfs({ phase: 'result', result: { ok: false, reason: 'quarantined', name: names[0], names: [...names] } }); } catch (e) {}
+    // a ?module= link that was refused before the app was listening
+    try { if (typeof B.takeLinkNotice === 'function' && B.takeLinkNotice()) setIfs({ phase: 'result', result: { ok: false, reason: 'link-refused' } }); } catch (e) {}
     return off;
   }, []);
   // "Open with TrinityOne": a SECOND listener beside the join one above, for a disjoint scheme (the join

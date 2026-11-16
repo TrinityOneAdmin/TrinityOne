@@ -149,7 +149,11 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
       : [{ label: 'Open Library', primary: true, onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed', r.kind === 'dict' ? 'dictionaries' : 'commentaries'); } }, { label: 'Done', onClick: close }];
   } else if (s.phase === 'result') {
     tone = 'var(--clay-ink)'; icon = 'x';
-    if (r.reason === 'quarantined') {
+    if (r.reason === 'link-refused') {
+      title = 'TrinityOne can\u2019t open that link';
+      body = 'It points to a file that isn\u2019t in TrinityOne\u2019s own library, so nothing was downloaded. You can add Bibles from the Library.';
+      buttons = [ok, { label: 'Open Library', onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('featured', 'bibles'); } }];
+    } else if (r.reason === 'quarantined') {
       const many = Array.isArray(r.names) && r.names.length > 1;
       title = many ? 'Saved files were not opened' : 'A saved file was not opened';
       name = many ? null : r.name; names = many ? r.names : null;

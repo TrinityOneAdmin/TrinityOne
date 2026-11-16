@@ -52,21 +52,55 @@ async function lyingZip() {       // declares a Bible-sized entry, inflates to 2
 }
 const BAD_URL = 'https://example.invalid/bomb.zip';
 
-test('M2 — A LINK\'S ZIP (?module=<https url>) IS READ BY THE BOUNDED READER: a decode bomb is refused, nothing is saved or recorded, and fflate.unzipSync is never asked', async () => {
+test('M2 — A LINK\'S ZIP (?module=<https url>) NEVER REACHES A READER: a url that is not ours is refused before any request, and the Library\'s own download of a hostile absolute url is read by the bounded reader and refused', async () => {
   const bomb = await lyingZip();
   assert.ok(bomb.length < 100 * 1024);
   const calls = [];
   const p = phone({ hosted: { [BAD_URL]: bomb }, search: '?module=' + encodeURIComponent(BAD_URL), unzipCalls: calls });
   await p.boot(); await sleep(150);
-  assert.equal(p.Bible.versions().length, 0, 'the link\'s decode bomb was loaded');
-  assert.ok(!p.state.puts.includes(BAD_URL), 'the refused bytes were saved');
-  assert.equal(Object.keys(p.installed()).length, 0, 'a record was written for refused bytes');
-  assert.deepEqual([...calls], [], 'unzipSync ran on a downloaded zip: ' + calls);
-  assert.ok(p.inflates.out < 16 * 1024 * 1024, 'the decode ran on: ' + p.inflates.out);
-  // the same through the Library's own install of an absolute url
+  assert.ok(!p.fetched.some(u => u.includes('bomb.zip')), 'a request was made for a link that is not ours: ' + p.fetched);
+  assert.equal(p.Bible.versions().length, 0);
+  assert.equal(p.state.puts.length, 0, 'something was saved: ' + p.state.puts);
+  assert.equal(Object.keys(p.installed()).length, 0);
+  assert.equal(p.Bible.takeLinkNotice(), true, 'the member is not told the link was refused');
+  assert.equal(p.Bible.takeLinkNotice(), false, 'told more than once');
+  assert.deepEqual([...calls], []);
+  // an absolute url that DOES reach fetchAndCacheModule (a mirror-style Library install) is read by the bounded reader
   const q = phone({ hosted: { [BAD_URL]: bomb } }); await q.boot(); q.Bible._error = null;
   await assert.rejects(q.Bible.installModule({ id: 'x', abbr: 'LK', name: 'Link Bible', kind: 'bible', format: 'MYBIBLE', category: 'bibles', url: BAD_URL }));
   assert.equal(Object.keys(q.installed()).length, 0);
+  assert.ok(q.inflates.out < 16 * 1024 * 1024, 'the decode ran on: ' + q.inflates.out);
+});
+
+test('M3 — ?module= OPENS WHAT WE PUBLISH AND NOTHING ELSE, through the real boot path: a catalogue url and an eBible mirror url install; lookalike urls, other hosts and an unreadable catalogue do not, and none of them makes a request', async () => {
+  const bsbUrl = 'modules/engbsb.zip';
+  const a = phone({ serveBsb: true, search: '?module=' + bsbUrl }); await a.boot();
+  for (let i = 0; i < 60 && a.Bible.versions().length < 1; i++) await sleep(25);
+  assert.equal(a.Bible.versions().length, 1, 'a catalogue link no longer opens');
+  assert.ok(a.installed()[bsbUrl], 'the catalogue link was not recorded');
+  assert.equal(a.Bible.takeLinkNotice(), false);
+  // a translation from the eBible mirror list the Library offers
+  const mirror = JSON.parse(readFileSync(ROOT + 'ebible-catalog.json', 'utf8')).items.find(i => /^https:\/\/ebible\.org\//.test(i.url));
+  assert.ok(mirror, 'no mirror entry with an https url');
+  const mz = realFflate.zipSync({ '02-GEN.usfm': enc('\\id GEN - Mirror Link Bible\n\\c 1\n\\p\n\\v 1 x\n') });
+  const b = phone({ hosted: { [mirror.url]: mz }, search: '?module=' + encodeURIComponent(mirror.url) }); await b.boot();
+  for (let i = 0; i < 60 && b.Bible.versions().length < 1; i++) await sleep(25);
+  assert.equal(b.Bible.versions().length, 1, 'a mirror link no longer opens');
+  // refused: near-misses of real urls, other hosts, other schemes, and the empty/odd ones. No request, nothing saved.
+  const refused = [bsbUrl + '?x=1', bsbUrl + '/', './' + bsbUrl, 'https://evil.example/' + bsbUrl, '//evil.example/x.zip', 'http://ebible.org/x.zip',
+    mirror.url + '?x=1', 'javascript:alert(1)', 'data:application/zip;base64,AAAA', 'file:///etc/passwd', 'modules/not-ours.zip'];
+  for (const u of refused) {
+    const c = phone({ serveBsb: true, hosted: { [u]: mz }, search: '?module=' + encodeURIComponent(u) }); await c.boot(); await sleep(60);
+    assert.ok(!c.fetched.some(f => f === u || f.endsWith(u)), `a request was made for ${u}: ${c.fetched}`);
+    assert.equal(c.state.puts.filter(k => k === u).length, 0, `${u} was saved`);
+    assert.equal(c.installed()[u], undefined, `${u} was recorded`);
+    assert.equal(c.Bible.takeLinkNotice(), true, `${u}: the member was not told`);
+  }
+  // the member is told by event when the app is already listening
+  const d = phone({ search: '?module=' + encodeURIComponent('https://evil.example/x.zip') });
+  const seen = []; d.Bible.onFileInstall(ev => seen.push(ev.phase));
+  await d.boot(); await sleep(60);
+  assert.ok(seen.includes('link-refused'), 'no link-refused event: ' + seen);
 });
 
 test('M2c — each half of the hosted check stands alone: a bomb at a RELATIVE (catalogue-style) url is refused by the reader, and a bare view-bomb database at an https url is refused by the database check; neither is saved', async () => {
@@ -83,15 +117,14 @@ test('M2c — each half of the hosted check stands alone: a bomb at a RELATIVE (
   assert.equal(Object.keys(p.installed()).length, 0); assert.equal(p.Bible.versions().length, 0);
 });
 
-test('M2b — THE HONEST LINK STILL WORKS, and its record is read by the bounded reader at every boot (never unzipSync); an OLD stored record of a bomb is quarantined, not decoded', async () => {
+test('M2b — AN HONEST ABSOLUTE-URL DOWNLOAD STILL WORKS, and its record is read by the bounded reader at every boot (never unzipSync); an OLD stored record of a bomb is quarantined, not decoded', async () => {
   const honest = realFflate.zipSync({ 'ok.bbl.mybible': await bibleDb('HL', 'Honest Link Bible', 'fine') });
   const URL_OK = 'https://example.invalid/honest.zip';
   const calls = [];
-  const p = phone({ hosted: { [URL_OK]: honest }, search: '?module=' + encodeURIComponent(URL_OK), unzipCalls: calls });
-  await p.boot();
-  for (let i = 0; i < 40 && p.Bible.versions().length < 1; i++) await sleep(25);
-  assert.equal(p.Bible.versions().length, 1, 'an honest ?module= zip no longer installs');
-  assert.ok(p.installed()[URL_OK], 'the link was not recorded');
+  const p = phone({ hosted: { [URL_OK]: honest }, unzipCalls: calls }); await p.boot(); p.Bible._error = null;
+  await p.Bible.installModule({ id: 'hl', abbr: 'HL', name: 'Honest Link Bible', kind: 'bible', format: 'MYBIBLE', category: 'bibles', url: URL_OK });
+  assert.equal(p.Bible.versions().length, 1, 'an honest absolute-url zip no longer installs');
+  assert.ok(p.installed()[URL_OK], 'it was not recorded');
   const again = phone({ state: p.state, unzipCalls: calls }); await again.boot();
   for (let i = 0; i < 40 && again.Bible.versions().length < 1; i++) await sleep(25);
   assert.equal(again.Bible.versions().length, 1, 'the honest link was not restored at boot');
