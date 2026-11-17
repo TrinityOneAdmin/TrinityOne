@@ -63,14 +63,30 @@ public class TrinityWidgetPlugin extends Plugin {
     @PluginMethod
     public void publishPrompt(PluginCall call) {
         JSONObject p;
-        try { p = promptArgs(call, System.currentTimeMillis()); }
+        try { p = promptArgs(call, nowMs()); }
         catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
         catch (Exception e) { call.reject("bad prompt"); return; }
-        WidgetStore.write(ctx(), WidgetStore.K_PROMPT, p);
-        PromptFetchJob.schedule(ctx());
-        WidgetStore.refresh(ctx());
+        PromptStore st = promptStore();
+        st.write(p);
+        st.schedule();
+        st.refresh();
         call.resolve();
     }
+
+    /** Where publishPrompt puts an accepted config. An interface so the JVM test (PublishPromptTest) can run
+     *  publishPrompt ITSELF with a recording store (audit M1 of eab4bf9b): no Context exists off-device. */
+    interface PromptStore { void write(JSONObject cfg); void schedule(); void refresh(); }
+
+    PromptStore promptStore() {
+        final Context c = ctx();
+        return new PromptStore() {
+            @Override public void write(JSONObject cfg) { WidgetStore.write(c, WidgetStore.K_PROMPT, cfg); }
+            @Override public void schedule() { PromptFetchJob.schedule(c); }
+            @Override public void refresh() { WidgetStore.refresh(c); }
+        };
+    }
+
+    long nowMs() { return System.currentTimeMillis(); }
 
     /** No caller asks for more than this: a week with no PIN, "remember me" (30 days) with one. */
     static final long MAX_VALID_S = 366L * 86400L;

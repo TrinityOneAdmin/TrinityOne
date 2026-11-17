@@ -21,7 +21,8 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
     @Override
     public void onUpdate(Context c, AppWidgetManager m, int[] ids) {
         long now = System.currentTimeMillis();
-        WidgetStore.pages(c, now);   // enforces validUntil before anything is drawn
+        // pages() also enforces validUntil before anything is drawn.
+        String order = WidgetStore.pageOrder(WidgetStore.pages(c, now));
         for (int id : ids) {
             RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
             Intent svc = new Intent(c, TrinityWidgetService.class);
@@ -33,11 +34,20 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
             if (open != null) v.setPendingIntentTemplate(R.id.trinity_widget_stack, open);
             PendingIntent openEmpty = openApp(c, false);
             if (openEmpty != null) v.setOnClickPendingIntent(R.id.trinity_widget_empty, openEmpty);
+            // Most current page in front (device D2): StackView does not promise which child it shows after an
+            // update, so put page 0 in front whenever the page set or order changed — and only then, so a member's
+            // swipe to the other page survives redraws that change nothing.
+            if (WidgetStore.takeOrderChange(c, id, order)) v.setDisplayedChild(R.id.trinity_widget_stack, 0);
             m.updateAppWidget(id, v);
         }
         m.notifyAppWidgetViewDataChanged(ids, R.id.trinity_widget_stack);
         scheduleNextChange(c, now);
         if (WidgetStore.read(c, WidgetStore.K_PROMPT) != null) PromptFetchJob.schedule(c);   // re-arm after a reboot
+    }
+
+    @Override
+    public void onDeleted(Context c, int[] ids) {
+        for (int id : ids) WidgetStore.forgetOrder(c, id);
     }
 
     /** Resized: the verse's line count depends on the height (TrinityWidgetService.linesForThisWidget), so redraw. */

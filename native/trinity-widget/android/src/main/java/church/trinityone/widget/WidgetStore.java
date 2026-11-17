@@ -172,6 +172,32 @@ final class WidgetStore {
     }
 
     /**
+     * The page set and order as one string ("P|ref" / "V|ref" per page, most current first). The provider asks
+     * StackView to show page 0 again ONLY when this changes (device D2, 2026-11-17: after a refresh the daily verse
+     * was in front although the prompt was the most current), so a member's own swipe is not undone by every redraw
+     * that changes nothing.
+     */
+    static String pageOrder(List<Page> pages) {
+        StringBuilder b = new StringBuilder();
+        for (Page p : pages) b.append(p.prompt ? 'P' : 'V').append('|').append(p.ref).append('\n');
+        return b.toString();
+    }
+
+    static boolean frontNeedsReset(String shownOrder, String nowOrder) { return shownOrder == null || !shownOrder.equals(nowOrder); }
+
+    static final String K_ORDER = "order.";   // + widget id → the pageOrder last put in front of that widget
+
+    /** True (and remembered) when this widget's page set/order differs from what it last showed. */
+    static boolean takeOrderChange(Context c, int widgetId, String nowOrder) {
+        String k = K_ORDER + widgetId;
+        if (!frontNeedsReset(prefs(c).getString(k, null), nowOrder)) return false;
+        prefs(c).edit().putString(k, nowOrder).apply();
+        return true;
+    }
+
+    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).apply(); }
+
+    /**
      * How many lines of verse fit a widget this many dp tall, so the text ends in "…" instead of being cut through a
      * line (trinity_widget_item.xml). Leans SMALL on purpose: one line too few costs an early "…", one too many is
      * the clipped line this exists to prevent. textSp = the size the verse is drawn at its smallest (12 with API 26+
