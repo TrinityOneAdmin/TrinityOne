@@ -16,6 +16,9 @@ const enc = (s) => new TextEncoder().encode(s);
 const dec = (u8) => new TextDecoder().decode(u8);
 
 async function sqlite(sql) { const SQL = await initSqlJs(); const db = new SQL.Database(); db.run(sql); const u8 = db.export(); db.close(); return u8; }
+// a zip records the time each file was added: a FIXED local-time stamp (built from parts, so the machine's time zone cannot change it)
+// makes a rebuild byte-for-byte the same as the last one
+const zipFixed = (files) => fflate.zipSync(files, { mtime: new Date(2026, 0, 1, 0, 0, 0) });
 const q = (s) => String(s).replace(/'/g, "''");
 
 // the books we keep: Ruth (8), John (43), 3 John (64) - the whole of each
@@ -75,24 +78,24 @@ export async function buildSamples() {
     CREATE TABLE Dictionary (topic TEXT, definition TEXT);
     INSERT INTO Dictionary VALUES ('AGAPE', 'SAMPLE ENTRY: self-giving love.'), ('GRACE', 'SAMPLE ENTRY: undeserved favour.');`);
   const refs = enc(JSON.stringify({ meta: { kind: 'crossref', abbr: 'SXR', name: 'Sample Cross References', license: 'CC0' }, refs: { '43.3.16': ['Romans 5:8', '1 John 4:9'], '8.1.1': ['Judges 2:16'] } }));
-  const good = fflate.zipSync({ 'ok.bbl.mybible': wDb });
+  const good = zipFixed({ 'ok.bbl.mybible': wDb });
   const at = good.length - 22; const loc = new Uint8Array(20); new DataView(loc.buffer).setUint32(0, 0x07064b50, true);
   const refused = new Uint8Array([...good.subarray(0, at), ...loc, ...good.subarray(at)]);       // a zip64 locator: refused by design
 
   return [
-    { file: '01-web-usfm-sample.zip', bytes: fflate.zipSync(web), format: 'USFM, zipped (one .usfm per book)', kind: 'bible', source: WEB_SRC + ' Cut to Ruth, John, 3 John.', licence: 'Public domain',
+    { file: '01-web-usfm-sample.zip', bytes: zipFixed(web), format: 'USFM, zipped (one .usfm per book)', kind: 'bible', source: WEB_SRC + ' Cut to Ruth, John, 3 John.', licence: 'Public domain',
       name: '01-web-usfm-sample', check: { book: 43, chapter: 3, verse: 16, text: 'For God so loved the world' }, see: 'Read it now, then John 3:16 reads "For God so loved the world, that he gave his only born Son…". Genesis is not in this file: the reader says so and offers a book that is.' },
     { file: '02-web-3john-single-book.usfm', bytes: enc(usfm3jn), format: 'USFM, a single book file', kind: 'bible', source: WEB_SRC + ' 3 John only; the \\id line was edited to carry a name.', licence: 'Public domain',
-      name: 'World English Bible - 3 John only (sample)', check: { book: 64, chapter: 1, verse: 1, text: 'The elder to Gaius the beloved' }, see: 'Name on the result screen: "World English Bible - 3 John only (sample)" (with "(from a file)" added if the real WEB is installed). 3 John 1:1 reads "The elder to Gaius the beloved, whom I love in truth."' },
-    { file: '03-kjv-usfm-sample.zip', bytes: fflate.zipSync(kjv), format: 'USFM, zipped (King James text)', kind: 'bible', source: KJV_SRC + ' Cut to Ruth, 3 John.', licence: 'Public domain (see source)',
-      name: '03-kjv-usfm-sample', check: { book: 8, chapter: 1, verse: 1, text: 'judges ruled' }, see: 'Ruth 1:1 reads "Now it came to pass in the days when the judges ruled, that there was a famine in the land…" (KJV wording).' },
+      name: 'World English Bible - 3 John only (sample)', check: { book: 64, chapter: 1, verse: 1, text: 'The elder to Gaius the beloved' }, see: 'Name on the result screen: "World English Bible - 3 John only (sample)" (this name is not one TrinityOne offers, so nothing is added to it). Read it now opens 3 John 1, because 3 John is the only book in the file. 3 John 1:1 reads "The elder to Gaius the beloved, whom I love in truth."' },
+    { file: '03-kjv-usfm-sample.zip', bytes: zipFixed(kjv), format: 'USFM, zipped (King James text)', kind: 'bible', source: KJV_SRC + ' Cut to Ruth, 3 John.', licence: 'Public domain (see source)',
+      name: '03-kjv-usfm-sample', check: { book: 8, chapter: 1, verse: 1, text: 'judges ruled' }, see: 'Read it now opens Ruth 1 (the first book in the file; John, which you may have been reading, is not in it). Ruth 1:1 reads "Now it came to pass in the days when the judges ruled, that there was a famine in the land…" (KJV wording).' },
     { file: '04-web-sample.bbl.mybible', bytes: wDb, format: 'MySword Bible (.bbl.mybible, SQLite)', kind: 'bible', source: 'Built from ' + WEB_SRC + ' Cut to Ruth, John, 3 John; markers stripped.', licence: 'Public domain',
       name: 'WEB sample (MySword)', check: { book: 43, chapter: 3, verse: 16, text: 'For God so loved the world' }, see: 'Result screen: "Bible installed - WEB sample (MySword)". John 3:16 as above.' },
-    { file: '05-web-sample.bbl.mybible.zip', bytes: fflate.zipSync({ '05-web-sample.bbl.mybible': wDb2 }), format: 'MySword Bible, zipped', kind: 'bible', source: 'Built from ' + WEB_SRC, licence: 'Public domain',
+    { file: '05-web-sample.bbl.mybible.zip', bytes: zipFixed({ '05-web-sample.bbl.mybible': wDb2 }), format: 'MySword Bible, zipped', kind: 'bible', source: 'Built from ' + WEB_SRC, licence: 'Public domain',
       name: 'WEB sample (MySword, zipped)', check: { book: 8, chapter: 1, verse: 1, text: 'judges judged' }, see: 'Result screen: "Bible installed - WEB sample (MySword, zipped)". Ruth 1:1 reads "Now it happened in the days when the judges judged…".' },
     { file: '06-notes-sample.cmt.mybible', bytes: notes, format: 'MySword commentary (.cmt.mybible)', kind: 'comment', source: OWN, licence: 'CC0',
       name: 'Sample Study Notes', check: { commentary: [43, 3], text: 'SAMPLE NOTE: the whole gospel' }, see: 'Result screen: "Commentary installed - Sample Study Notes". Read John 3, open the study panel: the note "SAMPLE NOTE: the whole gospel in one sentence." appears, marked as imported.' },
-    { file: '07-notes-sample.cmt.mybible.zip', bytes: fflate.zipSync({ '07-notes-sample.cmt.mybible': await sqlite(`CREATE TABLE Details (Description TEXT, Abbreviation TEXT);
+    { file: '07-notes-sample.cmt.mybible.zip', bytes: zipFixed({ '07-notes-sample.cmt.mybible': await sqlite(`CREATE TABLE Details (Description TEXT, Abbreviation TEXT);
       INSERT INTO Details VALUES ('Sample Study Notes (zipped)', 'SSZ');
       CREATE TABLE Commentary (Book INT, Chapter INT, FromVerse INT, ToVerse INT, Comments TEXT);
       INSERT INTO Commentary VALUES (8, 1, 1, 1, 'SAMPLE NOTE ZIPPED: a famine, and a family that leaves.');`) }), format: 'MySword commentary, zipped', kind: 'comment', source: OWN, licence: 'CC0',
@@ -104,7 +107,7 @@ export async function buildSamples() {
     // known-bad: each must be REFUSED, with nothing installed
     { file: 'BAD-1-refused-zip.zip', bytes: refused, bad: true, format: 'a zip the reader refuses (a zip64 locator)', source: OWN, licence: 'CC0',
       see: '"TrinityOne can\'t use this file ... Nothing was installed." (the same screen any zip that is not safe to open gets)' },
-    { file: 'BAD-2-not-a-bible.zip', bytes: fflate.zipSync({ 'holiday.txt': enc('Not a Bible.') }), bad: true, format: 'a zip with no Bible in it', source: OWN, licence: 'CC0',
+    { file: 'BAD-2-not-a-bible.zip', bytes: zipFixed({ 'holiday.txt': enc('Not a Bible.') }), bad: true, format: 'a zip with no Bible in it', source: OWN, licence: 'CC0',
       see: '"TrinityOne can\'t use this file ... Nothing was installed."' },
     { file: 'BAD-3-osis-not-supported.xml', bytes: enc('<?xml version="1.0" encoding="UTF-8"?><osis><osisText osisIDWork="Sample"><div type="book" osisID="3John"><chapter osisID="3John.1"><verse osisID="3John.1.1">The elder to Gaius.</verse></chapter></div></osisText></osis>'), bad: true, format: 'OSIS XML (not supported yet)', source: OWN, licence: 'CC0',
       see: '"TrinityOne can\'t use this file ... Nothing was installed." OSIS, USX and Zefania files are not supported; convert them to USFM or MySword first.' },

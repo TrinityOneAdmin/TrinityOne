@@ -70,3 +70,10 @@ test('the sample set covers every kind the importer has, and every file is small
   assert.equal(new Set(SAMPLES.map(s => s.file)).size, SAMPLES.length);
   for (const s of SAMPLES) assert.ok(s.source && s.licence && s.see && s.format, `${s.file} lacks provenance for the README`);
 });
+
+test('SAMPLE REPRO — building the samples again gives the same bytes for every file (zip timestamps are fixed)', async () => {
+  await sleep(2200);   // a zip stamps 2-second time: two builds in one instant would match even with the clock in them
+  const again = await buildSamples();
+  assert.equal(again.length, SAMPLES.length);
+  for (let i = 0; i < again.length; i++) assert.deepEqual(Buffer.from(again[i].bytes), Buffer.from(SAMPLES[i].bytes), `${again[i].file} differs between two builds`);
+});

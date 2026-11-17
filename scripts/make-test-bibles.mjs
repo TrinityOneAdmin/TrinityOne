@@ -34,6 +34,9 @@ ${samples.filter(s => !s.bad).map(row).join('\n')}
 <p><b>Installing the same file twice</b> says "You already have this &hellip;" and changes nothing. <b>After closing and reopening the app</b> every
 module is still there. A name that matches a Bible TrinityOne itself offers (for example the real "World English Bible") gets
 "(from a file)" added: that is deliberate, so a file can never pass itself off as a published Bible; these samples avoid such names.</p>
+<p><b>"Read it now" on the partial Bibles.</b> 02 has only 3 John and 03 has only Ruth and 3 John, so they have no text where you were reading
+(for example John 1). "Read it now" therefore opens the first passage the new Bible has (3 John 1, or Ruth 1) instead of leaving you on a page with
+no text. If you then go to a chapter the Bible lacks, the reader says so (for example "John 1 isn't in &hellip;") and offers a button to the first chapter it has.</p>
 <h2>Files that should be refused</h2>
 <table class="bad"><tr><th>File</th><th>Format</th><th>Source</th><th>What you should see</th></tr>
 ${samples.filter(s => s.bad).map(row).join('\n')}

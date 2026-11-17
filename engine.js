@@ -1502,6 +1502,9 @@ window.safeImgUrl = function (v) {
     } else if(kind === "dict") held = hasDict(abbr) || dicts.some(d => K(d.abbr) === ka);
     return held || reserved.has(ka) || reserved.has(kn);
   }
+  // The 'lookalike-name' label ('(from a file)') depends on these lists. Within the per-boot bound a slow list is read once and shared; a list
+  // that has not answered by then counts as empty, so a file may then wear a catalogue name WITHOUT the label (it did already when offline).
+  // Labelling is advisory: it never decides what loads, so this is documented rather than waited on.
   async function _reservedNames(kind){
     const out = new Set(), cat = _CAT_OF_KIND[kind];
     const add = (it, abbrToo = true) => { if(it && catOf(it) === cat){ if(it.name) out.add(_nameKey(it.name)); if(abbrToo && it.abbr) out.add(_nameKey(it.abbr)); } };
