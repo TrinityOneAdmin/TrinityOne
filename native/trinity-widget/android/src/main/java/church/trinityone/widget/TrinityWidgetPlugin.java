@@ -21,6 +21,7 @@ import org.json.JSONObject;
  *   setEnabled({ on })      → on: the widget appears in the launcher's widget list. off: clears everything.
  *   publishVotd({ days })   → the 60-day verse table (app/screens-today.jsx)
  *   publishPrompt({ npub, bases, validUntil, texts, cached }) → the church's public verse prompt config
+ *   publishTexts({ npub, texts }) → { updated } — ONLY the texts of the stored config, if it is that church's
  *   clearPrompt()           → back to the daily verse only; stops the background fetch
  *   clear()                 → forget everything
  *   requestPin()            → Android 8+: ask the launcher to place the widget
@@ -62,22 +63,107 @@ public class TrinityWidgetPlugin extends Plugin {
 
     @PluginMethod
     public void publishPrompt(PluginCall call) {
-        try {
-            JSONObject p = new JSONObject();
-            String npub = call.getString("npub", "");
-            if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) { call.reject("bad npub"); return; }
-            p.put("npub", npub);
-            p.put("bases", call.getArray("bases"));
-            p.put("validUntil", call.getLong("validUntil", 0L));
-            JSObject texts = call.getObject("texts");
-            p.put("texts", texts == null ? new JSONObject() : texts);
-            JSObject cached = call.getObject("cached");
-            p.put("cached", cached == null ? JSONObject.NULL : PromptFetchJob.sanitise(cached));
-            WidgetStore.write(ctx(), WidgetStore.K_PROMPT, p);
-        } catch (Exception e) { call.reject("bad prompt"); return; }
-        PromptFetchJob.schedule(ctx());
-        WidgetStore.refresh(ctx());
+        JSONObject p;
+        try { p = promptArgs(call, nowMs()); }
+        catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
+        catch (Exception e) { call.reject("bad prompt"); return; }
+        PromptStore st = promptStore();
+        synchronized (WidgetStore.PROMPT_LOCK) { st.write(p); }
+        st.schedule();
+        st.refresh();
         call.resolve();
+    }
+
+    /** Where publishPrompt puts an accepted config. An interface so the JVM test (PublishPromptTest) can run
+     *  publishPrompt ITSELF with a recording store (audit M1 of eab4bf9b): no Context exists off-device. */
+    interface PromptStore { JSONObject read(); void write(JSONObject cfg); void schedule(); void refresh(); }
+
+    PromptStore promptStore() { return storeFor(ctx()); }
+
+    /** The real store, also used by PromptFetchJob. */
+    static PromptStore storeFor(final Context c) {
+        return new PromptStore() {
+            @Override public JSONObject read() { return WidgetStore.read(c, WidgetStore.K_PROMPT); }
+            @Override public void write(JSONObject cfg) { WidgetStore.write(c, WidgetStore.K_PROMPT, cfg); }
+            @Override public void schedule() { PromptFetchJob.schedule(c); }
+            @Override public void refresh() { WidgetStore.refresh(c); }
+        };
+    }
+
+    long nowMs() { return System.currentTimeMillis(); }
+
+    /**
+     * publishTexts({ npub, texts }) → { updated }. The member's translation of the passages changed (the Bible module
+     * finished loading, or the member switched translation) but nothing about the church's copy did. Re-audit S1 of
+     * d6f0e32c: re-sending the whole config through publishPrompt put back the copy the APP last probed, over a newer
+     * or withdrawn one the background job (PromptFetchJob) had stored since. This touches ONLY "texts", and only in a
+     * stored config for the same church: no config, or another church's → nothing changes (updated: false).
+     * cached, bases and validUntil are never touched, and nothing is scheduled.
+     */
+    @PluginMethod
+    public void publishTexts(PluginCall call) {
+        boolean updated;
+        try { updated = applyTexts(call, promptStore()); }
+        catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
+        catch (Exception e) { call.reject("bad texts"); return; }
+        JSObject r = new JSObject();
+        r.put("updated", updated);
+        call.resolve(r);
+    }
+
+    static boolean applyTexts(PluginCall call, PromptStore st) throws Exception {
+        String npub = call.getString("npub", "");
+        if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) throw new IllegalArgumentException("bad npub");
+        JSObject texts = call.getObject("texts");
+        if (texts == null) throw new IllegalArgumentException("bad texts");
+        synchronized (WidgetStore.PROMPT_LOCK) {
+            JSONObject cfg = st.read();
+            if (cfg == null || !npub.equals(cfg.optString("npub", ""))) return false;
+            cfg.put("texts", texts);
+            st.write(cfg);
+        }
+        st.refresh();
+        return true;
+    }
+
+    /** No caller asks for more than this: a week with no PIN, "remember me" (30 days) with one. */
+    static final long MAX_VALID_S = 366L * 86400L;
+
+    /**
+     * publishPrompt's arguments → the config WidgetStore keeps. Pure (no Context), so the JVM test
+     * (src/test/.../PublishPromptArgsTest) runs exactly the code publishPrompt runs.
+     *
+     * NUMBERS: never PluginCall.getLong / getInt / getDouble. They return the default unless the bridge's value is
+     * already that exact boxed type, and the bridge parses JSON with org.json, which hands back an Integer for any
+     * whole number that fits in 32 bits. A unix-seconds validUntil (1795510000) is such a number, so getLong returned
+     * 0, WidgetStore.promptConfig deleted the config on the next redraw, and the church prompt never reached the
+     * widget (device-found on the Oppo, 2026-11-17). Read the raw value as a Number instead.
+     */
+    static JSONObject promptArgs(PluginCall call, long nowMs) throws Exception {
+        JSONObject p = new JSONObject();
+        String npub = call.getString("npub", "");
+        if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) throw new IllegalArgumentException("bad npub");
+        p.put("npub", npub);
+        p.put("bases", call.getArray("bases"));
+        long until = seconds(call.getData(), "validUntil");
+        // Refused rather than stored: a config that is already past (or 0) would be deleted at the next redraw, which
+        // looks like success to the app; one in milliseconds would never expire and defeat the native lock bound.
+        if (until * 1000L <= nowMs || until > nowMs / 1000L + MAX_VALID_S) throw new IllegalArgumentException("bad validUntil");
+        p.put("validUntil", until);
+        JSObject texts = call.getObject("texts");
+        p.put("texts", texts == null ? new JSONObject() : texts);
+        JSObject cached = call.getObject("cached");
+        p.put("cached", cached == null ? JSONObject.NULL : PromptFetchJob.sanitise(cached));
+        return p;
+    }
+
+    /** A whole number of seconds from the bridge, whatever boxed type org.json chose (Integer, Long, Double); else 0. */
+    static long seconds(JSONObject data, String key) {
+        Object v = data == null ? null : data.opt(key);
+        if (!(v instanceof Number)) return 0L;
+        double d = ((Number) v).doubleValue();
+        if (Double.isNaN(d) || Double.isInfinite(d)) return 0L;
+        return ((Number) v).longValue();
     }
 
     /**
@@ -103,7 +189,7 @@ public class TrinityWidgetPlugin extends Plugin {
 
     @PluginMethod
     public void clearPrompt(PluginCall call) {
-        WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null);
+        synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
         PromptFetchJob.cancel(ctx());
         WidgetStore.refresh(ctx());
         call.resolve();
@@ -126,7 +212,8 @@ public class TrinityWidgetPlugin extends Plugin {
 
     private void forget() {
         WidgetStore.write(ctx(), WidgetStore.K_VOTD, null);
-        WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null);
+        synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
+        WidgetStore.forgetAllOrders(ctx());
         PromptFetchJob.cancel(ctx());
         WidgetStore.refresh(ctx());
     }

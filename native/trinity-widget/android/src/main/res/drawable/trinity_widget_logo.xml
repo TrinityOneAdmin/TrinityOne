@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The TrinityOne mark (the PRODUCT's, never the church's), converted path-for-path from icons/halo.svg, which was
+     measured off the launcher icon (assets/icon-foreground.png): clay rounded square, a broken ring of three arcs,
+     a gold dot centred. A vector, so one ~1 KB file serves every density. Same colours in light and dark, as the
+     launcher icon is. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path
+        android:fillColor="#C25A38"
+        android:pathData="M112,0 H400 A112,112 0 0 1 512,112 V400 A112,112 0 0 1 400,512 H112 A112,112 0 0 1 0,400 V112 A112,112 0 0 1 112,0 Z" />
+    <path
+        android:pathData="M416.5,346.3 A184.2,184.2 0 0 1 159.4,412.8"
+        android:strokeColor="#F4EEE2"
+        android:strokeWidth="34"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M97.5,349.9 A184.2,184.2 0 0 1 168.5,93.9"
+        android:strokeColor="#F4EEE2"
+        android:strokeWidth="34"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M254.0,71.8 A184.2,184.2 0 0 1 440.1,261.3"
+        android:strokeColor="#F4EEE2"
+        android:strokeWidth="34"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#E0B860"
+        android:pathData="M222,256 A34,34 0 1 0 290,256 A34,34 0 1 0 222,256 Z" />
+</vector>

@@ -2352,6 +2352,38 @@ function votdInTranslation(pick, Bible) {
   }
   return out;
 }
+// The home-screen widget's text for ONE passage of the church's verse prompt, in the member's own translation.
+// DEVICE 2026-11-17: a range ("1 Samuel 8:11-18") or a whole chapter ("Numbers 7") got NO text and the widget said
+// "Tap to read", because votdInTranslation reads one verse. Here: a same-chapter range = its verses joined; a whole
+// chapter = its opening verses; a range into the next chapter = its first verse to the end of that chapter. Capped
+// at WIDGET_PASSAGE_MAX characters at a word boundary, ending in "…" (the widget truncates anyway, and this crosses
+// the bridge into widget storage). '' when this phone's Bible lacks it — the widget then shows the reference alone.
+const WIDGET_PASSAGE_MAX = 600;
+function widgetPassageText(ref, Bible) {
+  const loc = Bible && Bible.parseRef ? Bible.parseRef(ref) : null;
+  if (!loc || !Bible.loaded || !Bible.books().includes(loc.book)) return '';
+  const rows = Bible.getVerses(loc.book, loc.chap) || [];
+  const num = v => parseInt(v, 10);
+  let pick = rows;
+  if (loc.verse != null) {
+    const intoNextChapter = /[-\u2013\u2014]\s*\d+:\d+/.test(String(ref));
+    const end = loc.verseEnd || (intoNextChapter ? Infinity : loc.verse);
+    pick = rows.filter(r => num(r.v) >= loc.verse && num(r.v) <= end);
+  }
+  let out = '';
+  for (const r of pick) {
+    const t = String((r && r.text) || '').replace(/\s+/g, ' ').trim();
+    if (!t) continue;
+    out = out ? out + ' ' + t : t;
+    if (out.length > WIDGET_PASSAGE_MAX) break;
+  }
+  if (out.length > WIDGET_PASSAGE_MAX) {
+    const cut = out.slice(0, WIDGET_PASSAGE_MAX - 1);
+    const sp = cut.lastIndexOf(' ');
+    out = (sp > WIDGET_PASSAGE_MAX / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '') + '\u2026';
+  }
+  return out;
+}
 function votdLocalISO(d) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
@@ -2674,10 +2706,52 @@ function TodayScreen({ ctx }) {
         try { until = Number(await window.TrinityIdentity.rememberedUntil()) || 0; } catch (e) { until = 0; }
         if (until <= nowS) { if (!cancelled) clear(); return; }
       }
+      // A REFUSAL IS NOT SWALLOWED (2026-11-17): the native side refuses a config it could not keep (bad npub, a
+      // validUntil that is not future unix seconds). Forget this hour's throttle so the next run asks again, and say
+      // so in the log — before this, a config the native side dropped looked exactly like success.
+      // A validUntil the native side cannot bound also CLEARS what it holds (audit L2 of eab4bf9b): a config that
+      // cannot be bounded is never kept, and the previous one may name older relay addresses.
+      const refused = (e) => {
+        const cur = homeWidgetProbed[widgetChurch];
+        if (cur && cur.key === probeKey) delete homeWidgetProbed[widgetChurch];
+        const msg = (e && e.message) || String(e);
+        try { console.warn('[widget] publishPrompt refused:', msg); } catch (_) {}
+        if (/bad validUntil/.test(msg) && !cancelled) clear();
+      };
+      function publish(cached, texts) {
+        try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(refused); } catch (e) { refused(e); }
+      }
+      // The member's own translation for every passage the copy names, so the widget can show the words, not just
+      // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
+      const textsFor = (cached) => {
+        const texts = {};
+        const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
+        refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = widgetPassageText(r, Bible); if (t) texts[r] = t; });
+        return texts;
+      };
+      const textsKeyOf = (texts) => String(Bible.activeVersion || '') + '|' + JSON.stringify(texts);
       // SMALL PIPES (audit F6): the same church, addresses and prompt are probed at most once an hour per session.
       const probeKey = where.npub + '|' + bases.join(',') + '|' + vpRefsKey;
       const last = homeWidgetProbed[widgetChurch];
-      if (last && last.key === probeKey && nowS - last.at < 3600) return;
+      if (last && last.key === probeKey && nowS - last.at < 3600) {
+        // DEVICE 2026-11-17: Today first runs BEFORE the Bible module has loaded, so the copy went out with texts {}
+        // and this throttle then stopped the rewrite when Bible.loaded flipped — the widget said "Tap to read" for
+        // the rest of the hour. The throttle is for the NETWORK: when only the texts would differ (the Bible loaded,
+        // or the member changed translation), send ONLY the texts, with no second probe — through publishTexts, which
+        // changes nothing but the texts of the stored config for this church (re-audit S1 of d6f0e32c: re-sending the
+        // whole config put this session's copy back over a newer or withdrawn one the background job had stored).
+        // An APK without publishTexts sends nothing here rather than the whole config.
+        if (!last.copy || !W.publishTexts) return;
+        const texts = textsFor(last.copy);
+        const tk = textsKeyOf(texts);
+        if (tk === last.textsKey) return;
+        last.textsKey = tk;
+        try {
+          Promise.resolve(W.publishTexts({ npub: where.npub, texts }))
+            .catch((e) => { if (last.textsKey === tk) last.textsKey = ''; try { console.warn('[widget] publishTexts refused:', (e && e.message) || e); } catch (_) {} });
+        } catch (e) {}
+        return;
+      }
       // THE PROBE IS NATIVE (audit re-check R1). On the APK the webview's fetch goes through Capacitor's
       // https://localhost/_capacitor_http_interceptor_ proxy (CapacitorHttp is enabled), so this page can neither
       // refuse a redirect nor tell which address answered. TrinityWidget.probe runs the background job's own GET:
@@ -2692,15 +2766,13 @@ function TodayScreen({ ctx }) {
       // Not shared anywhere -> clear (keep the hourly throttle). Unreachable / unknown -> leave what is there, bounded
       // by its validUntil, and ask again next time.
       if (!cached) { if (outcome === 'absent') clear(true); else delete homeWidgetProbed[widgetChurch]; return; }
-      // The member's own translation for every passage the copy names, so the widget can show the words, not just
-      // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
-      const texts = {};
-      const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
-      refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = votdInTranslation({ ref: r, text: '' }, Bible); if (t.text) texts[r] = t.text; });
-      try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(() => {}); } catch (e) {}
+      const texts = textsFor(cached);
+      homeWidgetProbed[widgetChurch].copy = cached;
+      homeWidgetProbed[widgetChurch].textsKey = textsKeyOf(texts);
+      publish(cached, texts);
     })();
     return () => { cancelled = true; };
-  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, relaysTick]);   // eslint-disable-line
+  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, Bible.activeVersion, relaysTick]);   // eslint-disable-line
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;

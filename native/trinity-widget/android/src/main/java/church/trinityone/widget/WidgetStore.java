@@ -37,6 +37,14 @@ final class WidgetStore {
     static final String K_VOTD = "votd";
     static final String K_PROMPT = "prompt";
 
+    /**
+     * ONE lock for every read-modify-write of K_PROMPT (re-audit X-a of e19bfb9d): the app's bridge thread
+     * (publishPrompt, publishTexts, clearPrompt, clear/setEnabled off) and the background job's thread (PromptFetchJob)
+     * both rewrite it. SharedPreferences updates its in-memory map synchronously, so holding this across read → write
+     * makes each change whole. Never held across the network: the job's GET pass runs outside it.
+     */
+    static final Object PROMPT_LOCK = new Object();
+
     static final class Page {
         final String label, ref, text;
         final boolean prompt;
@@ -76,15 +84,17 @@ final class WidgetStore {
 
     /** The prompt config, or null. Enforces validUntil WITHOUT the app: past it, the config is deleted. */
     static JSONObject promptConfig(Context c, long now) {
-        JSONObject p = read(c, K_PROMPT);
-        if (p == null) return null;
-        long until = p.optLong("validUntil", 0);
-        if (until <= 0 || until * 1000L <= now) {
-            write(c, K_PROMPT, null);
-            PromptFetchJob.cancel(c);
-            return null;
+        synchronized (PROMPT_LOCK) {
+            JSONObject p = read(c, K_PROMPT);
+            if (p == null) return null;
+            long until = p.optLong("validUntil", 0);
+            if (until <= 0 || until * 1000L <= now) {
+                write(c, K_PROMPT, null);
+                PromptFetchJob.cancel(c);
+                return null;
+            }
+            return p;
         }
-        return p;
     }
 
     /** The active prompt entry: { ref, becameMs } or null. */
@@ -169,6 +179,57 @@ final class WidgetStore {
             }
         }
         return next;
+    }
+
+    /**
+     * The page set and order as one string ("P|ref" / "V|ref" per page, most current first). The provider asks
+     * StackView to show page 0 again ONLY when this changes (device D2, 2026-11-17: after a refresh the daily verse
+     * was in front although the prompt was the most current), so a member's own swipe is not undone by every redraw
+     * that changes nothing.
+     */
+    static String pageOrder(List<Page> pages) {
+        StringBuilder b = new StringBuilder();
+        for (Page p : pages) b.append(p.prompt ? 'P' : 'V').append('|').append(p.ref).append('\n');
+        return b.toString();
+    }
+
+    static boolean frontNeedsReset(String shownOrder, String nowOrder) { return shownOrder == null || !shownOrder.equals(nowOrder); }
+
+    static final String K_ORDER = "order.";   // + widget id → the pageOrder last put in front of that widget
+
+    static String shownOrder(Context c, int widgetId) { return prefs(c).getString(K_ORDER + widgetId, null); }
+
+    static void recordOrder(Context c, int widgetId, String order) { prefs(c).edit().putString(K_ORDER + widgetId, order).apply(); }
+
+    /** Every widget's recorded order (re-audit R3): with them gone, the next draw puts page 0 in front again. */
+    static void forgetAllOrders(Context c) {
+        SharedPreferences.Editor e = prefs(c).edit();
+        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER)) e.remove(k);
+        e.apply();
+    }
+
+    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).apply(); }
+
+    /**
+     * How many lines of verse fit a widget this many dp tall, so the text ends in "…" instead of being cut through a
+     * line (trinity_widget_item.xml). Leans SMALL on purpose: one line too few costs an early "…", one too many is
+     * the clipped line this exists to prevent. textSp = the size the verse is drawn at its smallest (12 with API 26+
+     * autosize, else 15). heightDp <= 0 (a launcher that reports no size) → 4, what fits the declared 110dp minimum
+     * at normal font size.
+     *
+     *   widget − root padding 12 → StackView; a page gets 90% of it (StackView's stack perspective) − page padding 24
+     *   − header (the 20dp mark, or the 12sp label if larger, + 8 gap) − reference (12sp + 6 gap) − 8 slack
+     *   (launcher padding we cannot see) → ÷ one line (1.25 × textSp × font scale).
+     */
+    static int verseLines(int heightDp, float fontScale, float textSp) {
+        if (heightDp <= 0) return 4;
+        float fs = fontScale > 0 ? fontScale : 1f;
+        float page = (heightDp - 12f) * 0.9f - 24f;
+        float header = Math.max(20f, 12f * 1.25f * fs) + 8f;
+        float ref = 12f * 1.25f * fs + 6f;
+        float line = 1.25f * textSp * fs;
+        int n = (int) Math.floor((page - header - ref - 8f) / line);
+        return Math.max(1, Math.min(12, n));
     }
 
     static ComponentName provider(Context c) { return new ComponentName(c, TrinityWidgetProvider.class); }

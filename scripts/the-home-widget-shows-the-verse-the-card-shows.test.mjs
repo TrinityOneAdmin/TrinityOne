@@ -13,6 +13,7 @@
 process.env.TZ = 'Europe/London';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { compileScreen, loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 
 const POOL = [
@@ -25,7 +26,7 @@ const TRANSLATED = 'BSB-TEXT For God so loved the world that He gave His one and
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const localISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
-function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {} } = {}) {
+function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {}, parseRef = null, chapters = {}, bibleLoaded = true, withPublishTexts = true } = {}) {
   const listeners = {};
   const opts = { feedBases };
   const { React, draw } = miniReact();
@@ -40,7 +41,8 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
+  const native = { prompt: null };   // what the fake plugin holds in "widget storage"
+  const published = [], prompts = [], textsSent = [], promptRefused = [], warned = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
   const win = {
     addEventListener(t, h) { (listeners[t] = listeners[t] || []).push(h); }, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
@@ -49,8 +51,10 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     ChurchBadge,
     TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: POOL },
     Bible: {
-      parseRef: r => (r === 'John 3:16' ? { book: 43, chap: 3, verse: 16 } : r === 'Psalms 23:1' ? { book: 19, chap: 23, verse: 1 } : null),
-      loaded: true, books: () => [43], getVerses: (b, c) => (b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
+      parseRef: parseRef || (r => (r === 'John 3:16' ? { book: 43, chap: 3, verse: 16 } : r === 'Psalms 23:1' ? { book: 19, chap: 23, verse: 1 } : null)),
+      // `chapters` ({ 'book:chap': rows }) adds whole chapters of this phone's Bible (the passage tests below).
+      loaded: bibleLoaded, books: () => [43].concat(Object.keys(chapters).map(k => Number(k.split(':')[0]))),
+      getVerses: (b, c) => (chapters[b + ':' + c] ? chapters[b + ':' + c] : b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
       refKey: (loc, v) => loc.book + '.' + loc.chap + '.' + v,   // the reader's canonical key (the verse heart uses it)
     },
@@ -61,14 +65,30 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
         for (const b of bases) { if (!/^https:\/\//.test(b)) continue; if (unreachable.includes(b) || redirectTo[b]) { fail++; continue; }
           if (feed[b] && npub === CHURCH_NPUB) { if (!best || (feed[b].ts || 0) > (best.ts || 0)) best = feed[b]; } else n404++; }
         return best ? { outcome: 'found', copy: best } : (n404 && !fail ? { outcome: 'absent' } : { outcome: 'unreachable' }); }, publishVotd: (a) => { published.push(a); return Promise.resolve(); },
-      publishPrompt: (a) => { prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
+      // TrinityWidgetPlugin.promptArgs's contract (JVM-tested: native/trinity-widget/android/src/test/…/PublishPromptArgsTest):
+      // validUntil must be a NUMBER of unix SECONDS, in the future and at most 366 days out; anything else is REFUSED.
+      // (Until 2026-11-17 the native side read it with PluginCall.getLong, silently stored 0 and dropped the config at
+      // the next redraw while resolving — a stub that accepted everything could never show that.)
+      publishPrompt: (a) => { const v = a && a.validUntil, nowS = Math.floor(date.getTime() / 1000);
+        if (!/^npub1[a-z0-9]{58}$/.test(String(a && a.npub))) { promptRefused.push(a); return Promise.reject(new Error('bad npub')); }
+        if (typeof v !== 'number' || !Number.isFinite(v) || Math.trunc(v) <= nowS || Math.trunc(v) > nowS + 366 * 86400) { promptRefused.push(a); return Promise.reject(new Error('bad validUntil')); }
+        prompts.push(a); native.prompt = JSON.parse(JSON.stringify(a)); return Promise.resolve(); },
+      // TrinityWidgetPlugin.publishTexts (JVM-tested: PublishTextsTest): ONLY the stored config's texts, and only for
+      // the same church; nothing stored or another church's -> { updated: false }, nothing changes.
+      publishTexts: (a) => { textsSent.push(a);
+        if (!/^npub1[a-z0-9]{58}$/.test(String(a && a.npub))) return Promise.reject(new Error('bad npub'));
+        if (!a.texts || typeof a.texts !== 'object') return Promise.reject(new Error('bad texts'));
+        if (!native.prompt || native.prompt.npub !== a.npub) return Promise.resolve({ updated: false });
+        native.prompt.texts = JSON.parse(JSON.stringify(a.texts)); return Promise.resolve({ updated: true }); },
+      clearPrompt: () => { cleared.push(1); native.prompt = null; return Promise.resolve(); } } } } : undefined,
   };
+  if (!withPublishTexts && win.Capacitor) delete win.Capacitor.Plugins.TrinityWidget.publishTexts;   // an older APK
   let pickStore = null;
   const globals = {
     React, window: win, localStorage,
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
     navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
-    setTimeout, clearTimeout, setInterval, clearInterval, console,
+    setTimeout, clearTimeout, setInterval, clearInterval, console: { ...console, warn: (...a) => { warned.push(a.join(' ')); } },
     Icon, ChurchBadge,
     lsGet: (k, d) => (k === 'trinityone.streak' ? { count: 7, last: localISO(date) } : k === 'trinityone.votd-pick' ? pickStore : d),
     lsSet: (k, v) => { if (k === 'trinityone.votd-pick') pickStore = v; },
@@ -95,7 +115,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
     bookmarkItems: [], toggleBookmark: (k) => { hearted.push(k); }, setBookmarkTags: () => {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, probed, hearted, opts, store,
+  return { draw: () => draw(TodayScreen, { ctx }), bible: win.Bible, native, published, prompts, textsSent, promptRefused, warned, cleared, fetched, fetchInits, probed, hearted, opts, store,
     fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
@@ -289,6 +309,83 @@ test('1b: before any relay is admitted, Today writes NO address (and does not cl
   s.draw(); await settle();
   assert.equal(s.prompts.length, 0);
   assert.equal(s.probed.length + s.fetched.length, 0, 'Today probed something although no relay was admitted');
+});
+
+test('DEVICE 2026-11-17: a config the native side REFUSES is not taken for success — logged, and asked again on the next run', async () => {
+  // A validUntil in milliseconds (or anything not future unix seconds) is refused by TrinityWidgetPlugin.promptArgs.
+  const s = todayScreen({ church: 'grace', pin: true, rememberedUntil: 1800000000 * 1000, feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 0, 'the fake plugin accepted a validUntil the real one refuses');
+  assert.equal(s.promptRefused.length, 1, 'Today did not try to configure the widget');
+  assert.ok(s.warned.some(w => /publishPrompt refused: bad validUntil/.test(w)), 'the refusal was swallowed without a word');
+  // audit L2: a config that cannot be bounded is never kept — the old one (maybe older relay addresses) is cleared.
+  assert.equal(s.cleared.length, 1, 'a validUntil refusal left the previous native config in place');
+  s.fire('trinity-relays-verified'); s.draw(); await settle();
+  assert.equal(s.probed.length, 2, 'after a refusal Today kept the hourly throttle, so the widget stays unconfigured for an hour');
+});
+
+// DEVICE D1 2026-11-17: the live prompt "1 Samuel 8:11-18; Matthew 20:27-29; Numbers 7" showed "Tap to read" for
+// Numbers 7 — the texts map was filled one VERSE per ref. parseRef here is the REAL one, lifted from engine.js.
+const ENGINE = readFileSync(new URL('../engine.js', import.meta.url), 'utf8');
+const realParseRef = (() => {
+  const a = ENGINE.indexOf('  const BOOK_NAMES = ['), b = ENGINE.indexOf('  const USFM_BOOK = {');
+  assert.ok(a > 0 && b > a, 're-anchor: engine.js parseRef moved');
+  return new Function(ENGINE.slice(a, b) + '\nreturn parseRef;')();
+})();
+const chapterOf = (tag, n) => Array.from({ length: n }, (_, i) => ({ v: i + 1, text: `${tag}${i + 1} ` + 'word '.repeat(12).trim() + '.' }));
+test('D1: the widget gets the member\'s text for a RANGE and a whole CHAPTER, capped, under the ref as given', async () => {
+  const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Matthew 20:27-29; Numbers 7', schedule: [] };
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
+    parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '40:20': chapterOf('M', 34), '4:7': chapterOf('N', 89) } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'Today did not configure the widget');
+  const t = s.prompts[0].texts;
+  assert.deepEqual(Object.keys(t).sort(), ['1 Samuel 8:11-18', 'Matthew 20:27-29', 'Numbers 7'], 'a passage got no text (the widget says "Tap to read")');
+  assert.match(t['Matthew 20:27-29'], /^M27 .*M28 .*M29 word/, 'the range is not its verses joined');
+  assert.doesNotMatch(t['Matthew 20:27-29'], /M26 |M30 /, 'the range ran past its ends');
+  assert.match(t['1 Samuel 8:11-18'], /^S11 /);
+  assert.match(t['Numbers 7'], /^N1 word .* N2 word/, 'the chapter does not open with its first verses');
+  for (const [r, x] of Object.entries(t)) assert.ok(x.length <= 600, `${r}: ${x.length} chars crossed into widget storage`);
+  assert.ok(t['Numbers 7'].endsWith('\u2026') && !/N89 /.test(t['Numbers 7']), 'an 89-verse chapter was not capped with an ellipsis');
+});
+
+test('DEVICE 2026-11-17: the Bible loading AFTER the first write sends the texts — ONLY the texts, with NO second probe', async () => {
+  const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Numbers 7', schedule: [] };
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
+    parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '4:7': chapterOf('N', 89) }, bibleLoaded: false });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'Today did not configure the widget');
+  assert.deepEqual(s.prompts[0].texts, {}, 'premise: with the Bible not loaded the first write has no texts');
+  // Re-audit S1: meanwhile the BACKGROUND JOB found the copy withdrawn and stored null.
+  s.native.prompt.cached = null;
+  s.bible.loaded = true; s.draw(); await settle();
+  assert.equal(s.probed.length, 1, 'the Bible loading probed the relays again (small pipes: the texts are local)');
+  assert.equal(s.textsSent.length, 1, 'the Bible loaded but the widget was never given the texts (it says "Tap to read" for the hour)');
+  assert.deepEqual(Object.keys(s.native.prompt.texts).sort(), ['1 Samuel 8:11-18', 'Numbers 7']);
+  assert.equal(s.prompts.length, 1, 'the texts went through publishPrompt, which replaces the whole config');
+  assert.equal(s.native.prompt.cached, null, 'the texts re-send put back a copy the background job had withdrawn');
+  // Re-audit N-a: a re-run with the same texts (here: relay admission settles again) sends nothing.
+  s.fire('trinity-relays-verified'); s.draw(); await settle();
+  assert.equal(s.textsSent.length, 1, 'a re-run with the same texts wrote the widget again');
+  assert.equal(s.probed.length, 1);
+  s.bible.activeVersion = 'KJV'; s.draw(); await settle();
+  assert.equal(s.textsSent.length, 2, 'a change of translation did not re-send the texts');
+  assert.equal(s.probed.length, 1);
+  assert.equal(s.prompts.length, 1);
+});
+
+test('X-b: an APK WITHOUT publishTexts gets nothing when the Bible loads late — never the whole config again', async () => {
+  const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Numbers 7', schedule: [] };
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
+    parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '4:7': chapterOf('N', 89) }, bibleLoaded: false, withPublishTexts: false });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'premise: the first write happened');
+  s.native.prompt.cached = null;   // the background job withdrew the copy meanwhile
+  s.bible.loaded = true; s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'without publishTexts Today fell back to publishPrompt (it would put a withdrawn copy back)');
+  assert.equal(s.textsSent.length, 0);
+  assert.equal(s.native.prompt.cached, null);
+  assert.equal(s.probed.length, 1);
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────
