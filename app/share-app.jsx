@@ -57,6 +57,22 @@ function shareAppToBase64(u8) {
 // transfer of A is still running when B is shared, A's transfer can be cut short. Keeping every copy instead
 // would pile them up on a low-storage phone; the member can share A again.
 // Web / PWA: navigator.share with one File where the browser can, otherwise a download.
+// The file name a shared verse card carries: its reference, made safe ("1 John 3:16-18" -> "1-John-3-16-18.png").
+// Letters, marks and digits of any script are kept; ':' '.' dashes '/' '\\' and spaces become '-'; anything else goes.
+// Empty or nothing left -> 'TrinityOne-verse.png'. At most 60 characters (no surrogate pair split).
+function shareCardFilename(ref) {
+  let n = String(ref == null ? '' : ref);
+  try { n = n.normalize('NFC'); } catch (e) {}
+  n = n.replace(/[:.\u2013\u2014\u2012\u2212\/\\\s]/g, '-').replace(/[^\p{L}\p{M}\p{N}\u200C\u200D-]/gu, '').replace(/-{2,}/g, '-');
+  // cut at 60 by grapheme (an accent stays with its letter); no Intl.Segmenter -> by code point
+  let parts;
+  try { parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(n), (x) => x.segment); } catch (e) { parts = Array.from(n); }
+  n = parts.slice(0, 60).join('').replace(/^[-\u200C\u200D]+|[-\u200C\u200D]+$/g, '');
+  // a Windows reserved device name (with or without an extension) cannot be a file name there
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(n)) n = 'Verse-' + n;
+  return (n || 'TrinityOne-verse') + '.png';
+}
+let shareAppLegacyCleared = false;   // the legacy root-level verse card was cleared this session
 const shareAppLastCopy = {};   // slot -> CACHE path of the last copy shared or dismissed (deleted at the next one in that slot)
 async function shareOneFile(opts, ctx) {
   const o = opts || {};
@@ -95,12 +111,23 @@ async function shareOneFile(opts, ctx) {
   const drop = (path) => { try { Promise.resolve(P.Filesystem.deleteFile({ path, directory: 'CACHE' })).catch(() => {}); } catch (e) {} };
   if (!uri) {
     const last = shareAppLastCopy[slot];
-    if (last && last !== o.filename) drop(last);
+    // `cacheDir` (the verse card only): the copy goes in that CACHE sub-folder, and the whole folder is cleared first, so a
+    // copy a PREVIOUS app session left behind (the pointer below is in memory) is cleared too. Without it: as before.
+    const cdir = typeof o.cacheDir === 'string' && o.cacheDir ? o.cacheDir : '';
+    const rel = cdir ? cdir + '/' + o.filename : o.filename;
+    if (cdir) {
+      // awaited, so the write below cannot be undone by a delete still running (errors swallowed: no folder yet is normal).
+      // A delete leaves a transfer that already has the old file open still readable (accepted, as drop() below).
+      try { await P.Filesystem.rmdir({ path: cdir, directory: 'CACHE', recursive: true }); } catch (e) {}
+      // once per app session: the pre-folder builds wrote a fixed root-level 'TrinityOne-verse.png' that nothing else clears
+      if (!shareAppLegacyCleared) { shareAppLegacyCleared = true; try { await P.Filesystem.deleteFile({ path: 'TrinityOne-verse.png', directory: 'CACHE' }); } catch (e) {} }
+    }
+    else if (last && last !== rel) drop(last);
     shareAppLastCopy[slot] = null;
     try {
-      const w = await P.Filesystem.writeFile({ path: o.filename, data: shareAppToBase64(o.bytes), directory: 'CACHE' });
+      const w = await P.Filesystem.writeFile(cdir ? { path: rel, data: shareAppToBase64(o.bytes), directory: 'CACHE', recursive: true } : { path: rel, data: shareAppToBase64(o.bytes), directory: 'CACHE' });
       uri = w && w.uri;
-      if (uri) wrote = o.filename;
+      if (uri) wrote = rel;
     } catch (e) { uri = null; }
     if (!uri) { toast('Couldn’t get ' + name + ' ready to share — is the phone full?'); return 'failed'; }
   }
@@ -499,7 +526,7 @@ async function shareCardShare(verse, st, probe, ctx, opts) {
     return ctx.shareText(text, 'A verse for you');
   }
   const title = String(verse.ref || '').trim() || 'A verse';
-  return window.shareOneFile({ bytes, filename: 'TrinityOne-verse.png', mime: 'image/png', title, dialogTitle: 'Share this verse', text, slot: 'verse' }, ctx);
+  return window.shareOneFile({ bytes, filename: shareCardFilename(verse.ref), cacheDir: 'verse-card', mime: 'image/png', title, dialogTitle: 'Share this verse', text, slot: 'verse' }, ctx);
 }
 
 // `cv`: the same look for the canvas — [colour, fallback] pairs; a var(--x) is resolved on the card on screen.
