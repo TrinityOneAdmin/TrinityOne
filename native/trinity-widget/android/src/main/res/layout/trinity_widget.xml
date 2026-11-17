@@ -31,15 +31,31 @@
         android:textColor="@color/trinity_widget_ink2"
         android:textSize="14sp" />
     <!-- TAP TO FLIP (owner, 2026-11-17): on ColorOS a sideways swipe moves the home screen and only a DOWN swipe flips
-         the StackView. This strip over the page dots (right edge) sends ACTION_FLIP to TrinityWidgetProvider, which
-         rotates that widget's pages by one (WidgetStore.K_FLIP; a partial showNext is ignored by ColorOS). Outside the StackView on purpose: views inside a page can only use the pages' shared
-         template intent, which opens the app. Shown only when there are two pages. A FrameLayout because RemoteViews
-         does not allow a plain View. -->
-    <FrameLayout
-        android:id="@+id/trinity_widget_flip"
-        android:layout_width="48dp"
+         the StackView. The strip over the page dots sends ACTION_FLIP to TrinityWidgetProvider, which rotates that
+         widget's pages by one (WidgetStore.K_FLIP; ColorOS ignores a partial showNext). Outside the StackView on
+         purpose: views inside a page can only use the pages' shared template intent, which opens the app. Shown only
+         with two pages. FrameLayouts because RemoteViews does not allow a plain View.
+         WIDTH (audit D-1 of 1bbab650): the dots sit at a FRACTION of the card's width (the front page is 0.9 x the
+         widened stack), so a fixed-width strip either missed them on wide cards or covered the verse's last words on
+         narrow ones. Weights 9:1 with the strip's marginStart -140dp share (card + 140) out, so the strip starts at
+         0.9 x (card + 140) - 140 = 0.9 x card - 14dp for every width: the dots' left edge is at 0.9 x card - 9.6dp and
+         the verse column ends at 0.9 x card - 19.6dp (trinity_widget_item.xml). The spacer is not
+         clickable, so a touch there falls through to the StackView. FlipStripGeometryTest checks this for 180-480dp. -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="end"
-        android:contentDescription="@string/trinity_widget_flip"
-        android:visibility="gone" />
+        android:orientation="horizontal">
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="9" />
+        <FrameLayout
+            android:id="@+id/trinity_widget_flip"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="-140dp"
+            android:contentDescription="@string/trinity_widget_flip"
+            android:visibility="gone" />
+    </LinearLayout>
 </FrameLayout>

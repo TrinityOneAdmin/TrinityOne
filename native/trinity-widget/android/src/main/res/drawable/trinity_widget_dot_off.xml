@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <solid android:color="@color/trinity_widget_dot_off" />
+    <!-- A RING, not a paler disc (audit D-3 of 1bbab650): the unlit dot differs from the lit one by shape, and its
+         colour is >= 3:1 against the card (light #9C8A72 on #FBF6EE 3.1:1, dark #857060 on #241C14 3.6:1). -->
+    <stroke android:width="1.5dp" android:color="@color/trinity_widget_dot_off" />
     <size android:width="6dp" android:height="6dp" />
 </shape>

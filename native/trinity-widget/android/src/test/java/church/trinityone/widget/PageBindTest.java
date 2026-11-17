@@ -4,8 +4,6 @@ import static org.junit.Assert.assertEquals;
 
 import org.junit.Test;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,8 +41,8 @@ public class PageBindTest {
 
     @Test
     public void theChurchPagesLabelIsYourChurchIsReading() throws Exception {
-        String s = new String(Files.readAllBytes(Paths.get("src/main/res/values/trinity_widget_strings.xml")), "UTF-8");
-        assertEquals(1, s.split("<string name=\"trinity_widget_prompt\">Your church is reading</string>", -1).length - 1);
-        assertEquals("the old swipe text is still a resource", -1, s.indexOf("Swipe for more"));
+        // PARSED (audit D-4): a comment cannot satisfy these.
+        assertEquals("Your church is reading", Xml.string("trinity_widget_prompt"));
+        assertEquals("the old swipe text is still a resource", false, Xml.anyStringContains("Swipe for more"));
     }
 }

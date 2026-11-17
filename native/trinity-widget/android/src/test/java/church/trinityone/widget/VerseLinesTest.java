@@ -39,13 +39,12 @@ public class VerseLinesTest {
 
     @Test
     public void theLayoutNumbersVerseLinesMirrorsAreTheLayouts() throws Exception {
-        // verseLines assumes these; if a layout changes and this does not, the line count lies.
-        String root = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("src/main/res/layout/trinity_widget.xml")), "UTF-8");
-        String item = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("src/main/res/layout/trinity_widget_item.xml")), "UTF-8");
-        assertTrue(root.contains("android:layout_marginTop=\"-" + (int) WidgetStore.STACK_PULL_UP_DP + "dp\""));
-        assertTrue(item.contains("android:paddingTop=\"" + (int) WidgetStore.PAGE_PAD_V_DP + "dp\""));
-        assertTrue(item.contains("android:paddingBottom=\"" + (int) WidgetStore.PAGE_PAD_V_DP + "dp\""));
-        assertTrue(item.contains("android:layout_marginTop=\"" + (int) WidgetStore.TEXT_GAP_DP + "dp\""));
-        assertTrue(item.contains("android:layout_marginTop=\"" + (int) WidgetStore.REF_GAP_DP + "dp\""));
+        // verseLines assumes these; if a layout changes and this does not, the line count lies. PARSED (audit D-4).
+        org.w3c.dom.Document root = Xml.layout("trinity_widget"), item = Xml.layout("trinity_widget_item");
+        assertEquals(-WidgetStore.STACK_PULL_UP_DP, Xml.dp(Xml.byId(root, "trinity_widget_stack"), "layout_marginTop"), 0f);
+        assertEquals(WidgetStore.PAGE_PAD_V_DP, Xml.dp(Xml.root(item), "paddingTop"), 0f);
+        assertEquals(WidgetStore.PAGE_PAD_V_DP, Xml.dp(Xml.root(item), "paddingBottom"), 0f);
+        assertEquals(WidgetStore.TEXT_GAP_DP, Xml.dp(Xml.byId(item, "trinity_widget_text"), "layout_marginTop"), 0f);
+        assertEquals(WidgetStore.REF_GAP_DP, Xml.dp(Xml.byId(item, "trinity_widget_ref"), "layout_marginTop"), 0f);
     }
 }
