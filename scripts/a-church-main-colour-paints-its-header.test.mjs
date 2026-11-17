@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find } from './render-jsx-screen.mjs';
 
 // the REAL engine.js guards are window-scoped; these are copies of their contract (hex or var(--x); data: only)
-const safeCssColor = (v, fb) => { const s = typeof v === 'string' ? v.trim() : ''; return (/^#[0-9a-fA-F]{3,8}$/.test(s) || /^var\(--[a-zA-Z0-9-]+\)$/.test(s)) ? s : (fb || 'var(--clay)'); };
+const safeCssColor = (v, fb) => { const s = typeof v === 'string' ? v.trim() : ''; return (/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(s) || /^var\(--[a-zA-Z0-9-]+\)$/.test(s)) ? s : (fb || 'var(--clay)'); };
 const safeImgUrl = (v) => { const s = typeof v === 'string' ? v.trim() : ''; return /^data:image\/[a-zA-Z0-9.+-]+;/.test(s) ? s : ''; };
 
 function helpers(React) {

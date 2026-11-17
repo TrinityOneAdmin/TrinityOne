@@ -45,7 +45,7 @@ const bubbleGlobals = (React) => ({
   window: { Fellowship: { myPubkey: 'mehex', displayFor: () => ({ handle: 'Ruth' }) }, addEventListener() {}, removeEventListener() {} },
   Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
   UserAvatar: () => null,
-  safeCssColor: (c, f) => (typeof c === 'string' && (/^#[0-9a-fA-F]{3,8}$/.test(c.trim()) || /^var\(--[\w-]+\)$/.test(c.trim())) ? c.trim() : (f || 'var(--clay)')),
+  safeCssColor: (c, f) => (typeof c === 'string' && (/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(c.trim()) || /^var\(--[\w-]+\)$/.test(c.trim())) ? c.trim() : (f || 'var(--clay)')),
   safeImgUrl: (v) => { const s = typeof v === 'string' ? v.trim() : ''; return /^data:image\/[a-zA-Z0-9.+-]+;/.test(s) ? s : ''; },
   setTimeout: () => 0, clearTimeout: () => {},
 });
