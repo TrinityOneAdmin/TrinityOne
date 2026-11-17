@@ -891,7 +891,7 @@ window.safeImgUrl = function (v) {
   async function publishedPins(){
     const out = {};
     try{
-      const cat = await getCatalog();
+      const cat = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] });
       for(const c of (cat && cat.categories) || [])
         for(const it of (c.items || []))
           if(it && it.url && it.sha256) out[it.url] = String(it.sha256).toLowerCase();
@@ -1506,14 +1506,14 @@ window.safeImgUrl = function (v) {
     const out = new Set(), cat = _CAT_OF_KIND[kind];
     const add = (it, abbrToo = true) => { if(it && catOf(it) === cat){ if(it.name) out.add(_nameKey(it.name)); if(abbrToo && it.abbr) out.add(_nameKey(it.abbr)); } };
     add(DEFAULT_MODULE); add(DEFAULT_LEXICON);
-    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
+    try{ const c = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] }); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
     // the 1,290 eBible translations the Library offers by name: a file must not wear one either
-    if(kind === "bible"){ try{ const m = await getMirror(); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
+    if(kind === "bible"){ try{ const m = await _within(getMirror(), LIST_WAIT_MS, null); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
     return out;
   }
   async function _pinnedEntry(h){
     for(const it of [DEFAULT_MODULE, DEFAULT_LEXICON]) if(it.url && KNOWN_HASHES[it.url] === h) return it;
-    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
+    try{ const c = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] }); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
     return null;
   }
   // take a just-loaded module back out of memory (no record, no bytes involved)
@@ -1955,18 +1955,27 @@ window.safeImgUrl = function (v) {
   }
 
   // ── boot: restore installed modules, then optional ?module=<url> autoload ──
+  // The lists are NETWORK reads (catalog.json, and the 414 KB eBible mirror list). A member's own imported file must never wait
+  // on them, and nothing may wait on them for ever: a list that has not answered in LIST_WAIT_MS counts as unreadable.
+  const LIST_WAIT_MS = 6000;
+  const _within = (p, ms, fallback) => new Promise((res) => { const t = setTimeout(() => res(fallback), ms); Promise.resolve(p).then(v => { clearTimeout(t); res(v); }, () => { clearTimeout(t); res(fallback); }); });
   async function moduleLinkAllowed(url){
     if(typeof url !== "string" || !url) return false;
     if(url === DEFAULT_MODULE.url) return true;
-    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
-    try{ const m = await getMirror(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){}
+    // An imported/ key is a member's own file and can never be published: answer at once, no list read. Before this, the member's
+    // own Bible waited at every launch behind a 414 KB list download (10 s on the web build while it compiles, minutes on a thin
+    // pipe, for ever if the connection hangs), and every record after it waited too.
+    if(url.indexOf("imported/") === 0) return false;
+    try{ const c = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] }); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
+    // the mirror's urls are all https: a relative url cannot be in it, so do not fetch it for one
+    if(/^https?:/i.test(url)){ try{ const m = await _within(getMirror(), LIST_WAIT_MS, null); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){} }
     return false;
   }
   // Can we READ the lists that say what is ours? (getCatalog resolves {categories:[]} on failure, getMirror null.)
   async function _listsReadable(){
     try{
-      const c = await getCatalog(); if(!(c && (c.categories || []).length)) return false;
-      const m = await getMirror(); return !!(m && (m.items || []).length);
+      const c = await _within(getCatalog(), LIST_WAIT_MS, null); if(!(c && (c.categories || []).length)) return false;
+      const m = await _within(getMirror(), LIST_WAIT_MS, null); return !!(m && (m.items || []).length);
     }catch(e){ return false; }
   }
   // told by event if the app is already listening, else kept for takeLinkNotice() at mount (same shape as the quarantine notice)
