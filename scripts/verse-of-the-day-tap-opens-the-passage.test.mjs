@@ -92,6 +92,7 @@ const nav = s => s.calls.gotoRef.length + s.calls.openReader;
 test('tapping the card opens the verse shown in the Bible, at that verse, and does not open the share sheet', () => {
   const s = mount();
   assert.ok(texts(s.card()).join(' ').includes('John 3:16'), 'fixture: the card does not show John 3:16');
+  assert.equal(s.card().props.style.cursor, 'pointer', 'the tappable card lost its pointer cursor');
   s.tap(s.card());
   assert.deepEqual(s.calls.gotoRef, [[43, 3, 16]], 'the card tap did not open John 3:16 at the verse');
   assert.equal(s.calls.openReader, 0);
@@ -145,6 +146,7 @@ test('heart, Minimise and the reference button each do only their own job', () =
 
 test('Bible tab turned off: the card tap does nothing, Share still shares, the reference is plain text', () => {
   const s = mount({ features: { read: false } });
+  assert.equal(s.card().props.style.cursor, 'default', 'with the Bible tab off the card does nothing but still shows a pointer cursor');
   s.tap(s.card());
   assert.equal(nav(s), 0, 'with the Bible tab off the card tap navigated (app.jsx would bounce it straight back to Today)');
   assert.equal(s.calls.shared.length, 0, 'with the Bible tab off the card tap opened the share sheet');

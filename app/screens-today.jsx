@@ -3084,7 +3084,7 @@ function TodayScreen({ ctx }) {
         </button>
       ) : (
       <div data-votd-card="1" onClick={openVotd} style={{
-        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
+        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: votdReadOn ? 'pointer' : 'default',
         background: mainC ? churchMainGradient(mainC, 155) : 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
         padding: '22px 22px 18px', color: onMain, marginBottom: 22, boxShadow: 'var(--shadow-lg)',
         animation: 'trinityFade .5s ease .05s both',
