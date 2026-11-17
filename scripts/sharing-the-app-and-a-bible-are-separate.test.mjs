@@ -99,18 +99,19 @@ async function bytesOf(rec) {
 // recreated under memory pressure while the member is in the other app). `App` records appStateChange listeners
 // so a test can bring the app back to the foreground.
 function fakeCapacitor({ native = true, shareRejects = null, shareHangs = false } = {}) {
-  const shares = [], writes = [], deletes = [], appListeners = [];
+  const shares = [], writes = [], deletes = [], rmdirs = [], appListeners = [];
   const Plugins = {
     App: { addListener: (ev, cb) => { appListeners.push([ev, cb]); return { remove() {} }; } },
     Filesystem: {
       deleteFile: async ({ path, directory }) => { deletes.push([path, directory]); },
+      rmdir: async ({ path, directory, recursive }) => { rmdirs.push({ path, directory, recursive }); },
       stat: async () => { throw new Error('File does not exist'); },
-      writeFile: async ({ path, data, directory }) => { writes.push({ path, directory, bytes: new Uint8Array(Buffer.from(data, 'base64')) }); return { uri: 'file:///data/cache/' + path }; },
+      writeFile: async ({ path, data, directory, recursive }) => { writes.push({ path, directory, recursive, bytes: new Uint8Array(Buffer.from(data, 'base64')) }); return { uri: 'file:///data/cache/' + path }; },
     },
     Share: { share: async (args) => { shares.push(args); if (shareHangs) return new Promise(() => {}); if (shareRejects) throw new Error(shareRejects); return { activityType: 'x' }; } },
   };
   const resume = () => appListeners.filter(([ev]) => ev === 'appStateChange').forEach(([, cb]) => cb({ isActive: true }));
-  return { Capacitor: { isNativePlatform: () => native, Plugins }, shares, writes, deletes, resume };
+  return { Capacitor: { isNativePlatform: () => native, Plugins }, shares, writes, deletes, rmdirs, resume };
 }
 const APK = new Uint8Array(1_200_000).fill(7);
 const apkFetch = (ok = true) => async (url) => {
@@ -540,6 +541,9 @@ test('C1 — "Share as image" (both buttons) sends ONE .png — the drawn card �
     assert.match(s.files[0], /\.png$/, `${which}: the shared file is not a .png`);
     assert.equal(cap.writes.length, 1, `${which}: expected one file written`);
     assert.match(cap.writes[0].path, /\.png$/);
+    assert.equal(cap.writes[0].path, 'verse-card/John-3-16.png', `${which}: the native file is not named for the verse`);
+    assert.equal(cap.writes[0].recursive, true);
+    assert.match(s.files[0], /verse-card\/John-3-16\.png$/, `${which}: the file handed to the share sheet is not named for the verse`);
     assert.deepEqual([...cap.writes[0].bytes], [...CANVAS_BYTES], `${which}: the file shared is not the picture the canvas made`);
     assert.deepEqual([...cap.writes[0].bytes.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'PNG signature');
     assert.equal(typeof s.text, 'string', `${which}: the verse words are not beside the picture`);
@@ -563,7 +567,7 @@ test('C2 — on the web the picture goes to navigator.share as ONE image/png Fil
   const d = browser.shared[0];
   assert.equal(d.files.length, 1);
   assert.equal(d.files[0].type, 'image/png');
-  assert.match(d.files[0].name, /\.png$/);
+  assert.equal(d.files[0].name, 'John-3-16.png', 'the web share File is not named for the verse');
   assert.deepEqual([...new Uint8Array(await d.files[0].arrayBuffer())], [...CANVAS_BYTES], 'the File is not the picture the canvas made');
   assert.ok(typeof d.text === 'string' && d.text.includes(VERSE.text) && d.text.includes(VERSE.ref), `the words are not beside the picture: ${JSON.stringify(d.text)}`);
   assert.equal(d.url, undefined, 'a url went with the picture');
@@ -577,9 +581,62 @@ test('C3 — a browser that cannot share files downloads the .png instead', asyn
   await v.buttons().main.props.onClick();
   assert.equal(browser.shared.length, 0);
   assert.equal(browser.clicked.length, 1, 'nothing was downloaded');
-  assert.match(browser.clicked[0].download, /\.png$/);
+  assert.equal(browser.clicked[0].download, 'John-3-16.png', 'the download is not named for the verse');
+  assert.match(v.toasts[0], /Downloading John-3-16\.png/);
   assert.equal(v.toasts.length, 1);
   assert.match(v.toasts[0], /words were not included/, `a download that drops the words must say so: ${v.toasts[0]}`);
+});
+
+test('C23 — the three paths carry the reference of "1 John 3:16-18", not a fixed name', async () => {
+  const verse = { ...VERSE, ref: '1 John 3:16-18' };
+  const cap = fakeCapacitor();
+  await verseCard({ cap, verse }).buttons().main.props.onClick();
+  assert.equal(cap.writes[0].path, 'verse-card/1-John-3-16-18.png');
+  const browser = fakeBrowser();
+  await verseCard({ browser, verse }).buttons().main.props.onClick();
+  assert.equal(browser.shared[0].files[0].name, '1-John-3-16-18.png');
+  const b2 = fakeBrowser({ canShare: false });
+  await verseCard({ browser: b2, verse }).buttons().main.props.onClick();
+  assert.equal(b2.clicked[0].download, '1-John-3-16-18.png');
+});
+
+test('C24 — only one verse-card file stays in the cache: each verse share clears the verse-card folder first; a module share does not touch it', async () => {
+  const cap = fakeCapacitor();
+  await verseCard({ cap, verse: { ...VERSE, ref: 'John 3:16' } }).buttons().main.props.onClick();
+  await verseCard({ cap, verse: { ...VERSE, ref: 'Psalms 23' } }).buttons().main.props.onClick();
+  assert.deepEqual(cap.writes.map(w => w.path), ['verse-card/John-3-16.png', 'verse-card/Psalms-23.png']);
+  assert.deepEqual(cap.rmdirs, [{ path: 'verse-card', directory: 'CACHE', recursive: true }, { path: 'verse-card', directory: 'CACHE', recursive: true }], 'the folder was not cleared before each write');
+  // the clear comes BEFORE the write of the same share (a fresh module copy of this app session = a "restart": nothing remembered)
+  const order = [];
+  const c2 = fakeCapacitor();
+  const F = c2.Capacitor.Plugins.Filesystem, rm = F.rmdir, wr = F.writeFile;
+  F.rmdir = async (a) => { order.push('rmdir'); return rm(a); }; F.writeFile = async (a) => { order.push('write'); return wr(a); };
+  await verseCard({ cap: c2 }).buttons().main.props.onClick();
+  assert.deepEqual(order, ['rmdir', 'write']);
+  // a module share has no cacheDir: no rmdir, plain path
+  const c3 = fakeCapacitor();
+  const v = verseCard({ cap: c3 });
+  await v.S.shareOneFile({ bytes: new Uint8Array([1]), filename: 'eng-kjv.zip', title: 'KJV' }, {});
+  assert.deepEqual(c3.rmdirs, []); assert.equal(c3.writes[0].path, 'eng-kjv.zip'); assert.equal(c3.writes[0].recursive, undefined);
+});
+
+test('C25 — shareCardFilename rules', () => {
+  const { shareCardFilename: f } = loadScreen('app/share-app.jsx', ['shareCardFilename'], { React: {}, window: {}, btoa });
+  const cases = [
+    ['John 3:16', 'John-3-16.png'], ['1 John 3:16-18', '1-John-3-16-18.png'], ['Psalms 23', 'Psalms-23.png'],
+    ['Song of Solomon 2:1', 'Song-of-Solomon-2-1.png'], ['John 3:16\u20134:2', 'John-3-16-4-2.png'],
+    ['\u05D1\u05B0\u05BC\u05E8\u05B5\u05D0\u05E9\u05C1\u05B4\u05D9\u05EA 1:1', '\u05D1\u05B0\u05BC\u05E8\u05B5\u05D0\u05E9\u05C1\u05B4\u05D9\u05EA-1-1.png'],
+    ['\uC694\uD55C\uBCF5\uC74C 3:16', '\uC694\uD55C\uBCF5\uC74C-3-16.png'],
+    ['', 'TrinityOne-verse.png'], [null, 'TrinityOne-verse.png'], ['../:', 'TrinityOne-verse.png'], ['\u{1F600}', 'TrinityOne-verse.png'],
+    ['  a/b\\c  ', 'a-b-c.png'],
+  ];
+  for (const [i, o] of cases) assert.equal(f(i), o.normalize('NFC'), JSON.stringify(i));   // the name is NFC
+  const long = f('Ab '.repeat(100));
+  assert.ok(Array.from(long.slice(0, -4)).length <= 60 && long.endsWith('.png') && !/-\.png$/.test(long), long);
+  const emoji = f('\u{20000}'.repeat(100));   // astral letters: no split surrogate
+  assert.equal(Array.from(emoji.slice(0, -4)).length, 60);
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji));
+  assert.ok(!/^\./.test(f('.hidden')) && !/[\/\\:]/.test(f('a:b/c')));
 });
 
 test('C4 — if the picture cannot be made, the words alone go (still no link) and the member is told', async () => {
