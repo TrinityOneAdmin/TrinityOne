@@ -587,6 +587,11 @@ test('S28 — dark mode: a very dark brand (navy) is LIGHTENED without losing it
     assert.ok(Math.abs(hueOf(v) - hueOf(dark2)) <= 6, `${dark2} -> ${v} changed hue (${hueOf(dark2).toFixed(0)} -> ${hueOf(v).toFixed(0)})`);
     assert.ok(ratioOf(v, '#211B13') >= 4.6, `${dark2} -> ${v} is ${ratioOf(v, '#211B13').toFixed(3)}:1, under the code's own 4.6 target`);
   }
+  // light mode: a pale green brand. Judging before rounding left #91f5aa at 4.57:1 (#467652); it must reach the code's own 4.6 target on the paper.
+  for (const pale of ['#91f5aa', '#ffd9a0']) {
+    const v = (await clayText({ dark: false, accent: 'clay', brand: pale })).value;
+    assert.ok(ratioOf(v, '#F4EEE2') >= 4.6, `${pale} -> ${v} in light mode is ${ratioOf(v, '#F4EEE2').toFixed(3)}:1, under 4.6`);
+  }
 });
 
 test('S29 — the shared safeCssColor (engine.js) takes 3, 4, 6 and 8 hex digits and refuses 5 and 7', () => {
