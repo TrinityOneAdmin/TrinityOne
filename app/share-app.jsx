@@ -63,10 +63,16 @@ function shareAppToBase64(u8) {
 function shareCardFilename(ref) {
   let n = String(ref == null ? '' : ref);
   try { n = n.normalize('NFC'); } catch (e) {}
-  n = n.replace(/[:.\u2013\u2014\u2012\u2212\/\\\s]/g, '-').replace(/[^\p{L}\p{M}\p{N}-]/gu, '').replace(/-{2,}/g, '-');
-  n = Array.from(n).slice(0, 60).join('').replace(/^-+|-+$/g, '');
+  n = n.replace(/[:.\u2013\u2014\u2012\u2212\/\\\s]/g, '-').replace(/[^\p{L}\p{M}\p{N}\u200C\u200D-]/gu, '').replace(/-{2,}/g, '-');
+  // cut at 60 by grapheme (an accent stays with its letter); no Intl.Segmenter -> by code point
+  let parts;
+  try { parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(n), (x) => x.segment); } catch (e) { parts = Array.from(n); }
+  n = parts.slice(0, 60).join('').replace(/^[-\u200C\u200D]+|[-\u200C\u200D]+$/g, '');
+  // a Windows reserved device name (with or without an extension) cannot be a file name there
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(n)) n = 'Verse-' + n;
   return (n || 'TrinityOne-verse') + '.png';
 }
+let shareAppLegacyCleared = false;   // the legacy root-level verse card was cleared this session
 const shareAppLastCopy = {};   // slot -> CACHE path of the last copy shared or dismissed (deleted at the next one in that slot)
 async function shareOneFile(opts, ctx) {
   const o = opts || {};
@@ -109,7 +115,13 @@ async function shareOneFile(opts, ctx) {
     // copy a PREVIOUS app session left behind (the pointer below is in memory) is cleared too. Without it: as before.
     const cdir = typeof o.cacheDir === 'string' && o.cacheDir ? o.cacheDir : '';
     const rel = cdir ? cdir + '/' + o.filename : o.filename;
-    if (cdir) { try { Promise.resolve(P.Filesystem.rmdir({ path: cdir, directory: 'CACHE', recursive: true })).catch(() => {}); } catch (e) {} }
+    if (cdir) {
+      // awaited, so the write below cannot be undone by a delete still running (errors swallowed: no folder yet is normal).
+      // A delete leaves a transfer that already has the old file open still readable (accepted, as drop() below).
+      try { await P.Filesystem.rmdir({ path: cdir, directory: 'CACHE', recursive: true }); } catch (e) {}
+      // once per app session: the pre-folder builds wrote a fixed root-level 'TrinityOne-verse.png' that nothing else clears
+      if (!shareAppLegacyCleared) { shareAppLegacyCleared = true; try { await P.Filesystem.deleteFile({ path: 'TrinityOne-verse.png', directory: 'CACHE' }); } catch (e) {} }
+    }
     else if (last && last !== rel) drop(last);
     shareAppLastCopy[slot] = null;
     try {

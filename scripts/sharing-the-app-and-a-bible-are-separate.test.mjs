@@ -610,9 +610,14 @@ test('C24 — only one verse-card file stays in the cache: each verse share clea
   const order = [];
   const c2 = fakeCapacitor();
   const F = c2.Capacitor.Plugins.Filesystem, rm = F.rmdir, wr = F.writeFile;
-  F.rmdir = async (a) => { order.push('rmdir'); return rm(a); }; F.writeFile = async (a) => { order.push('write'); return wr(a); };
+  F.rmdir = async (a) => { order.push('rmdir'); await new Promise(r => setTimeout(r, 20)); order.push('rmdir-done'); return rm(a); }; F.writeFile = async (a) => { order.push('write'); return wr(a); };
   await verseCard({ cap: c2 }).buttons().main.props.onClick();
-  assert.deepEqual(order, ['rmdir', 'write']);
+  assert.deepEqual(order, ['rmdir', 'rmdir-done', 'write'], 'the write started before the delete had finished');
+  // the legacy root-level card is deleted once per session, not on every share
+  const c4 = fakeCapacitor();
+  const v4 = verseCard({ cap: c4 });
+  await v4.buttons().main.props.onClick(); await v4.buttons().main.props.onClick();
+  assert.deepEqual(c4.deletes, [['TrinityOne-verse.png', 'CACHE']]);
   // a module share has no cacheDir: no rmdir, plain path
   const c3 = fakeCapacitor();
   const v = verseCard({ cap: c3 });
@@ -627,12 +632,16 @@ test('C25 — shareCardFilename rules', () => {
     ['Song of Solomon 2:1', 'Song-of-Solomon-2-1.png'], ['John 3:16\u20134:2', 'John-3-16-4-2.png'],
     ['\u05D1\u05B0\u05BC\u05E8\u05B5\u05D0\u05E9\u05C1\u05B4\u05D9\u05EA 1:1', '\u05D1\u05B0\u05BC\u05E8\u05B5\u05D0\u05E9\u05C1\u05B4\u05D9\u05EA-1-1.png'],
     ['\uC694\uD55C\uBCF5\uC74C 3:16', '\uC694\uD55C\uBCF5\uC74C-3-16.png'],
+    ['\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645 1', '\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645-1.png'],
+    ['CON', 'Verse-CON.png'], ['nul', 'Verse-nul.png'], ['com1', 'Verse-com1.png'], ['Concord', 'Concord.png'],
     ['', 'TrinityOne-verse.png'], [null, 'TrinityOne-verse.png'], ['../:', 'TrinityOne-verse.png'], ['\u{1F600}', 'TrinityOne-verse.png'],
     ['  a/b\\c  ', 'a-b-c.png'],
   ];
   for (const [i, o] of cases) assert.equal(f(i), o.normalize('NFC'), JSON.stringify(i));   // the name is NFC
   const long = f('Ab '.repeat(100));
   assert.ok(Array.from(long.slice(0, -4)).length <= 60 && long.endsWith('.png') && !/-\.png$/.test(long), long);
+  const acc = f('a'.repeat(59) + 'x\u0301' + 'zzz');   // an accent must not be cut from its letter
+  assert.equal(acc, 'a'.repeat(59) + 'x\u0301' + '.png');
   const emoji = f('\u{20000}'.repeat(100));   // astral letters: no split surrogate
   assert.equal(Array.from(emoji.slice(0, -4)).length, 60);
   assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji));
@@ -659,10 +668,10 @@ test('C5 (LOW 1) — a verse card never deletes a module copy a transfer may sti
   await v.buttons().main.props.onClick();
   await ticks();
   assert.equal(cap.shares.length, 2, 're-anchor: both shares should have opened');
-  assert.deepEqual(cap.deletes, [], `the verse card share deleted ${JSON.stringify(cap.deletes)} — a Bluetooth transfer of the Bible may be cut short`);
+  assert.deepEqual(cap.deletes, [['TrinityOne-verse.png', 'CACHE']], `the verse card share deleted (only the legacy root-level card may go) ${JSON.stringify(cap.deletes)} — a Bluetooth transfer of the Bible may be cut short`);
   await v.S.shareOneFile({ bytes: new Uint8Array([4, 5]), filename: 'eng-web.zip', title: 'WEB' }, {});
   await ticks();
-  assert.deepEqual(cap.deletes, [['eng-kjv.zip', 'CACHE']], 'a module share must clear the previous MODULE copy (unchanged) and nothing else');
+  assert.deepEqual(cap.deletes, [['TrinityOne-verse.png', 'CACHE'], ['eng-kjv.zip', 'CACHE']], 'a module share must clear the previous MODULE copy (unchanged) and nothing else');
 });
 
 test('C6 (LOW 3) — with no text, the web path is exactly as before: canShare({files}) then share({files, title}), no text key', async () => {
