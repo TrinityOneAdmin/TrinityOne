@@ -187,12 +187,15 @@ final class WidgetStore {
 
     static final String K_ORDER = "order.";   // + widget id → the pageOrder last put in front of that widget
 
-    /** True (and remembered) when this widget's page set/order differs from what it last showed. */
-    static boolean takeOrderChange(Context c, int widgetId, String nowOrder) {
-        String k = K_ORDER + widgetId;
-        if (!frontNeedsReset(prefs(c).getString(k, null), nowOrder)) return false;
-        prefs(c).edit().putString(k, nowOrder).apply();
-        return true;
+    static String shownOrder(Context c, int widgetId) { return prefs(c).getString(K_ORDER + widgetId, null); }
+
+    static void recordOrder(Context c, int widgetId, String order) { prefs(c).edit().putString(K_ORDER + widgetId, order).apply(); }
+
+    /** Every widget's recorded order (re-audit R3): with them gone, the next draw puts page 0 in front again. */
+    static void forgetAllOrders(Context c) {
+        SharedPreferences.Editor e = prefs(c).edit();
+        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER)) e.remove(k);
+        e.apply();
     }
 
     static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).apply(); }

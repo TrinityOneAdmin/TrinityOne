@@ -175,6 +175,7 @@ public class TrinityWidgetPlugin extends Plugin {
     private void forget() {
         WidgetStore.write(ctx(), WidgetStore.K_VOTD, null);
         WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null);
+        WidgetStore.forgetAllOrders(ctx());
         PromptFetchJob.cancel(ctx());
         WidgetStore.refresh(ctx());
     }

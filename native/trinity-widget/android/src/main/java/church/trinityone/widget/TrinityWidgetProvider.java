@@ -19,30 +19,75 @@ import android.widget.RemoteViews;
 public class TrinityWidgetProvider extends AppWidgetProvider {
 
     @Override
-    public void onUpdate(Context c, AppWidgetManager m, int[] ids) {
+    public void onUpdate(final Context c, final AppWidgetManager m, int[] ids) {
         long now = System.currentTimeMillis();
         // pages() also enforces validUntil before anything is drawn.
         String order = WidgetStore.pageOrder(WidgetStore.pages(c, now));
-        for (int id : ids) {
-            RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
-            Intent svc = new Intent(c, TrinityWidgetService.class);
-            svc.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
-            svc.setData(Uri.parse("trinitywidget://" + id + "/" + now));   // unique per widget, so adapters do not share a cache
-            v.setRemoteAdapter(R.id.trinity_widget_stack, svc);
-            v.setEmptyView(R.id.trinity_widget_stack, R.id.trinity_widget_empty);
-            PendingIntent open = openApp(c, true);
-            if (open != null) v.setPendingIntentTemplate(R.id.trinity_widget_stack, open);
-            PendingIntent openEmpty = openApp(c, false);
-            if (openEmpty != null) v.setOnClickPendingIntent(R.id.trinity_widget_empty, openEmpty);
-            // Most current page in front (device D2): StackView does not promise which child it shows after an
-            // update, so put page 0 in front whenever the page set or order changed — and only then, so a member's
-            // swipe to the other page survives redraws that change nothing.
-            if (WidgetStore.takeOrderChange(c, id, order)) v.setDisplayedChild(R.id.trinity_widget_stack, 0);
-            m.updateAppWidget(id, v);
-        }
-        m.notifyAppWidgetViewDataChanged(ids, R.id.trinity_widget_stack);
+        drawAll(new Host() {
+            @Override public String shownOrder(int id) { return WidgetStore.shownOrder(c, id); }
+            @Override public void update(int id, boolean front) { m.updateAppWidget(id, views(c, id, front)); }
+            @Override public void dataChanged(int[] done) { m.notifyAppWidgetViewDataChanged(done, R.id.trinity_widget_stack); }
+            @Override public void front(int id) {
+                RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
+                v.setDisplayedChild(R.id.trinity_widget_stack, 0);
+                m.partiallyUpdateAppWidget(id, v);
+            }
+            @Override public void recordOrder(int id, String o) { WidgetStore.recordOrder(c, id, o); }
+        }, ids, order);
         scheduleNextChange(c, now);
         if (WidgetStore.read(c, WidgetStore.K_PROMPT) != null) PromptFetchJob.schedule(c);   // re-arm after a reboot
+    }
+
+    /** What drawAll needs from the launcher and the prefs — an interface so the JVM test (DrawOrderTest) runs the order. */
+    interface Host {
+        String shownOrder(int id);
+        void update(int id, boolean front);   // the full RemoteViews; front → it also asks for page 0
+        void dataChanged(int[] ids);
+        void front(int id);                   // a partial update that only asks for page 0
+        void recordOrder(int id, String order);
+    }
+
+    /**
+     * MOST CURRENT PAGE IN FRONT (device D2; re-audit R2 of c0c78163). StackView does not promise which child it
+     * shows after an update, so when the page set or order CHANGED, page 0 is asked for twice: inside the full update,
+     * and again by a partial update sent AFTER the data-changed notice (so it lands after the adapter is told to
+     * reload). Only then is the new order recorded; a widget whose update threw is NOT recorded, so the next update
+     * tries again. When nothing changed, page 0 is not asked for, so a member's swipe to the other page survives —
+     * helped by the adapter's address now being stable per widget (views()), so the launcher keeps the same adapter.
+     * What the launcher actually does with the request is not knowable from here: the recorded order means "asked
+     * for, after the update was accepted", not "seen in front".
+     */
+    static void drawAll(Host h, int[] ids, String order) {
+        int[] done = new int[ids.length]; boolean[] reset = new boolean[ids.length]; int n = 0;
+        for (int id : ids) {
+            boolean r = WidgetStore.frontNeedsReset(h.shownOrder(id), order);
+            try { h.update(id, r); } catch (RuntimeException e) { continue; }
+            reset[n] = r; done[n++] = id;
+        }
+        int[] ok = java.util.Arrays.copyOf(done, n);
+        if (n > 0) h.dataChanged(ok);
+        for (int i = 0; i < n; i++) {
+            if (!reset[i]) continue;
+            try { h.front(ok[i]); } catch (RuntimeException e) { continue; }
+            h.recordOrder(ok[i], order);
+        }
+    }
+
+    static RemoteViews views(Context c, int id, boolean front) {
+        RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
+        Intent svc = new Intent(c, TrinityWidgetService.class);
+        svc.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+        // Unique PER WIDGET (so two widgets never share an adapter) and STABLE across updates (re-audit R2): it used to
+        // carry the update time, which handed StackView a new adapter — and a new front page — on every redraw.
+        svc.setData(Uri.parse("trinitywidget://" + id));
+        v.setRemoteAdapter(R.id.trinity_widget_stack, svc);
+        v.setEmptyView(R.id.trinity_widget_stack, R.id.trinity_widget_empty);
+        PendingIntent open = openApp(c, true);
+        if (open != null) v.setPendingIntentTemplate(R.id.trinity_widget_stack, open);
+        PendingIntent openEmpty = openApp(c, false);
+        if (openEmpty != null) v.setOnClickPendingIntent(R.id.trinity_widget_empty, openEmpty);
+        if (front) v.setDisplayedChild(R.id.trinity_widget_stack, 0);
+        return v;
     }
 
     @Override
