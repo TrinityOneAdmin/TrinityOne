@@ -45,6 +45,12 @@ repositories {
     mavenCentral()
 }
 
+// Some JVM tests read the resource XML itself (test helper Xml: layouts, strings). Declare it as an input, or Gradle
+// treats the test task as UP-TO-DATE after an attribute-only change and reports the previous run's result.
+tasks.withType(Test).configureEach {
+    inputs.dir('src/main/res').withPropertyName('widgetRes').withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 dependencies {
     implementation project(':capacitor-android')
     implementation "androidx.core:core:$androidxCoreVersion"
