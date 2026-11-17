@@ -67,7 +67,7 @@ async function measure(width) {
       const seg = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === tab);
       if (!b) { out.tabs[tab] = null; continue; }
       const r = b.getBoundingClientRect(), s = seg.getBoundingClientRect();
-      out.tabs[tab] = { left: r.left, right: r.right, height: r.height, top: r.top, tabsBottom: s.bottom, text: b.textContent.trim(), name: b.innerText.trim(), scrollW: document.documentElement.scrollWidth, innerW: window.innerWidth };
+      out.tabs[tab] = { left: r.left, right: r.right, height: r.height, top: r.top, tabsBottom: s.bottom, text: b.textContent.trim(), raw: b.textContent, name: b.innerText.trim(), scrollW: document.documentElement.scrollWidth, innerW: window.innerWidth };
     }
     out.oldCard = /Install a Bible from a file|Got one over Signal/.test(document.body.innerText);
     return JSON.stringify(out);
@@ -83,6 +83,7 @@ for (const width of [320, 360]) {
       const t = m.tabs[tab];
       assert.ok(t, `${tab}: the link is not on the page`);
       assert.equal(t.text, 'Have a Bible file? Install it');
+      assert.equal(t.raw, t.text, `${tab}: the link text carries stray whitespace: ${JSON.stringify(t.raw)}`);
       assert.ok(t.left >= 0 && t.right <= t.innerW, `${tab}: the link leaves the screen (${t.left}..${t.right} of ${t.innerW})`);
       assert.ok(t.scrollW <= t.innerW, `${tab}: the page scrolls sideways (${t.scrollW} > ${t.innerW})`);
       assert.ok(t.height >= 44, `${tab}: ${t.height}px tall`);
@@ -128,9 +129,9 @@ test('Dictionaries and Commentaries say "Have a file? Install it"; Bibles say "H
     ['Have a file? Install it', 'Have a file? Install it', 'Have a Bible file? Install it'], JSON.stringify(got));
 });
 
-for (const theme of ['light', 'dark']) {
-  test(`the line's text is at least 4.5:1 against its background in ${theme} mode`, { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
-    await ev(`localStorage.setItem('trinityone.settings', JSON.stringify({ dark: ${theme === 'dark'} }))`);   // the app's own setting, as the Profile switch writes it
+for (const theme of ['light', 'dark']) for (const accent of ['clay', 'indigo', 'teal', 'berry']) {
+  test(`the line's text is at least 4.5:1 against its background: ${accent} accent, ${theme} mode`, { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+    await ev(`localStorage.setItem('trinityone.settings', JSON.stringify({ dark: ${theme === 'dark'}, accent: '${accent}' }))`);   // the app's own setting, as the Profile switch writes it
     await send('Page.reload'); await sleep(1500); await waitEngine(); await sleep(3000);
     await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 800, deviceScaleFactor: 1, mobile: true }); await sleep(600);
     const r = JSON.parse(await ev(`(async () => { ${PAGE_HELPERS}
@@ -139,6 +140,6 @@ for (const theme of ['light', 'dark']) {
       const b = document.querySelector('button[data-install-from-file]');
       return JSON.stringify({ dark: root.classList.contains('dark'), ratio: contrast(b), color: getComputedStyle(b).color }); })()`));
     assert.equal(r.dark, theme === 'dark');
-    assert.ok(r.ratio >= 4.5, `${theme}: contrast ${r.ratio.toFixed(2)}:1 (${r.color}) is under AA 4.5:1`);
+    assert.ok(r.ratio >= 4.5, `${accent} ${theme}: contrast ${r.ratio.toFixed(2)}:1 (${r.color}) is under AA 4.5:1`);
   });
 }

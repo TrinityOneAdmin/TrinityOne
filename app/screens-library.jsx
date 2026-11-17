@@ -1188,7 +1188,8 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
           border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
           fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--clay-text, var(--clay))' }}>
           <Icon name="file" size={16} stroke={2} />
-          <span>{(category === 'bibles' || (!category && view === 'language')) ? 'Have a Bible file? Install it' : 'Have a file? Install it'}   {/* the All-bibles tab (no category) shows only Bibles */}</span>
+          {/* the All-bibles tab (no category) shows only Bibles, so it gets the Bible wording */}
+          <span>{(category === 'bibles' || (!category && view === 'language')) ? 'Have a Bible file? Install it' : 'Have a file? Install it'}</span>
         </button>
       </div>
 

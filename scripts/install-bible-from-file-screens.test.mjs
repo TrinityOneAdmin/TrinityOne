@@ -368,7 +368,7 @@ test('S23 — A REFUSED ?module= LINK: the sheet says so in plain words, and the
 // ════════════════════════════════ D. the REAL App: mount, listener, picker → sheet ══════════════════════════════
 
 const NPUB = 'npub1' + '0'.repeat(58);
-function boot({ bible = {}, capApp = undefined, seedLs = {}, fetchImpl, withFs = [] } = {}) {
+function boot({ bible = {}, capApp = undefined, seedLs = {}, fetchImpl, withFs = [], churchAccent } = {}) {
   const r = fakeReact();
   const env = appBrowser(); const window = env.window;
   for (const [k, v] of Object.entries(seedLs)) window.localStorage.setItem(k, v);
@@ -379,7 +379,7 @@ function boot({ bible = {}, capApp = undefined, seedLs = {}, fetchImpl, withFs =
   if (capApp) window.Capacitor = { isNativePlatform: () => true, convertFileSrc: (u) => 'https://localhost/_capacitor_content_/' + u, Plugins: { App: capApp, Filesystem: { readFile: async () => { withFs.push('readFile'); } } } };
   if (fetchImpl) window.fetch = fetchImpl;
   const App = loadApp({ React: r.React, window, expr: 'App' });
-  window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church' }];
+  window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church', ...(churchAccent ? { accent: churchAccent } : {}) }];
   window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(NPUB));
   window.localStorage.setItem('trinityone.onboarded', 'true');
   window.Fellowship = new Proxy({ myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x, subscribeAmBlocked: (cb) => { cb(false, ''); return () => {}; }, isBlockedChurch: () => false },
@@ -507,4 +507,53 @@ test('S17 — THE TWO LISTENERS HAVE DISJOINT SCHEMES: non-content links never o
   m.window.location.search = '';
   plugin.fire('appUrlOpen', { url: 'content://media/external/file/9' });
   assert.equal(m.window.location.search, '', 'a content:// link was treated as a join link');
+});
+
+// ── quiet-link round 3: --clay-text on the REAL App root follows the church brand, then the member's accent, and always reads at >= 4.5:1 ──
+const lumOf = (hex) => { const h = hex.replace('#', ''); const c = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const ratioOf = (a, b) => { const x = lumOf(a), y = lumOf(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const PAPER = { light: ['#F4EEE2', '#FFFDF8'], dark: ['#16120C', '#211B13'] };
+async function clayText({ dark, accent, brand }) {
+  const m = boot({ seedLs: { 'trinityone.settings': JSON.stringify({ dark, accent }) }, churchAccent: brand });
+  const tree = await settle(m);
+  const root = nodes(tree).find(n => n.props && typeof n.props.className === 'string' && /\btrinity\b/.test(n.props.className) && n.props.style && n.props.style['--clay-text'] !== undefined);
+  assert.ok(root, 're-anchor: the App root draws no --clay-text');
+  assert.equal(root.props.className.includes('dark'), dark);
+  return { value: root.props.style['--clay-text'], clay: root.props.style['--clay'] };
+}
+
+test('S24 — --clay-text: every accent and arbitrary brand colours (pale, dark, 3-digit, with alpha) read at >= 4.5:1 on the paper, in light and dark', async () => {
+  const cases = [...['clay', 'indigo', 'teal', 'berry'].map(a => ({ accent: a })),
+    ...['#F5D76E', '#1F2A5A', '#abc', '#C25A38', '#2E7D32', '#ffffff', '#000000', '#8FA7FFcc'].map(b => ({ accent: 'clay', brand: b }))];
+  for (const dark of [false, true]) for (const c of cases) {
+    const { value } = await clayText({ dark, ...c });
+    assert.match(value, /^#[0-9a-f]{6}$/, 'not a plain hex: ' + value);
+    for (const paper of PAPER[dark ? 'dark' : 'light']) assert.ok(ratioOf(value, paper) >= 4.5, `${dark ? 'dark' : 'light'} ${JSON.stringify(c)}: ${value} on ${paper} is ${ratioOf(value, paper).toFixed(2)}:1`);
+  }
+});
+
+test('S25 — --clay-text FOLLOWS A CHURCH BRAND when there is one (its hue), and the member\'s accent when there is not', async () => {
+  const green = await clayText({ dark: false, accent: 'clay', brand: '#2E7D32' });
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(green.value.slice(i, i + 2), 16));
+  assert.ok(g > r && g > b, `a green brand gave a non-green text colour ${green.value}`);
+  const none = await clayText({ dark: false, accent: 'clay' });
+  assert.notEqual(none.value, green.value, 'the brand made no difference');
+  const indigo = await clayText({ dark: false, accent: 'indigo' });
+  assert.notEqual(indigo.value, none.value, 'the member\'s accent made no difference');
+  // dark mode: a brand colour that already reads is used AS IS
+  const darkBrand = await clayText({ dark: true, accent: 'clay', brand: '#8fa7ff' });
+  assert.equal(darkBrand.value, '#8fa7ff');
+  const darkNone = await clayText({ dark: true, accent: 'clay' });
+  assert.equal(darkNone.value, '#e68a66', 'dark clay text is no longer the accent itself');
+});
+
+test('S26 — the line\'s text has no trailing or leading whitespace (a JSX comment must not leave spaces in the button text)', async () => {
+  for (const category of ['bibles', 'dictionaries', null]) {
+    const tree = await store({ category, view: 'language' }).draw();
+    const btn = linkOf(tree)[0];
+    const span = find(btn, n => n.type === 'span')[0];
+    const raw = rtexts(span).join('');
+    assert.equal(raw, raw.trim(), `${category}: the words carry stray whitespace: ${JSON.stringify(raw)}`);
+    assert.equal(span.kids.length, 1, `${category}: the span holds more than the words (${span.kids.length} children)`);
+  }
 });
