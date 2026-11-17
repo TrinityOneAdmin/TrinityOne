@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's root: the card, the StackView of pages, the empty-state text and the tap-to-flip strip.
+
+     TIGHTER TOP (owner, 2026-11-17: "quite a bit of space above the logo"). StackView draws its front page 10% of its
+     own height below its top and 90% as wide (its stack perspective; AOSP StackView.measureChildren /
+     transformViewAtIndex) — not settable from RemoteViews. So the StackView is pulled UP by 10dp and widened by 16dp
+     with negative margins: the front page's BOTTOM stays exactly on the card's bottom (its top is 0.1 x (H + 10) - 10),
+     it starts higher, and it is wider. 10dp keeps the page's top at or below the card's top for any card >= 90dp
+     tall (the declared minimum is 110dp); 16dp keeps its right edge inside for any card >= 144dp wide (minimum 180dp).
+     The root's padding is 0: the page is the same colour and radius as the card, so the inset bought nothing.
+     WidgetStore.verseLines mirrors these numbers. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/trinity_widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/trinity_widget_bg"
-    android:padding="6dp">
+    android:background="@drawable/trinity_widget_bg">
     <StackView
         android:id="@+id/trinity_widget_stack"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:layout_marginTop="-10dp"
+        android:layout_marginEnd="-16dp"
         android:loopViews="true" />
     <TextView
         android:id="@+id/trinity_widget_empty"
@@ -19,4 +30,16 @@
         android:text="@string/trinity_widget_empty"
         android:textColor="@color/trinity_widget_ink2"
         android:textSize="14sp" />
+    <!-- TAP TO FLIP (owner, 2026-11-17): on ColorOS a sideways swipe moves the home screen and only a DOWN swipe flips
+         the StackView. This strip over the page dots (right edge) sends ACTION_FLIP to TrinityWidgetProvider, which
+         answers with showNext. Outside the StackView on purpose: views inside a page can only use the pages' shared
+         template intent, which opens the app. Shown only when there are two pages. A FrameLayout because RemoteViews
+         does not allow a plain View. -->
+    <FrameLayout
+        android:id="@+id/trinity_widget_flip"
+        android:layout_width="40dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:contentDescription="@string/trinity_widget_flip"
+        android:visibility="gone" />
 </FrameLayout>

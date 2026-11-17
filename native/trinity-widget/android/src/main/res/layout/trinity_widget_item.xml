@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One page of the widget's StackView: a header (the TrinityOne mark + which page this is), the verse, its reference.
+<!-- One page of the widget's StackView: a header (the TrinityOne mark + which page this is), the verse, its reference,
+     and on the right edge one dot per page with THIS page's dot lit (TrinityWidgetService via WidgetStore.bindPage), so
+     the dots are right whichever page is in front, after a swipe too. No dots with one page.
 
      WHY minHeight/minWidth="2000dp" (device-found 2026-11-17: a large empty band across the top ~40% of the card):
      StackView measures each page AT_MOST its slot, so a page sized itself to its text; StackView then "spreads the
      items out" (StackView.measureChildren: perspective shift = its height minus the page's height) and pushed the
      short page to the BOTTOM of the widget. An oversized minimum makes the page resolve to exactly its slot (an
-     AT_MOST spec caps it), so the page fills the card and the verse's weight takes the room under the header.
-     StackView still offsets the front page by ~10% (its stack perspective); that strip is where a second page peeks. -->
+     AT_MOST spec caps it), so the page fills its slot. The slot's own 10% offset is countered in trinity_widget.xml.
+     Paddings and gaps here are mirrored by WidgetStore.verseLines. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/trinity_widget_item"
     android:layout_width="match_parent"
@@ -14,59 +16,88 @@
     android:minWidth="2000dp"
     android:minHeight="2000dp"
     android:background="@drawable/trinity_widget_bg"
-    android:orientation="vertical"
-    android:paddingStart="14dp"
-    android:paddingEnd="14dp"
-    android:paddingTop="12dp"
-    android:paddingBottom="12dp">
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="8dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-        <ImageView
-            android:id="@+id/trinity_widget_logo"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:contentDescription="@null"
-            android:importantForAccessibility="no"
-            android:src="@drawable/trinity_widget_logo" />
-        <TextView
-            android:id="@+id/trinity_widget_label"
-            android:layout_width="0dp"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <ImageView
+                android:id="@+id/trinity_widget_logo"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:contentDescription="@null"
+                android:importantForAccessibility="no"
+                android:src="@drawable/trinity_widget_logo" />
+            <TextView
+                android:id="@+id/trinity_widget_label"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/trinity_widget_accent"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+        <!-- maxLines is set per widget size by TrinityWidgetService (WidgetStore.verseLines), so a long verse ends in
+             "…" instead of being cut through a line; API 26+ also shrinks the text (16sp down to 12sp) to fit. -->
+        <TextView
+            android:id="@+id/trinity_widget_text"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginTop="6dp"
+            android:autoSizeMaxTextSize="16sp"
+            android:autoSizeMinTextSize="12sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:ellipsize="end"
+            android:gravity="top|start"
+            android:maxLines="4"
+            android:textColor="@color/trinity_widget_ink"
+            android:textSize="15sp" />
+        <TextView
+            android:id="@+id/trinity_widget_ref"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="@color/trinity_widget_accent"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textColor="@color/trinity_widget_ink2"
+            android:textSize="12sp" />
     </LinearLayout>
-    <!-- maxLines is set per widget size by TrinityWidgetService (WidgetStore.verseLines), so a long verse ends in "…"
-         instead of being cut through a line; API 26+ also shrinks the text (16sp down to 12sp) to fit before that. -->
-    <TextView
-        android:id="@+id/trinity_widget_text"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:layout_marginTop="8dp"
-        android:autoSizeMaxTextSize="16sp"
-        android:autoSizeMinTextSize="12sp"
-        android:autoSizeStepGranularity="1sp"
-        android:autoSizeTextType="uniform"
-        android:ellipsize="end"
-        android:gravity="top|start"
-        android:maxLines="4"
-        android:textColor="@color/trinity_widget_ink"
-        android:textSize="15sp" />
-    <TextView
-        android:id="@+id/trinity_widget_ref"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:textColor="@color/trinity_widget_ink2"
-        android:textSize="12sp" />
+    <!-- Page dots: vertical, because the StackView flips up/down (owner chose option A, 2026-11-17). -->
+    <LinearLayout
+        android:id="@+id/trinity_widget_dots"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_marginStart="6dp"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+        <ImageView
+            android:id="@+id/trinity_widget_dot0"
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/trinity_widget_dot_off" />
+        <ImageView
+            android:id="@+id/trinity_widget_dot1"
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:layout_marginTop="5dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/trinity_widget_dot_off" />
+    </LinearLayout>
 </LinearLayout>

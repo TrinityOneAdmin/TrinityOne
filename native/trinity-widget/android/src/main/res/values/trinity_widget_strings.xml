@@ -3,8 +3,8 @@
     <string name="trinity_widget_label">Verse of the day</string>
     <string name="trinity_widget_description">Today\'s verse, and your church\'s verse when it shares one.</string>
     <string name="trinity_widget_votd">Verse of the day</string>
-    <string name="trinity_widget_prompt">From your church</string>
+    <string name="trinity_widget_prompt">Your church is reading</string>
     <string name="trinity_widget_empty">Open TrinityOne for today\'s verse</string>
     <string name="trinity_widget_tap_to_read">Tap to read it in TrinityOne</string>
-    <string name="trinity_widget_swipe">Swipe for more</string>
+    <string name="trinity_widget_flip">Next page</string>
 </resources>
