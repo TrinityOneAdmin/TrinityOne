@@ -2,7 +2,7 @@
 //   Run: node --test scripts/the-public-verse-prompt-is-only-the-churchs-own.test.mjs
 //
 // AUDIT-phone-widget-c60c0f72-2026-11-16 F2. The owner console mirrors the church's verse prompt into the public,
-// refs-only copy every member's home-screen widget shows as "From your church". It used to take ANY author's prompt,
+// refs-only copy every member's home-screen widget shows as "Your church is reading". It used to take ANY author's prompt,
 // newest first. Members read the prompt through subscribeChurchVersePrompt (src/fellowship.src.js), which trusts only
 // _churchVoice — the church key or a steward STILL on the signed roster — newest wins, and an exact same-second tie
 // goes to the LOWEST event id. A former steward's newer prompt (or one from a skewed clock) was therefore published

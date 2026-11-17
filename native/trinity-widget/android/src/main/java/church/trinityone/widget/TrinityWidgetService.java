@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.RemoteViews;
 import android.widget.RemoteViewsService;
 
@@ -24,11 +25,13 @@ public class TrinityWidgetService extends RemoteViewsService {
         private final int widgetId;
         private List<WidgetStore.Page> pages = new ArrayList<>();
         private int verseLines = 4;
+        private int rotation = 0;   // tap-to-flip (WidgetStore.K_FLIP)
         Factory(Context c, int widgetId) { this.c = c; this.widgetId = widgetId; }
 
         @Override public void onCreate() {}
         @Override public void onDataSetChanged() {
             pages = WidgetStore.pages(c, System.currentTimeMillis());
+            rotation = widgetId == AppWidgetManager.INVALID_APPWIDGET_ID ? 0 : WidgetStore.rotation(c, widgetId, WidgetStore.pageOrder(pages));
             verseLines = linesForThisWidget();
         }
 
@@ -50,12 +53,22 @@ public class TrinityWidgetService extends RemoteViewsService {
         public RemoteViews getViewAt(int position) {
             RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget_item);
             if (position < 0 || position >= pages.size()) return v;
-            WidgetStore.Page p = pages.get(position);
-            String label = p.label + (pages.size() > 1 ? "  ·  " + c.getString(R.string.trinity_widget_swipe) : "");
-            v.setTextViewText(R.id.trinity_widget_label, label);
-            v.setTextViewText(R.id.trinity_widget_text, p.text);
-            v.setInt(R.id.trinity_widget_text, "setMaxLines", verseLines);
-            v.setTextViewText(R.id.trinity_widget_ref, p.ref);
+            final RemoteViews rv = v;
+            final int page = WidgetStore.logical(position, rotation, pages.size());
+            WidgetStore.bindPage(new WidgetStore.PageBinder() {
+                @Override public void label(String s) { rv.setTextViewText(R.id.trinity_widget_label, s); }
+                @Override public void text(String s, int maxLines) {
+                    rv.setTextViewText(R.id.trinity_widget_text, s);
+                    rv.setInt(R.id.trinity_widget_text, "setMaxLines", maxLines);
+                }
+                @Override public void ref(String s) { rv.setTextViewText(R.id.trinity_widget_ref, s); }
+                @Override public void dotsShown(boolean shown) { rv.setViewVisibility(R.id.trinity_widget_dots, shown ? View.VISIBLE : View.GONE); }
+                @Override public void dot(int slot, int state) {
+                    int id = slot == 0 ? R.id.trinity_widget_dot0 : R.id.trinity_widget_dot1;
+                    rv.setViewVisibility(id, state == WidgetStore.DOT_HIDDEN ? View.GONE : View.VISIBLE);
+                    rv.setImageViewResource(id, state == WidgetStore.DOT_ON ? R.drawable.trinity_widget_dot_on : R.drawable.trinity_widget_dot_off);
+                }
+            }, pages.get(page), page, pages.size(), verseLines);
             v.setOnClickFillInIntent(R.id.trinity_widget_item, new Intent());
             return v;
         }

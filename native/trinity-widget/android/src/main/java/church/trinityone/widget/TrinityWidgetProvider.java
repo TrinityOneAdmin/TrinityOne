@@ -9,12 +9,14 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.RemoteViews;
 
 /**
  * Draws the widget: a StackView (a swipeable collection widget, available to RemoteViews since API 11 — our
  * minSdk is 22) fed by TrinityWidgetService. Page order and the "most current" rule: see WidgetStore.
- * Tapping anywhere opens the app (no deep link: the app's link handler accepts only /join invites).
+ * Tapping anywhere opens the app (no deep link: the app's link handler accepts only /join invites) — except the
+ * right-edge strip over the page dots when there are two pages, which flips to the next page (ACTION_FLIP).
  */
 public class TrinityWidgetProvider extends AppWidgetProvider {
 
@@ -23,6 +25,31 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
         long now = System.currentTimeMillis();
         drawAll(host(c, m), ids, orderNow(c, now));
         afterDraw(c, now);
+    }
+
+    /** The tap-to-flip strip's broadcast (trinity_widget_flip; explicit, to this receiver only). */
+    static final String ACTION_FLIP = "church.trinityone.widget.FLIP";
+
+    @Override
+    public void onReceive(Context c, Intent i) {
+        if (i != null && handle(c, i.getAction(), i.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID))) return;
+        super.onReceive(c, i);
+    }
+
+    /** ACTION_FLIP → the next page of that widget (Host.flip); anything else → false (AppWidgetProvider handles it).
+     *  The flip records nothing: a member's choice of page is kept until the page set changes (drawAll). */
+    boolean handle(Context c, String action, int id) {
+        if (!ACTION_FLIP.equals(action)) return false;
+        if (id != AppWidgetManager.INVALID_APPWIDGET_ID) host(c, manager(c)).flip(id);
+        return true;
+    }
+
+    AppWidgetManager manager(Context c) { return AppWidgetManager.getInstance(c); }
+
+    static int pageCount(String order) {
+        int n = 0;
+        for (int i = 0; i < order.length(); i++) if (order.charAt(i) == '\n') n++;
+        return n;
     }
 
     // onUpdate's three seams, so the JVM test (DrawOrderTest) runs onUpdate ITSELF and sees it reach drawAll (re-audit
@@ -39,7 +66,7 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
     Host host(final Context c, final AppWidgetManager m) {
         return new Host() {
             @Override public String shownOrder(int id) { return WidgetStore.shownOrder(c, id); }
-            @Override public void update(int id, boolean front) { m.updateAppWidget(id, views(c, id, front)); }
+            @Override public void update(int id, boolean front, int pages) { m.updateAppWidget(id, views(c, id, front, pages)); }
             @Override public void dataChanged(int[] done) { m.notifyAppWidgetViewDataChanged(done, R.id.trinity_widget_stack); }
             @Override public void front(int id) {
                 RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
@@ -47,16 +74,24 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
                 m.partiallyUpdateAppWidget(id, v);
             }
             @Override public void recordOrder(int id, String o) { WidgetStore.recordOrder(c, id, o); }
+            // Device D-1: NOT a partial showNext (ColorOS ignores it) — rotate the adapter and notify the data change.
+            @Override public void flip(int id) {
+                WidgetStore.rotate(c, id, WidgetStore.pageOrder(WidgetStore.pages(c, System.currentTimeMillis())));
+                m.notifyAppWidgetViewDataChanged(new int[] { id }, R.id.trinity_widget_stack);
+            }
+            @Override public void clearFlip(int id) { WidgetStore.clearFlip(c, id); }
         };
     }
 
     /** What drawAll needs from the launcher and the prefs — an interface so the JVM test (DrawOrderTest) runs the order. */
     interface Host {
         String shownOrder(int id);
-        void update(int id, boolean front);   // the full RemoteViews; front → it also asks for page 0
+        void update(int id, boolean front, int pages);   // the full RemoteViews; front → it also asks for page 0
         void dataChanged(int[] ids);
         void front(int id);                   // a partial update that only asks for page 0
         void recordOrder(int id, String order);
+        void flip(int id);                    // rotate this widget's pages by one and notify the data change
+        void clearFlip(int id);               // forget a flip: the page set changed, most current goes first again
     }
 
     /**
@@ -71,9 +106,11 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
      */
     static void drawAll(Host h, int[] ids, String order) {
         int[] done = new int[ids.length]; boolean[] reset = new boolean[ids.length]; int n = 0;
+        int pages = pageCount(order);
         for (int id : ids) {
             boolean r = WidgetStore.frontNeedsReset(h.shownOrder(id), order);
-            try { h.update(id, r); } catch (RuntimeException e) { continue; }
+            if (r) h.clearFlip(id);   // BEFORE the update: the data reload it triggers must not read the old rotation
+            try { h.update(id, r, pages); } catch (RuntimeException e) { continue; }
             reset[n] = r; done[n++] = id;
         }
         int[] ok = java.util.Arrays.copyOf(done, n);
@@ -85,7 +122,7 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
         }
     }
 
-    static RemoteViews views(Context c, int id, boolean front) {
+    static RemoteViews views(Context c, int id, boolean front, int pages) {
         RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
         Intent svc = new Intent(c, TrinityWidgetService.class);
         svc.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
@@ -99,7 +136,18 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
         PendingIntent openEmpty = openApp(c, false);
         if (openEmpty != null) v.setOnClickPendingIntent(R.id.trinity_widget_empty, openEmpty);
         if (front) v.setDisplayedChild(R.id.trinity_widget_stack, 0);
+        // Tap to flip: only with two pages (one page → the strip is gone and the whole card opens the app).
+        v.setViewVisibility(R.id.trinity_widget_flip, pages >= 2 ? View.VISIBLE : View.GONE);
+        if (pages >= 2) v.setOnClickPendingIntent(R.id.trinity_widget_flip, flipIntent(c, id));
         return v;
+    }
+
+    static PendingIntent flipIntent(Context c, int id) {
+        Intent i = new Intent(ACTION_FLIP).setComponent(WidgetStore.provider(c));
+        i.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+        i.setData(Uri.parse("trinitywidget-flip://" + id));   // one PendingIntent per widget
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+        return PendingIntent.getBroadcast(c, 100 + id, i, flags);
     }
 
     @Override

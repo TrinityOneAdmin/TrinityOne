@@ -4,4 +4,5 @@
     <color name="trinity_widget_ink">#F3EADF</color>
     <color name="trinity_widget_ink2">#BFAF9C</color>
     <color name="trinity_widget_accent">#E0946A</color>
+    <color name="trinity_widget_dot_off">#857060</color>
 </resources>

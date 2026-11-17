@@ -13,7 +13,7 @@ import java.util.List;
  * the decision. The RemoteViews.setDisplayedChild call itself, and what StackView does with it, are device checks.
  */
 public class PageOrderTest {
-    static WidgetStore.Page prompt(String ref) { return new WidgetStore.Page(true, "From your church", ref, "x"); }
+    static WidgetStore.Page prompt(String ref) { return new WidgetStore.Page(true, "Your church is reading", ref, "x"); }
     static WidgetStore.Page votd(String ref) { return new WidgetStore.Page(false, "Verse of the day", ref, "y"); }
 
     @Test

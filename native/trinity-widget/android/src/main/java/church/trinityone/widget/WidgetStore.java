@@ -204,32 +204,108 @@ final class WidgetStore {
     /** Every widget's recorded order (re-audit R3): with them gone, the next draw puts page 0 in front again. */
     static void forgetAllOrders(Context c) {
         SharedPreferences.Editor e = prefs(c).edit();
-        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER)) e.remove(k);
+        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER) || k.startsWith(K_FLIP) || k.startsWith(K_FLIP_FOR)) e.remove(k);
         e.apply();
     }
 
-    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).apply(); }
+    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).remove(K_FLIP + widgetId).remove(K_FLIP_FOR + widgetId).apply(); }
+
+    /**
+     * TAP TO FLIP, device D-1 (2026-11-17): ColorOS's launcher ignores a PARTIAL update (showNext / setDisplayedChild)
+     * of a StackView. What every host does honour is a data change of the adapter, and StackView keeps its displayed
+     * index across one. So a flip ROTATES this widget's adapter by one page and notifies the data change: whatever
+     * index the stack is showing — the first, or another one the member swiped to — now holds the other page. With two
+     * pages that is always a flip. The rotation is per widget ("flip.<id>"), survives redraws that change nothing, and
+     * is cleared when the page set or order changes (drawAll, before the update), so "most current first" still holds.
+     */
+    static final String K_FLIP = "flip.";
+
+    /** + widget id → the pageOrder the rotation was made against (re-audit E-2 of cfc3fd22). */
+    static final String K_FLIP_FOR = "flipfor.";
+
+    /** The rotation to apply to `order` — 0, and the stored flip cleared, when it was made against another page set
+     *  (a page-set change can reach the factory before the next full redraw clears it in drawAll). */
+    static int rotation(Context c, int widgetId, String order) {
+        SharedPreferences p = prefs(c);
+        int rot = p.getInt(K_FLIP + widgetId, 0);
+        if (rot == 0) return 0;
+        if (order != null && order.equals(p.getString(K_FLIP_FOR + widgetId, null))) return rot;
+        clearFlip(c, widgetId);
+        return 0;
+    }
+
+    static void rotate(Context c, int widgetId, String order) {
+        int next = (rotation(c, widgetId, order) + 1) % 1000;
+        prefs(c).edit().putInt(K_FLIP + widgetId, next).putString(K_FLIP_FOR + widgetId, order).apply();
+    }
+
+    static void clearFlip(Context c, int widgetId) { prefs(c).edit().remove(K_FLIP + widgetId).remove(K_FLIP_FOR + widgetId).apply(); }
+
+    /** Adapter position → the page it shows, under a rotation. Dots use THIS (the page's own index), so each page keeps
+     *  its dot whichever way it reached the front. */
+    static int logical(int position, int rot, int count) {
+        if (count <= 0) return position;
+        return ((position + rot) % count + count) % count;
+    }
+
+    // The layout numbers verseLines mirrors (res/layout/trinity_widget.xml and trinity_widget_item.xml).
+    static final float STACK_PULL_UP_DP = 10f;   // the StackView's negative top margin
+    static final float PAGE_PAD_V_DP = 10f;      // page paddingTop / paddingBottom
+    static final float TEXT_GAP_DP = 6f;         // header -> verse
+    static final float REF_GAP_DP = 4f;          // verse -> reference
 
     /**
      * How many lines of verse fit a widget this many dp tall, so the text ends in "…" instead of being cut through a
      * line (trinity_widget_item.xml). Leans SMALL on purpose: one line too few costs an early "…", one too many is
      * the clipped line this exists to prevent. textSp = the size the verse is drawn at its smallest (12 with API 26+
-     * autosize, else 15). heightDp <= 0 (a launcher that reports no size) → 4, what fits the declared 110dp minimum
-     * at normal font size.
+     * autosize, else 15). heightDp <= 0 (a launcher that reports no size) → 4.
      *
-     *   widget − root padding 12 → StackView; a page gets 90% of it (StackView's stack perspective) − page padding 24
-     *   − header (the 20dp mark, or the 12sp label if larger, + 8 gap) − reference (12sp + 6 gap) − 8 slack
-     *   (launcher padding we cannot see) → ÷ one line (1.25 × textSp × font scale).
+     *   the front page's top = 0.1 × (widget + 10) − 10 (StackView's 10% perspective offset of a StackView pulled up
+     *   10dp; its bottom is the card's bottom) → page = widget − top − padding 20 − header (the 20dp mark, or the
+     *   12sp label if larger, + 6 gap) − reference (12sp + 4 gap) − 8 slack (launcher padding we cannot see)
+     *   → ÷ one line (1.25 × textSp × font scale).
+     * Before 2026-11-17 (dots branch): page = (widget − 12) × 0.9 − 24, gaps 8 and 6 — about 28dp less on a 218dp card.
      */
     static int verseLines(int heightDp, float fontScale, float textSp) {
         if (heightDp <= 0) return 4;
         float fs = fontScale > 0 ? fontScale : 1f;
-        float page = (heightDp - 12f) * 0.9f - 24f;
-        float header = Math.max(20f, 12f * 1.25f * fs) + 8f;
-        float ref = 12f * 1.25f * fs + 6f;
+        float top = 0.1f * (heightDp + STACK_PULL_UP_DP) - STACK_PULL_UP_DP;
+        float page = heightDp - top - 2f * PAGE_PAD_V_DP;
+        float header = Math.max(20f, 12f * 1.25f * fs) + TEXT_GAP_DP;
+        float ref = 12f * 1.25f * fs + REF_GAP_DP;
         float line = 1.25f * textSp * fs;
         int n = (int) Math.floor((page - header - ref - 8f) / line);
         return Math.max(1, Math.min(12, n));
+    }
+
+    /** One page's dot slots (trinity_widget_dot0/1): DOT_HIDDEN, DOT_OFF or DOT_ON. One page → no dots at all. */
+    static final int DOT_HIDDEN = 0, DOT_OFF = 1, DOT_ON = 2, DOT_SLOTS = 2;
+
+    static int[] dots(int count, int position) {
+        int[] out = new int[DOT_SLOTS];
+        if (count < 2) return out;
+        for (int i = 0; i < DOT_SLOTS; i++) out[i] = i >= count ? DOT_HIDDEN : (i == position ? DOT_ON : DOT_OFF);
+        return out;
+    }
+
+    /** What a page view is told — an interface so the JVM test (PageBindTest) runs exactly what getViewAt runs. */
+    interface PageBinder {
+        void label(String s);
+        void text(String s, int maxLines);
+        void ref(String s);
+        void dotsShown(boolean shown);
+        void dot(int slot, int state);
+    }
+
+    /** Fill one page. The label is the page's own ("Verse of the day" / "Your church is reading"), nothing appended:
+     *  the dots replaced "Swipe for more" (owner, 2026-11-17 — it read as "swipe sideways", which moves the home screen). */
+    static void bindPage(PageBinder b, Page p, int position, int count, int verseLines) {
+        b.label(p.label);
+        b.text(p.text, verseLines);
+        b.ref(p.ref);
+        int[] d = dots(count, position);
+        b.dotsShown(count >= 2);
+        for (int i = 0; i < d.length; i++) b.dot(i, d[i]);
     }
 
     static ComponentName provider(Context c) { return new ComponentName(c, TrinityWidgetProvider.class); }
