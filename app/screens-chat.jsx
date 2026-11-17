@@ -981,7 +981,7 @@ function FinanceCard({ card, church }) {
 const CHAT_CARD_AUTHORS = { finance: 'church', verse: 'anyone', commentary: 'anyone' };
 // Field caps for a member card; kept in step with _chatCardClean / _dmWrap in src/fellowship.src.js. A field of
 // the wrong type or over its cap is dropped, and a card with no text is no card — never thrown on, never HTML.
-const CHAT_CARD_LIMITS = { ref: 120, text: 4000, version: 40, source: 120, credit: 300 };
+const CHAT_CARD_LIMITS = { ref: 120, text: 4000, version: 40, source: 120, credit: 1000 };
 function chatShareCard(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   if (raw.type !== 'verse' && raw.type !== 'commentary') return null;
@@ -2500,7 +2500,16 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   // the receiver can strip it back off and show the thoughts under the card.
   const verseCard = (type === 'verse' && typeof payload.text === 'string' && payload.text && typeof payload.ref === 'string')
     ? chatShareCard({ type: 'verse', ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' }) : null;
-  // a devotional/note sent to a person goes as a readable DM
+  // A COMMENTARY goes in as a card too (owner 2026-11-17). In a GROUP it carries the in-app credit (the short one for
+  // a vetted catalogue module, an imported module's own full notice); in a DIRECT MESSAGE it carries no licence line
+  // at all. The body is the same words + credit (group) / words only (DM), so an older build reads the same thing.
+  // If a long imported notice will not fit on the card, the group share falls back to text, credit intact.
+  const cmBase = type === 'commentary' ? { type: 'commentary', ref: String(payload.ref || ''), source: String(payload.source || ''), text: String(payload.text || '') } : null;
+  const cmCredit = cmBase ? (typeof payload.credit === 'string' ? payload.credit : String(payload.license || '')) : '';
+  let groupCard = cmBase ? chatShareCard({ ...cmBase, credit: cmCredit }) : verseCard;
+  if (cmBase && groupCard && cmCredit && groupCard.credit !== cmCredit) groupCard = null;
+  const dmCard = cmBase ? chatShareCard(cmBase) : verseCard;
+  // a devotional/note sent to a person goes as a readable DM; `asText` (full licence) is what leaves the app
   const asText = verseCard ? chatCardFallback(verseCard) : type === 'commentary' ? (payload.ref + (payload.source ? ' — ' + payload.source : '') + '\n\n' + (payload.text || '') + (payload.license ? '\n\n' + payload.license : ''))
     : payload.text ? ('“' + payload.text + '” — ' + payload.ref + (payload.version ? ' · ' + payload.version : ''))
     : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
@@ -2519,7 +2528,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // deliberately left as it is; the guard belongs where the null actually comes from. Checked, not
     // assumed — see 'publishMessage has no null exit' in a-dm-that-never-sent-is-not-sent.test.mjs, which
     // fails the day a fourth exit is added. AUDIT-2026-08-30.
-    Promise.resolve(FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], verseCard ? { encrypted: !!g.encrypted, card: verseCard } : { encrypted: !!g.encrypted }))
+    const groupText = groupCard ? chatCardFallback(groupCard) : cmBase ? chatCardFallback({ ...cmBase, credit: cmCredit }) : asText;
+    Promise.resolve(FS.publishMessage(g.id, groupText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], groupCard ? { encrypted: !!g.encrypted, card: groupCard } : { encrypted: !!g.encrypted }))
       .then(evt => {
         if (evt && evt._refused === 'leaving') { ctx.toast('Not shared — you’re leaving ' + g.name + '’s church.'); return; }
         if (evt && evt._refused === 'queue-full') { ctx.toast('Not shared — too many messages are waiting to send. Try again when you have signal.'); return; }
@@ -2538,7 +2548,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // "Sent to Anna". Its sibling twelve lines up was fixed for exactly this and carries the reason: losing
     // something quietly while claiming it worked is the worst failure this app can produce. Reuse
     // dmFailWording rather than invent copy: _delivered === false means QUEUED, not lost.
-    Promise.resolve(verseCard ? FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), null, { card: verseCard }) : FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : '')))
+    const dmText = dmCard ? chatCardFallback(dmCard) : cmBase ? chatCardFallback(cmBase) : asText;
+    Promise.resolve(dmCard ? FS.sendDM(m.pubkey, dmText + (comment.trim() ? '\n\n' + comment.trim() : ''), null, { card: dmCard }) : FS.sendDM(m.pubkey, dmText + (comment.trim() ? '\n\n' + comment.trim() : '')))
       .then(evt => {
         // A NULL RETURN IS NOT A SEND. sendDM returns null when it cannot encrypt, and that step runs BEFORE
         // it queues — so nothing reached the wire, nothing is in the outbox, and there is nothing to retry.
