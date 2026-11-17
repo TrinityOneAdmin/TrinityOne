@@ -74,11 +74,12 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
                 m.partiallyUpdateAppWidget(id, v);
             }
             @Override public void recordOrder(int id, String o) { WidgetStore.recordOrder(c, id, o); }
+            // Device D-1: NOT a partial showNext (ColorOS ignores it) — rotate the adapter and notify the data change.
             @Override public void flip(int id) {
-                RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget);
-                v.showNext(R.id.trinity_widget_stack);
-                m.partiallyUpdateAppWidget(id, v);
+                WidgetStore.rotate(c, id);
+                m.notifyAppWidgetViewDataChanged(new int[] { id }, R.id.trinity_widget_stack);
             }
+            @Override public void clearFlip(int id) { WidgetStore.clearFlip(c, id); }
         };
     }
 
@@ -89,7 +90,8 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
         void dataChanged(int[] ids);
         void front(int id);                   // a partial update that only asks for page 0
         void recordOrder(int id, String order);
-        void flip(int id);                    // a partial update: showNext on the stack
+        void flip(int id);                    // rotate this widget's pages by one and notify the data change
+        void clearFlip(int id);               // forget a flip: the page set changed, most current goes first again
     }
 
     /**
@@ -107,6 +109,7 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
         int pages = pageCount(order);
         for (int id : ids) {
             boolean r = WidgetStore.frontNeedsReset(h.shownOrder(id), order);
+            if (r) h.clearFlip(id);   // BEFORE the update: the data reload it triggers must not read the old rotation
             try { h.update(id, r, pages); } catch (RuntimeException e) { continue; }
             reset[n] = r; done[n++] = id;
         }

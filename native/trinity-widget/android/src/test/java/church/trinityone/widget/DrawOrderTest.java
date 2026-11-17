@@ -28,6 +28,7 @@ public class DrawOrderTest {
         @Override public void front(int id) { log.add("front " + id); }
         @Override public void recordOrder(int id, String order) { log.add("record " + id); shown.put(id, order); }
         @Override public void flip(int id) { log.add("flip " + id); }
+        @Override public void clearFlip(int id) { log.add("clearFlip " + id); }
     }
 
     @Test
@@ -40,7 +41,7 @@ public class DrawOrderTest {
             @Override void afterDraw(android.content.Context c, long now) { after.add("after"); }
         };
         p.onUpdate(null, null, new int[] { 9 });
-        assertEquals(List.of("update 9 front", "dataChanged [9]", "front 9", "record 9"), h.log);
+        assertEquals(List.of("clearFlip 9", "update 9 front", "dataChanged [9]", "front 9", "record 9"), h.log);
         assertEquals(List.of("after"), after);
     }
 
@@ -91,7 +92,7 @@ public class DrawOrderTest {
     public void aChangedOrderAsksForPageZeroTwice_andIsRecordedOnlyAfter() {
         Rec h = new Rec();
         TrinityWidgetProvider.drawAll(h, new int[] { 9 }, "P|Numbers 7\nV|John 3:16\n");
-        assertEquals(List.of("update 9 front", "dataChanged [9]", "front 9", "record 9"), h.log);
+        assertEquals(List.of("clearFlip 9", "update 9 front", "dataChanged [9]", "front 9", "record 9"), h.log);
     }
 
     @Test
@@ -105,9 +106,9 @@ public class DrawOrderTest {
     public void aWidgetWhoseUpdateFailedIsNotRecorded_soTheNextUpdateTriesAgain() {
         Rec h = new Rec(); h.failId = 9;
         TrinityWidgetProvider.drawAll(h, new int[] { 9, 12 }, "V|John 3:16\n");
-        assertEquals(List.of("update 12 front", "dataChanged [12]", "front 12", "record 12"), h.log);
+        assertEquals(List.of("clearFlip 9", "clearFlip 12", "update 12 front", "dataChanged [12]", "front 12", "record 12"), h.log);
         h.failId = -1; h.log.clear();
         TrinityWidgetProvider.drawAll(h, new int[] { 9, 12 }, "V|John 3:16\n");
-        assertEquals(List.of("update 9 front", "update 12", "dataChanged [9, 12]", "front 9", "record 9"), h.log);
+        assertEquals(List.of("clearFlip 9", "update 9 front", "update 12", "dataChanged [9, 12]", "front 9", "record 9"), h.log);
     }
 }

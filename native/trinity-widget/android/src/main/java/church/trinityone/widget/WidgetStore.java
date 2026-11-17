@@ -204,11 +204,34 @@ final class WidgetStore {
     /** Every widget's recorded order (re-audit R3): with them gone, the next draw puts page 0 in front again. */
     static void forgetAllOrders(Context c) {
         SharedPreferences.Editor e = prefs(c).edit();
-        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER)) e.remove(k);
+        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER) || k.startsWith(K_FLIP)) e.remove(k);
         e.apply();
     }
 
-    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).apply(); }
+    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).remove(K_FLIP + widgetId).apply(); }
+
+    /**
+     * TAP TO FLIP, device D-1 (2026-11-17): ColorOS's launcher ignores a PARTIAL update (showNext / setDisplayedChild)
+     * of a StackView. What every host does honour is a data change of the adapter, and StackView keeps its displayed
+     * index across one. So a flip ROTATES this widget's adapter by one page and notifies the data change: whatever
+     * index the stack is showing — the first, or another one the member swiped to — now holds the other page. With two
+     * pages that is always a flip. The rotation is per widget ("flip.<id>"), survives redraws that change nothing, and
+     * is cleared when the page set or order changes (drawAll, before the update), so "most current first" still holds.
+     */
+    static final String K_FLIP = "flip.";
+
+    static int rotation(Context c, int widgetId) { return prefs(c).getInt(K_FLIP + widgetId, 0); }
+
+    static void rotate(Context c, int widgetId) { prefs(c).edit().putInt(K_FLIP + widgetId, (rotation(c, widgetId) + 1) % 1000).apply(); }
+
+    static void clearFlip(Context c, int widgetId) { prefs(c).edit().remove(K_FLIP + widgetId).apply(); }
+
+    /** Adapter position → the page it shows, under a rotation. Dots use THIS (the page's own index), so each page keeps
+     *  its dot whichever way it reached the front. */
+    static int logical(int position, int rot, int count) {
+        if (count <= 0) return position;
+        return ((position + rot) % count + count) % count;
+    }
 
     // The layout numbers verseLines mirrors (res/layout/trinity_widget.xml and trinity_widget_item.xml).
     static final float STACK_PULL_UP_DP = 10f;   // the StackView's negative top margin

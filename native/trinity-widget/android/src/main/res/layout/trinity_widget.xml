@@ -32,12 +32,12 @@
         android:textSize="14sp" />
     <!-- TAP TO FLIP (owner, 2026-11-17): on ColorOS a sideways swipe moves the home screen and only a DOWN swipe flips
          the StackView. This strip over the page dots (right edge) sends ACTION_FLIP to TrinityWidgetProvider, which
-         answers with showNext. Outside the StackView on purpose: views inside a page can only use the pages' shared
+         rotates that widget's pages by one (WidgetStore.K_FLIP; a partial showNext is ignored by ColorOS). Outside the StackView on purpose: views inside a page can only use the pages' shared
          template intent, which opens the app. Shown only when there are two pages. A FrameLayout because RemoteViews
          does not allow a plain View. -->
     <FrameLayout
         android:id="@+id/trinity_widget_flip"
-        android:layout_width="40dp"
+        android:layout_width="48dp"
         android:layout_height="match_parent"
         android:layout_gravity="end"
         android:contentDescription="@string/trinity_widget_flip"

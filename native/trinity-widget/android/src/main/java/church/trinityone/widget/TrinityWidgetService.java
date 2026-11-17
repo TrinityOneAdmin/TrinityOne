@@ -25,11 +25,13 @@ public class TrinityWidgetService extends RemoteViewsService {
         private final int widgetId;
         private List<WidgetStore.Page> pages = new ArrayList<>();
         private int verseLines = 4;
+        private int rotation = 0;   // tap-to-flip (WidgetStore.K_FLIP)
         Factory(Context c, int widgetId) { this.c = c; this.widgetId = widgetId; }
 
         @Override public void onCreate() {}
         @Override public void onDataSetChanged() {
             pages = WidgetStore.pages(c, System.currentTimeMillis());
+            rotation = widgetId == AppWidgetManager.INVALID_APPWIDGET_ID ? 0 : WidgetStore.rotation(c, widgetId);
             verseLines = linesForThisWidget();
         }
 
@@ -52,6 +54,7 @@ public class TrinityWidgetService extends RemoteViewsService {
             RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.trinity_widget_item);
             if (position < 0 || position >= pages.size()) return v;
             final RemoteViews rv = v;
+            final int page = WidgetStore.logical(position, rotation, pages.size());
             WidgetStore.bindPage(new WidgetStore.PageBinder() {
                 @Override public void label(String s) { rv.setTextViewText(R.id.trinity_widget_label, s); }
                 @Override public void text(String s, int maxLines) {
@@ -65,7 +68,7 @@ public class TrinityWidgetService extends RemoteViewsService {
                     rv.setViewVisibility(id, state == WidgetStore.DOT_HIDDEN ? View.GONE : View.VISIBLE);
                     rv.setImageViewResource(id, state == WidgetStore.DOT_ON ? R.drawable.trinity_widget_dot_on : R.drawable.trinity_widget_dot_off);
                 }
-            }, pages.get(position), position, pages.size(), verseLines);
+            }, pages.get(page), page, pages.size(), verseLines);
             v.setOnClickFillInIntent(R.id.trinity_widget_item, new Intent());
             return v;
         }
