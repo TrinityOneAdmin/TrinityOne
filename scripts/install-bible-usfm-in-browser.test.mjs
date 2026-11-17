@@ -2,7 +2,7 @@
 // Run: node --test scripts/install-bible-usfm-in-browser.test.mjs
 //
 // The owner reported that a USFM-format Bible installed from a file "left the text unloaded". This drives the real member app
-// (served by scripts/gateway.mjs, in-browser Babel and all): Library tab, the "Install a Bible from a file" button, a real change
+// (served by scripts/gateway.mjs, in-browser Babel and all): Library tab, the quiet "Have a Bible file? Install it" link, a real change
 // event on the real <input type=file> with a real File, the result sheet's "Read it now", and the reader's own text. Then it
 // reloads the page and asks the engine for the same text. Files: a zip of three WEB books and a single-book .usfm (public domain,
 // cut from modules/eng-web.zip). FAKED: nothing but the file chooser, which a headless browser cannot open.
@@ -62,7 +62,7 @@ async function installViaLibrary(name, bytes, readerNeedle) {
     const events = []; const off = window.Bible.onFileInstall(e => events.push(e));
     const tab = await clickText(/^Library$/); await wait(600);
     const store = await clickText(/^Bibles/); await wait(900);
-    const btn = [...document.querySelectorAll('button')].find(x => /Install a Bible from a file/.test(x.textContent));
+    const btn = [...document.querySelectorAll('button')].find(x => /Have a Bible file\\? Install it/.test(x.textContent));
     if (btn) btn.click();
     const input = [...document.querySelectorAll('input[type=file]')].pop();
     const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob('${b64}'), c => c.charCodeAt(0))], ${JSON.stringify(name)}));

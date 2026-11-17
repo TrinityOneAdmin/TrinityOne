@@ -1164,21 +1164,6 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Download once — stays on your device</div>
           </div>
         </div>
-        {/* INSTALL A BIBLE FROM A FILE: always here, every category. The member got a file over Signal, Quick Share,
-            Bluetooth or a cable and has to be able to find where it goes. Bible.pickFile opens the browser's picker;
-            the answer comes back on the install sheet (app/install-bible.jsx). */}
-        <button onClick={() => window.Bible.pickFile()} style={{
-          display: 'flex', alignItems: 'center', gap: 12, width: 'calc(100% - 36px)', boxSizing: 'border-box', margin: '2px 18px 12px',
-          padding: '12px 14px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}>
-            <Icon name="plus" size={21} stroke={1.8} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>Install a Bible from a file</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4, marginTop: 2 }}>Got one over Signal, Quick Share, Bluetooth or a USB cable? Add it here.</div>
-          </div>
-        </button>
         {/* segmented: Featured / All bibles (full eBible mirror, bibles only) / Installed */}
         <div style={{ display: 'flex', gap: 4, padding: 4, margin: '0 18px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           {[['featured', 'Featured'], ...(showLang ? [['language', 'All bibles']] : []), ['installed', 'Installed']].map(([id, label]) => {
@@ -1194,6 +1179,17 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
           })}
         </div>
         {view === 'language' && <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, padding: '6px 18px 0' }}>Downloads from ebible.org. They can see which translation you install.</div>}
+        {/* INSTALL FROM A FILE: one quiet line under the tabs, on every category and every tab (owner chose option A, 2026-11-17; it was a
+            big card above the tabs). The member got a file over Signal, Quick Share, Bluetooth or a cable and has to be able to find where
+            it goes. Bible.pickFile opens the browser's picker; the answer comes back on the install sheet (app/install-bible.jsx).
+            A real button: 44px tall to tap, the words are its accessible name, the icon is decoration. */}
+        <button onClick={() => window.Bible.pickFile()} data-install-from-file style={{
+          display: 'flex', alignItems: 'center', gap: 7, minHeight: 44, boxSizing: 'border-box', maxWidth: 'calc(100% - 36px)', margin: '0 18px', padding: '0 2px',
+          border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+          fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--clay)' }}>
+          <Icon name="file" size={16} stroke={2} />
+          <span>{category === 'bibles' ? 'Have a Bible file? Install it' : 'Have a file? Install it'}</span>
+        </button>
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>

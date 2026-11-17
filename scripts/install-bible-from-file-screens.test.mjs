@@ -30,7 +30,7 @@ const plain = (x) => JSON.parse(JSON.stringify(x));   // the App runs in a vm: i
 
 // ════════════════════════════════ A. the Library button, and the devotional row ════════════════════════════════
 
-function store({ category = null } = {}) {
+function store({ category = null, view = 'featured' } = {}) {
   const { React, draw } = miniReact();
   const calls = { pick: 0 };
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
@@ -49,21 +49,46 @@ function store({ category = null } = {}) {
     Chip: ({ children }) => React.createElement('span', {}, children),
     ScreenScroll: (p) => p.children, safeCssColor: (c) => c || 'var(--clay)',
   });
-  const props = { open: true, onClose() {}, ctx: { toast() {} }, category, initialView: 'featured' };
+  const props = { open: true, onClose() {}, ctx: { toast() {} }, category, initialView: view };
   return { calls, draw: async () => { draw(S.ModuleStore, props); await tick(); return draw(S.ModuleStore, props); } };
 }
 const pressable = (tree, label) => find(tree, n => n.type === 'button' && rtexts(n).join(' ').includes(label));
 
-test('S1 — the Library has an "Install a Bible from a file" button on every category, and pressing it opens the file picker', async () => {
+// The owner chose option A (2026-11-17): the big card above the tabs is replaced by ONE quiet line under them, on every category and tab.
+const LINK = { bibles: 'Have a Bible file? Install it', dictionaries: 'Have a file? Install it', commentaries: 'Have a file? Install it', none: 'Have a file? Install it' };
+const linkOf = (tree) => pressable(tree, 'Install it');
+const wordsOf = (btn) => find(btn, n => n.type === 'span').map(n => rtexts(n).join('')).join('').trim();   // the words, not the icon's drawing
+
+test('S1 — the quiet "Have a … file? Install it" line is on every category and every tab with the right words, and pressing it opens the file picker', async () => {
   for (const category of [null, 'bibles', 'dictionaries', 'commentaries']) {
-    const s = store({ category });
-    const tree = await s.draw();
-    const btn = pressable(tree, 'Install a Bible from a file');
-    assert.equal(btn.length, 1, `category ${category}: the button is not on the Library screen`);
-    assert.equal(s.calls.pick, 0, 'the picker opened before anyone pressed anything');
-    btn[0].props.onClick();
-    assert.equal(s.calls.pick, 1, `category ${category}: pressing the button did not reach Bible.pickFile`);
+    for (const view of (category === 'bibles' || category === null) ? ['featured', 'language', 'installed'] : ['featured', 'installed']) {
+      const s = store({ category, view });
+      const tree = await s.draw();
+      const btn = linkOf(tree);
+      const where = `category ${category}, tab ${view}`;
+      assert.equal(btn.length, 1, `${where}: the link is not on the Library screen`);
+      assert.equal(wordsOf(btn[0]), LINK[category || 'none'], `${where}: wrong words`);
+      assert.equal(s.calls.pick, 0, 'the picker opened before anyone pressed anything');
+      btn[0].props.onClick();
+      assert.equal(s.calls.pick, 1, `${where}: pressing the link did not reach Bible.pickFile`);
+    }
   }
+});
+
+test('S1b — it is a real button, 44 px to tap, sits UNDER the tabs, and the old big card is gone', async () => {
+  const tree = await store({ category: 'bibles' }).draw();
+  const all = rtexts(tree).join(' | ');
+  assert.doesNotMatch(all, /Install a Bible from a file|Got one over Signal/, 'the old big card is still on the page');
+  const btn = linkOf(tree)[0];
+  assert.equal(btn.type, 'button', 'the link is not a real button');
+  assert.ok(parseInt(btn.props.style.minHeight, 10) >= 44, 'tap height under 44: ' + btn.props.style.minHeight);
+  assert.ok(!/\d/.test(String(btn.props.style.width || '')) || /%/.test(String(btn.props.style.width)), 'a fixed width could overflow a 320 px phone');
+  // order in the drawn page: the tab buttons first, then the link
+  const order = find(tree, n => n.type === 'button').map(n => (n.props['data-install-from-file'] !== undefined ? wordsOf(n) : rtexts(n).join('').trim()));
+  const iTab = order.findIndex(t => /Featured$/.test(t)), iLink = order.indexOf('Have a Bible file? Install it');
+  assert.ok(iTab >= 0 && iLink > iTab, 'the link is not under the tabs: ' + order.slice(0, 8));
+  // the segmented tabs still work and the link is on every one of them (checked in S1)
+  assert.ok(order.some(t => /All bibles$/.test(t)) && order.some(t => /Installed$/.test(t)));
 });
 
 test('S2 — the devotional import row is hidden (with its section); the dictionary, commentary and cross-reference import rows stay', async () => {
