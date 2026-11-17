@@ -129,13 +129,13 @@ function _clayText(baseHex, dark) {
     if (dark) {
       // dark: RAISE LIGHTNESS in HSL, keeping hue and saturation, so a very dark brand (navy) stays navy-blue instead of going grey (mixing toward white would)
       const bg = [33, 27, 19], [h, s, l0] = _rgbHsl(base);
-      for (let l = l0; l <= 1.0001; l += 0.01) { const rgb = _hslRgb(h, s, Math.min(1, l)); if (_ratio(rgb, bg) >= 4.6) return _rgbHex(rgb); }
+      for (let l = l0; l <= 1.0001; l += 0.01) { const hex = _rgbHex(_hslRgb(h, s, Math.min(1, l))); if (_ratio(_hexRgb(hex), bg) >= 4.6) return hex; }   // ROUND to the hex first, then judge the colour that will really be drawn
       return '#ffffff';
     }
     const bg = [244, 238, 226];                                   // light: --paper #F4EEE2; darken toward black until it reads
     for (let i = 0; i <= 25; i++) {
-      const k = i * 0.04, rgb = base.map(v => v * (1 - k));
-      if (_ratio(rgb, bg) >= 4.6) return _rgbHex(rgb);
+      const k = i * 0.04, hex = _rgbHex(base.map(v => v * (1 - k)));   // rounded to the hex first, then judged
+      if (_ratio(_hexRgb(hex), bg) >= 4.6) return hex;
     }
     return '#000000';
   } catch (e) { return dark ? '#fff' : '#000'; }

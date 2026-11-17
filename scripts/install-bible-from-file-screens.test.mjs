@@ -578,14 +578,14 @@ test('S28 — dark mode: a very dark brand (navy) is LIGHTENED without losing it
     const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return h * 60; };
   const navy = '#001F3F';
   const { value } = await clayText({ dark: true, accent: 'clay', brand: navy });
-  assert.ok(ratioOf(value, '#211B13') >= 4.5, `navy in dark mode is ${ratioOf(value, '#211B13').toFixed(2)}:1 (${value})`);
+  assert.ok(ratioOf(value, '#211B13') >= 4.6, `navy in dark mode is ${ratioOf(value, '#211B13').toFixed(2)}:1 (${value})`);
   assert.ok(Math.abs(hueOf(value) - hueOf(navy)) <= 5, `navy lost its hue: ${value} is ${hueOf(value).toFixed(0)} deg, navy is ${hueOf(navy).toFixed(0)}`);
   const [r, g, b] = [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
   assert.ok(b - Math.max(r, g) >= 60, `navy went grey, not blue: ${value}`);
-  for (const dark2 of ['#3B0A45', '#0B3D2E']) {   // a dark purple and a dark green keep their hue too
+  for (const dark2 of ['#3B0A45', '#0B3D2E', '#808000', '#556B2F']) {   // dark purple, dark green, olive (it landed at 4.58 when rounding came after the check)   // a dark purple and a dark green keep their hue too
     const v = (await clayText({ dark: true, accent: 'clay', brand: dark2 })).value;
     assert.ok(Math.abs(hueOf(v) - hueOf(dark2)) <= 6, `${dark2} -> ${v} changed hue (${hueOf(dark2).toFixed(0)} -> ${hueOf(v).toFixed(0)})`);
-    assert.ok(ratioOf(v, '#211B13') >= 4.5);
+    assert.ok(ratioOf(v, '#211B13') >= 4.6, `${dark2} -> ${v} is ${ratioOf(v, '#211B13').toFixed(3)}:1, under the code's own 4.6 target`);
   }
 });
 
