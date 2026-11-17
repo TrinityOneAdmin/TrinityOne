@@ -2331,9 +2331,71 @@ function votdQuoteMarks(text) {
   const t = String(text || '').trim();
   return { open: /^[“‘"]/.test(t) ? '' : '“', close: /[”’"]$/.test(t) ? '' : '”' };
 }
+// ── VERSE OF THE DAY: THE PICK, AS FUNCTIONS — shared by the card and the home-screen widget's table ─────────
+// reference/PLAN-phone-widget-2026-11-16.html §4.
+//
+// ⚠ KNOWN FINDING, DELIBERATELY UNCHANGED HERE (plan §4, owner to decide): the day-of-year below measures from
+// local midnight on 31 Dec in WINTER time, so during summer time the hour 00:00-00:59 still returns the
+// PREVIOUS day (measured under TZ=Europe/London: 2026-07-01 00:30 -> doy 181, not 182). This is the card's
+// formula exactly as it was; the widget table avoids it by evaluating every day at local NOON.
+function votdDayPick(pool, date) {
+  const doy = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 864e5);
+  return pool[doy % pool.length];
+}
+// The pick in the member's active translation when that translation has the verse, else the pool's WEB text.
+function votdInTranslation(pick, Bible) {
+  let out = { ref: pick.ref, text: pick.text, version: 'WEB' };
+  const loc = Bible && Bible.parseRef ? Bible.parseRef(pick.ref) : null;
+  if (loc && Bible.loaded && Bible.books().includes(loc.book)) {
+    const row = Bible.getVerses(loc.book, loc.chap).find(v => String(v.v) === String(loc.verse));
+    if (row) out = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
+  }
+  return out;
+}
+function votdLocalISO(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+// The widget's table: { 'YYYY-MM-DD': { ref, text, version } } for `days` local days from `from`. Each day is
+// evaluated at LOCAL NOON through the card's own votdDayPick, so the widget shows what the card shows (see the
+// finding above). `todayPick` (an "Another verse" pick, or null) replaces TODAY only — tomorrow on is the rule.
+function votdWidgetDays(pool, Bible, from, days, todayPick) {
+  const out = {};
+  for (let i = 0; i < days; i++) {
+    const d = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i, 12, 0, 0);
+    out[votdLocalISO(d)] = votdInTranslation(i === 0 && todayPick ? todayPick : votdDayPick(pool, d), Bible);
+  }
+  return out;
+}
+// The native widget plugin (native/trinity-widget), or null on the web / iOS / an APK without it.
+function trinityHomeWidget() {
+  const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
+  return P || null;
+}
+// Per-session memory of the last verse-prompt probe, per church: { key, at } (audit F6 — probe at most hourly).
+const homeWidgetProbed = {};
+// Make the stored switch agree with the native provider's real state (audit F4). Shared by Today and the Settings
+// switch (app/identity.jsx HomeWidgetToggle). `set` receives the native answer.
+function homeWidgetReconcile(W, set) {
+  if (!W || !W.status) return;
+  try {
+    Promise.resolve(W.status()).then(st => {
+      if (!st || typeof st.enabled !== 'boolean') return;
+      try { localStorage.setItem('trinityone.widget', st.enabled ? '1' : '0'); } catch (e) {}
+      set(st.enabled);
+    }).catch(() => {});
+  } catch (e) {}
+}
+function homeWidgetIsOn() { try { return localStorage.getItem('trinityone.widget') === '1'; } catch (e) { return false; } }
+
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
+  // The home-screen widget switch (Settings → HomeWidgetToggle) — re-read when it flips.
+  const [widgetOn, setWidgetOn] = React.useState(homeWidgetIsOn);
+  React.useEffect(() => { const h = () => setWidgetOn(homeWidgetIsOn()); window.addEventListener('trinity-widget-changed', h); return () => window.removeEventListener('trinity-widget-changed', h); }, []);
+  // THE NATIVE SIDE IS THE TRUTH about whether the widget is on (audit F4): the stored flag can be lost (a restore)
+  // while the provider is still enabled, and then the widget would sit on a frozen table. Ask once on mount.
+  React.useEffect(() => { homeWidgetReconcile(trinityHomeWidget(), setWidgetOn); }, []);
   // U6: the pinned-sermon card can be dismissed (per sermon id, persisted) and stops saying "New" once it ages,
   // so it doesn't hold the prime Today slot forever. A newly-pinned sermon (different id) reappears.
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
@@ -2385,9 +2447,10 @@ function TodayScreen({ ctx }) {
     setStreak(count);
   }, []);
 
-  // verse of the day — rotate by day-of-year; render from the active translation when possible
-  const doy = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
-  const dayPick = D.VOTD_POOL[doy % D.VOTD_POOL.length];
+  // verse of the day — rotate by day-of-year; render from the active translation when possible.
+  // votdDayPick / votdInTranslation (above TodayScreen) are ALSO what builds the home-screen widget's table, so
+  // the card and the widget cannot disagree.
+  const dayPick = votdDayPick(D.VOTD_POOL, now);
   // "ANOTHER VERSE" (owner 2026-11-13): a tap swaps in a random pool verse, kept on THIS phone for the rest of
   // the day under trinityone.votd-pick = { day, ref }. The REF is stored, not an index, so a later edit of the
   // pool cannot shift a pick onto a different verse. It is trusted only when it is an object, its day is today
@@ -2414,17 +2477,25 @@ function TodayScreen({ ctx }) {
     setVotdPick(val);
     try { lsSet('trinityone.votd-pick', val); } catch (err) {}
   };
-  let votd = { ref: pick.ref, text: pick.text, version: 'WEB' };
-  const vloc = Bible.parseRef(pick.ref);
-  if (vloc && Bible.loaded && Bible.books().includes(vloc.book)) {
-    const row = Bible.getVerses(vloc.book, vloc.chap).find(v => String(v.v) === String(vloc.verse));
-    if (row) votd = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
-  }
+  const votd = votdInTranslation(pick, Bible);
+  // THE HOME-SCREEN WIDGET'S TABLE (reference/PLAN-phone-widget-2026-11-16.html §4). Only when the member has
+  // switched the widget on in Settings (trinityone.widget = '1', HomeWidgetToggle in app/identity.jsx) and only
+  // on the APK (the plugin is absent on the web and on iOS). Rewritten whenever what the card shows could have
+  // changed: a new day, an "Another verse" pick (today's entry must match the card), a translation change.
+  React.useEffect(() => {
+    if (!widgetOn) return;
+    const W = trinityHomeWidget();
+    if (!W || !W.publishVotd) return;
+    try { Promise.resolve(W.publishVotd({ days: votdWidgetDays(D.VOTD_POOL, Bible, now, 60, pickedVerse) })).catch(() => {}); } catch (e) {}
+  }, [widgetOn, votdToday, votd.ref, votd.text, votd.version]);   // eslint-disable-line
   const votdQ = votdQuoteMarks(votd.text);
   // THE HEART files the verse under a "Favourites" tag, keyed by the CANONICAL key ("43.3.16"), the one the
   // reader and Library match on, not votd.ref ("John 3:16"), which the reader would never light up. Filled =
   // bookmarked AND tagged Favourites. Un-favouriting keeps a bookmark that has other tags, drops one that has none.
   // No resolvable reference, no heart.
+  // The verse ACTUALLY SHOWN (votd.ref === pick.ref — the day's verse, or an "Another verse" pick). The widget branch
+  // moved the translation lookup into votdInTranslation(), which used to leave this local behind; parse it here.
+  const vloc = Bible.parseRef(votd.ref);
   const votdKey = (vloc && vloc.verse != null) ? Bible.refKey(vloc, vloc.verse) : null;
   // An OLD-spelling bookmark ("John 3:16", saved before keys were canonical) is the same verse: match on the
   // canonical form like the reader does, then operate on THAT item's own stored id, never a second copy.
@@ -2558,6 +2629,78 @@ function TodayScreen({ ctx }) {
   const _tdFeat = (ctx.church && ctx.church.features) || {};
   const rotaOn = _tdFeat.rota !== false;
   const resourcesOn = _tdFeat.resources !== false;
+  // THE CHURCH'S PUBLIC VERSE PROMPT ON THE HOME-SCREEN WIDGET (reference/PLAN-phone-widget-2026-11-16.html §4b).
+  // The widget fetches /public/<npub>/verse-prompt.json in the background with the app CLOSED, so what this hands
+  // it — the church's npub and relay addresses — sits on the phone outside the app's lock. Hence:
+  //   · only while the widget is on, a church is followed, the community is unlocked and Resources is on;
+  //   · ADDRESSES: only Fellowship.widgetFeedBases(), i.e. relaysForChurch() after the admission gate (rule 10);
+  //   · validUntil, which the native side enforces on its own: with no PIN, a week; with a PIN, only while
+  //     "remember me" holds (its own expiry) — a PIN member without it gets NO prompt config, because the app
+  //     is locked again at its next start and no code runs at that moment to clear the widget;
+  //   · probe first: only a 200 configures the background fetch (a church that never switched it on is not
+  //     polled), and anything else CLEARS it — which is also what a lock, a leave or a church switch does here.
+  const widgetChurch = ctx.churchNpub || '';
+  const widgetLocked = !!ctx.commLocked;
+  const widgetHasPin = !!ctx.hasCommunityPin;
+  const vpRefsKey = versePrompt ? [versePrompt.ref || ''].concat((versePrompt.schedule || []).map(s => (s && s.ref) || '')).join('|') : '';
+  // RELAY ADMISSION OFTEN FINISHES AFTER TODAY HAS DRAWN (audit F6/F7): re-run when the admitted set changes, so the
+  // widget is configured once a relay is proved, and its addresses are REWRITTEN when one is added or refused.
+  const [relaysTick, setRelaysTick] = React.useState(0);
+  React.useEffect(() => { const h = () => setRelaysTick(n => n + 1); window.addEventListener('trinity-relays-verified', h); return () => window.removeEventListener('trinity-relays-verified', h); }, []);
+  // …and when the widget's church settings were cleared from ELSEWHERE (lock, "Ask for my PIN again", a church switch
+  // — TrinityIdentity.widgetForgetChurch), the hourly throttle must not stop Today putting them back (audit re-check
+  // R3: church A -> B -> A within the hour left A unwritten). Forget the throttle and run the writer again.
+  React.useEffect(() => {
+    const h = () => { for (const k of Object.keys(homeWidgetProbed)) delete homeWidgetProbed[k]; setRelaysTick(n => n + 1); };
+    window.addEventListener('trinity-widget-forgot-church', h);
+    return () => window.removeEventListener('trinity-widget-forgot-church', h);
+  }, []);
+  React.useEffect(() => {
+    const W = trinityHomeWidget();
+    if (!W || !W.publishPrompt || !W.clearPrompt) return;
+    let cancelled = false;
+    // A clear forgets the probe throttle too, so turning the widget back on (or unlocking) probes again at once —
+    // except the "not shared anywhere" answer below, which keeps it (no reason to ask again within the hour).
+    const clear = (keepThrottle) => { if (!keepThrottle) delete homeWidgetProbed[widgetChurch]; try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} };
+    if (!widgetOn || !widgetChurch || widgetLocked || !resourcesOn) { clear(); return; }
+    (async () => {
+      const F = window.Fellowship;
+      const where = (F && F.widgetFeedBases) ? F.widgetFeedBases(widgetChurch) : null;
+      const bases = (where && Array.isArray(where.bases)) ? where.bases.filter(b => /^https:\/\//i.test(String(b))) : [];
+      if (!where || !where.npub || !bases.length) return;   // nothing admitted yet: write no address, keep what is there
+      const nowS = Math.floor(Date.now() / 1000);
+      let until = nowS + 7 * 86400;
+      if (widgetHasPin) {
+        try { until = Number(await window.TrinityIdentity.rememberedUntil()) || 0; } catch (e) { until = 0; }
+        if (until <= nowS) { if (!cancelled) clear(); return; }
+      }
+      // SMALL PIPES (audit F6): the same church, addresses and prompt are probed at most once an hour per session.
+      const probeKey = where.npub + '|' + bases.join(',') + '|' + vpRefsKey;
+      const last = homeWidgetProbed[widgetChurch];
+      if (last && last.key === probeKey && nowS - last.at < 3600) return;
+      // THE PROBE IS NATIVE (audit re-check R1). On the APK the webview's fetch goes through Capacitor's
+      // https://localhost/_capacitor_http_interceptor_ proxy (CapacitorHttp is enabled), so this page can neither
+      // refuse a redirect nor tell which address answered. TrinityWidget.probe runs the background job's own GET:
+      // https only, no redirects, timed out, size-capped, refs-only. 'absent' = EVERY base answered 404 (audit F8).
+      if (!W.probe) return;
+      let res = null;
+      try { res = await W.probe({ npub: where.npub, bases }); } catch (e) { res = null; }
+      if (cancelled) return;
+      const outcome = res && res.outcome;
+      const cached = (outcome === 'found' && res.copy && typeof res.copy === 'object') ? res.copy : null;
+      homeWidgetProbed[widgetChurch] = { key: probeKey, at: nowS };
+      // Not shared anywhere -> clear (keep the hourly throttle). Unreachable / unknown -> leave what is there, bounded
+      // by its validUntil, and ask again next time.
+      if (!cached) { if (outcome === 'absent') clear(true); else delete homeWidgetProbed[widgetChurch]; return; }
+      // The member's own translation for every passage the copy names, so the widget can show the words, not just
+      // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
+      const texts = {};
+      const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
+      refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = votdInTranslation({ ref: r, text: '' }, Bible); if (t.text) texts[r] = t.text; });
+      try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(() => {}); } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, relaysTick]);   // eslint-disable-line
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;

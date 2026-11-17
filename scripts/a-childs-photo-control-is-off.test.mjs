@@ -77,7 +77,7 @@ async function photoControl({ church, safeguard }) {
     Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), UserAvatar: Stub('UserAvatar'),
     DirectoryToggle: Stub('DirectoryToggle'), BackupCard: Stub('BackupCard'),
     AppVersion: Stub('AppVersion'), FamilySheet: Stub('FamilySheet'),
-    VotdToggle: Stub('VotdToggle'),
+    VotdToggle: Stub('VotdToggle'), HomeWidgetToggle: Stub('HomeWidgetToggle'),
     WALLET_ENABLED: false, navigator: { clipboard: null }, setTimeout, clearTimeout, console,
   };
   const key = '__kidphoto_' + Math.random().toString(36).slice(2);

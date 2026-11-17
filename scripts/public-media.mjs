@@ -163,3 +163,23 @@ export function buildDevosFeed(devos, { name = '', churchNpub = '', baseUrl = ''
     devotionals: rows,
   }, null, 2) + '\n';
 }
+
+// THE CHURCH'S PUBLIC VERSE PROMPT, for members' home-screen widgets (reference/PLAN-phone-widget-2026-11-16.html
+// §4b). The owner's decision of 2026-11-16: REFERENCES AND TIMES ONLY — the steward's note is NEVER part of the
+// public copy, and this builder drops a `note` (or anything else) even if a copy carries one. No church name
+// either: the widget shows none, so the feed gives it nothing to show.
+const VP_REF_MAX = 200, VP_SCHEDULE_MAX = 50;
+export function publicVersePromptFields(c) {
+  if (!c || typeof c !== 'object') return null;
+  const ref = String(c.ref || '').slice(0, VP_REF_MAX).trim();
+  const schedule = (Array.isArray(c.schedule) ? c.schedule : []).slice(0, VP_SCHEDULE_MAX)
+    .map(s => (s && typeof s === 'object') ? { at: Math.floor(Number(s.at)), ref: String(s.ref || '').slice(0, VP_REF_MAX).trim() } : null)
+    .filter(s => s && Number.isFinite(s.at) && s.at > 0 && s.ref)
+    .sort((a, b) => a.at - b.at);
+  if (!ref && !schedule.length) return null;
+  return { ref, schedule };
+}
+export function buildVersePromptFeed(fields, ts) {
+  const f = publicVersePromptFields(fields);
+  return JSON.stringify({ generator: 'TrinityOne', v: 1, ts: Number(ts) || 0, ref: f ? f.ref : '', schedule: f ? f.schedule : [] }) + '\n';
+}

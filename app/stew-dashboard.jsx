@@ -12316,6 +12316,7 @@ function DashWebsitePanel({ church }) {
   const sermonsOn = !!(share && share.sermons);
   const plansOn = !!(share && share.plans);
   const devosOn = !!(share && share.devos);
+  const verseOn = !!(share && share.versePrompt);
   const blocked = (share && share.blocked) || 0;
   const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
   const held = (share && share.held) || 0;
@@ -12388,6 +12389,7 @@ function DashWebsitePanel({ church }) {
         <button onClick={() => setTab('plans')} style={tabStyle('plans')}>Reading Plans</button>
         <button onClick={() => setTab('sermons')} style={tabStyle('sermons')}>Sermons</button>
         <button onClick={() => setTab('devos')} style={tabStyle('devos')}>Devotionals</button>
+        <button onClick={() => setTab('verse')} style={tabStyle('verse')}>Verse prompts</button>
       </div>
 
       {tab === 'calendar' ? (
@@ -12523,6 +12525,34 @@ function DashWebsitePanel({ church }) {
               ) : null}
             </div>
           ) : null}
+        </React.Fragment>
+      ) : null}
+
+      {/* THE VERSE PROMPT ON MEMBERS' HOME SCREENS (reference/PLAN-phone-widget-2026-11-16.html §4b, owner 2026-11-16).
+          Owner-only like every switch on this page. What goes public is the passages and the times you scheduled them —
+          never a note — at a public address, because a home-screen widget fetches it with the app closed and no key. */}
+      {tab === 'verse' ? (
+        <React.Fragment>
+          <div onClick={() => patchShare({ versePrompt: !verseOn })} className="set-row" style={{ ...row(verseOn), opacity: known ? 1 : .6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show verse prompts on members{'\u2019'} home screens</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{verseOn
+                ? 'On \u2014 the passages you send, and the times you schedule them, are public on the internet so members\u2019 home-screen widgets can show them. Anyone with the address can read them.'
+                : 'Off \u2014 verse prompts stay inside the app.'}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ versePrompt: !verseOn }); }} disabled={busy || !known} aria-label="Show verse prompts on members' home screens" role="switch" aria-checked={verseOn} title="Publishes the passages of your verse prompt (never a note) so members' home-screen widgets can show them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: verseOn ? 'var(--clay-ink)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: verseOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
+          </div>
+          {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+          {/* OWNER, 2026-11-16 (audit F9): future scheduled times stay public, but the switch must SAY so, plainly, the
+              moment it is on — a weekly schedule can show anyone when the church meets. */}
+          {verseOn ? (
+            <div role="alert" data-verse-public-warning="1" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--clay-ink)', fontSize: 13, fontWeight: 600, lineHeight: 1.45 }}>
+              Public on the internet: the passages you send AND the times you schedule them, including times still to come. Anyone with the address can read them — a regular schedule could show when your church meets.
+            </div>
+          ) : null}
+          {verseOn ? <div className="set-desc" style={{ color: 'var(--ink-2)', marginTop: 8 }}>A prompt sent by another steward reaches home screens the next time the church{'\u2019'}s own console (this one) is open.</div> : null}
         </React.Fragment>
       ) : null}
 

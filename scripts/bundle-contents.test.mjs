@@ -100,7 +100,10 @@ const BUNDLE_OK = (f) =>
   // Tracked despite android/ being gitignored, so it rides along in the archive. Nothing on the bundle path
   // reads it — only an APK build from a git checkout does. Not sensitive (app id, permissions, allowBackup),
   // so it is allowed rather than excluded; dropping it is a tidy-up, not a fix, and every exclusion is risk.
-  || f === 'android/app/src/main/AndroidManifest.xml';
+  || f === 'android/app/src/main/AndroidManifest.xml'
+  // The home-screen widget plugin's MANIFEST only (its Android sources are export-ignored, .gitattributes): the root
+  // package.json ships and names "file:native/trinity-widget", so an npm install in an unpacked bundle must find it.
+  || f === 'native/trinity-widget/package.json';
 
 // Things that are never right ANYWHERE in the tarball, whatever else the rules say. Belt and braces: these
 // are also covered above, and pinning them separately means a widened allowlist cannot silently readmit them.
@@ -132,7 +135,8 @@ function assertNoInternalDocs(listing, who) {
 // a relay is not a fix. These are the files the self-update and the served app genuinely need.
 const MUST_SHIP = ['scripts/gateway.mjs', 'scripts/event-store.mjs', 'scripts/relay-update.sh',
   'relay-app/release-pubkey.pem', 'relay-app/control.html', 'version.txt', 'package.json',
-  'index.html', 'steward.html', 'vendor/fellowship.js', 'vendor/steward.js', 'engine.js', 'LICENSE'];
+  'index.html', 'steward.html', 'vendor/fellowship.js', 'vendor/steward.js', 'engine.js', 'LICENSE',
+  'native/trinity-widget/package.json'];   // package.json's file: dependency must resolve
 
 function assertStillInstallable(listing, who) {
   for (const f of MUST_SHIP) assert.ok(listing.includes(f), who + ' no longer ships ' + f + ' — the relay cannot run');

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The TrinityOne home-screen widget. Merged into WHICHEVER app the shared android/ project builds — the member
+  app AND the steward console (scripts/build-steward-apk.sh re-uses the same project). So the widget provider
+  ships android:enabled="false": it is in no launcher's widget list until the MEMBER app's Settings switch
+  calls TrinityWidget.setEnabled({ on: true }) (app/identity.jsx, HomeWidgetToggle). The steward console never
+  loads that code, so on the steward APK the receiver stays disabled for ever.
+  Home screen only: widgetCategory is home_screen, never keyguard (reference/PLAN-phone-widget-2026-11-16.html §2).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name="church.trinityone.widget.TrinityWidgetProvider"
+            android:enabled="false"
+            android:exported="false"
+            android:label="@string/trinity_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/trinity_widget_info" />
+        </receiver>
+        <service
+            android:name="church.trinityone.widget.TrinityWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+        <service
+            android:name="church.trinityone.widget.PromptFetchJob"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+    </application>
+</manifest>

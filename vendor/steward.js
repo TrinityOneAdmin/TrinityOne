@@ -15665,6 +15665,7 @@ zoo`.split("\n");
   }
   var JOINPOLICY_D = "trinityone/joinpolicy:";
   var SHARE_D = "trinityone/share:";
+  var PUBVERSE_D = "trinityone/pubverse:";
   var PUBEVENT_D = "trinityone/pubevent:";
   var ADMITTED_D = "trinityone/admitted:";
   var RESEAT_D = "trinityone/reseat:";
@@ -20425,7 +20426,7 @@ zoo`.split("\n");
   var _svcSeq = 0;
   var _reqSeq = 0;
   var WEB_HORIZON_OK = /* @__PURE__ */ new Set([3, 6, 12]);
-  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own", horizonMonths: 6, calName: "", sermonFeedName: "", sermonLimit: 10, detail: "full" });
+  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, versePrompt: false, optOut: [], optIn: [], address: "own", horizonMonths: 6, calName: "", sermonFeedName: "", sermonLimit: 10, detail: "full" });
   var WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
   var _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
   function _webNormalise(c) {
@@ -20439,7 +20440,7 @@ zoo`.split("\n");
     const planLimit = typeof o.planLimit === "number" && o.planLimit >= 0 && o.planLimit <= 100 ? Math.floor(o.planLimit) : 0;
     const devoLimit = typeof o.devoLimit === "number" && o.devoLimit >= 0 && o.devoLimit <= 100 ? Math.floor(o.devoLimit) : 0;
     const sermonLimit = typeof o.sermonLimit === "number" && o.sermonLimit >= 0 && o.sermonLimit <= 100 ? Math.floor(o.sermonLimit) : 10;
-    return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own", horizonMonths, calName, sermonFeedName, sermonLimit, detail, planLimit, devoLimit };
+    return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, versePrompt: o.versePrompt === true, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own", horizonMonths, calName, sermonFeedName, sermonLimit, detail, planLimit, devoLimit };
   }
   function _webOneList(st, w, next) {
     const same = (a, b) => a.length === b.length && a.every((x, i3) => x === b[i3]);
@@ -20927,6 +20928,11 @@ zoo`.split("\n");
       copyTs: carried ? carried.copyTs : /* @__PURE__ */ new Map(),
       copiesKnown: !!(carried && carried.copiesKnown),
       from: carried ? carried.from : { share: /* @__PURE__ */ new Map(), corpus: /* @__PURE__ */ new Map() },
+      vprompts: carried ? carried.vprompts : /* @__PURE__ */ new Map(),
+      vcopy: carried ? carried.vcopy : null,
+      vcopyTs: carried ? carried.vcopyTs : 0,
+      vbusy: false,
+      vfail: null,
       subs: [],
       listeners,
       busy: false,
@@ -20985,6 +20991,7 @@ zoo`.split("\n");
           _webQueueSync();
           return;
         }
+        if (typeof _webVerseNote === "function" && _webVerseNote(w, e, d)) return;
         if (!d.startsWith(EVENT_D)) return;
         const id = d.slice(EVENT_D.length);
         if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
@@ -21069,9 +21076,72 @@ zoo`.split("\n");
     }
     return out;
   }
+  function _publicVerseBody(p) {
+    if (!p || typeof p !== "object") return null;
+    const ref = String(p.ref || "").trim();
+    const schedule = (Array.isArray(p.schedule) ? p.schedule : []).map((x) => x && typeof x === "object" ? { at: Math.floor(Number(x.at)), ref: String(x.ref || "").trim() } : null).filter((x) => x && Number.isFinite(x.at) && x.at > 0 && x.ref);
+    if (!ref && !schedule.length) return null;
+    return JSON.stringify({ ref, schedule });
+  }
+  function _webVerseNote(w, e, d) {
+    if (d === VERSE_PROMPT_D) {
+      const prev = w.vprompts.get(e.pubkey);
+      if (prev && (prev.ts > e.created_at || prev.ts === e.created_at && String(prev.id || "") <= String(e.id || ""))) return true;
+      let c = null;
+      if (!(e.tags.some((t) => t[0] === "deleted") || !e.content)) {
+        try {
+          c = JSON.parse(e.content);
+        } catch {
+        }
+      }
+      w.vprompts.set(e.pubkey, { ts: e.created_at, id: String(e.id || ""), c: c && typeof c === "object" ? c : null });
+      _webQueueSync();
+      return true;
+    }
+    if (d === PUBVERSE_D + pub) {
+      if (e.pubkey !== pub || e.created_at < w.vcopyTs) return true;
+      w.vcopyTs = e.created_at;
+      w.vcopy = e.tags.some((t) => t[0] === "deleted") || !e.content ? null : String(e.content);
+      _webQueueSync();
+      return true;
+    }
+    return false;
+  }
+  function _webVersePrompt(w) {
+    let best = null;
+    for (const [by, rec] of w.vprompts) {
+      if (!(by === pub || _careRosterKnown && _careRoster.has(by))) continue;
+      if (!best || rec.ts > best.ts || rec.ts === best.ts && rec.id < best.id) best = rec;
+    }
+    return best ? best.c : null;
+  }
+  async function _webVerseMirror(w) {
+    if (!w || w.pub !== pub || !sk || actingChurch) return;
+    if (!w.shareKnown || !w.copiesKnown || w.vbusy) return;
+    const desired = w.share.versePrompt ? _publicVerseBody(_webVersePrompt(w)) : null;
+    if (desired === w.vcopy) return;
+    if (w.vfail && w.vfail.body === desired && now() - w.vfail.at < 60) return;
+    w.vbusy = true;
+    try {
+      const at = Math.max(now(), (w.vcopyTs || 0) + 1);
+      const tags = desired ? [["d", PUBVERSE_D + pub], ["t", NET]] : [["d", PUBVERSE_D + pub], ["t", NET], ["deleted", "1"]];
+      const ok = await publish(feChurch({ kind: 30078, created_at: at, tags, content: desired || "" }, sk));
+      if (_web !== w) return;
+      if (ok) {
+        w.vcopy = desired;
+        w.vcopyTs = at;
+        w.vfail = null;
+      } else w.vfail = { body: desired, at: now() };
+    } catch (e) {
+      w.vfail = { body: desired, at: now() };
+    } finally {
+      w.vbusy = false;
+    }
+  }
   async function _webSync() {
     const w = _web;
     if (!w || w.pub !== pub || !sk || actingChurch) return;
+    if (typeof _webVerseMirror === "function") _webVerseMirror(w);
     if (w.busy) {
       w.again = true;
       return;
@@ -23191,6 +23261,10 @@ zoo`.split("\n");
       const next = new Set((list || []).filter(Boolean));
       if (next.size || !_careRosterKnown) _careRoster = next;
       _reCheckCareKeyPending();
+      try {
+        _webQueueSync();
+      } catch (e) {
+      }
     },
     // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
     subscribeMediaKey() {
@@ -25952,6 +26026,10 @@ zoo`.split("\n");
           _careRosterKnown = true;
           _careRosterSeen = true;
           _stewardRosterChanged(_rosterBefore, cur, e.created_at);
+          try {
+            _webQueueSync();
+          } catch (err2) {
+          }
           onList(cur);
         },
         oneose() {

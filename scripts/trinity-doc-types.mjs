@@ -139,6 +139,7 @@ export const DOC_TYPES = Object.freeze({
   // /public/<npub>/calendar.ics, and only while share:.calendar is true.
   'trinityone/share:':        { write: 'church',    read: 'members', scope: 'suffix', note: 'd=share:<churchpub>, {calendar, sermons, plans, optOut:[ids], address}. The per-TYPE switches for the public feeds and the per-ITEM opt-outs. Owner-only, like voice:/stewards:, and it names its own church in the d-tag so a co-tenant church cannot write it for another' },
   'trinityone/pubevent:':     { write: 'church',    read: 'members', scope: 'author', note: 'the PLAINTEXT public copy of one event: {title, date, time, where, blurb, recur, day} — the noticeboard fields and nothing else (never a group, an image, an attendee). event: itself is sealed under the church name key so the relay cannot read it; the console writes this copy while the calendar switch is on and tombstones it on opt-out, delete or switch-off. Keyed by (author, d), so one church cannot overwrite another\'s' },
+  'trinityone/pubverse:':     { write: 'church',    read: 'members', scope: 'suffix', note: 'd=pubverse:<churchpub>. The PLAINTEXT public copy of the church\'s verse prompt for members\' home-screen widgets: {ref, schedule:[{at, ref}]} — references and times only, NEVER the note. The owner console writes it while the share: document\'s versePrompt switch is on and tombstones it on switch-off or when the prompt is cleared; served at /public/<npub>/verse-prompt.json. Owner-only and self-named, like share: (reference/PLAN-phone-widget-2026-11-16.html §4b)' },
 
   // ── membership and joining ───────────────────────────────────────────────────────────────────────────
   'trinityone/member:':       { write: 'member',    read: 'members', scope: 'suffix', note: 'a member\'s own join document' },
@@ -532,6 +533,7 @@ export const D = Object.freeze({
   JOINPOLICY:     k('trinityone/joinpolicy:'),
   SHARE:          k('trinityone/share:'),
   PUBEVENT:       k('trinityone/pubevent:'),
+  PUBVERSE:       k('trinityone/pubverse:'),
   ADMITTED:       k('trinityone/admitted:'),
   RESEAT:         k('trinityone/reseat:'),
   // Who signs what the church sends — a display by-line, church-signed. Deliberately its OWN document rather

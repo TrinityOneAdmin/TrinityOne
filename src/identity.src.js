@@ -169,10 +169,48 @@ async function rememberWrite(m, until) {
     return true;
   } catch (e) { console.warn('[identity] remember write failed', e); return false; }
 }
+// ── THE HOME-SCREEN WIDGET'S CHURCH SETTINGS LIVE OUTSIDE THE APP'S LOCK (reference/PLAN-phone-widget-2026-11-16.html
+// §4b; AUDIT-phone-widget-c60c0f72 F1/F4). The widget may hold the church's npub and relay addresses only while
+// "remember me" (or no PIN) holds, and app/screens-today.jsx writes them only then — but it can only clear them
+// while Today is on screen. So the clear ALSO lives here, in rememberClear(), which every path that ends a
+// remembered state reaches: lock (and "Lock now"), forgetDevice ("Ask for my PIN again"), setPin, removePin, a
+// new or imported identity, a remembered record that expired or no longer matches the account. Leaving or
+// switching church is the app's business, not identity's: app/app.jsx calls widgetForgetChurch() on that.
+function _widgetPlugin() {
+  try { const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget; return W || null; } catch (e) { return null; }
+}
+function widgetClearChurch() {
+  const W = _widgetPlugin();
+  if (W && W.clearPrompt) { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} }
+}
+// Today keeps an hourly probe throttle; this tells it the settings are gone so it writes them again WHEN ALLOWED
+// (audit re-check R3). Today's re-run reads rememberedUntil(), so from rememberClear() this must fire only AFTER the
+// remember record is really deleted — fired earlier, Today could read the old record and write the church back
+// (audit re-check of 3ece67c6, S1).
+function widgetSignalForgot() {
+  try { window.dispatchEvent(new CustomEvent('trinity-widget-forgot-church')); } catch (e) {}
+}
+// For the app's church-change hook (app/app.jsx): nothing to wait for there.
+function widgetForgetChurch() { widgetClearChurch(); widgetSignalForgot(); }
+// A NEW ACCOUNT ON THIS PHONE — a DIFFERENT PERSON (regenerate, or importMnemonic of words that are not this phone's
+// account: a handover to a young person, a reseat, another person's transfer) — does not inherit the previous
+// person's opt-in: the widget is switched OFF and its data cleared (audit F4). The SAME adult coming back in with
+// their own words (forgot-PIN unlock, their own transfer, their own backup) keeps it (audit re-check R2).
+function widgetOffForNewAccount() {
+  try { localStorage.removeItem('trinityone.widget'); } catch (e) {}
+  const W = _widgetPlugin();
+  if (W && W.setEnabled) { try { Promise.resolve(W.setEnabled({ on: false })).catch(() => {}); } catch (e) {} }
+  try { window.dispatchEvent(new CustomEvent('trinity-widget-changed', { detail: false })); } catch (e) {}
+}
 async function rememberClear() {
-  if (!isNative()) return;
-  try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
-  catch (e) { console.warn('[identity] remember clear failed', e); }
+  try { widgetClearChurch(); } catch (e) {}   // at once: nothing should poll the church a moment longer than needed
+  try {
+    if (!isNative()) return;
+    try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
+    catch (e) { console.warn('[identity] remember clear failed', e); }
+  } finally {
+    try { widgetSignalForgot(); } catch (e) {}   // only once the record is gone (S1) — see widgetSignalForgot
+  }
 }
 // WHOSE encrypted blob is on this device? Written by setPin. Absent on a device whose PIN predates this, and
 // on the two recovery paths that rebuild the marker without knowing the account — callers must read that as
@@ -497,6 +535,7 @@ window.TrinityIdentity = {
     // a brand-new identity starts with no PIN — clear any stale lock so the fresh key persists plainly
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     await rememberClear();   // …and never leave the PREVIOUS identity's seed remembered on this device
+    widgetOffForNewAccount();   // …nor the previous person's home-screen widget opt-in (audit F4)
     sessionMnemonic = null;
     await secureSet(mnemonic);
     apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -627,8 +666,13 @@ window.TrinityIdentity = {
   async importMnemonic(words) {
     const m = String(words || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!validateMnemonic(m, wordlist)) throw new Error('That doesn’t look like a valid 12-word recovery phrase.');
+    // Asked BEFORE anything is cleared: is this the person already on the phone? 'unknown' (no reference) counts as
+    // a different person, the same way whoseMnemonic's other callers read it.
+    let samePerson = false;
+    try { samePerson = window.TrinityIdentity.whoseMnemonic(m) === 'match'; } catch (e) { samePerson = false; }
     await clearEnc();   // M12: also drop the native SecureStorage blob, not just the localStorage marker
     await rememberClear();   // this device is no longer that account — do not leave its seed remembered
+    if (!samePerson) widgetOffForNewAccount();   // a DIFFERENT person does not inherit the widget opt-in (F4, R2)
     sessionMnemonic = null;
     await secureSet(m);
     apply(deriveProfile(m), { ephemeral: isEphemeral() });
@@ -741,6 +785,9 @@ window.TrinityIdentity = {
   // Does NOT lock the current session: the member is looking at the app, and throwing them out for changing
   // a preference would be its own bug. The next launch will ask for the PIN.
   async forgetDevice() { await rememberClear(); return true; },
+  // The home-screen widget's church settings — cleared by the app when the member leaves or switches church
+  // (app/app.jsx). Lock/forget/PIN changes clear them through rememberClear() above.
+  widgetForgetChurch() { widgetForgetChurch(); },
   // For the profile screen: 0 when not remembered, else the unix second it lapses.
   async rememberedUntil() { const r = await rememberRead(); return (r && r.until > nowSec()) ? r.until : 0; },
 
