@@ -79,7 +79,7 @@ test('the restricted control is reachable — not a tooltip on a phone', () => {
 });
 
 test('sendDM keeps the REASON, not just the fact of failure', () => {
-  const body = stripComments(fnBody(VENDOR, 'async sendDM(peerPub, content, replyTo) {', 'sendDM'));
+  const body = stripComments(fnBody(VENDOR, 'async sendDM(peerPub, content, replyTo, meta) {', 'sendDM'));
   assert.match(body, /isPermanentRefusal\(/,
     'sendDM throws the failure reason away, so every caller has to guess whether to promise a retry. The ' +
     'machinery to tell a refusal from an outage is already in this file.');

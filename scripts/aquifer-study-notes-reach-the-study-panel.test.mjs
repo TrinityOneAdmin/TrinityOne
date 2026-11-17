@@ -510,8 +510,8 @@ function shareSheet(payload) {
   const published = [], dms = [], shared = [], toasts = [];
   const F = {
     myPubkey: 'a'.repeat(64),
-    publishMessage: async (id, text, tags, o) => { published.push({ id, text }); return {}; },
-    sendDM: async (pk, text) => { dms.push({ pk, text }); return {}; },
+    publishMessage: async (id, text, tags, o) => { published.push({ id, text, o }); return {}; },
+    sendDM: async (pk, text, replyTo, meta) => { dms.push({ pk, text, meta }); return {}; },
     subscribeChurchGroups: (_c, cb) => { cb([{ id: 'g1', name: 'Home group', kind: 'Group' }]); return () => {}; },
     subscribeChurchMembers: (_c, cb) => { cb([{ pubkey: 'b'.repeat(64), name: 'Anna' }]); return () => {}; },
     displayFor: () => ({ handle: 'Anna', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } }),
@@ -537,7 +537,11 @@ function shareSheet(payload) {
   return { tree: draw(mod.VerseShareSheet, props), published, dms, shared, toasts };
 }
 
-test('POINT OF USE: the share sheet for a tapped commentary entry sends text + source + licence to a group', async () => {
+// EDITED 2026-11-17 (share-chat-cards, owner decision B): in-app shares no longer carry the module's FULL notice.
+// A GROUP gets the short credit (still creator, notice, licence and "adapted from"); a DIRECT MESSAGE gets none.
+// These two tests used to pin the full licence in both; "Share outside the app" below still pins the full one.
+const SHORT_OSN = '— Aquifer Open Study Notes © Mission Mutual, adapted from Tyndale Open Study Notes · CC BY-SA 4.0';
+test('POINT OF USE: the share sheet for a tapped commentary entry sends text + source + the SHORT credit to a group, as a card', async () => {
   const { payload } = await tapShare(0);
   const sheet = shareSheet(payload);
   const words = texts(sheet.tree).join(' | ');
@@ -548,18 +552,29 @@ test('POINT OF USE: the share sheet for a tapped commentary entry sends text + s
   grp[0].props.onClick();
   assert.equal(sheet.published.length, 1);
   const sent = sheet.published[0].text;
+  assert.equal(payload.credit, SHORT_OSN, 'the catalogue Aquifer notes did not get the short in-app credit');
   assert.ok(sent.includes(payload.text), 'the group message lacks the commentary text');
-  assert.ok(payload.license.length > 10 && sent.includes(payload.license), 'the group message lacks the licence');
+  assert.ok(sent.includes(SHORT_OSN), 'the group message lacks the short credit');
+  assert.match(sent, /Mission Mutual/); assert.match(sent, /Tyndale/); assert.match(sent, /CC BY-SA 4\.0/);
+  assert.ok(!sent.includes('© 2023 Tyndale House Publishers'), 'the group message still carries the long notice');
   assert.ok(sent.includes(payload.source), 'the group message lacks the source name');
+  const card = sheet.published[0].o.card;
+  assert.equal(card.type, 'commentary');
+  assert.equal(card.credit, SHORT_OSN, 'the group card lacks the short credit');
+  assert.equal(card.text, payload.text);
 });
 
-test('POINT OF USE: a commentary sent to a person carries the licence too', async () => {
+test('POINT OF USE: a commentary sent to a person carries NO licence line (owner 2026-11-17)', async () => {
   const { payload } = await tapShare(0);
   const sheet = shareSheet(payload);
   find(sheet.tree, n => n.type === 'button' && texts(n).join(' ').includes('Anna'))[0].props.onClick();
   assert.equal(sheet.dms.length, 1);
   assert.ok(payload.license.length > 10);
-  assert.ok(sheet.dms[0].text.includes(payload.text) && sheet.dms[0].text.includes(payload.license));
+  const t = sheet.dms[0].text;
+  assert.ok(t.includes(payload.text), 'the DM lacks the commentary text');
+  assert.ok(!t.includes(payload.license) && !t.includes(SHORT_OSN) && !/Mission Mutual|CC BY-SA/.test(t), 'a licence line rode the DM: ' + t.slice(-160));
+  assert.equal(sheet.dms[0].meta.card.type, 'commentary');
+  assert.equal(sheet.dms[0].meta.card.credit, undefined, 'the DM card carries a credit');
 });
 
 test('POINT OF USE: "Share outside the app" shares the text with its licence and NO link', async () => {

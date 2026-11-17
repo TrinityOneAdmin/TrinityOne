@@ -57,7 +57,7 @@ test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
   const src = stripComments(FEL);
   assert.match(src, /_dmWrap\(text, replyTo(, meta)?\)/, 'the reply reference is wrapped into the body');
   assert.match(src, /_dmUnwrap\(body\)/, 'and unwrapped on read');
-  assert.match(src, /const body = window\.Fellowship\._dmWrap\(content, replyTo\)/,
+  assert.match(src, /const body = window\.Fellowship\._dmWrap\(content, replyTo(, meta)?\)/,
     'sendDM must encrypt the WRAPPED body — wrapping after encryption would do nothing');
   // The group-room way (a NIP-10 `e` tag) is public. On a kind-4 that publishes "these two ciphertexts belong
   // to one exchange" to whoever holds the relay — real metadata about a private conversation.

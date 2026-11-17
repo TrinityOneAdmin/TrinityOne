@@ -1087,6 +1087,35 @@ function commentaryLicenceWarns(license, imported) {
   return false;
 }
 
+// THE SHORT CREDIT a commentary carries when it is shared INTO A GROUP inside the app (owner 2026-11-17). The full
+// module notice is long; CC BY-SA 4.0 §3(a) still asks for the creator, the copyright notice, the licence and a
+// note that this is an adaptation, and a church-wide room may well count as "the public" - so groups keep a credit,
+// just the shortest one that still says all four. Only a catalogue module we have read the notice of gets one
+// (matched on its abbr AND on the notice itself, so an abbr collision cannot borrow it). An IMPORTED module keeps
+// its own notice untouched - we never shorten a notice we have not vetted, and its copyright warning relies on it.
+// "Share outside the app" always sends the full notice; a direct message sends none (owner).
+const COMMENTARY_INAPP_CREDITS = {
+  OSN: { needs: [/Mission Mutual/, /CC BY-SA 4\.0/], credit: '— Aquifer Open Study Notes © Mission Mutual, adapted from Tyndale Open Study Notes · CC BY-SA 4.0',
+    // the module's own Details notice, as shipped - what a re-share OUT of the app carries (commentaryFullCredit)
+    full: 'Aquifer Open Study Notes © Mission Mutual · CC BY-SA 4.0 · an adaptation of Tyndale Open Study Notes © 2023 Tyndale House Publishers, also CC BY-SA 4.0' },
+};
+// The reverse, for a share OUT of the app (audit 2026-11-17, M1): a received commentary card carries the SHORT
+// credit; outside the app the owner's rule is the full notice. Any other credit (an imported module's own notice,
+// an unknown one) is returned unchanged. Called by chatCardOutsideText in app/screens-chat.jsx.
+function commentaryFullCredit(credit) {
+  const c = String(credit || '');
+  for (const k of Object.keys(COMMENTARY_INAPP_CREDITS)) { const e = COMMENTARY_INAPP_CREDITS[k]; if (e.credit === c && e.full) return e.full; }
+  return c;
+}
+function commentaryInAppCredit(abbr, license, imported) {
+  const l = String(license || '');
+  if (imported) return l;
+  const k = String(abbr || '');
+  const known = Object.prototype.hasOwnProperty.call(COMMENTARY_INAPP_CREDITS, k) ? COMMENTARY_INAPP_CREDITS[k] : null;
+  if (known && known.needs.every(re => re.test(l))) return known.credit;
+  return l;
+}
+
 function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, readerVerse }) {
   const panelScrollRef = useR(null);
   // Scroll the cross-ref list so verse N's group sits near the top — how the panel "follows" the reader.
@@ -1434,7 +1463,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
                 <div key={i} style={{ marginBottom: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                   <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block' }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
-                  {ctx && ctx.openShareSheet ? <button type="button" aria-label="Share this commentary" title="Share this commentary" onClick={() => ctx.openShareSheet({ type: 'commentary', ref: label + (b.v ? ':' + b.v + (b.vTo && b.vTo > b.v ? '-' + b.vTo : '') : ''), source: srcBlk.name || srcBlk.abbr || '', text: commentaryPlainText(window.sanitizeHtml(b.html)), license: srcBlk.license || '', warnLicence: commentaryLicenceWarns(srcBlk.license, srcBlk.imported) })} style={{ width: 44, height: 44, margin: '-11px -12px -11px 0', position: 'relative', zIndex: 1, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}><Icon name="share" size={16} /></button> : null}
+                  {ctx && ctx.openShareSheet ? <button type="button" aria-label="Share this commentary" title="Share this commentary" onClick={() => ctx.openShareSheet({ type: 'commentary', ref: label + (b.v ? ':' + b.v + (b.vTo && b.vTo > b.v ? '-' + b.vTo : '') : ''), source: srcBlk.name || srcBlk.abbr || '', text: commentaryPlainText(window.sanitizeHtml(b.html)), license: srcBlk.license || '', credit: commentaryInAppCredit(srcBlk.abbr, srcBlk.license, srcBlk.imported), warnLicence: commentaryLicenceWarns(srcBlk.license, srcBlk.imported) })} style={{ width: 44, height: 44, margin: '-11px -12px -11px 0', position: 'relative', zIndex: 1, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}><Icon name="share" size={16} /></button> : null}
                   </div>
                   <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(b.html) }} />
                 </div>

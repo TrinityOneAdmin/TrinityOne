@@ -960,8 +960,39 @@ function _decEvt(cp, e) {
   if (!ring || !ring.length) return null;
   // Current key first, then each superseded one: a message sealed before the last rotation must still open.
   // Returning null DROPS the message at both call sites, so a missing key reads as "this was never said".
-  for (const key of ring) { try { return { ...e, content: nip44d(e.content, key) }; } catch (x) {} }
+  // A MEMBER-SHARED CARD IN A SEALED ROOM (share-chat-cards 2026-11-17). publishMessage seals the
+  // ['card','1',json] tag's json under the SAME room key as the body and marks it ['card','1',<ciphertext>,'enc'],
+  // because a kind-1's tags are public: a verse or commentary in clear tags would tell a seized relay what a sealed
+  // room was reading. It opens here with the key that opened the body; a tag that will not open is DROPPED, so the
+  // screen shows the body text (exactly what a build without cards shows). Every other tag passes through.
+  // Inline, not a helper: tests lift this function alone, and a missing helper inside the try would drop EVERY
+  // sealed message as unreadable.
+  for (const key of ring) {
+    let content;
+    try { content = nip44d(e.content, key); } catch (x) { continue; }
+    let tags = e.tags;
+    if (tags.some(t => t && t[0] === 'card' && t[3] === 'enc')) {
+      tags = tags.flatMap(t => { if (!(t && t[0] === 'card' && t[3] === 'enc')) return [t]; try { return [['card', t[1], nip44d(t[2], key)]]; } catch (x) { return []; } });
+    }
+    return { ...e, content, tags };
+  }
   return null;
+}
+// The fields a MEMBER-shared card may carry (verse / commentary), each a capped string. Anything else is dropped,
+// and a card with no text is no card. Kept in step with chatShareCard in app/screens-chat.jsx, which re-checks
+// every received card before drawing it; _dmWrap/_dmUnwrap carry their own inline copy so a test can lift them.
+function _chatCardClean(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x) || (x.type !== 'verse' && x.type !== 'commentary')) return null;
+  const o = { type: x.type };
+  for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) {
+    // bidi EMBEDDING/OVERRIDE/ISOLATE controls (U+202A-E, U+2066-9) and zero-width space / word-joiner / BOM-type
+    // characters are stripped so a card cannot reorder or hide what it shows. The direction MARKS (LRM/RLM/ALM,
+    // U+200E/F, U+061C) and ZWNJ/ZWJ are KEPT: Hebrew and Arabic Bible and commentary text uses them. Kept in step
+    // with chatShareCard (app/screens-chat.jsx) and _dmWrap/_dmUnwrap
+    const v = typeof x[k] === 'string' ? x[k].replace(/[\u200B\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : '';
+    if (v && v.length <= n) o[k] = v;
+  }
+  return o.text ? o : null;
 }
 
 const NET = 'trinityone';                       // network-wide tag
@@ -4595,6 +4626,14 @@ window.Fellowship = {
   // The app calls this once it has dropped the church and shown "follow a church", so the NEXT church can be checked.
   ackAmBlocked() { _amBlocked = false; _blockedCp = ''; _notifyBlocked(); },
   isBlockedChurch(npubOrHex) { return _isBlockedChurch(npubOrHex); },
+  // Is this author the ACTIVE church's own key, or a steward on its church-key-signed roster? The chat screen asks
+  // before drawing a card type only the church may post (a finance statement), so a member cannot dress a message
+  // up as an official statement. Read-only; grants nothing.
+  isChurchVoice(pubkey) {
+    const cp = window.Fellowship.churchPub;
+    if (!pubkey || !cp) return false;
+    return pubkey === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(pubkey));
+  },
   forgetBlockedChurch(npubOrHex) { return _forgetBlockedChurch(npubOrHex); },
   refetchChurchDocs,   // force church-doc hubs to re-fetch on app resume (updates without a full restart)
   CANONICAL_RELAY,
@@ -5970,9 +6009,22 @@ window.Fellowship = {
         if (wantsEnc) return { _refused: 'sealfailed' };
       }
     }
+    // opts.card (share-chat-cards 2026-11-17): a member-shared verse/commentary rides as a ['card','1',json] tag —
+    // the same rich-message shape the church's finance statements use — with `content` still the plain words, so
+    // a build without cards and the steward console read the text. In a SEALED room the json is sealed under the
+    // same key as the body (see _openCardTags); if that seal fails in a room that wants encryption, nothing is sent.
+    let cardTags = [];
+    const card = opts.card ? _chatCardClean(opts.card) : null;
+    if (card) {
+      const js = JSON.stringify(card);
+      if (encTag.length) {
+        try { cardTags = [['card', '1', nip44e(js, gkey), 'enc']]; }
+        catch (e) { if (wantsEnc) return { _refused: 'sealfailed' }; }
+      } else cardTags = [['card', '1', js]];
+    }
     const evt = finalizeEvent({
       kind: 1, created_at: Math.floor(Date.now() / 1000),
-      tags: [['t', NET], ['t', groupId], ...churchTag, ...encTag, ...extraTags], content: body,
+      tags: [['t', NET], ['t', groupId], ...churchTag, ...encTag, ...extraTags, ...cardTags], content: body,
     }, sk);
     // UX-AUDIT-2026-07-20 E1: this swallowed the failure to a console.warn and returned the event anyway, so
     // the UI could not tell a delivered message from a lost one — the composer cleared, no bubble appeared,
@@ -6089,18 +6141,30 @@ window.Fellowship = {
   // `meta` (church event messages, 2026-10-14) ADDS two optional fields to the same v:1 envelope: `nr:1` =
   // "announcement, no replies" and `ev` = the event id it is about. Additive only: an older build reads `t`
   // and ignores the rest; a body with neither a reply nor meta is still the bare string.
+  // `meta.card` (share-chat-cards 2026-11-17) ADDS `cd`: a member-shared verse/commentary card, inside the
+  // ciphertext like everything else here. Additive in the same way: `t` still carries the full words, so an older
+  // build and the steward console's own unwrap show the text. The cleaner is inline (same reason as the care
+  // offer) and is kept in step with _chatCardClean above.
   _dmWrap(text, replyTo, meta) {
     const hasR = !!(replyTo && replyTo.id);
     const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : '';
     const cx = meta && meta.careOffer;   // care offer: self-contained here (no helper) so a test can lift this function alone
     const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || '')) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
-    if (!hasR && !nr && !ev && !co) return text;
+    const kx = meta && meta.card;
+    let cd = null;
+    if (kx && typeof kx === 'object' && !Array.isArray(kx) && (kx.type === 'verse' || kx.type === 'commentary')) {
+      cd = { type: kx.type };
+      for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) { const v = typeof kx[k] === 'string' ? kx[k].replace(/[\u200B\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : ''; if (v && v.length <= n) cd[k] = v; }   // bidi/zero-width stripped, as _chatCardClean
+      if (!cd.text) cd = null;
+    }
+    if (!hasR && !nr && !ev && !co && !cd) return text;
     try {
       const o = { v: 1, t: String(text) };
       if (hasR) o.r = String(replyTo.id).slice(0, 64);
       if (nr) o.nr = 1;
       if (ev) o.ev = ev;
       if (co) o.co = co;
+      if (cd) o.cd = cd;
       return JSON.stringify(o);
     } catch (e) { return text; }
   },
@@ -6108,15 +6172,24 @@ window.Fellowship = {
     if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     try {
       const o = JSON.parse(body);
-      if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || '')) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
+      if (o && o.v === 1 && typeof o.t === 'string') {
+        const kx = o.cd;
+        let card = null;
+        if (kx && typeof kx === 'object' && !Array.isArray(kx) && (kx.type === 'verse' || kx.type === 'commentary')) {
+          card = { type: kx.type };
+          for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) { const v = typeof kx[k] === 'string' ? kx[k].replace(/[\u200B\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : ''; if (v && v.length <= n) card[k] = v; }   // bidi/zero-width stripped, as _chatCardClean
+          if (!card.text) card = null;
+        }
+        return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || '')) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null, ...(card ? { card } : {}) };
+      }
     } catch (e) {}
     return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
   },
-  async sendDM(peerPub, content, replyTo) {
+  async sendDM(peerPub, content, replyTo, meta) {
     if (!sk) await window.Fellowship.ready;
     if (_outboxFull()) return { _refused: 'queue-full' };   // see publishMessage: refuse the new one, never drop an old one
     if (_failedFull()) return { _refused: 'failed-full' };
-    const body = window.Fellowship._dmWrap(content, replyTo);
+    const body = window.Fellowship._dmWrap(content, replyTo, meta);
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule as a group message (see the E1 note on the other
@@ -6182,7 +6255,7 @@ window.Fellowship = {
       const mine = e.pubkey === pub;
       let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
       const un = window.Fellowship._dmUnwrap(content);
-      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, ts: e.created_at, pubkey: e.pubkey };
+      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, card: un.card || null, ts: e.created_at, pubkey: e.pubkey };
       msgs.set(e.id, m); push(m);
     };
     const deliverRx = (e) => {

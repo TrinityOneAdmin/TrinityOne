@@ -206,7 +206,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
   win.Fellowship._dmWrap = (c) => c;
   win.Fellowship._dmUnwrap = (c) => ({ text: c, replyTo: null });
   const methods = [
-    fnBody(src, 'async sendDM(peerPub, content, replyTo) {', 'sendDM'),
+    fnBody(src, 'async sendDM(peerPub, content, replyTo, meta) {', 'sendDM'),
     fnBody(src, 'async reactDM(peerPub, msgId, emoji) {', 'reactDM'),
     fnBody(src, 'subscribeThread(peerPub, onMsg) {', 'subscribeThread'),
     fnBody(src, 'subscribeDMs(onConvos) {', 'subscribeDMs'),
@@ -280,7 +280,7 @@ const dmTo = (peerPub) => EVTS.filter(x => x.ev && x.ev.kind === 4 && x.ev.pubke
 const landedAt = (relay, peerPub, from) => EVTS.slice(from).filter(x => x.url === relay.wsUrl && x.ev && x.ev.kind === 4 && JSON.stringify(x.ev.tags).includes(peerPub)).length;
 
 test('point of use: sendDM / reactDM / the outbox use the DM relay sets, never the whole list (vendor text; dead code is removed from vendor)', () => {
-  const sd = fnBody(FELLOW, 'async sendDM(peerPub, content, replyTo) {', 'sendDM');
+  const sd = fnBody(FELLOW, 'async sendDM(peerPub, content, replyTo, meta) {', 'sendDM');
   assert.equal(sd.split('_publishBounded(dmSendRelays(peerPub), evt)').length - 1, 1);
   assert.equal(sd.split('relays: dmSendRelays(peerPub)').length - 1, 1);
   assert.equal(sd.split('window.Fellowship.relays').length - 1, 0, 'sendDM still names the whole candidate list');

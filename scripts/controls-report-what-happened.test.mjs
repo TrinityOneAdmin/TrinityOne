@@ -46,6 +46,7 @@ function shareTo({ result }) {
     FS: { sendDM: async () => result },
     ctx: { toast: (m) => toasts.push(m) },
     asText: 'hello', comment: { trim: () => '' },
+    verseCard: null, dmCard: null, cmBase: null,   // the sheet's cards (share-chat-cards 2026-11-17); null = a plain-text share
     onClose: () => {},
     dmFailWording: (evt) => (evt && evt._refused ? 'REFUSED' : 'QUEUED'),
     Promise,

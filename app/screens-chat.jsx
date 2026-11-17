@@ -970,6 +970,123 @@ function FinanceCard({ card, church }) {
   );
 }
 
+// ── a card a MEMBER shares into a chat: a verse, or a commentary entry (share-chat-cards, owner 2026-11-17) ──────
+// The SAME rich-message shape as the church's finance statement above: a kind-1 (or a DM envelope's `cd`) carrying
+// ['card','1',json], with the plain words in the body as the fallback every older build and the steward console
+// show. No image travels; this phone draws the card from the data, in HTML, from the church profile it holds.
+//
+// WHO MAY POST WHICH CARD TYPE — explicit, per author. Nothing on the relay restricts a ['card'] tag (the gateway
+// never reads it), so the screen must: a finance statement is the CHURCH speaking, and a member who hand-builds
+// one must not get it drawn as the church's letterhead. Anything not in this table is shown as its plain body.
+const CHAT_CARD_AUTHORS = { finance: 'church', verse: 'anyone', commentary: 'anyone' };
+// Field caps for a member card; kept in step with _chatCardClean / _dmWrap in src/fellowship.src.js. A field of
+// the wrong type or over its cap is dropped, and a card with no text is no card — never thrown on, never HTML.
+const CHAT_CARD_LIMITS = { ref: 120, text: 4000, version: 40, source: 120, credit: 1000 };
+function chatShareCard(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.type !== 'verse' && raw.type !== 'commentary') return null;
+  const o = { type: raw.type };
+  for (const k of Object.keys(CHAT_CARD_LIMITS)) {
+    // bidi embedding/override/isolate controls and zero-width space / BOM-type characters are stripped, so a card
+    // cannot reorder or hide what it shows; the direction MARKS (LRM/RLM/ALM) and ZWNJ/ZWJ are kept - Hebrew and
+    // Arabic Bible text uses them. Same set as _chatCardClean in src/fellowship.src.js.
+    const v = typeof raw[k] === 'string' ? raw[k].replace(/[\u200B\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : '';
+    if (v && v.length <= CHAT_CARD_LIMITS[k]) o[k] = v;
+  }
+  return o.text ? o : null;
+}
+// Is this author the church (its own key, or a steward on its church-signed roster)? isChurchVoice is the engine's
+// answer; displayFor().isChurch (set only from the church's own key/voice doc, never a member's kind-0) is the
+// fallback for a build of the engine without it.
+function chatCardAuthorIsChurch(pubkey) {
+  const F = window.Fellowship;
+  if (!pubkey || !F) return false;
+  try { if (F.isChurchVoice && F.isChurchVoice(pubkey)) return true; } catch (e) {}
+  try { const d = F.displayFor && F.displayFor(pubkey); return !!(d && d.isChurch === true); } catch (e) { return false; }
+}
+// card object + its author → the kind this screen will DRAW, or null (= show the plain body).
+function chatCardKind(card, authorPub) {
+  if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
+  const who = Object.prototype.hasOwnProperty.call(CHAT_CARD_AUTHORS, card.type) ? CHAT_CARD_AUTHORS[card.type] : '';
+  if (who === 'church') return chatCardAuthorIsChurch(authorPub) ? card.type : null;
+  if (who === 'anyone') { const sc = chatShareCard(card); return sc ? sc.type : null; }
+  return null;
+}
+// The plain words a card's body STARTS with — the sender builds the body from this (VerseShareSheet), and the
+// receiver strips it back off to find the sender's own thoughts, which go UNDER the card as ordinary chat text.
+function chatCardFallback(card) {
+  if (!card) return '';
+  if (card.type === 'commentary') return (card.ref || '') + (card.source ? ' — ' + card.source : '') + '\n\n' + (card.text || '') + (card.credit ? '\n\n' + card.credit : '');
+  return '“' + (card.text || '') + '” — ' + (card.ref || '') + (card.version ? ' · ' + card.version : '');
+}
+// THE CARD IS BOUND TO THE BODY (audit 2026-11-17, M2). The body is what the steward console, an older build and
+// every search read; a card that said something the body does not would show members words a moderator never
+// sees. So a card is drawn ONLY when the body is exactly its words (chatCardFallback), optionally followed by a
+// blank line and the sender's thoughts. Normalisation: none beyond the cleaning chatShareCard already does to the
+// card's fields (bidi/zero-width stripped) - the sender builds the body FROM the cleaned card, so an honest
+// message matches byte for byte. Returns the thoughts ('' for none), or null = not bound, draw the plain body.
+function chatCardThoughts(card, body) {
+  const t = typeof body === 'string' ? body : '';
+  const pre = chatCardFallback(card);
+  if (!pre) return null;
+  if (t === pre) return '';
+  if (t.startsWith(pre + '\n\n')) return t.slice(pre.length + 2).trim();
+  return null;
+}
+// OUTSIDE THE APP A COMMENTARY CARRIES ITS FULL NOTICE (audit 2026-11-17, M1). A received commentary card holds the
+// SHORT in-app credit; re-sharing it out of the app (the message menu's Share) swaps that back for the full
+// notice, via commentaryFullCredit next to commentaryInAppCredit (app/screens-read.jsx, loaded with this file).
+function chatCardOutsideText(card) {
+  if (!card || card.type !== 'commentary' || !card.credit) return chatCardFallback(card);
+  const full = (typeof commentaryFullCredit === 'function') ? commentaryFullCredit(card.credit) : card.credit;
+  return chatCardFallback({ ...card, credit: full });
+}
+// The designed card itself. A verse card matches the share-image look (clay, serif, the reference underneath); a
+// tap opens "Share as image" with the VERSE ONLY — never the sender's thoughts, which are not this member's to send
+// out of the app (the same rule as the k=verse bubble). A commentary card carries its credit in small type.
+function ChatShareCardView({ card, ctx }) {
+  const [more, setMore] = useC(false);
+  const churchName = (ctx && ctx.church && typeof ctx.church.name === 'string') ? ctx.church.name : '';
+  if (card.type === 'verse') {
+    const open = (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (ctx && ctx.openShare) ctx.openShare({ ref: card.ref || '', text: card.text, version: card.version || '' }); };
+    return (
+      <div data-chat-card="verse" role="button" aria-label={'Verse card: ' + (card.ref || '')} onClick={open} style={{
+        maxWidth: 270, borderRadius: 18, overflow: 'hidden', cursor: 'pointer',
+        background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: '#fff', boxShadow: 'var(--shadow)' }}>
+        <div style={{ padding: '14px 18px 14px' }}>
+          <div aria-hidden="true" style={{ fontFamily: 'var(--font-read)', fontSize: 44, lineHeight: 1, height: 22, opacity: .5, marginBottom: 2 }}>“</div>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 17.5, lineHeight: 1.42, margin: '0 0 12px', fontWeight: 500, textWrap: 'pretty', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            display: '-webkit-box', WebkitLineClamp: 14, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{card.text}</p>
+          <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, letterSpacing: '.5px', textTransform: 'uppercase' }}>{card.ref || ''}{card.version ? ' · ' + card.version : ''}</div>
+        </div>
+        {churchName ? <div style={{ padding: '7px 18px', fontFamily: 'var(--font-ui)', fontSize: 10.5, fontWeight: 700, letterSpacing: '.4px', background: 'rgba(0,0,0,.14)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</div> : null}
+      </div>
+    );
+  }
+  const long = (card.text || '').length > 600;
+  return (
+    <div data-chat-card="commentary" style={{ maxWidth: 284, borderRadius: 18, padding: '13px 15px', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', color: 'var(--ink)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 3, textTransform: 'uppercase' }}>
+        <Icon name="book" size={13} color="var(--clay)" /> Commentary · {card.ref || ''}</div>
+      {card.source ? <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-3)', marginBottom: 8 }}>{card.source}</div> : null}
+      <p data-card-body="1" style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        ...(long && !more ? { display: '-webkit-box', WebkitLineClamp: 12, WebkitBoxOrient: 'vertical', overflow: 'hidden' } : {}) }}>{card.text}</p>
+      {long ? <button type="button" onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setMore(v => !v); }} style={{ border: 'none', background: 'none', padding: '6px 0 0', color: 'var(--clay)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{more ? 'Show less' : 'Show all'}</button> : null}
+      {card.credit ? <div data-card-credit="1" style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--ink-2)', marginTop: 9, paddingTop: 7, borderTop: '1px solid var(--line)' }}>{card.credit}</div> : null}
+    </div>
+  );
+}
+// The sender's thoughts, under a card, as an ordinary bubble.
+function ChatCardThoughts({ text, me }) {
+  if (!text) return null;
+  return (
+    <div data-card-thoughts="1" style={{ maxWidth: 270, marginTop: 6, borderRadius: 18, padding: '10px 14px', background: me ? 'var(--clay)' : 'var(--surface)', color: me ? '#fff' : 'var(--ink)',
+      border: me ? 'none' : '1px solid var(--line)', boxShadow: 'var(--shadow)', borderBottomRightRadius: me ? 5 : 18, borderBottomLeftRadius: me ? 18 : 5 }}>
+      <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</p>
+    </div>
+  );
+}
+
 function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
@@ -1090,21 +1207,7 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
     );
   }
 
-  if (m.kind === 'card') {
-    const c = m.card || {};
-    if (c.type === 'finance') {
-      return (
-        <Row me={me} m={m} ctx={ctx} mod={mod}>
-          <FinanceCard card={c} church={ctx && ctx.church} />
-          {react}
-        </Row>
-      );
-    }
-    // a card TYPE this build does not know → fall through to the plain-text body below (forward-compat:
-    // a newer card type degrades to its text on an older member build, PLAN-UX-E §3/§6).
-  }
-
-  return (
+  const plain = () => (
     <Row me={me} m={m} ctx={ctx} mod={mod}>
       <div style={{ maxWidth: 270, borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
         border: me ? 'none' : '1px solid var(--line)', boxShadow: 'var(--shadow)',
@@ -1114,11 +1217,59 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
       {react}
     </Row>
   );
+  // a card TYPE this build does not know, or one not allowed from this author, or one not bound to its body →
+  // the plain-text body (forward-compat: a newer card type degrades to its text, PLAN-UX-E §3/§6).
+  if (m.kind === 'card') return <ChatCardBubble m={m} ctx={ctx} me={me} mod={mod} react={react} plain={plain} />;
+  return plain();
+}
+
+// A card message's bubble. Its own component so that WHO MAY POST IT is re-asked when the church's steward roster
+// arrives ('trinity-church-trust', fired by the engine's _fireTrust): a delegated steward's finance statement read
+// before the roster landed is text at first, and becomes the card when the roster says who they are - without
+// waiting for the room to re-render (audit 2026-11-17, L5). Profiles arriving can change displayFor().isChurch too.
+// 'trinity-profiles' fires once per incoming profile, so the bubble re-asks on every event but only RE-RENDERS when
+// the answer changes (re-audit 2026-11-17): the kind lives in state and is set only on a change.
+function ChatCardBubble({ m, ctx, me, mod, react, plain }) {
+  const c = m.card || {};
+  const [ck, setCk] = useC(() => chatCardKind(c, m.pubkey));   // per-author allow-list: a member's "finance" card is NOT drawn as the church's
+  const ckRef = useCR(ck);
+  ckRef.current = ck;
+  useCE(() => {
+    const recheck = () => { const k = chatCardKind(m.card || {}, m.pubkey); if (k !== ckRef.current) { ckRef.current = k; setCk(k); } };
+    recheck();   // a new card/author on this bubble
+    window.addEventListener('trinity-church-trust', recheck);
+    window.addEventListener('trinity-profiles', recheck);
+    return () => { window.removeEventListener('trinity-church-trust', recheck); window.removeEventListener('trinity-profiles', recheck); };
+  }, [m.card, m.pubkey]);
+  if (ck === 'verse' || ck === 'commentary') {
+    const sc = chatShareCard(c);
+    const thoughts = chatCardThoughts(sc, m.text);
+    if (thoughts === null) return plain();   // the card's words are not the body's: draw the body, never an unbound card
+    return (
+      <Row me={me} m={m} ctx={ctx} mod={mod}>
+        <ChatShareCardView card={sc} ctx={ctx} />
+        <ChatCardThoughts text={thoughts} me={me} />
+        {react}
+      </Row>
+    );
+  }
+  if (ck === 'finance') {
+    return (
+      <Row me={me} m={m} ctx={ctx} mod={mod}>
+        <FinanceCard card={c} church={ctx && ctx.church} />
+        {react}
+      </Row>
+    );
+  }
+  return plain();
 }
 
 // shareable text for any message kind (plain text, verse, or a shared card)
 function shareTextOf(m) {
   if (!m) return '';
+  // a member-shared verse/commentary card → the card's own words only: the body also carries the SENDER's thoughts,
+  // which are not this member's to send on (the same rule as the verse card's tap).
+  if (m.kind === 'card') { const sc = chatShareCard(m.card); if (sc && chatCardThoughts(sc, m.text) !== null) return chatCardFallback(sc); }
   if (m.text) return m.text;   // a resource card (PLAN-UX-E) always carries the statement text here → shared verbatim
   if (m.kind === 'verse' && m.verse) return '“' + m.verse.text + '” — ' + m.verse.ref + (m.verse.version ? ' (' + m.verse.version + ')' : '');
   if (m.kind === 'card' && m.card) return [m.card.title, m.card.periodLabel].filter(Boolean).join(' — ');   // fallback if a card ever lacked a text body
@@ -1155,7 +1306,12 @@ function Row({ me, m, children, ctx, mod }) {
   const canDM = !!(m.pubkey && ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));   // safeguarding gate
   // press-and-hold a message to share it (OS share sheet). Touch-move cancels so scrolling is unaffected.
   const lp = React.useRef(null);
-  const doShare = () => { const t = shareTextOf(m); if (t && ctx && ctx.shareText) ctx.shareText(t); };
+  // OUT OF THE APP: a bound commentary card goes with its FULL notice (chatCardOutsideText), never the short credit
+  const doShare = () => {
+    const sc = m && m.kind === 'card' ? chatShareCard(m.card) : null;
+    const t = (sc && chatCardThoughts(sc, m.text) !== null) ? chatCardOutsideText(sc) : shareTextOf(m);
+    if (t && ctx && ctx.shareText) ctx.shareText(t);
+  };
   const startLP = () => { clearTimeout(lp.current); lp.current = setTimeout(doShare, 480); };
   const cancelLP = () => { clearTimeout(lp.current); lp.current = null; };
   const M = mod || {};
@@ -2329,7 +2485,11 @@ function SharePreview({ p, type }) {
       <div style={{ borderRadius: 18, padding: '16px 18px', background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 18 }}>
         <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay)', marginBottom: 7 }}>COMMENTARY · {p.ref}{p.source ? ' · ' + p.source : ''}</div>
         <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.4, margin: '0 0 8px', color: 'var(--ink)', textWrap: 'pretty', display: '-webkit-box', WebkitLineClamp: 6, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{p.text}</p>
-        {p.license ? <div style={{ fontSize: 10.5, lineHeight: 1.4, color: 'var(--ink-3)' }}>{p.license}</div> : null}
+        {/* WHAT A GROUP WILL ACTUALLY GET (audit 2026-11-17, L3): the in-app credit, not the full notice. The sheet's
+            one preview serves every target, so it says which: a private message carries no licence line, and
+            "Share outside the app" (below) says it adds the full licence. */}
+        {(typeof p.credit === 'string' ? p.credit : p.license) ? <div data-preview-credit="1" style={{ fontSize: 11, lineHeight: 1.4, color: 'var(--ink-2)' }}>{typeof p.credit === 'string' ? p.credit : p.license}</div> : null}
+        {(typeof p.credit === 'string' ? p.credit : p.license) ? <div style={{ fontSize: 11, lineHeight: 1.4, color: 'var(--ink-3)', marginTop: 3 }}>In groups. Private messages go without it.</div> : null}
         {p.warnLicence ? <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--ink-2)', marginTop: 8 }}>This commentary's copyright may not allow sharing.</div> : null}
       </div>
     );
@@ -2379,13 +2539,29 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const pql = pq.trim().toLowerCase();
   const pName = (m) => (m.name && m.name.trim()) || (m.nip05 ? String(m.nip05).split('@')[0] : '') || ((FS && FS.displayFor) ? FS.displayFor(m.pubkey).handle : 'Member');
   const peopleShown = pql ? people.filter(m => pName(m).toLowerCase().includes(pql) || (m.nip05 || '').toLowerCase().includes(pql)) : people;
-  // a verse/devotional/note sent to a person goes as a readable DM (DMs don't render the card payload)
-  const asText = type === 'commentary' ? (payload.ref + (payload.source ? ' — ' + payload.source : '') + '\n\n' + (payload.text || '') + (payload.license ? '\n\n' + payload.license : ''))
+  // A VERSE goes into the app's own chats as a designed CARD (owner 2026-11-17): a ['card','1',…] tag / DM `cd` built
+  // from the verse fields ONLY — the thoughts typed below are never in it — while the body stays the plain words +
+  // thoughts, so an older build and the steward console still read text. chatCardFallback IS the verse's text, so
+  // the receiver can strip it back off and show the thoughts under the card.
+  const verseCard = (type === 'verse' && typeof payload.text === 'string' && payload.text && typeof payload.ref === 'string')
+    ? chatShareCard({ type: 'verse', ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' }) : null;
+  // A COMMENTARY goes in as a card too (owner 2026-11-17). In a GROUP it carries the in-app credit (the short one for
+  // a vetted catalogue module, an imported module's own full notice); in a DIRECT MESSAGE it carries no licence line
+  // at all. The body is the same words + credit (group) / words only (DM), so an older build reads the same thing.
+  // If a long imported notice will not fit on the card, the group share falls back to text, credit intact.
+  const cmBase = type === 'commentary' ? { type: 'commentary', ref: String(payload.ref || ''), source: String(payload.source || ''), text: String(payload.text || '') } : null;
+  const cmCredit = cmBase ? (typeof payload.credit === 'string' ? payload.credit : String(payload.license || '')) : '';
+  let groupCard = cmBase ? chatShareCard({ ...cmBase, credit: cmCredit }) : verseCard;
+  if (cmBase && groupCard && cmCredit && groupCard.credit !== cmCredit) groupCard = null;
+  const dmCard = cmBase ? chatShareCard(cmBase) : verseCard;
+  // a devotional/note sent to a person goes as a readable DM; `asText` (full licence) is what leaves the app
+  const asText = verseCard ? chatCardFallback(verseCard) : type === 'commentary' ? (payload.ref + (payload.source ? ' — ' + payload.source : '') + '\n\n' + (payload.text || '') + (payload.license ? '\n\n' + payload.license : ''))
     : payload.text ? ('“' + payload.text + '” — ' + payload.ref + (payload.version ? ' · ' + payload.version : ''))
     : payload.title ? (payload.title + (payload.ref ? ' — ' + payload.ref : '') + (payload.excerpt ? '\n' + payload.excerpt : '')) : '';
   const sendToGroup = (g) => {
     if (!live) { ctx.toast('Chat isn’t available'); return; }
-    // share as clean plain text (not a JSON card) so it reads naturally in the group, thoughts included
+    // the body is clean plain text (words + thoughts) so it reads naturally on a build without cards; a verse also
+    // carries its card (opts.card above), which the engine seals with the body in an encrypted room
     // DO NOT SAY "SHARED" UNTIL IT IS. This fired and forgot, then toasted success unconditionally. Once the
     // send began REFUSING to publish into an encrypted room without its key, that turned a leak into silent
     // loss wearing a confirmation: the verse was gone, the sheet closed, and the member was told it had been
@@ -2397,7 +2573,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // deliberately left as it is; the guard belongs where the null actually comes from. Checked, not
     // assumed — see 'publishMessage has no null exit' in a-dm-that-never-sent-is-not-sent.test.mjs, which
     // fails the day a fourth exit is added. AUDIT-2026-08-30.
-    Promise.resolve(FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], { encrypted: !!g.encrypted }))
+    const groupText = groupCard ? chatCardFallback(groupCard) : cmBase ? chatCardFallback({ ...cmBase, credit: cmCredit }) : asText;
+    Promise.resolve(FS.publishMessage(g.id, groupText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], groupCard ? { encrypted: !!g.encrypted, card: groupCard } : { encrypted: !!g.encrypted }))
       .then(evt => {
         if (evt && evt._refused === 'leaving') { ctx.toast('Not shared — you’re leaving ' + g.name + '’s church.'); return; }
         if (evt && evt._refused === 'queue-full') { ctx.toast('Not shared — too many messages are waiting to send. Try again when you have signal.'); return; }
@@ -2416,7 +2593,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // "Sent to Anna". Its sibling twelve lines up was fixed for exactly this and carries the reason: losing
     // something quietly while claiming it worked is the worst failure this app can produce. Reuse
     // dmFailWording rather than invent copy: _delivered === false means QUEUED, not lost.
-    Promise.resolve(FS.sendDM(m.pubkey, asText + (comment.trim() ? '\n\n' + comment.trim() : '')))
+    const dmText = dmCard ? chatCardFallback(dmCard) : cmBase ? chatCardFallback(cmBase) : asText;
+    Promise.resolve(dmCard ? FS.sendDM(m.pubkey, dmText + (comment.trim() ? '\n\n' + comment.trim() : ''), null, { card: dmCard }) : FS.sendDM(m.pubkey, dmText + (comment.trim() ? '\n\n' + comment.trim() : '')))
       .then(evt => {
         // A NULL RETURN IS NOT A SEND. sendDM returns null when it cannot encrypt, and that step runs BEFORE
         // it queues — so nothing reached the wire, nothing is in the outbox, and there is nothing to retry.
@@ -2466,7 +2644,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
           <Icon name="share" size={20} color="var(--clay)" />
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share outside the app</div>
-            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>The text, with its source and licence</div></div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>The text, with its source and full licence</div></div>
           <Icon name="chevR" size={17} color="var(--ink-3)" />
         </button>
       ) : null}
@@ -2845,14 +3023,21 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: 274, text: msgById[m.replyTo].content })
               : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
             {(m.noReply || m.eventId) ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />{dmAnnounceLabel(m, ctx && ctx.churchEvents)}</span> : null}
-            <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
+            {(chatShareCard(m.card) && chatCardThoughts(chatShareCard(m.card), m.content) !== null) ? (
+              // a shared verse/commentary arrives as its designed card, the sender's thoughts under it as text
+              // (the group bubble's ChatShareCardView + ChatCardThoughts). Tapping the thoughts opens reactions.
+              <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', cursor: 'pointer' }}>
+                <ChatShareCardView card={chatShareCard(m.card)} ctx={ctx} />
+                <ChatCardThoughts text={chatCardThoughts(chatShareCard(m.card), m.content)} me={m.mine} />
+              </div>
+            ) : <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
               {/* Same as the group bubble: the line breaks are in the message, HTML just collapses them.
                   This sibling was never reported — only the notice was — and fixing one of two is how half a
                   defect ships. */}
               <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{m.content}</p>
-            </div>
+            </div>}
             {m.careOffer && !m.mine ? <CareOfferAccept offer={m.careOffer} ctx={ctx} /> : null}
             {/* THE STATE THE COMMIT CLAIMED AND DID NOT SHIP. c2aacf7 queued a failed private message and
                 computed _pending/_failed for it — and then drew neither, so a message still waiting to send

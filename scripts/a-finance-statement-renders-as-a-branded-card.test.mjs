@@ -254,13 +254,14 @@ test('searchableText and shareTextOf cover a card (title + period + body)', () =
 // behavioural disable here (rule 3 only bites text-matching assertions, of which this has none).
 test('DELETION: with the finance branch disabled the card stops rendering and the body shows', () => {
   const src = readFileSync(join(ROOT, 'app/screens-chat.jsx'), 'utf8');
-  const ANCHOR = 'if (c.type === \'finance\') {';
+  // re-anchored 2026-11-17 (share-chat-cards): the branch now reads the per-author allow-list's answer, `ck`
+  const ANCHOR = 'if (ck === \'finance\') {';
   assert.equal(src.split(ANCHOR).length - 1, 1, 'the finance-card anchor is not unique — re-scope this sabotage');
 
   const dir = mkdtempSync(join(tmpdir(), 'trin-card-'));
   try {
     const sabPath = join(dir, 'screens-chat.jsx');
-    writeFileSync(sabPath, src.replace(ANCHOR, 'if (false && c.type === \'finance\') {'));
+    writeFileSync(sabPath, src.replace(ANCHOR, 'if (false && ck === \'finance\') {'));
 
     // compile + load the sabotaged copy the same way loadScreen does (reply-kit prepended, one new-Function scope)
     const { React, draw } = miniReact();
