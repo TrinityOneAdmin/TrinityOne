@@ -74,3 +74,9 @@ design             export-ignore
 # text stays beside the data in the repository.
 scripts/data/** export-ignore
 scripts/gen-confusables-table.py export-ignore
+
+# ── THE HOME-SCREEN WIDGET'S NATIVE SOURCES (native/trinity-widget, reference/PLAN-phone-widget-2026-11-16.html) ──
+# Only an APK build from a git checkout reads them; no relay does. Its package.json STAYS in the bundle on purpose:
+# the bundle's root package.json names "file:native/trinity-widget", and an `npm install` in an unpacked bundle
+# (relay-app/install.sh, scripts/relay-update.sh) must not meet a dependency that points at nothing.
+native/trinity-widget/android export-ignore

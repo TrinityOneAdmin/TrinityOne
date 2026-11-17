@@ -12540,7 +12540,7 @@ function DashWebsitePanel({ church }) {
                 ? 'On \u2014 the passages you send, and the times you schedule them, are public on the internet so members\u2019 home-screen widgets can show them. Anyone with the address can read them.'
                 : 'Off \u2014 verse prompts stay inside the app.'}</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); patchShare({ versePrompt: !verseOn }); }} disabled={busy || !known} aria-label="Show verse prompts on members' home screens" role="switch" aria-checked={verseOn} title="Publishes the passages of your verse prompt (never a note) so members' home-screen widgets can show them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: verseOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ versePrompt: !verseOn }); }} disabled={busy || !known} aria-label="Show verse prompts on members' home screens" role="switch" aria-checked={verseOn} title="Publishes the passages of your verse prompt (never a note) so members' home-screen widgets can show them" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: verseOn ? 'var(--clay-ink)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: verseOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>

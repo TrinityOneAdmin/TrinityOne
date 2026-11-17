@@ -40,7 +40,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [], probed = [];
+  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
   const win = {
     addEventListener(t, h) { (listeners[t] = listeners[t] || []).push(h); }, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
@@ -52,6 +52,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
       parseRef: r => (r === 'John 3:16' ? { book: 43, chap: 3, verse: 16 } : r === 'Psalms 23:1' ? { book: 19, chap: 23, verse: 1 } : null),
       loaded: true, books: () => [43], getVerses: (b, c) => (b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
+      refKey: (loc, v) => loc.book + '.' + loc.chap + '.' + v,   // the reader's canonical key (the verse heart uses it)
     },
     Capacitor: plugin ? { Plugins: { TrinityWidget: { status: () => Promise.resolve(nativeEnabled == null ? { supported: true } : { supported: true, enabled: nativeEnabled }),
       // PromptFetchJob.probe's contract: https only, NO redirects (a redirecting base is a failure), found / absent
@@ -92,8 +93,9 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
     toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {},
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
+    bookmarkItems: [], toggleBookmark: (k) => { hearted.push(k); }, setBookmarkTags: () => {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, probed, opts, store,
+  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, probed, hearted, opts, store,
     fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
@@ -342,4 +344,24 @@ test('R3: when the widget\'s church settings are cleared from ELSEWHERE, the hou
   s.draw(); await settle();
   assert.equal(s.probed.length, 2, 'after a clear from elsewhere Today did not probe again (throttled for up to an hour)');
   assert.equal(s.prompts.length, 2, 'after a clear from elsewhere the widget was left with no church prompt');
+});
+
+test('MERGE (integration 3b6bacd6): the verse heart files the verse ACTUALLY SHOWN — also after "Another verse"', async () => {
+  const s = todayScreen({ widget: '0' });
+  let tree = s.draw();
+  const keyOf = { 'John 3:16': '43.3.16', 'Psalms 23:1': '19.23.1' };
+  const heart = () => find(tree, n => n.type === 'button' && /Favourites$/.test(String((n.props || {})['aria-label'] || '')));
+  // keep tapping "Another verse" until a verse this Bible stub can key is showing, and it differs from the first
+  const first = cardVerse(tree).refs[0];
+  for (let i = 0; i < 40; i++) {
+    const cur = cardVerse(tree).refs[0];
+    if (cur !== first && keyOf[cur]) break;
+    find(tree, n => n.type === 'button' && (n.props || {})['aria-label'] === 'Another verse')[0].props.onClick({ stopPropagation() {} });
+    tree = s.draw();
+  }
+  const shown = cardVerse(tree).refs[0];
+  assert.ok(shown !== first && keyOf[shown], 're-anchor: could not get a different, keyable verse onto the card');
+  assert.equal(heart().length, 1, 'no heart on the card');
+  heart()[0].props.onClick({ stopPropagation() {} });
+  assert.deepEqual(s.hearted, [keyOf[shown]], 'the heart filed a DIFFERENT verse from the one on the card (the day\'s, not the pick)');
 });
