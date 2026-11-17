@@ -60,6 +60,7 @@ function shareTo(result) {
     FS: { sendDM: async () => result },
     ctx: { toast: (m) => toasts.push(m) },
     asText: 'For God so loved the world', comment: { trim: () => '' },
+    verseCard: null,   // the sheet's verse card (share-chat-cards 2026-11-17); null = a plain-text share, as here
     onClose: () => {},
     // the REAL wording helper's null behaviour, spelled out: no _refused ⇒ it promises a retry.
     dmFailWording: (evt) => (evt && evt._refused ? 'REFUSED' : 'PROMISED-A-RETRY'),

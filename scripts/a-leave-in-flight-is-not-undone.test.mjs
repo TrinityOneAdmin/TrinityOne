@@ -253,7 +253,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
   win.Fellowship._dmWrap = (c) => c;
   win.Fellowship._dmUnwrap = (c) => ({ text: c, replyTo: null });
   const methods = [
-    fnBody(src, 'async sendDM(peerPub, content, replyTo) {', 'sendDM'),
+    fnBody(src, 'async sendDM(peerPub, content, replyTo, meta) {', 'sendDM'),
     fnBody(src, 'async reactDM(peerPub, msgId, emoji) {', 'reactDM'),
     fnBody(src, 'async publishMessage(groupId, content, extraTags = [], opts = {}) {', 'publishMessage'),
     fnBody(src, 'async leaveMembership(npubOrHex) {', 'leaveMembership'),

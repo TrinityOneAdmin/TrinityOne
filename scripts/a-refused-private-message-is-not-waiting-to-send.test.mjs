@@ -49,7 +49,7 @@ function engine({ publishError, failed = 0 }) {
     dmSendRelays: () => ['wss://test.invalid'],   // step 2c: where the DM goes; this test is about the refusal's wording
   };
   // bind whatever name the bundle gave finalizeEvent inside sendDM, so a rename fails loudly
-  const sendBody = fnBody(BUNDLE, 'async sendDM(peerPub, content, replyTo) {', 'sendDM');
+  const sendBody = fnBody(BUNDLE, 'async sendDM(peerPub, content, replyTo, meta) {', 'sendDM');
   const fin = (sendBody.match(/\b(finalizeEvent\d*)\(/) || [])[1];
   assert.ok(fin, 're-anchor: sendDM no longer signs an event');
   scope[fin] = scope.finalizeEvent;

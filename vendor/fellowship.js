@@ -7462,12 +7462,32 @@
     const ring = gid && _gkeys[_gkKey(cp, gid)];
     if (!ring || !ring.length) return null;
     for (const key of ring) {
+      let content;
       try {
-        return { ...e, content: decrypt(e.content, key) };
+        content = decrypt(e.content, key);
       } catch (x) {
+        continue;
       }
+      let tags = e.tags;
+      if (tags.some((t) => t && t[0] === "card" && t[3] === "enc")) {
+        tags = tags.flatMap((t) => {
+          if (!(t && t[0] === "card" && t[3] === "enc")) return [t];
+          try {
+            return [["card", t[1], decrypt(t[2], key)]];
+          } catch (x) {
+            return [];
+          }
+        });
+      }
+      return { ...e, content, tags };
     }
     return null;
+  }
+  function _chatCardClean(x) {
+    if (!x || typeof x !== "object" || Array.isArray(x) || x.type !== "verse" && x.type !== "commentary") return null;
+    const o = { type: x.type };
+    for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 300]]) if (typeof x[k] === "string" && x[k] && x[k].length <= n) o[k] = x[k];
+    return o.text ? o : null;
   }
   var NET = "trinityone";
   function scheduleVisible(list) {
@@ -10708,6 +10728,14 @@
     isBlockedChurch(npubOrHex) {
       return _isBlockedChurch(npubOrHex);
     },
+    // Is this author the ACTIVE church's own key, or a steward on its church-key-signed roster? The chat screen asks
+    // before drawing a card type only the church may post (a finance statement), so a member cannot dress a message
+    // up as an official statement. Read-only; grants nothing.
+    isChurchVoice(pubkey) {
+      const cp = window.Fellowship.churchPub;
+      if (!pubkey || !cp) return false;
+      return pubkey === cp || !!(_churchRoster.get(cp) && _churchRoster.get(cp).has(pubkey));
+    },
     forgetBlockedChurch(npubOrHex) {
       return _forgetBlockedChurch(npubOrHex);
     },
@@ -12057,10 +12085,22 @@
           if (wantsEnc) return { _refused: "sealfailed" };
         }
       }
+      let cardTags = [];
+      const card = opts.card ? _chatCardClean(opts.card) : null;
+      if (card) {
+        const js = JSON.stringify(card);
+        if (encTag.length) {
+          try {
+            cardTags = [["card", "1", encrypt(js, gkey), "enc"]];
+          } catch (e) {
+            if (wantsEnc) return { _refused: "sealfailed" };
+          }
+        } else cardTags = [["card", "1", js]];
+      }
       const evt = finalizeEvent2({
         kind: 1,
         created_at: Math.floor(Date.now() / 1e3),
-        tags: [["t", NET], ["t", groupId], ...churchTag, ...encTag, ...extraTags],
+        tags: [["t", NET], ["t", groupId], ...churchTag, ...encTag, ...extraTags, ...cardTags],
         content: body
       }, sk);
       const msgRelays = publishSetFor(cp);
@@ -12223,18 +12263,30 @@
     // `meta` (church event messages, 2026-10-14) ADDS two optional fields to the same v:1 envelope: `nr:1` =
     // "announcement, no replies" and `ev` = the event id it is about. Additive only: an older build reads `t`
     // and ignores the rest; a body with neither a reply nor meta is still the bare string.
+    // `meta.card` (share-chat-cards 2026-11-17) ADDS `cd`: a member-shared verse/commentary card, inside the
+    // ciphertext like everything else here. Additive in the same way: `t` still carries the full words, so an older
+    // build and the steward console's own unwrap show the text. The cleaner is inline (same reason as the care
+    // offer) and is kept in step with _chatCardClean above.
     _dmWrap(text, replyTo, meta) {
       const hasR = !!(replyTo && replyTo.id);
       const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
       const cx = meta && meta.careOffer;
       const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || "")) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
-      if (!hasR && !nr && !ev && !co) return text;
+      const kx = meta && meta.card;
+      let cd = null;
+      if (kx && typeof kx === "object" && !Array.isArray(kx) && (kx.type === "verse" || kx.type === "commentary")) {
+        cd = { type: kx.type };
+        for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 300]]) if (typeof kx[k] === "string" && kx[k] && kx[k].length <= n) cd[k] = kx[k];
+        if (!cd.text) cd = null;
+      }
+      if (!hasR && !nr && !ev && !co && !cd) return text;
       try {
         const o = { v: 1, t: String(text) };
         if (hasR) o.r = String(replyTo.id).slice(0, 64);
         if (nr) o.nr = 1;
         if (ev) o.ev = ev;
         if (co) o.co = co;
+        if (cd) o.cd = cd;
         return JSON.stringify(o);
       } catch (e) {
         return text;
@@ -12244,16 +12296,25 @@
       if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
       try {
         const o = JSON.parse(body);
-        if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
+        if (o && o.v === 1 && typeof o.t === "string") {
+          const kx = o.cd;
+          let card = null;
+          if (kx && typeof kx === "object" && !Array.isArray(kx) && (kx.type === "verse" || kx.type === "commentary")) {
+            card = { type: kx.type };
+            for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 300]]) if (typeof kx[k] === "string" && kx[k] && kx[k].length <= n) card[k] = kx[k];
+            if (!card.text) card = null;
+          }
+          return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null, ...card ? { card } : {} };
+        }
       } catch (e) {
       }
       return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     },
-    async sendDM(peerPub, content, replyTo) {
+    async sendDM(peerPub, content, replyTo, meta) {
       if (!sk) await window.Fellowship.ready;
       if (_outboxFull()) return { _refused: "queue-full" };
       if (_failedFull()) return { _refused: "failed-full" };
-      const body = window.Fellowship._dmWrap(content, replyTo);
+      const body = window.Fellowship._dmWrap(content, replyTo, meta);
       let ciphertext;
       try {
         ciphertext = _dmEncrypt(sk, peerPub, body);
@@ -12316,7 +12377,7 @@
           content = "\u{1F512} (could not decrypt)";
         }
         const un = window.Fellowship._dmUnwrap(content);
-        const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, ts: e.created_at, pubkey: e.pubkey };
+        const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, card: un.card || null, ts: e.created_at, pubkey: e.pubkey };
         msgs.set(e.id, m);
         push(m);
       };
