@@ -34,7 +34,7 @@ window.sanitizeHtml = function (html) {
 //                 reject remote/`http(s):`/`javascript:` etc. so a profile field can never beacon out.
 window.safeCssColor = function (v, fallback) {
   const s = typeof v === "string" ? v.trim() : "";
-  if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+  if (/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(s)) return s;
   if (/^var\(--[a-zA-Z0-9-]+\)$/.test(s)) return s;
   return fallback || "var(--clay)";
 };

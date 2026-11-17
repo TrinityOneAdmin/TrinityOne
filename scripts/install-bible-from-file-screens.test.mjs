@@ -30,7 +30,7 @@ const plain = (x) => JSON.parse(JSON.stringify(x));   // the App runs in a vm: i
 
 // ════════════════════════════════ A. the Library button, and the devotional row ════════════════════════════════
 
-function store({ category = null } = {}) {
+function store({ category = null, view = 'featured' } = {}) {
   const { React, draw } = miniReact();
   const calls = { pick: 0 };
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
@@ -49,21 +49,47 @@ function store({ category = null } = {}) {
     Chip: ({ children }) => React.createElement('span', {}, children),
     ScreenScroll: (p) => p.children, safeCssColor: (c) => c || 'var(--clay)',
   });
-  const props = { open: true, onClose() {}, ctx: { toast() {} }, category, initialView: 'featured' };
+  const props = { open: true, onClose() {}, ctx: { toast() {} }, category, initialView: view };
   return { calls, draw: async () => { draw(S.ModuleStore, props); await tick(); return draw(S.ModuleStore, props); } };
 }
 const pressable = (tree, label) => find(tree, n => n.type === 'button' && rtexts(n).join(' ').includes(label));
 
-test('S1 — the Library has an "Install a Bible from a file" button on every category, and pressing it opens the file picker', async () => {
+// The owner chose option A (2026-11-17): the big card above the tabs is replaced by ONE quiet line under them, on every category and tab.
+const LINK = { bibles: 'Have a Bible file? Install it', dictionaries: 'Have a file? Install it', commentaries: 'Have a file? Install it', none: 'Have a file? Install it' };
+const linkOf = (tree) => pressable(tree, 'Install it');
+const wordsOf = (btn) => find(btn, n => n.type === 'span').map(n => rtexts(n).join('')).join('').trim();   // the words, not the icon's drawing
+
+test('S1 — the quiet "Have a … file? Install it" line is on every category and every tab with the right words, and pressing it opens the file picker', async () => {
   for (const category of [null, 'bibles', 'dictionaries', 'commentaries']) {
-    const s = store({ category });
-    const tree = await s.draw();
-    const btn = pressable(tree, 'Install a Bible from a file');
-    assert.equal(btn.length, 1, `category ${category}: the button is not on the Library screen`);
-    assert.equal(s.calls.pick, 0, 'the picker opened before anyone pressed anything');
-    btn[0].props.onClick();
-    assert.equal(s.calls.pick, 1, `category ${category}: pressing the button did not reach Bible.pickFile`);
+    for (const view of (category === 'bibles' || category === null) ? ['featured', 'language', 'installed'] : ['featured', 'installed']) {
+      const s = store({ category, view });
+      const tree = await s.draw();
+      const btn = linkOf(tree);
+      const where = `category ${category}, tab ${view}`;
+      assert.equal(btn.length, 1, `${where}: the link is not on the Library screen`);
+      const want = (category === null && view === 'language') ? LINK.bibles : LINK[category || 'none'];   // no category + All bibles tab shows only Bibles (round 2, N2)
+      assert.equal(wordsOf(btn[0]), want, `${where}: wrong words`);
+      assert.equal(s.calls.pick, 0, 'the picker opened before anyone pressed anything');
+      btn[0].props.onClick();
+      assert.equal(s.calls.pick, 1, `${where}: pressing the link did not reach Bible.pickFile`);
+    }
   }
+});
+
+test('S1b — it is a real button, 44 px to tap, sits UNDER the tabs, and the old big card is gone', async () => {
+  const tree = await store({ category: 'bibles' }).draw();
+  const all = rtexts(tree).join(' | ');
+  assert.doesNotMatch(all, /Install a Bible from a file|Got one over Signal/, 'the old big card is still on the page');
+  const btn = linkOf(tree)[0];
+  assert.equal(btn.type, 'button', 'the link is not a real button');
+  assert.ok(parseInt(btn.props.style.minHeight, 10) >= 44, 'tap height under 44: ' + btn.props.style.minHeight);
+  assert.ok(!/\d/.test(String(btn.props.style.width || '')) || /%/.test(String(btn.props.style.width)), 'a fixed width could overflow a 320 px phone');
+  // order in the drawn page: the tab buttons first, then the link
+  const order = find(tree, n => n.type === 'button').map(n => (n.props['data-install-from-file'] !== undefined ? wordsOf(n) : rtexts(n).join('').trim()));
+  const iTab = order.findIndex(t => /Featured$/.test(t)), iLink = order.indexOf('Have a Bible file? Install it');
+  assert.ok(iTab >= 0 && iLink > iTab, 'the link is not under the tabs: ' + order.slice(0, 8));
+  // the segmented tabs still work and the link is on every one of them (checked in S1)
+  assert.ok(order.some(t => /All bibles$/.test(t)) && order.some(t => /Installed$/.test(t)));
 });
 
 test('S2 — the devotional import row is hidden (with its section); the dictionary, commentary and cross-reference import rows stay', async () => {
@@ -342,7 +368,7 @@ test('S23 — A REFUSED ?module= LINK: the sheet says so in plain words, and the
 // ════════════════════════════════ D. the REAL App: mount, listener, picker → sheet ══════════════════════════════
 
 const NPUB = 'npub1' + '0'.repeat(58);
-function boot({ bible = {}, capApp = undefined, seedLs = {}, fetchImpl, withFs = [] } = {}) {
+function boot({ bible = {}, capApp = undefined, seedLs = {}, fetchImpl, withFs = [], churchAccent } = {}) {
   const r = fakeReact();
   const env = appBrowser(); const window = env.window;
   for (const [k, v] of Object.entries(seedLs)) window.localStorage.setItem(k, v);
@@ -353,7 +379,7 @@ function boot({ bible = {}, capApp = undefined, seedLs = {}, fetchImpl, withFs =
   if (capApp) window.Capacitor = { isNativePlatform: () => true, convertFileSrc: (u) => 'https://localhost/_capacitor_content_/' + u, Plugins: { App: capApp, Filesystem: { readFile: async () => { withFs.push('readFile'); } } } };
   if (fetchImpl) window.fetch = fetchImpl;
   const App = loadApp({ React: r.React, window, expr: 'App' });
-  window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church' }];
+  window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church', ...(churchAccent ? { accent: churchAccent } : {}) }];
   window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(NPUB));
   window.localStorage.setItem('trinityone.onboarded', 'true');
   window.Fellowship = new Proxy({ myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x, subscribeAmBlocked: (cb) => { cb(false, ''); return () => {}; }, isBlockedChurch: () => false },
@@ -481,4 +507,92 @@ test('S17 — THE TWO LISTENERS HAVE DISJOINT SCHEMES: non-content links never o
   m.window.location.search = '';
   plugin.fire('appUrlOpen', { url: 'content://media/external/file/9' });
   assert.equal(m.window.location.search, '', 'a content:// link was treated as a join link');
+});
+
+// ── quiet-link round 3: --clay-text on the REAL App root follows the church brand, then the member's accent, and always reads at >= 4.5:1 ──
+const lumOf = (hex) => { const h = hex.replace('#', ''); const c = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const ratioOf = (a, b) => { const x = lumOf(a), y = lumOf(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const PAPER = { light: ['#F4EEE2', '#FFFDF8'], dark: ['#16120C', '#211B13'] };
+async function clayText({ dark, accent, brand }) {
+  const m = boot({ seedLs: { 'trinityone.settings': JSON.stringify({ dark, accent }) }, churchAccent: brand });
+  const tree = await settle(m);
+  const root = nodes(tree).find(n => n.props && typeof n.props.className === 'string' && /\btrinity\b/.test(n.props.className) && n.props.style && n.props.style['--clay-text'] !== undefined);
+  assert.ok(root, 're-anchor: the App root draws no --clay-text');
+  assert.equal(root.props.className.includes('dark'), dark);
+  return { value: root.props.style['--clay-text'], clay: root.props.style['--clay'] };
+}
+
+test('S24 — --clay-text: every accent and arbitrary brand colours (pale, dark, 3-digit, with alpha) read at >= 4.5:1 on the paper, in light and dark', async () => {
+  const cases = [...['clay', 'indigo', 'teal', 'berry'].map(a => ({ accent: a })),
+    ...['#F5D76E', '#1F2A5A', '#abc', '#C25A38', '#2E7D32', '#ffffff', '#000000', '#8FA7FFcc'].map(b => ({ accent: 'clay', brand: b }))];
+  for (const dark of [false, true]) for (const c of cases) {
+    const { value } = await clayText({ dark, ...c });
+    assert.match(value, /^#[0-9a-f]{6}$/, 'not a plain hex: ' + value);
+    for (const paper of PAPER[dark ? 'dark' : 'light']) assert.ok(ratioOf(value, paper) >= 4.5, `${dark ? 'dark' : 'light'} ${JSON.stringify(c)}: ${value} on ${paper} is ${ratioOf(value, paper).toFixed(2)}:1`);
+  }
+});
+
+test('S25 — --clay-text FOLLOWS A CHURCH BRAND when there is one (its hue), and the member\'s accent when there is not', async () => {
+  const green = await clayText({ dark: false, accent: 'clay', brand: '#2E7D32' });
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(green.value.slice(i, i + 2), 16));
+  assert.ok(g > r && g > b, `a green brand gave a non-green text colour ${green.value}`);
+  const none = await clayText({ dark: false, accent: 'clay' });
+  assert.notEqual(none.value, green.value, 'the brand made no difference');
+  const indigo = await clayText({ dark: false, accent: 'indigo' });
+  assert.notEqual(indigo.value, none.value, 'the member\'s accent made no difference');
+  // dark mode: a brand colour that already reads is used AS IS
+  const darkBrand = await clayText({ dark: true, accent: 'clay', brand: '#8fa7ff' });
+  assert.equal(darkBrand.value, '#8fa7ff');
+  const darkNone = await clayText({ dark: true, accent: 'clay' });
+  assert.equal(darkNone.value, '#e68a66', 'dark clay text is no longer the accent itself');
+});
+
+test('S26 — the line\'s text has no trailing or leading whitespace (a JSX comment must not leave spaces in the button text)', async () => {
+  for (const category of ['bibles', 'dictionaries', null]) {
+    const tree = await store({ category, view: 'language' }).draw();
+    const btn = linkOf(tree)[0];
+    const span = find(btn, n => n.type === 'span')[0];
+    const raw = rtexts(span).join('');
+    assert.equal(raw, raw.trim(), `${category}: the words carry stray whitespace: ${JSON.stringify(raw)}`);
+    assert.equal(span.kids.length, 1, `${category}: the span holds more than the words (${span.kids.length} children)`);
+  }
+});
+
+test('S27 — a brand colour that is not valid CSS (5 or 7 hex digits) is refused: the real App keeps the member\'s accent', async () => {
+  const none = await clayText({ dark: false, accent: 'indigo' });
+  for (const bad of ['#12345', '#1234567', '#12', '#123456789', '#12345g']) {
+    for (const dark of [false, true]) {
+      const plain = await clayText({ dark, accent: 'indigo' });
+      const r = await clayText({ dark, accent: 'indigo', brand: bad });
+      assert.equal(r.value, plain.value, `${bad} (dark=${dark}): the invalid brand changed --clay-text`);
+      assert.equal(r.clay, plain.clay, `${bad} (dark=${dark}): the invalid brand became --clay`);
+    }
+  }
+  const ok = await clayText({ dark: false, accent: 'indigo', brand: '#2E7D32' });
+  assert.notEqual(ok.value, none.value, 'control: a valid 6-digit brand must still be taken');
+  for (const good of ['#abcd', '#2E7D32ff']) assert.notEqual((await clayText({ dark: false, accent: 'indigo', brand: good })).clay, none.clay, `${good} (4 and 8 digits are valid CSS) was refused`);
+});
+
+test('S28 — dark mode: a very dark brand (navy) is LIGHTENED without losing its hue, and reads at >= 4.5:1', async () => {
+  const hueOf = (hex) => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255); const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!d) return -1;
+    const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return h * 60; };
+  const navy = '#001F3F';
+  const { value } = await clayText({ dark: true, accent: 'clay', brand: navy });
+  assert.ok(ratioOf(value, '#211B13') >= 4.5, `navy in dark mode is ${ratioOf(value, '#211B13').toFixed(2)}:1 (${value})`);
+  assert.ok(Math.abs(hueOf(value) - hueOf(navy)) <= 5, `navy lost its hue: ${value} is ${hueOf(value).toFixed(0)} deg, navy is ${hueOf(navy).toFixed(0)}`);
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
+  assert.ok(b - Math.max(r, g) >= 60, `navy went grey, not blue: ${value}`);
+  for (const dark2 of ['#3B0A45', '#0B3D2E']) {   // a dark purple and a dark green keep their hue too
+    const v = (await clayText({ dark: true, accent: 'clay', brand: dark2 })).value;
+    assert.ok(Math.abs(hueOf(v) - hueOf(dark2)) <= 6, `${dark2} -> ${v} changed hue (${hueOf(dark2).toFixed(0)} -> ${hueOf(v).toFixed(0)})`);
+    assert.ok(ratioOf(v, '#211B13') >= 4.5);
+  }
+});
+
+test('S29 — the shared safeCssColor (engine.js) takes 3, 4, 6 and 8 hex digits and refuses 5 and 7', () => {
+  const { win } = phone();
+  assert.equal(typeof win.safeCssColor, 'function', 're-anchor: the engine does not define window.safeCssColor');
+  for (const ok of ['#abc', '#abcd', '#c25a38', '#c25a38cc']) assert.equal(win.safeCssColor(ok, 'FALLBACK'), ok);
+  for (const bad of ['#ab', '#abcde', '#c25a38c', '#c25a38ccd', '#c25a3g', 'red', 'url(x)']) assert.equal(win.safeCssColor(bad, 'FALLBACK'), 'FALLBACK', bad + ' was accepted');
+  assert.equal(win.safeCssColor('var(--clay)', 'FALLBACK'), 'var(--clay)');
 });

@@ -40,13 +40,13 @@ function cardImgUrl(src) {
 // guard; a crafted string could otherwise smuggle url() into a gradient and beacon that way.
 function cardColor(c, fallback) {
   const h = typeof c === 'string' ? c.trim() : '';
-  return /^#[0-9a-fA-F]{3,8}$/.test(h) ? h : (fallback || 'var(--clay)');
+  return /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(h) ? h : (fallback || 'var(--clay)');
 }
 
 // darken a pale accent so title text stays legible on the card's surface (copied from the member renderer).
 function cardInk(accent) {
   const h = typeof accent === 'string' ? accent.trim() : '';
-  if (!/^#[0-9a-fA-F]{3,8}$/.test(h)) return cardColor(accent, 'var(--clay)');
+  if (!/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(h)) return cardColor(accent, 'var(--clay)');
   let c = h.slice(1);
   if (c.length === 3) c = c.split('').map(x => x + x).join('');
   if (c.length < 6) return '#2b2723';

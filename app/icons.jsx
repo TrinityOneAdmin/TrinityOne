@@ -50,6 +50,7 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
     x: <><path d="m6 6 12 12M18 6 6 18" {...p} /></>,
     menu: <><path d="M4 7h16M4 12h16M4 17h16" {...p} /></>,   // the console's phone-only "Sections" control
     plus: <><path d="M12 5v14M5 12h14" {...p} /></>,
+    file: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5" {...p} /></>,
     download: <><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14" {...p} /></>,
     check: <><path d="m5 12.5 4.5 4.5L19 6.5" {...p} /></>,
     flame: <><path d="M12 3.5c.5 3 2.2 4.1 3.6 5.6 1.2 1.3 2.4 2.8 2.4 5.1A6 6 0 0 1 6 14.2c0-1.6.6-2.8 1.4-3.7.3 1 .9 1.6 1.7 1.9-.4-2.6.9-5.6 2.9-8.9Z" {...p} /></>,

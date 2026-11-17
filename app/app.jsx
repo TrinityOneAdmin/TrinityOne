@@ -99,6 +99,49 @@ function _readableOn(hex) {
     return L > 0.42 ? '#2A1B12' : '#fff';
   } catch (e) { return '#fff'; }
 }
+// TEXT-SIZED accent, computed (not hand-tuned per accent, so it also holds for any hex a church picks): start from the colour we want as text and
+// move it toward black (light mode) or white (dark mode) in small steps until it reaches 4.6:1 (WCAG AA is 4.5:1) against the worst paper/surface it sits on.
+// A colour that already passes is returned unchanged. Used for --clay-text (the Library's install-from-a-file line).
+// ALPHA IS IGNORED, on purpose: #rgba and #rrggbbaa are read as their opaque colour (the 4th / 7th-8th digits are dropped). Text is judged and drawn opaque.
+function _hexRgb(hex) {
+  const h = String(hex).replace('#', '');
+  const full = h.length === 3 || h.length === 4 ? h.slice(0, 3).split('').map(c => c + c).join('') : h.slice(0, 6);
+  const m = full.match(/../g);
+  return m && m.length === 3 ? m.map(x => parseInt(x, 16)) : [194, 90, 56];
+}
+function _rgbHex(rgb) { return '#' + rgb.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join(''); }
+function _lum(rgb) { const c = rgb.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+function _ratio(a, b) { const x = _lum(a), y = _lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+function _rgbHsl(rgb) {
+  const [r, g, b] = rgb.map(v => v / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+function _hslRgb(h, s, l) {
+  const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  return [0, 8, 4].map(n => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+}
+function _clayText(baseHex, dark) {
+  try {
+    const base = _hexRgb(baseHex);
+    if (dark) {
+      // dark: RAISE LIGHTNESS in HSL, keeping hue and saturation, so a very dark brand (navy) stays navy-blue instead of going grey (mixing toward white would)
+      const bg = [33, 27, 19], [h, s, l0] = _rgbHsl(base);
+      for (let l = l0; l <= 1.0001; l += 0.01) { const rgb = _hslRgb(h, s, Math.min(1, l)); if (_ratio(rgb, bg) >= 4.6) return _rgbHex(rgb); }
+      return '#ffffff';
+    }
+    const bg = [244, 238, 226];                                   // light: --paper #F4EEE2; darken toward black until it reads
+    for (let i = 0; i <= 25; i++) {
+      const k = i * 0.04, rgb = base.map(v => v * (1 - k));
+      if (_ratio(rgb, bg) >= 4.6) return _rgbHex(rgb);
+    }
+    return '#000000';
+  } catch (e) { return dark ? '#fff' : '#000'; }
+}
+// the church-brand ink: the brand colour mixed 14% toward black, as --clay-ink is (there in oklab, here in sRGB: close enough for a start colour that is then corrected)
+function _brandInk(hex) { const c = _hexRgb(hex); return _rgbHex(c.map(v => v * 0.86)); }
 const ACCENTS = {
   clay:   { light: { c: '#C25A38', i: '#A8462A', s: '#F3DECF', d: '#9C4327', on: '#fff' }, dark: { c: '#E68A66', i: '#EE9E7E', s: '#43271B', d: '#C2613B', on: '#2A1B12' } },
   indigo: { light: { c: '#5360D6', i: '#3E49B8', s: '#E2E3F7', d: '#3A43A0' , on: '#fff' }, dark: { c: '#8E97EE', i: '#A6ADF2', s: '#262A52', d: '#5A63C0' , on: '#2A1B12' } },
@@ -2702,7 +2745,7 @@ function App() {
   const ap = t.dark ? acc.dark : acc.light;
   // a church's brand accent (a hex the steward set) overrides the personal accent theme so the
   // member's app takes on the church's colour. The clay family is derived from the one hex.
-  const ca = (ctx.church && typeof ctx.church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(ctx.church.accent.trim())) ? ctx.church.accent.trim() : null;
+  const ca = (ctx.church && typeof ctx.church.accent === 'string' && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(ctx.church.accent.trim())) ? ctx.church.accent.trim() : null;
   const brand = ca ? {
     '--clay': ca,
     // A church picks an arbitrary hex, so the readable text colour on it has to be computed, not assumed —
@@ -2715,6 +2758,9 @@ function App() {
   const rootStyle = {
     '--clay': ap.c, '--clay-ink': ap.i, '--clay-soft': ap.s, '--clay-deep': ap.d, '--on-clay': ap.on || '#fff',
     ...(brand || {}),
+    // text-sized accent for the Library's install-from-a-file line (--clay-text): a church's brand colour when it has one, else the member's accent.
+    // Light = the brand's ink (accent's ink), dark = the colour itself; _clayText then darkens/lightens it only as far as 4.5:1 needs.
+    '--clay-text': _clayText(ca ? (t.dark ? ca : _brandInk(ca)) : (t.dark ? ap.c : ap.i), t.dark),
     '--read-scale': t.readScale,
   };
 
