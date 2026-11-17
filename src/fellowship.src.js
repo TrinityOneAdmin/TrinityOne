@@ -1827,6 +1827,36 @@ function publishSetFor(cp) {
   } catch (e) {}
   return _netRelays([...new Set([...persisted, ...signed, ...canonical])], cp);
 }
+// IS THIS RELAY ADDRESS ONE THAT ONLY WORKS ON SOMEBODY'S OWN NETWORK? (member invite, PLAN-member-invite-open-
+// church-2026-11-17, audit amendment M3.) A join link TRAVELS: it is scanned or forwarded to a phone on another
+// network, where loopback is that phone itself and a LAN/CGNAT/link-local address is nobody or a stranger. So an
+// invite never names one; the caller falls back to the shared pool. Unparseable → private (fail closed).
+// Not handled, and noted in the plan: a tailnet-only *.ts.net name looks exactly like a public Funnel one.
+function _inviteHostIsPrivate(url) {
+  let h = '';
+  try { h = new URL(String(url || '')).hostname.toLowerCase(); } catch (e) { return true; }
+  h = h.replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  if (h.endsWith('.local') || h.endsWith('.lan') || h === 'home.arpa' || h.endsWith('.home.arpa')) return true;
+  if (h.includes(':')) {
+    // IPv6: loopback / unspecified, fc00::/7 (unique local), fe80::/10 (link local), and every IPv4-mapped
+    // form (the URL parser rewrites ::ffff:127.0.0.1 to hex, so refuse the whole prefix rather than decode it).
+    if (h === '::1' || h === '::') return true;
+    if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true;
+    if (/^fe[89ab][0-9a-f]?:/.test(h)) return true;
+    if (h.startsWith('::ffff:')) return true;
+    return false;
+  }
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
+  if (m) {
+    const a = +m[1], b = +m[2];
+    return a === 127 || a === 0 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+      || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254);
+  }
+  if (!h.includes('.')) return true;   // a dotless name resolves only on the network that named it
+  return false;
+}
 // THE READ SET FOR A CHURCH'S GROUP TRAFFIC (owner 2026-10-26: a church's box gets only that church's traffic).
 //
 // A group id belongs to the church whose group list it came from, and every group read here already drops
@@ -6971,8 +7001,29 @@ window.Fellowship = {
     // comes back empty, which is indistinguishable from "the church has not admitted you". The screen that
     // renders this then tells an admitted member their request is still waiting. Emit the raw signal and let
     // the app decide what to say — this file must not own that copy.
+    // ── openKnown: "this church is KNOWN to let people join without approval" (PLAN-member-invite-open-church
+    // 2026-11-17, audit amendment H1). It is a SEPARATE answer from `approval`, on purpose. `approval` above is
+    // last-arrival-wins and drops a steward's copy that arrives before the roster; it drives the pending/removed
+    // screens and is deliberately left as it is in this change. `openKnown` gates something a member can DO
+    // (share the church's join link from the community menu), so it is default-deny and order-independent:
+    //   · each author's NEWEST joinpolicy copy is kept, whoever they are (like admittedByAuthor) — a copy that
+    //     arrives before the roster is not thrown away, it is simply not counted yet;
+    //   · trust is decided when it is READ, on every emit: the church key, or a steward on the CURRENT roster;
+    //   · of the trusted copies the newest wins (a same-second tie goes to the lowest id, as the relays decide);
+    //   · open only if that winner is a live document whose approval is false. No document, a deletion, an empty
+    //     or unparseable body, or approval:true → false. "We never heard" is never "open".
+    const policyByAuthor = new Map();   // author pubkey -> { at, id, open }
+    const _openKnown = () => {
+      const roster = _churchRoster.get(pubk);
+      let win = null;
+      for (const [author, v] of policyByAuthor) {
+        if (author !== pubk && !(roster && roster.has(author))) continue;
+        if (!win || v.at > win.at || (v.at === win.at && String(v.id) < String(win.id))) win = v;
+      }
+      return !!(win && win.open);
+    };
     const emit = () => { const isAdmitted = !!(me && _admittedUnion().has(me));
-      onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed }); };
+      onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed, openKnown: _openKnown() }); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
         if (d === 'trinityone/admitted:' + pubk) {
@@ -6981,6 +7032,17 @@ window.Fellowship = {
           let list = []; try { list = (JSON.parse(e.content).pubkeys) || []; } catch { list = []; }
           admittedByAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
           emit(); return;   // who counts is decided in _admittedUnion, when it is read
+        }
+        // openKnown's per-author record, kept BEFORE the trust check below (which is arrival-time and would drop
+        // a steward's copy that beat the roster here). Who counts is decided in _openKnown, when it is read.
+        if (d === 'trinityone/joinpolicy:' + pubk) {
+          const prev = policyByAuthor.get(e.pubkey);
+          const at = e.created_at || 0, id = String(e.id || '');
+          if (!prev || at > prev.at || (at === prev.at && id < prev.id)) {
+            let open = false;
+            if (!e.tags.some(t => t[0] === 'deleted') && e.content) { try { const j = JSON.parse(e.content); open = !!(j && typeof j === 'object' && j.approval === false); } catch { open = false; } }
+            policyByAuthor.set(e.pubkey, { at, id, open });
+          }
         }
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
         if (d === 'trinityone/joinpolicy:' + pubk) { if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit(); }
@@ -7005,6 +7067,50 @@ window.Fellowship = {
     const bases = [...new Set(list.map(u => String(u || '')).filter(u => /^wss:\/\//i.test(u))
       .map(u => u.replace(/^wss:/i, 'https:').replace(/\/relay\/?$/i, '').replace(/\/+$/, '')))];
     return { npub: npubEncode(cp), bases };
+  },
+
+  // ── WHICH RELAY A MEMBER'S INVITE LINK NAMES (PLAN-member-invite-open-church-2026-11-17, amendments M1-M3;
+  // CLAUDE.md rule 10, reference/RELAY-ADMISSION.md) ──
+  // For a self-hosted church the link must name the church's OWN box, as the console's Steward.joinUrl() does,
+  // not the shared pool. A link's &relay= is only a HINT on the receiving phone (it must pass admission there),
+  // but what this phone puts in it is still chosen as narrowly as publishSetFor chooses a box to write to:
+  //   · candidates are relaysForChurch(cp) — the set AFTER this phone's admission gate — and nothing else;
+  //   · a candidate counts only if the key it PROVED (_gate.provedKey) is named in this church's own signed
+  //     relay-net document, read from the cache churchRelayNet keeps, and only a document really read
+  //     (docAt > 0). Matched on the key, never the URL (RELAY-ADMISSION trap 2);
+  //   · never a shipped/canonical relay (address or key), wss:// only, never a private/LAN host;
+  //   · several → alwaysOn first, then URL order, so two members of one church share the same link.
+  // `relayname` comes from the MATCHED SIGNED entry, never from trinityone.relaynames (link-planted, unverified),
+  // and only when an own box was chosen. No match, or a cold cache → the shared relay with no name: exactly the
+  // link this app always made. Adds no candidate, reads nothing new, writes nothing.
+  inviteRelayFor(churchNpub) {
+    const fallback = { relay: CANONICAL_RELAY, relayname: '' };
+    const cp = toPub(churchNpub);
+    if (!cp) return fallback;
+    try {
+      const doc = _relayNetCache.get(cp);
+      if (!doc || !(doc.docAt > 0)) return fallback;
+      const byKey = new Map();
+      for (const e of (doc.entries || [])) { const k = String((e && e.pubkey) || '').toLowerCase(); if (k && !byKey.has(k)) byKey.set(k, e); }
+      if (!byKey.size) return fallback;
+      const key = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
+      const shippedUrls = new Set([...CANONICAL_RELAYS, ...Object.keys(CANONICAL_RELAY_PUBS || {})].map(key));
+      const shippedKeys = new Set(Object.values(CANONICAL_RELAY_PUBS || {}).flat().map(k => String(k || '').toLowerCase()));
+      const picks = [];
+      for (const u of (relaysForChurch(cp) || [])) {
+        if (typeof u !== 'string' || !/^wss:\/\//i.test(u)) continue;
+        if (shippedUrls.has(key(u)) || _inviteHostIsPrivate(u)) continue;
+        const k = _gate.provedKey(u, cp);
+        if (!k || shippedKeys.has(k)) continue;
+        const entry = byKey.get(k);
+        if (entry) picks.push({ u, entry });
+      }
+      if (!picks.length) return fallback;
+      picks.sort((a, b) => ((b.entry.alwaysOn !== false) - (a.entry.alwaysOn !== false)) || (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+      const best = picks[0];
+      const nm = (typeof best.entry.name === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(best.entry.name)) ? best.entry.name : '';
+      return { relay: best.u, relayname: nm };
+    } catch (e) { return fallback; }
   },
 
   // ── read the reading plans a church shares (kind-30078, d=plan:) ──

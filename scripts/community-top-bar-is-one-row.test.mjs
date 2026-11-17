@@ -79,7 +79,7 @@ const RESERVE_NOW = 121, RESERVE_OLD = 156;
 
 // THE LIVE COMMUNITY SCREEN in the miniature React (layer A) — and the tree layer B serialises. `docL` captures every
 // document listener the header registers; `focused` records what the screen asked to focus.
-function mountChat({ width, banner, hideName = false, dmUnread = true, name = LONG, networks = false }) {
+function mountChat({ width, banner, hideName = false, dmUnread = true, name = LONG, networks = false, invite = false, joinState = null, minor = false }) {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const safeImgUrl = u => (typeof u === 'string' && u.startsWith('data:image/') ? u : '');
@@ -116,12 +116,15 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
     SectionLabel: ({ children }) => children,
     safeCssColor: c => c, relTime: () => 'now', D: { GROUPS: [], RELAYS: [] },
   });
-  const calls = { openDMInbox: 0, openProfile: 0 };
+  const calls = { openDMInbox: 0, openProfile: 0, openInvite: 0 };
   const ctx = {
     toast() {}, church: { npub: 'npub1c', name, id: 'c1', initials: 'SB', banner: banner ? GIF : undefined, features: hideName ? { hideChurchName: true } : undefined },
-    joinState: { loaded: true, isPending: false, removed: false, offline: false, unknown: false },
-    myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor: false, clearanceKnown: true },
+    // `invite`: an OPEN church (PLAN-member-invite-open-church-2026-11-17) — the join state subscribeChurchJoin + app.jsx
+    // produce for it: openKnown, tagged with this church's id. `joinState` overrides it whole for the absent cases.
+    joinState: joinState || { loaded: true, isPending: false, removed: false, offline: false, unknown: false, ...(invite ? { approval: false, openKnown: true, churchId: 'c1' } : {}) },
+    myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor: !!minor, clearanceKnown: true },
     openPeople() {}, openDM() {}, openDMInbox() { calls.openDMInbox++; }, openGroup() {}, openProfile() { calls.openProfile++; }, openChurchSwitcher() {},
+    openInvite() { calls.openInvite++; },
     dmUnread, churchNetworks: networks ? [{ networkPub: 'netpub1', npub: 'npub1net', name: 'The Fellowship' }] : undefined,
   };
   const M = { ctx, calls, docL, focused, focusCalls, scroll, tree: null, ChurchPill,
@@ -218,11 +221,14 @@ CASES.push({ width: 320, banner: true, open: true, hideName: true });
 CASES.push({ width: 320, banner: true, open: true, inset: 47 }, { width: 390, banner: true, open: true, inset: 47 },
   { width: 390, banner: true, open: true, inset: 59 }, { width: 360, banner: true, open: true, inset: 59 },
   { width: 320, banner: true, open: true, networks: true }, { width: 320, banner: true, open: true, networks: true, inset: 47 });
+// AN OPEN CHURCH: the menu holds THREE items (Search, Profile, Invite someone) — at the narrowest phone, both layouts, and on a notch
+CASES.push({ width: 320, banner: false, open: true, invite: true }, { width: 320, banner: true, open: true, invite: true },
+  { width: 360, banner: false, open: true, invite: true }, { width: 390, banner: true, open: true, invite: true, inset: 59 });
 // the console preview at a wide container and a narrow one
 CASES.push({ width: 760, preview: true }, { width: 320, preview: true });
 const PAGES = CASES.map(c => communityPage(c));
 if (process.env.DUMP_PAGES) PAGES.forEach((p, k) => writeFileSync(process.env.DUMP_PAGES + '/c' + k + '.html', p.html));
-const caseLabel = c => `${c.width}px, ${c.preview ? 'CONSOLE PREVIEW' : c.banner ? 'banner church' : 'compact-pill church'}${c.open ? ', menu OPEN' : ''}${c.hideName ? ', name hidden' : ''}${c.inset ? ', top inset ' + c.inset + 'px' : ''}${c.networks ? ', church in a network' : ''}`;
+const caseLabel = c => `${c.width}px, ${c.preview ? 'CONSOLE PREVIEW' : c.banner ? 'banner church' : 'compact-pill church'}${c.open ? ', menu OPEN' : ''}${c.hideName ? ', name hidden' : ''}${c.inset ? ', top inset ' + c.inset + 'px' : ''}${c.networks ? ', church in a network' : ''}${c.invite ? ', OPEN church (Invite someone)' : ''}`;
 
 before(async () => {
   if (!CHROME) return;
@@ -280,7 +286,10 @@ async function rects(i) {
       reach: { dm: hit(dm), chev: hit(chev) }, expanded: chev && chev.getAttribute('aria-expanded'),
       name: nameEl ? { clipped: nameEl.scrollWidth > nameEl.clientWidth, h: Math.round(nameEl.getBoundingClientRect().height) } : null,
       panel: panelEl ? { box: box(panelEl), bg: getComputedStyle(panelEl).backgroundColor,
-        btns: [...panelEl.querySelectorAll(':scope > button')].map(b => ({ id: b.getAttribute('data-hdr-item'), aria: b.getAttribute('aria-label'), text: (b.lastElementChild ? b.lastElementChild.textContent : b.textContent).trim(), ...box(b), hit: hit(b), hitEdges: hitEdges(b) })) } : null }); })()`;
+        btns: [...panelEl.querySelectorAll(':scope > button')].map(b => { const lab = b.lastElementChild; const lb = lab ? lab.getBoundingClientRect() : null, bb = b.getBoundingClientRect();
+          return { id: b.getAttribute('data-hdr-item'), aria: b.getAttribute('aria-label'), text: (lab ? lab.textContent : b.textContent).trim(), ...box(b), hit: hit(b), hitEdges: hitEdges(b),
+            // the label's own box must sit INSIDE its button: a word wider than a third of a 320px menu spills over its neighbour
+            labelInside: !lb || (lb.left >= bb.left - 0.5 && lb.right <= bb.right + 0.5 && lb.top >= bb.top - 0.5 && lb.bottom <= bb.bottom + 0.5) }; }) } : null }); })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   assert.ok(!(r.result && r.result.exceptionDetails), 'probe threw: ' + JSON.stringify(r.result && r.result.exceptionDetails || {}).slice(0, 300));
   return JSON.parse(r.result.result.value);
@@ -350,19 +359,20 @@ for (const [i, c] of CASES.entries()) {
   });
 
   if (c.open) {
-    test(`Community menu OPEN: Search + Profile, where the thumb is, 44px+, hit at each centre — ${label}`, { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+    test(`Community menu OPEN: Search + Profile${c.invite ? ' + Invite someone' : ''}, where the thumb is, 44px+, hit at each centre — ${label}`, { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
       const m = await measure(i);
       assert.ok(m.panel, 'the chevron was opened but no panel is in the tree');
-      assert.deepEqual(m.panel.btns.map(b => b.id), ['search', 'profile']);
-      assert.deepEqual(m.panel.btns.map(b => b.text), ['Search', 'Profile']);
+      assert.deepEqual(m.panel.btns.map(b => b.id), c.invite ? ['search', 'profile', 'invite'] : ['search', 'profile']);
+      assert.deepEqual(m.panel.btns.map(b => b.text), c.invite ? ['Search', 'Profile', 'Invite someone'] : ['Search', 'Profile']);
       assert.equal(m.panel.btns[1].aria, 'Profile', 'the Profile item has an accessible name');
       for (const b of m.panel.btns) {
         assert.ok(b.h >= 44 && b.w >= 44, `menu item "${b.text}" is ${b.w}x${b.h}, want >= 44`);
         assert.ok(b.x >= 0 && b.right <= m.vw && b.y >= 0 && b.bottom <= m.vh, `menu item "${b.text}" is outside the ${m.vw}x${m.vh} viewport (${b.x}..${b.right}, ${b.y}..${b.bottom})`);
         assert.ok(b.hit, `HIT TEST: the element at the centre of "${b.text}" is not that item — something covers it`);
         assert.ok(b.hitEdges, `HIT TEST: at the TOP, CENTRE or BOTTOM edge of "${b.text}" (y ${b.y}..${b.bottom}) the element hit is not that item — a card is painted over the menu`);
+        assert.ok(b.labelInside, `the label "${b.text}" spills outside its own button (${b.x}..${b.right}) — it would draw over its neighbour`);
       }
-      assert.ok(m.panel.btns[0].right <= m.panel.btns[1].x, 'the two menu items overlap');
+      for (let k = 1; k < m.panel.btns.length; k++) assert.ok(m.panel.btns[k - 1].right <= m.panel.btns[k].x, `menu items ${k - 1} and ${k} overlap`);
       if (c.banner) {
         // BANNER MODE: DIRECTLY under the chevron, over the banner, on a SOLID surface — not 150px away under the image.
         const gap = m.panel.box.y - m.chev.bottom;
@@ -533,6 +543,55 @@ test('A. Android hardware Back closes the open menu through the app\'s back stac
     M.redraw();
     assert.equal(M.panel(), null, 'Back closes the menu');
     assert.equal(M.calls.openProfile + M.calls.openDMInbox, 0, 'Back must not pick anything');
+  }
+});
+
+// ── LAYER A: "Invite someone" for an OPEN church (PLAN-member-invite-open-church-2026-11-17) ───────────────────────────
+test('A. an OPEN church: "Invite someone" is in the menu, opens the SAME invite sheet as the steward button exactly once, and closes the menu', () => {
+  for (const banner of [false, true]) {
+    const M = mountChat({ width: 360, banner, invite: true });
+    assert.equal(M.item('invite'), null, 'nothing is drawn while the menu is closed');
+    openMenu(M);
+    const it = M.item('invite');
+    assert.ok(it, `an open church's menu has no "Invite someone" (banner=${banner})`);
+    assert.ok(reads(it).includes('Invite someone'), 'visible words, not just an icon');
+    assert.deepEqual(find(M.panel(), n => n.type === 'button').map(b => b.props['data-hdr-item']), ['search', 'profile', 'invite']);
+    it.props.onClick(); M.redraw();
+    assert.equal(M.calls.openInvite, 1, 'picking it must open the invite sheet (ctx.openInvite) once');
+    assert.equal(M.panel(), null, 'picking it closes the menu');
+    assert.equal(M.calls.openProfile + M.calls.openDMInbox, 0);
+  }
+});
+
+test('A. a CHILD in an open church sees "Invite someone" too (owner decision: "it\'s just an invite, and read only")', () => {
+  const M = mountChat({ width: 360, banner: false, invite: true, minor: true });
+  openMenu(M);
+  assert.ok(M.item('invite'), 'no child gate on the invite item');
+});
+
+test('A. NO "Invite someone" unless the church is KNOWN open, and known for THIS church: approval on, unknown, not loaded, never heard, another church', () => {
+  const base = { loaded: true, isPending: false, removed: false, offline: false, unknown: false };
+  const cases = {
+    'approval required (openKnown false)': { ...base, approval: true, openKnown: false, churchId: 'c1' },
+    'no policy heard (no openKnown field)': { ...base, approval: false, churchId: 'c1' },
+    'unknown (relay never answered)': { ...base, approval: false, openKnown: true, churchId: 'c1', offline: true, unknown: true },
+    'not loaded yet': { ...base, loaded: false, approval: false, openKnown: true, churchId: 'c1' },
+    'the answer is about ANOTHER church (one render behind a switch)': { ...base, approval: false, openKnown: true, churchId: 'c-previous' },
+    'no church id at all': { ...base, approval: false, openKnown: true },
+    'openKnown is truthy but not true': { ...base, approval: false, openKnown: 1, churchId: 'c1' },
+  };
+  // the CONTROL row: the same state, but open for this church, DOES show it — so an absence below is the gate, not the rig
+  const ctl = mountChat({ width: 360, banner: false, joinState: { ...base, approval: false, openKnown: true, churchId: 'c1' } });
+  openMenu(ctl);
+  assert.ok(ctl.item('invite'), 'CONTROL: an open church for the church on screen shows the item — re-anchor this test');
+  for (const [what, joinState] of Object.entries(cases)) {
+    for (const banner of [false, true]) {
+      const M = mountChat({ width: 360, banner, joinState });
+      openMenu(M);
+      assert.ok(M.panel(), 'anchor: the menu opened');
+      assert.equal(M.item('invite'), null, `"Invite someone" shown when ${what} (banner=${banner})`);
+      assert.equal(find(M.panel(), n => n.type === 'button').length, 2, `${what}: Search and Profile only`);
+    }
   }
 });
 

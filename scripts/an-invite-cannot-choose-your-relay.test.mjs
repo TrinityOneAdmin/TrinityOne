@@ -28,6 +28,7 @@ import { normalizeURL } from 'nostr-tools/utils';
 import { WebSocket as NodeWebSocket } from 'ws';
 import { fnBody, stmt } from './test-slice.mjs';
 import * as H from './relay-network-harness.mjs';
+import { loadScreen } from './render-jsx-screen.mjs';
 
 const RELAY_NET_D = 'trinityone/relay-net';
 const read = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf8');
@@ -729,4 +730,53 @@ test('a clone DESTINATION takes the full gate, and a non-member target ends up h
       'the destination gate let a church\'s entire history — every document, every name, every sealed care request — ' +
       'land on a relay nobody vouched for');
   } finally { con.close(); }
+});
+
+// ── 5. A MEMBER'S INVITE IS RECEIVED EXACTLY LIKE THE CONSOLE'S (PLAN-member-invite-open-church-2026-11-17) ──────────
+// Any member of an open church can now share its join link, and for a self-hosted church that link names the church's
+// own box, as Steward.joinUrl() does. Nothing changed on the RECEIVING side, and this proves it stayed that way: the link
+// a member's phone builds (the shipped joinLinkFor, compiled from app/identity-extras.jsx) and the link the console builds
+// (the shipped Steward.joinUrl, out of vendor/steward.js) are fed to the shipped adoptInviteRelays on fresh phones, and
+// get the same answer — the church's signed box adopted, a box it never signed for refused.
+//
+// WHAT IS SUPPLIED, not chosen by shipped code here: the member phone's Fellowship.inviteRelayFor answer. These relays
+// are on 127.0.0.1 (TLS faked at the transport, see the top of this file), and inviteRelayFor rightly REFUSES a loopback
+// box for a link that travels (amendment M3). Its own choice is driven from the bundle in
+// scripts/a-member-can-invite-to-an-open-church.test.mjs; this case is about what a RECEIVING phone does with the link.
+function memberLink(answer) {
+  const { joinLinkFor } = loadScreen('app/identity-extras.jsx', ['joinLinkFor'], {
+    React: { createElement: () => null, useState: () => [null, () => {}], useEffect: () => {} },
+    window: { Fellowship: { CANONICAL_RELAY: 'wss://canonical.invalid/relay', inviteRelayFor: () => answer } },
+  });
+  return joinLinkFor({ church: { npub: npubEncode(church.pub) } });
+}
+function stewardLink(relay) {
+  const m = fnBody(STEWARD, '    joinUrl() {', 'Steward.joinUrl');
+  const f = new Function('window', 'location', 'ownIsLoopback', 'selfPublicRelay', 'selfRelayName', 'ownRelay', 'return { ' + m + ' };');
+  return f({ Steward: { npub: npubEncode(church.pub) } }, undefined, () => false, () => '', () => '', () => relay).joinUrl();
+}
+test('a link a MEMBER shares is received exactly like the console\'s joinUrl() link: the signed box adopted, an unsigned one refused', async () => {
+  const signed = secure(SIGNED.wsUrl), stranger = secure(STRANGER.wsUrl);
+  const mLink = memberLink({ relay: signed, relayname: 'signed-box' });
+  const sLink = stewardLink(signed);
+  const q = (u) => new URL(u).searchParams;
+  assert.equal(q(mLink).get('follow'), npubEncode(church.pub));
+  assert.equal(q(mLink).get('relay'), signed, 'anchor: the member link names the box inviteRelayFor chose');
+  assert.equal(q(mLink).get('relayname'), 'signed-box');
+  assert.equal(q(sLink).get('relay'), signed, 'anchor: the console link names the same box');
+  const receive = async (link) => {
+    const app = memberOn({ church, relays: [], canonical: [] });
+    try { app.relays().push(secure(DIR.wsUrl)); return await app.adoptInviteRelays(church.pub, new URL(link).search); }
+    finally { app.close(); }
+  };
+  const fromMember = await receive(mLink), fromConsole = await receive(sLink);
+  assert.deepEqual(fromConsole.added, [signed], 'CONTROL: the console\'s own link adopts the church\'s signed box');
+  assert.deepEqual(fromMember.added, fromConsole.added, 'a member\'s link must be adopted exactly as the console\'s is');
+  assert.deepEqual(fromMember.refused, fromConsole.refused);
+  // and a member link that somehow named a box the church never signed for is refused like any crafted link
+  const bad = await receive(memberLink({ relay: stranger, relayname: 'stranger' }));
+  const badConsole = await receive(stewardLink(stranger));
+  assert.deepEqual(bad.added, [], 'a member link naming an unsigned box adopted it');
+  assert.deepEqual(bad.refused, [stranger]);
+  assert.deepEqual(bad.refused, badConsole.refused, 'refused exactly as the same link from the console is');
 });

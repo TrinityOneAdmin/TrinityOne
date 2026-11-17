@@ -533,6 +533,16 @@ function ChatScreen({ ctx }) {
           { id: 'profile', label: 'Profile', ariaLabel: 'Profile', title: 'Your anonymous identity', onPick: () => ctx.openProfile(),
             iconNode: <span style={{ position: 'relative', lineHeight: 0 }}><UserAvatar av={myAvatar(id)} name={myName(id)} size={28} /></span> },
         ];
+        // ANY MEMBER OF AN OPEN CHURCH MAY SHARE ITS JOIN LINK (owner 2026-11-17, reference/DOMAIN.md; PLAN-member-invite-
+        // open-church-2026-11-17). Only when the church is KNOWN not to need approval: openKnown is default-deny (no policy
+        // document, a deletion or approval:true are all "not open"), and it must belong to the church on screen — joinState
+        // is per-church and is one render behind a church switch (L1). Children too, by decision ("it's just an invite").
+        // The same sheet as the steward's own invite.
+        const joinNow = ctx.joinState || {};
+        if (joinNow.loaded && joinNow.openKnown === true && !joinNow.unknown && ctx.church && joinNow.churchId != null && joinNow.churchId === ctx.church.id
+          && /^npub1[0-9a-z]+$/.test(ctx.church.npub || '') && typeof ctx.openInvite === 'function') {
+          menuItems.push({ id: 'invite', label: 'Invite someone', icon: 'qr', onPick: () => ctx.openInvite() });
+        }
         const topMb = (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20);
         const hasBanner = !!(ctx.church && ctx.church.banner);
         return hasBanner ? (
