@@ -8194,18 +8194,20 @@
     h = h.replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
     if (!h) return true;
     if (h === "localhost" || h.endsWith(".localhost")) return true;
-    if (h.endsWith(".local") || h.endsWith(".lan") || h === "home.arpa" || h.endsWith(".home.arpa")) return true;
+    if (h.endsWith(".local") || h.endsWith(".lan") || h === "home.arpa" || h.endsWith(".home.arpa") || h.endsWith(".internal")) return true;
     if (h.includes(":")) {
       if (h === "::1" || h === "::") return true;
       if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true;
-      if (/^fe[89ab][0-9a-f]?:/.test(h)) return true;
+      if (/^fe[89a-f][0-9a-f]?:/.test(h)) return true;
       if (h.startsWith("::ffff:")) return true;
+      if (/^::[0-9a-f]{1,4}(:[0-9a-f]{1,4})?$/.test(h)) return true;
+      if (h.startsWith("64:ff9b:")) return true;
       return false;
     }
     const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
     if (m) {
       const a = +m[1], b = +m[2];
-      return a === 127 || a === 0 || a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254;
+      return a === 127 || a === 0 || a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254 || a >= 224;
     }
     if (!h.includes(".")) return true;
     return false;
@@ -13216,11 +13218,16 @@
       const _openKnown = () => {
         const roster = _churchRoster.get(pubk);
         let win = null;
+        let winBy = "";
         for (const [author, v] of policyByAuthor) {
-          if (author !== pubk && !(roster && roster.has(author))) continue;
-          if (!win || v.at > win.at || v.at === win.at && String(v.id) < String(win.id)) win = v;
+          if (!win || v.at > win.at || v.at === win.at && String(v.id) < String(win.id)) {
+            win = v;
+            winBy = author;
+          }
         }
-        return !!(win && win.open);
+        if (!win) return false;
+        if (winBy !== pubk && !(roster && roster.has(winBy))) return false;
+        return !!win.open;
       };
       const emit = () => {
         const isAdmitted = !!(me && _admittedUnion().has(me));
@@ -13255,6 +13262,10 @@
                 }
               }
               policyByAuthor.set(e.pubkey, { at, id, open });
+            }
+            if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) {
+              emit();
+              return;
             }
           }
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;

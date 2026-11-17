@@ -1838,21 +1838,23 @@ function _inviteHostIsPrivate(url) {
   h = h.replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
   if (!h) return true;
   if (h === 'localhost' || h.endsWith('.localhost')) return true;
-  if (h.endsWith('.local') || h.endsWith('.lan') || h === 'home.arpa' || h.endsWith('.home.arpa')) return true;
+  if (h.endsWith('.local') || h.endsWith('.lan') || h === 'home.arpa' || h.endsWith('.home.arpa') || h.endsWith('.internal')) return true;
   if (h.includes(':')) {
     // IPv6: loopback / unspecified, fc00::/7 (unique local), fe80::/10 (link local), and every IPv4-mapped
     // form (the URL parser rewrites ::ffff:127.0.0.1 to hex, so refuse the whole prefix rather than decode it).
     if (h === '::1' || h === '::') return true;
     if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true;
-    if (/^fe[89ab][0-9a-f]?:/.test(h)) return true;
+    if (/^fe[89a-f][0-9a-f]?:/.test(h)) return true;              // fe80::/10 link local, fec0::/10 site local
     if (h.startsWith('::ffff:')) return true;
+    if (/^::[0-9a-f]{1,4}(:[0-9a-f]{1,4})?$/.test(h)) return true;  // ::/96 IPv4-compatible (::127.0.0.1 → ::7f00:1)
+    if (h.startsWith('64:ff9b:')) return true;                     // NAT64 64:ff9b::/96 (and the local-use /48)
     return false;
   }
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
   if (m) {
     const a = +m[1], b = +m[2];
     return a === 127 || a === 0 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
-      || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254);
+      || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || a >= 224;   // 224/4 multicast, 240/4 + broadcast
   }
   if (!h.includes('.')) return true;   // a dotless name resolves only on the network that named it
   return false;
@@ -7007,20 +7009,26 @@ window.Fellowship = {
     // screens and is deliberately left as it is in this change. `openKnown` gates something a member can DO
     // (share the church's join link from the community menu), so it is default-deny and order-independent:
     //   · each author's NEWEST joinpolicy copy is kept, whoever they are (like admittedByAuthor) — a copy that
-    //     arrives before the roster is not thrown away, it is simply not counted yet;
-    //   · trust is decided when it is READ, on every emit: the church key, or a steward on the CURRENT roster;
-    //   · of the trusted copies the newest wins (a same-second tie goes to the lowest id, as the relays decide);
-    //   · open only if that winner is a live document whose approval is false. No document, a deletion, an empty
-    //     or unparseable body, or approval:true → false. "We never heard" is never "open".
+    //     arrives before the roster is not thrown away;
+    //   · the newest copy OVERALL wins, whoever signed it (a same-second tie goes to the lowest id, as the relays
+    //     decide), and trust is decided when it is READ, on every emit: the church key, or a steward on the
+    //     CURRENT roster;
+    //   · open only if that newest copy is TRUSTED and is a live document whose approval is false. A newer copy
+    //     from a key we cannot (yet, or any longer) trust makes the answer UNKNOWN, i.e. not open — it does not
+    //     fall back to an older trusted "open" (audit of 928e87c9). Default-deny: a stranger's copy can at worst
+    //     hide this button, never show it. No document, a deletion, an empty or unparseable body, or
+    //     approval:true → false. "We never heard" is never "open".
     const policyByAuthor = new Map();   // author pubkey -> { at, id, open }
     const _openKnown = () => {
       const roster = _churchRoster.get(pubk);
       let win = null;
+      let winBy = '';
       for (const [author, v] of policyByAuthor) {
-        if (author !== pubk && !(roster && roster.has(author))) continue;
-        if (!win || v.at > win.at || (v.at === win.at && String(v.id) < String(win.id))) win = v;
+        if (!win || v.at > win.at || (v.at === win.at && String(v.id) < String(win.id))) { win = v; winBy = author; }
       }
-      return !!(win && win.open);
+      if (!win) return false;
+      if (winBy !== pubk && !(roster && roster.has(winBy))) return false;   // newest copy is untrusted → unknown
+      return !!win.open;
     };
     const emit = () => { const isAdmitted = !!(me && _admittedUnion().has(me));
       onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed, openKnown: _openKnown() }); };
@@ -7043,6 +7051,10 @@ window.Fellowship = {
             if (!e.tags.some(t => t[0] === 'deleted') && e.content) { try { const j = JSON.parse(e.content); open = !!(j && typeof j === 'object' && j.approval === false); } catch { open = false; } }
             policyByAuthor.set(e.pubkey, { at, id, open });
           }
+          // An UNTRUSTED author's copy is dropped by the check below without an emit, but it can change openKnown
+          // (a newer untrusted copy makes it unknown), so say so now. approval/isAdmitted/isPending are re-emitted
+          // with the values they already had.
+          if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) { emit(); return; }
         }
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
         if (d === 'trinityone/joinpolicy:' + pubk) { if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit(); }

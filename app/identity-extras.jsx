@@ -550,8 +550,10 @@ function MovePhoneSheet({ open, onClose, ctx }) {
 function InviteSheet({ open, onClose, identity, ctx }) {
   // L4: a friend invite is a JOIN LINK — no identity handed over. They open it, their app mints its own key,
   // and they follow the church (held pending until a steward admits them if approval is required).
-  const url = joinLinkFor(ctx);
-  const qrSvg = (window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
+  // Only while OPEN: this sheet is always mounted (app.jsx), and the link asks Fellowship.inviteRelayFor, which walks
+  // the church's admitted relay set. A closed sheet has nothing to show. NostrSheet's invite pane is already open-only.
+  const url = open ? joinLinkFor(ctx) : '';
+  const qrSvg = (url && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
   const shareInvite = async () => {
     if (!url) return;
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;

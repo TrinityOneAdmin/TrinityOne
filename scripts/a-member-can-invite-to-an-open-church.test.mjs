@@ -114,16 +114,30 @@ test('GATE H1: the church says approval ON at 200 and an older steward copy says
   }
 });
 
-test('GATE H1: a steward\'s newer "approval ON" that arrives BEFORE the roster is counted the moment the roster names them', () => {
+test('GATE H1: a NEWER copy from a key not (yet) on the roster makes it UNKNOWN — never a fall back to an older "open"', () => {
   const j = joinSub();   // no roster yet
   j.live(policy(church, 100, { approval: false }));
   assert.equal(j.open(), true, 'anchor: the church alone says open');
   j.live(policy(steward, 200, { approval: true }));
-  assert.equal(j.open(), true, 'a copy from a key not (yet) on the roster does not count');
+  assert.equal(j.open(), false, 'a newer copy from a key we cannot trust yet must not leave the older church "open" standing');
   j.setRoster([steward.pub]);
-  assert.equal(j.open(), false, 'the roster arrived naming that steward: their newer approval-ON copy, kept from before, now wins');
+  assert.equal(j.open(), false, 'the roster arrived naming that steward: their newer approval-ON copy, kept from before, is the answer');
+  // and the same for a newer approval-OFF from an untrusted key: still not open until trusted
+  const k = joinSub();
+  k.live(policy(church, 100, { approval: true }));
+  k.live(policy(steward, 200, { approval: false }));
+  assert.equal(k.open(), false, 'an untrusted newer "open" cannot open the church');
+  k.setRoster([steward.pub]);
+  assert.equal(k.open(), true, 'once the roster names them, their newer approval-OFF is trusted and wins');
+});
+
+test('GATE: a steward REMOVED from the roster after setting approval ON → still NOT open (their copy is newest and now untrusted)', () => {
+  const j = joinSub({ roster: [steward.pub] });
+  j.live(policy(church, 100, { approval: false }));
+  j.live(policy(steward, 200, { approval: true }));
+  assert.equal(j.open(), false, 'anchor: the trusted steward turned approval on');
   j.setRoster([]);
-  assert.equal(j.open(), true, 'the steward is revoked: their copy stops counting and the church\'s own answer stands again');
+  assert.equal(j.open(), false, 'revoking the steward must not fall back to the church\'s older "open"');
 });
 
 test('GATE: a later deletion, an empty body, approval:true, or garbage from the winner → NOT open', () => {
@@ -139,6 +153,10 @@ test('GATE: a later deletion, an empty body, approval:true, or garbage from the 
   const m = joinSub();
   m.live(policy(church, 100, {}));
   assert.equal(m.open(), false, 'a document that does not SAY approval:false is not open (default-deny)');
+  const d = joinSub();
+  d.live(policy(church, 100, { approval: false }));
+  d.live(policy(church, 200, { approval: false }, true));
+  assert.equal(d.open(), false, 'a copy carrying a `deleted` tag is a deletion even if its body still says approval:false');
   const o = joinSub();
   o.live(policy(church, 300, { approval: false }));
   o.live(policy(church, 200, null, true));
@@ -152,6 +170,12 @@ test('GATE: a copy signed by a key that is neither the church nor on its roster 
   j.live(policy(church, 100, { approval: true }));
   j.live(policy(stranger, 600, { approval: false }));
   assert.equal(j.open(), false);
+  // DEFAULT-DENY, accepted cost: a stranger's NEWER copy also blocks a genuinely open church. At worst it hides a button.
+  const k = joinSub();
+  k.live(policy(church, 100, { approval: false }));
+  assert.equal(k.open(), true, 'anchor');
+  k.live(policy(stranger, 200, { approval: false }));
+  assert.equal(k.open(), false, 'a newer untrusted copy makes the answer unknown, whatever it says');
 });
 
 test('GATE: a same-second tie between two trusted copies goes to the LOWEST event id, as the relays decide it', () => {
@@ -236,7 +260,9 @@ test('BOX M3: an admitted, signed own box on a loopback / private / LAN / link-l
   const hosts = ['wss://127.0.0.1:4848/relay', 'wss://localhost/relay', 'wss://192.168.1.20/relay', 'wss://10.0.0.5/relay',
     'wss://172.20.1.1/relay', 'wss://100.100.7.7/relay', 'wss://169.254.3.3/relay', 'wss://0.0.0.0/relay', 'wss://[::1]/relay',
     'wss://[fd12::1]/relay', 'wss://[fe80::1]/relay', 'wss://box.local/relay', 'wss://box.lan/relay', 'wss://box.home.arpa/relay',
-    'wss://relaybox/relay', 'wss://2130706433/relay', 'wss://[::ffff:127.0.0.1]/relay'];
+    'wss://relaybox/relay', 'wss://2130706433/relay', 'wss://[::ffff:127.0.0.1]/relay',
+    'wss://[::127.0.0.1]/relay', 'wss://[::7f00:1]/relay', 'wss://[64:ff9b::7f00:1]/relay', 'wss://[fec0::1]/relay',
+    'wss://224.0.0.1/relay', 'wss://239.1.2.3/relay', 'wss://255.255.255.255/relay', 'wss://box.internal/relay'];
   for (const u of hosts) {
     const K = hex();
     const f = inviter({ relays: [u], admitted: { [u]: K }, docs: { [church.pub]: doc([{ pubkey: K, alwaysOn: true, url: u, name: 'home' }]) } });
@@ -246,6 +272,11 @@ test('BOX M3: an admitted, signed own box on a loopback / private / LAN / link-l
   const K = hex(), pubHost = 'wss://172.32.0.1/relay';
   const ok = inviter({ relays: [pubHost], admitted: { [pubHost]: K }, docs: { [church.pub]: doc([{ pubkey: K, alwaysOn: true, url: pubHost }]) } });
   assert.deepEqual(ok.pick(NP), { relay: pubHost, relayname: '' }, 'an ordinary public address must still be chosen');
+  for (const pub of ['wss://[2001:db8:5::1]/relay', 'wss://223.255.1.1/relay', 'wss://internal.example.org/relay']) {
+    const K2 = hex();
+    const f2 = inviter({ relays: [pub], admitted: { [pub]: K2 }, docs: { [church.pub]: doc([{ pubkey: K2, alwaysOn: true, url: pub }]) } });
+    assert.deepEqual(f2.pick(NP), { relay: pub, relayname: '' }, `CONTROL: ${pub} is a public address`);
+  }
 });
 
 test('BOX rule 10: a box in the raw relay list that the gate has NOT admitted is never chosen, even though the church signed its key', () => {
@@ -268,6 +299,10 @@ test('BOX: never a shipped relay (by address or by its shared key), never ws://;
   const alias = 'wss://a8-alias.example.org/relay';
   const f = inviter({ relays: [alias], admitted: { [SHIPPED]: SHARED_KEY, [alias]: SHARED_KEY }, docs: { [church.pub]: doc([{ pubkey: SHARED_KEY, alwaysOn: true, url: SHIPPED }]) } });
   assert.deepEqual(f.pick(NP), { relay: SHIPPED, relayname: '' }, 'the shared box at another address is still the shared box: no own-box name');
+  // a SHIPPED ADDRESS answering with a NON-shared key the church signed (only the address check stands in the way)
+  const KX = hex();
+  const s2 = inviter({ relays: [], admitted: { [SHIPPED]: KX }, docs: { [church.pub]: doc([{ pubkey: KX, alwaysOn: true, url: SHIPPED, name: 'imposter' }]) } });
+  assert.deepEqual(s2.pick(NP), { relay: SHIPPED, relayname: '' }, 'a shipped address is never "the church\'s own box", whatever key it proves');
   const K = hex(), plain = 'ws://box.stmarys-example.org/relay';
   const g = inviter({ relays: [plain], admitted: { [plain]: K }, docs: { [church.pub]: doc([{ pubkey: K, alwaysOn: true, url: plain }]) } });
   assert.deepEqual(g.pick(NP), { relay: SHIPPED, relayname: '' }, 'a cleartext relay never goes in a link (L5)');
@@ -328,6 +363,20 @@ test('SHEET: with no own box (cold cache) the shared link is exactly the old one
     const t = inviteSheet({ CANONICAL_RELAY: SHIPPED, inviteRelayFor: bad });
     assert.deepEqual(qs(await t.share()), { follow: NP, relay: SHIPPED }, 'a bad or shared-relay answer must leave the old link, with no name');
   }
+});
+
+test('SHEET: a CLOSED sheet (it is always mounted) does not compute the link at all', () => {
+  let calls = 0;
+  const { React, draw } = miniReact();
+  const win = { Fellowship: { CANONICAL_RELAY: SHIPPED, inviteRelayFor: () => { calls++; return null; } }, TrinityIdentity: { qrSVG: () => '<svg/>' }, addEventListener() {}, removeEventListener() {} };
+  const { InviteSheet } = loadScreen('app/identity-extras.jsx', ['InviteSheet'], { React, window: win,
+    Icon: () => null, BottomSheet: (p) => (p.open ? p.children : null), Sheet: (p) => p.children, IconBtn: () => null, copyText: () => {},
+    document: { createElement: () => ({ style: {} }), body: {}, addEventListener() {}, removeEventListener() {} } });
+  const ctx = { church: { npub: NP, name: 'St Mary', id: NP }, toast() {} };
+  draw(InviteSheet, { open: false, onClose() {}, ctx, identity: {} });
+  assert.equal(calls, 0, 'a closed invite sheet asked inviteRelayFor for a link nobody can see');
+  draw(InviteSheet, { open: true, onClose() {}, ctx, identity: {} });
+  assert.ok(calls >= 1, 'CONTROL: the open sheet does ask');
 });
 
 // ═══════════════════════════════ 4. THE CHURCH ID on joinState (L1) ═══════════════════════════════
