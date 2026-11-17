@@ -2493,8 +2493,8 @@ function TodayScreen({ ctx }) {
     ? D.VOTD_POOL.find(p => p.ref === votdPick.ref) : null;
   const pick = pickedVerse || dayPick;
   // A random verse DIFFERENT from the one showing (an immediate repeat is skipped; A→B→A is allowed, which is
-  // fine for "random"). stopPropagation: the card behind this button opens the share sheet, and this tap must
-  // not. If the write fails the pick still holds for this session through state.
+  // fine for "random"). stopPropagation: the card behind this button opens the verse in the Bible, and this tap
+  // must not. If the write fails the pick still holds for this session through state.
   const anotherVerse = (e) => {
     if (e && e.stopPropagation) e.stopPropagation();
     const pool = D.VOTD_POOL;
@@ -2550,6 +2550,21 @@ function TodayScreen({ ctx }) {
       ctx.toast('Added to Favourites');
     }
   };
+  // TAPPING THE CARD OPENS THE VERSE IN THE BIBLE (owner 2026-11-17; it used to open the share sheet, which now has
+  // its own Share button on the card). The verse ACTUALLY SHOWN (vloc, from votd.ref, so an "Another verse" pick
+  // too), at that verse, in the active translation. Same rule as votdInTranslation: when the parse fails, has no
+  // verse, no Bible is loaded or the active one lacks the book, open the reader where it is (never a dead tap,
+  // never the share sheet). A church that has turned the Bible tab off (features.read === false, the same
+  // church.features the tab bar reads) gets NO navigation: gotoRef would set tab 'read' and app.jsx's tab guard
+  // would bounce straight back to Today. Owner decision 2026-11-17: then the card tap does nothing.
+  const votdReadOn = !(ctx.church && ctx.church.features && ctx.church.features.read === false);
+  const openVotd = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (!votdReadOn) return;
+    if (vloc && vloc.verse != null && Bible.loaded && Bible.books().includes(vloc.book)) ctx.gotoRef(vloc.book, vloc.chap, vloc.verse);
+    else ctx.openReader();
+  };
+  const shareVotd = (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.openShareSheet(votd); };
   // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) paints the verse-of-the-day and featured-sermon cards. Unset,
   // each card keeps its exact clay gradient and white ink.
   const mainC = (typeof churchMainColor === 'function') ? churchMainColor(ctx.church) : null;
@@ -3068,8 +3083,8 @@ function TodayScreen({ ctx }) {
           <Icon name="chevD" size={18} color={onMain} style={{ flexShrink: 0, opacity: .92 }} />
         </button>
       ) : (
-      <div data-votd-card="1" onClick={() => ctx.openShareSheet(votd)} style={{
-        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
+      <div data-votd-card="1" onClick={openVotd} style={{
+        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: votdReadOn ? 'pointer' : 'default',
         background: mainC ? churchMainGradient(mainC, 155) : 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
         padding: '22px 22px 18px', color: onMain, marginBottom: 22, boxShadow: 'var(--shadow-lg)',
         animation: 'trinityFade .5s ease .05s both',
@@ -3104,7 +3119,14 @@ function TodayScreen({ ctx }) {
           </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
+            {/* The reference is the keyboard / screen-reader way to the passage (the card itself is a plain tap target,
+                not role=button, because it holds three other buttons). Looks exactly like the plain text it replaces.
+                Bible tab off: plain text, since there is nowhere to go. */}
+            {votdReadOn ? (
+              <button type="button" onClick={openVotd} aria-label={'Read ' + votd.ref + ' in the Bible'} style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px', border: 'none', background: 'transparent', color: 'inherit', padding: 0, margin: 0, fontFamily: 'inherit', lineHeight: 'inherit', textAlign: 'left', cursor: 'pointer' }}>{votd.ref} · {votd.version}</button>
+            ) : (
+              <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
+            )}
             <div style={{ display: 'flex', gap: 8 }}>
               {votdKey ? (
                 <button type="button" onClick={votdHeart} aria-label={votdSaved ? 'Remove from Favourites' : 'Add to Favourites'} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)', border: 'none', padding: 0, cursor: 'pointer',
@@ -3112,10 +3134,12 @@ function TodayScreen({ ctx }) {
                   <Icon name="heart" size={17} stroke={2} color={onMain} fill={votdSaved} />
                 </button>
               ) : null}
-              <div style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+              {/* SHARE: was a decorative div that reached the share sheet only by bubbling to the card. The card now opens
+                  the Bible, so this is a real button and stops the tap here. Always shown (unlike the heart). */}
+              <button type="button" onClick={shareVotd} aria-label="Share this verse" style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)', border: 'none', padding: 0, cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
                 <Icon name="share" size={17} stroke={2} color={onMain} />
-              </div>
+              </button>
             </div>
           </div>
         </div>

@@ -119,17 +119,19 @@ function today(Bible, ref = 'Isaiah 40:8') {
   };
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const shared = [];
+  const nav = { gotoRef: [], openReader: 0 };
   const ctx = {
     church: { name: 'Grace', initials: 'G', npub: 'np1' },
     openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
     toast() {}, netUnread: 0, openListen() {}, openShareSheet(v) { shared.push(v); }, openServing() {},
+    gotoRef(b, c, v) { nav.gotoRef.push([b, c, v]); }, openReader() { nav.openReader++; },
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
     churchEvents: [], myRsvps: {}, servPending: [], servNext: null, servingSeenTs: null,
   };
-  return { shared, draw: () => draw(TodayScreen, { ctx }) };
+  return { shared, nav, draw: () => draw(TodayScreen, { ctx }) };
 }
 
-// The verse card is the tappable block that opens the share sheet; its scripture is the paragraph in quotes.
+// The verse card is the tappable block (it opens the verse in the Bible); its scripture is the paragraph in quotes.
 function verseCard(tree) {
   const cards = find(tree, n => typeof (n.props || {}).onClick === 'function' && texts(n).some(t => /Verse of the day/i.test(t)) && texts(n).some(t => t === '“'));
   assert.equal(cards.length >= 1, true, 'the Verse of the Day card is not on the screen (is it minimised?) — nothing below can be true');
@@ -157,11 +159,18 @@ test('Today’s Verse of the Day from a USFM Bible reads as the verse: no markup
   assert.equal(shown, '“The grass withers and the flowers fall, but the word of our God stands forever.”',
     'the Verse of the Day does not read exactly as Isaiah 40:8');
 
-  // TAPPING THE CARD shares what it shows — the share sheet (and copy from it) gets the same clean text.
-  card.props.onClick();
-  assert.equal(t.shared.length, 1, 'tapping the verse card did not open the share sheet');
+  // THE CARD'S SHARE BUTTON shares what it shows — the share sheet (and copy from it) gets the same clean text.
+  // (Owner 2026-11-17: sharing moved from the card tap to this button; the card tap now opens the passage.)
+  const share = find(card, n => n.type === 'button' && (n.props || {})['aria-label'] === 'Share this verse')[0];
+  assert.ok(share, 'the verse card has no "Share this verse" button');
+  share.props.onClick({ stopPropagation() {} });
+  assert.equal(t.shared.length, 1, 'tapping Share did not open the share sheet');
   assert.equal(t.shared[0].text, 'The grass withers and the flowers fall, but the word of our God stands forever.”',
     'the share sheet was handed a different text from the card: ' + JSON.stringify(t.shared[0].text));
+  // TAPPING THE CARD opens Isaiah 40:8 in the (real engine's) Bible, at the verse.
+  card.props.onClick({ stopPropagation() {} });
+  assert.deepEqual(t.nav.gotoRef, [[23, 40, 8]], 'tapping the verse card did not open Isaiah 40:8 in the Bible');
+  assert.equal(t.shared.length, 1, 'tapping the verse card opened the share sheet');
 });
 
 test('…and the same holds for every reader of `text`: the chapter, a nested heading, an entity in scripture', async () => {
