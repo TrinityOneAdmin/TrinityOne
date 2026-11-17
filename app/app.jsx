@@ -1682,10 +1682,10 @@ function App() {
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
-    if (!np || !F || !F.subscribeChurchJoin) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: true }); joinChurchRef.current = null; return; }
+    if (!np || !F || !F.subscribeChurchJoin) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: true, churchId: activeChurch }); joinChurchRef.current = null; return; }
     // show a neutral loading until the sub resolves — stops the community flashing before a pending join resolves.
     // reset only on an actual church change, not a mere reconnect (connTick), else the tab would blink each reconnect.
-    if (joinChurchRef.current !== activeChurch) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: false }); joinChurchRef.current = activeChurch; }
+    if (joinChurchRef.current !== activeChurch) { setJoinState({ approval: false, isAdmitted: true, isPending: false, loaded: false, churchId: activeChurch }); joinChurchRef.current = activeChurch; }
     const WAS_KEY = 'trinityone.wasadmitted.' + activeChurch;
     const unsub = F.subscribeChurchJoin(np, (s) => {
       // REMOVED IS NOT PENDING. A member who was once admitted and is now pending has been taken OUT — blocked,
@@ -1702,7 +1702,9 @@ function App() {
       // access has been removed", which is worse than the "waiting to be let in" the Today card was fixed
       // for, and it was being cached to localStorage as the offline answer. Found by audit, 2026-09-05.
       const removed = !!(wasAdmitted && s.approval && !s.isAdmitted && !s.authFailed);
-      setJoinState({ ...s, removed, loaded: true });
+      // churchId: WHICH church this answer is about. The community menu's "Invite someone" is shown only when it
+      // matches the church on screen, so a stale "open" from the previous church can never paint for one render (L1).
+      setJoinState({ ...s, removed, loaded: true, churchId: activeChurch });
       // Cache this church's LAST-KNOWN real join state, so an offline reopen can show the TRUTH (pending stays
       // pending, admitted stays admitted) instead of a hardcoded "you're in".
       // Cache only what we were ABLE to establish. Caching an unreachable read makes the wrong answer
@@ -1717,7 +1719,7 @@ function App() {
     const offlineT = setTimeout(() => setJoinState(js => {
       if (js && js.loaded) return js;
       let cached = null; try { cached = JSON.parse(localStorage.getItem('trinityone.joinstate.' + activeChurch) || 'null'); } catch (e) {}
-      return cached ? { ...cached, loaded: true, offline: true } : { approval: false, isAdmitted: false, isPending: false, loaded: true, offline: true, unknown: true };
+      return cached ? { ...cached, loaded: true, offline: true, churchId: activeChurch } : { approval: false, isAdmitted: false, isPending: false, loaded: true, offline: true, unknown: true, churchId: activeChurch };
     }), 6000);
     return () => { clearTimeout(offlineT); if (typeof unsub === 'function') unsub(); };
   }, [activeChurch, churches, connTick]);
@@ -2491,7 +2493,7 @@ function App() {
     // ask for — { children, askAtDesk, settled }. There is deliberately NO parent release control anywhere
     // beside it: a parent checking their own child out routes straight round the pickup code.
     myChildren,
-    joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed } for the active church
+    joinState,   // { approval, isAdmitted, isPending, offline, unknown, authFailed, openKnown, churchId } for the active church
     // How far this phone's clock is from the relay's, in whole minutes, when we have actually MEASURED it.
     // Undefined means we could not measure (an older relay does not report its clock, and the HTTP Date
     // header is not CORS-safelisted so a phone cannot read it cross-origin) — the screen then says the clock

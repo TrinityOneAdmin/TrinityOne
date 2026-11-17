@@ -435,9 +435,22 @@ function _inviteChurchNp(ctx) { return (ctx.church && /^npub1[0-9a-z]+$/.test(ct
 // The person who opens it mints their OWN key on-device and follows the church (and, if the church requires
 // approval, is held pending until a steward admits them — like any other member). This removes the old flow
 // where the inviter minted the invitee's seed and therefore knew their key.
+// WHICH RELAY THE LINK NAMES (PLAN-member-invite-open-church-2026-11-17): Fellowship.inviteRelayFor picks this
+// church's OWN box when this phone has ADMITTED it and the church's signed relay-net document names its key (the
+// same link the console's Steward.joinUrl() makes for a self-hosted church), and the shared relay otherwise.
+// &relayname= rides along ONLY with an own box, and only the name from that signed entry. Anything unexpected
+// from it (missing, throws, not wss://) leaves exactly the link this always made. The receiving phone treats
+// &relay= as a hint that must pass its own admission (scripts/an-invite-cannot-choose-your-relay.test.mjs).
+// Callers: InviteSheet (below) and NostrSheet's invite pane (app/screens-chat.jsx, twice).
 function joinLinkFor(ctx) {
   const np = _inviteChurchNp(ctx);
-  return _inviteBase() + '/?follow=' + np + '&relay=' + encodeURIComponent(_inviteRelay());
+  const F = window.Fellowship;
+  let pick = null;
+  try { pick = (np && F && typeof F.inviteRelayFor === 'function') ? F.inviteRelayFor(np) : null; } catch (e) { pick = null; }
+  const shared = _inviteRelay();
+  const relay = (pick && typeof pick.relay === 'string' && /^wss:\/\//i.test(pick.relay)) ? pick.relay : shared;
+  const nm = (relay !== shared && pick && typeof pick.relayname === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(pick.relayname)) ? pick.relayname : '';
+  return _inviteBase() + '/?follow=' + np + '&relay=' + encodeURIComponent(relay) + (nm ? '&relayname=' + encodeURIComponent(nm) : '');
 }
 // The seed-carrying invite is now used ONLY for the guardian→child handoff (safeguarding v2): the parent OWNS
 // the child account they set up and hands its key to the child's device. Kept for that path; the receiving
@@ -537,8 +550,10 @@ function MovePhoneSheet({ open, onClose, ctx }) {
 function InviteSheet({ open, onClose, identity, ctx }) {
   // L4: a friend invite is a JOIN LINK — no identity handed over. They open it, their app mints its own key,
   // and they follow the church (held pending until a steward admits them if approval is required).
-  const url = joinLinkFor(ctx);
-  const qrSvg = (window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
+  // Only while OPEN: this sheet is always mounted (app.jsx), and the link asks Fellowship.inviteRelayFor, which walks
+  // the church's admitted relay set. A closed sheet has nothing to show. NostrSheet's invite pane is already open-only.
+  const url = open ? joinLinkFor(ctx) : '';
+  const qrSvg = (url && window.TrinityIdentity && window.TrinityIdentity.qrSVG) ? window.TrinityIdentity.qrSVG(url) : '';
   const shareInvite = async () => {
     if (!url) return;
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;

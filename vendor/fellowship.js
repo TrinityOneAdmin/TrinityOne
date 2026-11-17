@@ -8184,6 +8184,34 @@
     }
     return _netRelays([.../* @__PURE__ */ new Set([...persisted, ...signed, ...canonical])], cp);
   }
+  function _inviteHostIsPrivate(url) {
+    let h = "";
+    try {
+      h = new URL(String(url || "")).hostname.toLowerCase();
+    } catch (e) {
+      return true;
+    }
+    h = h.replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
+    if (!h) return true;
+    if (h === "localhost" || h.endsWith(".localhost")) return true;
+    if (h.endsWith(".local") || h.endsWith(".lan") || h === "home.arpa" || h.endsWith(".home.arpa") || h.endsWith(".internal")) return true;
+    if (h.includes(":")) {
+      if (h === "::1" || h === "::") return true;
+      if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true;
+      if (/^fe[89a-f][0-9a-f]?:/.test(h)) return true;
+      if (h.startsWith("::ffff:")) return true;
+      if (/^::[0-9a-f]{1,4}(:[0-9a-f]{1,4})?$/.test(h)) return true;
+      if (h.startsWith("64:ff9b:")) return true;
+      return false;
+    }
+    const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
+    if (m) {
+      const a = +m[1], b = +m[2];
+      return a === 127 || a === 0 || a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254 || a >= 224;
+    }
+    if (!h.includes(".")) return true;
+    return false;
+  }
   function groupReadRelays(cp) {
     if (!cp) return _netRelays([...CANONICAL_RELAYS]);
     return relaysForChurch(cp);
@@ -13186,9 +13214,24 @@
         return all;
       };
       const me = window.Fellowship.myPubkey || pub;
+      const policyByAuthor = /* @__PURE__ */ new Map();
+      const _openKnown = () => {
+        const roster = _churchRoster.get(pubk);
+        let win = null;
+        let winBy = "";
+        for (const [author, v] of policyByAuthor) {
+          if (!win || v.at > win.at || v.at === win.at && String(v.id) < String(win.id)) {
+            win = v;
+            winBy = author;
+          }
+        }
+        if (!win) return false;
+        if (winBy !== pubk && !(roster && roster.has(winBy))) return false;
+        return !!win.open;
+      };
       const emit = () => {
         const isAdmitted = !!(me && _admittedUnion().has(me));
-        onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed });
+        onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed, openKnown: _openKnown() });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
@@ -13204,6 +13247,26 @@
             admittedByAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
             emit();
             return;
+          }
+          if (d === "trinityone/joinpolicy:" + pubk) {
+            const prev = policyByAuthor.get(e.pubkey);
+            const at = e.created_at || 0, id = String(e.id || "");
+            if (!prev || at > prev.at || at === prev.at && id < prev.id) {
+              let open = false;
+              if (!e.tags.some((t) => t[0] === "deleted") && e.content) {
+                try {
+                  const j = JSON.parse(e.content);
+                  open = !!(j && typeof j === "object" && j.approval === false);
+                } catch {
+                  open = false;
+                }
+              }
+              policyByAuthor.set(e.pubkey, { at, id, open });
+            }
+            if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) {
+              emit();
+              return;
+            }
           }
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
           if (d === "trinityone/joinpolicy:" + pubk) {
@@ -13244,6 +13307,60 @@
       }
       const bases = [...new Set(list.map((u) => String(u || "")).filter((u) => /^wss:\/\//i.test(u)).map((u) => u.replace(/^wss:/i, "https:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "")))];
       return { npub: npubEncode(cp), bases };
+    },
+    // ── WHICH RELAY A MEMBER'S INVITE LINK NAMES (PLAN-member-invite-open-church-2026-11-17, amendments M1-M3;
+    // CLAUDE.md rule 10, reference/RELAY-ADMISSION.md) ──
+    // For a self-hosted church the link must name the church's OWN box, as the console's Steward.joinUrl() does,
+    // not the shared pool. A link's &relay= is only a HINT on the receiving phone (it must pass admission there),
+    // but what this phone puts in it is still chosen as narrowly as publishSetFor chooses a box to write to:
+    //   · candidates are relaysForChurch(cp) — the set AFTER this phone's admission gate — and nothing else;
+    //   · a candidate counts only if the key it PROVED (_gate.provedKey) is named in this church's own signed
+    //     relay-net document, read from the cache churchRelayNet keeps, and only a document really read
+    //     (docAt > 0). Matched on the key, never the URL (RELAY-ADMISSION trap 2);
+    //   · never a shipped/canonical relay (address or key), wss:// only, never a private/LAN host;
+    //   · several → alwaysOn first, then URL order, so two members of one church share the same link.
+    // `relayname` comes from the MATCHED SIGNED entry, never from trinityone.relaynames (link-planted, unverified),
+    // and only when an own box was chosen. No match, or a cold cache → the shared relay with no name: exactly the
+    // link this app always made. Adds no candidate, reads nothing new, writes nothing.
+    inviteRelayFor(churchNpub) {
+      const fallback = { relay: CANONICAL_RELAY, relayname: "" };
+      const cp = toPub(churchNpub);
+      if (!cp) return fallback;
+      try {
+        const doc = _relayNetCache.get(cp);
+        if (!doc || !(doc.docAt > 0)) return fallback;
+        const byKey = /* @__PURE__ */ new Map();
+        for (const e of doc.entries || []) {
+          const k = String(e && e.pubkey || "").toLowerCase();
+          if (k && !byKey.has(k)) byKey.set(k, e);
+        }
+        if (!byKey.size) return fallback;
+        const key = (u) => {
+          try {
+            return normalizeURL2(u);
+          } catch (e) {
+            return String(u || "");
+          }
+        };
+        const shippedUrls = new Set([...CANONICAL_RELAYS, ...Object.keys(CANONICAL_RELAY_PUBS || {})].map(key));
+        const shippedKeys = new Set(Object.values(CANONICAL_RELAY_PUBS || {}).flat().map((k) => String(k || "").toLowerCase()));
+        const picks = [];
+        for (const u of relaysForChurch(cp) || []) {
+          if (typeof u !== "string" || !/^wss:\/\//i.test(u)) continue;
+          if (shippedUrls.has(key(u)) || _inviteHostIsPrivate(u)) continue;
+          const k = _gate.provedKey(u, cp);
+          if (!k || shippedKeys.has(k)) continue;
+          const entry = byKey.get(k);
+          if (entry) picks.push({ u, entry });
+        }
+        if (!picks.length) return fallback;
+        picks.sort((a, b) => (b.entry.alwaysOn !== false) - (a.entry.alwaysOn !== false) || (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+        const best = picks[0];
+        const nm = typeof best.entry.name === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(best.entry.name) ? best.entry.name : "";
+        return { relay: best.u, relayname: nm };
+      } catch (e) {
+        return fallback;
+      }
     },
     // ── read the reading plans a church shares (kind-30078, d=plan:) ──
     subscribeChurchVersePrompt(churchNpub, cb) {
