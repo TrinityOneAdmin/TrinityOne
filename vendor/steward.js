@@ -23621,14 +23621,16 @@ zoo`.split("\n");
       const nameSubs = [];
       let pending = [], batchTimer = null;
       let hidden = /* @__PURE__ */ new Set();
+      const cardFor = (card, by) => card && card.type === "finance" && !(by && (by === pub || _careRosterKnown && _careRoster.has(by))) ? null : card;
       const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
-        if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
+        if (hidden.has(m.id)) return { ...m, card: cardFor(m.card, m.by), name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
         const q = m.replyTo ? byId.get(m.replyTo) : null;
-        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
+        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: cardFor(q.card, q.by) } : null;
         const r = rx.get(m.id);
-        return { ...m, quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
+        return { ...m, card: cardFor(m.card, m.by), quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
       const emit = () => onMsgs(attach());
+      _memberEmitters.add(emit);
       const resolveName = (pk) => {
         if (!pk || seen.has(pk)) return;
         seen.add(pk);
@@ -23709,6 +23711,7 @@ zoo`.split("\n");
         emit();
       });
       return () => {
+        _memberEmitters.delete(emit);
         try {
           sub.close();
         } catch {

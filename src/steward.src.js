@@ -10154,17 +10154,26 @@ window.Steward = {
     // The MEMBER app is unchanged and still filters these out completely — fellowship.src.js has its own
     // subscribeHidden and screens-chat.jsx drops them. This is a moderator's view of their own decision,
     // and it must never become a way for a congregation to read what a steward removed.
+    // A FINANCE STATEMENT IS THE CHURCH SPEAKING (console-finance-card-trust 2026-11-17). Nothing on the relay
+    // restricts a ['card'] tag, so a member could hand-build one and this console drew it as the church's own
+    // statement - in the bubble, in a reply's quote, and in a pin a steward then signs as the church. The member
+    // app draws one only from the church key or a steward on the church-signed roster (Fellowship.isChurchVoice);
+    // this is the same rule. FAILS CLOSED until a roster has been read (`_careRosterKnown`): the body text shows
+    // instead. Decided at EVERY emit, and the roster's arrival re-emits (_memberEmitters below), so a steward's
+    // card appears once the roster lands. Any other card type is untouched (cardRenderable draws finance only).
+    const cardFor = (card, by) => (card && card.type === 'finance' && !(by && (by === pub || (_careRosterKnown && _careRoster.has(by))))) ? null : card;
     const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
       // ONE pass: a second .map that re-read `rx` would put the reactions back on a removed message.
-      if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || '', removed: true, text: '', replyTo: '', quote: null, reactions: [], myReaction: '' };
+      if (hidden.has(m.id)) return { ...m, card: cardFor(m.card, m.by), name: names.get(m.by) || '', removed: true, text: '', replyTo: '', quote: null, reactions: [], myReaction: '' };
       // A reply's quote is the message it answers, resolved here (as the member app does from its own list).
       // A REMOVED message is never quoted: that would reprint, one row down, the words the steward took away.
       // quote is null when the target is not loaded (older than the window) — the UI says "an earlier message".
       const q = m.replyTo ? byId.get(m.replyTo) : null;
-      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
-      const r = rx.get(m.id); return { ...m, quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
+      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: cardFor(q.card, q.by) } : null;
+      const r = rx.get(m.id); return { ...m, card: cardFor(m.card, m.by), quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
+    _memberEmitters.add(emit);   // the steward roster arrived or changed: re-decide every finance card - see cardFor
     // resolve sender names in one batched kind-0 sub (debounced) — avoids a sub per author (relay cap)
     const resolveName = (pk) => {
       if (!pk || seen.has(pk)) return; seen.add(pk); pending.push(pk);
@@ -10204,7 +10213,7 @@ window.Steward = {
       oneose() { emit(); },
     });
     const hideSub = window.Steward.subscribeHidden((set) => { hidden = set; emit(); });
-    return () => { try { sub.close(); } catch {} try { hideSub(); } catch {} clearTimeout(batchTimer); nameSubs.forEach(s => { try { s.close(); } catch {} }); };
+    return () => { _memberEmitters.delete(emit); try { sub.close(); } catch {} try { hideSub(); } catch {} clearTimeout(batchTimer); nameSubs.forEach(s => { try { s.close(); } catch {} }); };
   },
   // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
   reactGroup(groupId, msgId, targetPub, emoji) {

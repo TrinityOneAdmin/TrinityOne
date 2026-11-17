@@ -52,7 +52,11 @@ function room({ hiddenIds = [], skeys = {} } = {}) {
   let onevent = null; const out = [];
   const pool = { subscribeMany: (r, f, h) => { if (f.some(x => x.kinds && x.kinds.includes(1))) onevent = h.onevent; return { close() {} }; } };
   let hiddenCb = null;
-  const scope = { pool, relays: () => [], pub: PUB, _skeys: skeys, decrypt3: (c) => c.replace(/^SEALED:/, ''), setTimeout: () => 0, clearTimeout() {},
+  const scope = { pool, relays: () => [], pub: PUB, _skeys: skeys,
+    // console-finance-card-trust 2026-11-17: the finance-card author check reads the steward roster, and the
+    // chat registers its emit so the roster's arrival re-decides cards. Church-authored fixtures pass without one.
+    _careRoster: new Set(), _careRosterKnown: false, _memberEmitters: new Set(),
+    decrypt3: (c) => c.replace(/^SEALED:/, ''), setTimeout: () => 0, clearTimeout() {},
     window: { Steward: { subscribeHidden: (cb) => { hiddenCb = cb; cb(new Set(hiddenIds)); return () => {}; } } }, Map, Set };
   const fn = new Function('scope', 'with (scope) { return ({ ' + body + ' }); }')(scope);
   fn.subscribeGroupChat('g1', (m) => { out.length = 0; out.push(...m); });
