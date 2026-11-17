@@ -59,6 +59,7 @@ function mount(env) {
     TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: env.pool || POOL },
     Bible: {
       parseRef: (r) => { const m = /^(\w+) (\d+):(\d+)$/.exec(String(r)); return m && BOOK[m[1]] ? { book: BOOK[m[1]], chap: +m[2], verse: +m[3] } : null; },
+      refKey: (loc, v) => loc.book + '.' + loc.chap + '.' + v,   // same as engine.js refKey; TodayScreen's heart keys bookmarks with it
       loaded: true, books: () => env.books || [43, 19, 45],
       getVerses: (b, c) => { const m = Object.entries(BOOK).find(([, n]) => n === b); const p = POOL.find(x => x.ref.startsWith(m[0] + ' ')); const v = +p.ref.split(':')[1]; return [{ v, text: LIVE[b] }]; },
       maxChapter: () => 1, activeVersion: 'KJV', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
