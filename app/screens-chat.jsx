@@ -987,9 +987,10 @@ function chatShareCard(raw) {
   if (raw.type !== 'verse' && raw.type !== 'commentary') return null;
   const o = { type: raw.type };
   for (const k of Object.keys(CHAT_CARD_LIMITS)) {
-    // bidi controls and zero-width characters are stripped (ZWNJ U+200C / ZWJ U+200D kept: scripts need them),
-    // so a card cannot reorder or hide what it shows. Same set as _chatCardClean in src/fellowship.src.js.
-    const v = typeof raw[k] === 'string' ? raw[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : '';
+    // bidi embedding/override/isolate controls and zero-width space / BOM-type characters are stripped, so a card
+    // cannot reorder or hide what it shows; the direction MARKS (LRM/RLM/ALM) and ZWNJ/ZWJ are kept - Hebrew and
+    // Arabic Bible text uses them. Same set as _chatCardClean in src/fellowship.src.js.
+    const v = typeof raw[k] === 'string' ? raw[k].replace(/[\u200B\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : '';
     if (v && v.length <= CHAT_CARD_LIMITS[k]) o[k] = v;
   }
   return o.text ? o : null;
@@ -1226,16 +1227,20 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
 // arrives ('trinity-church-trust', fired by the engine's _fireTrust): a delegated steward's finance statement read
 // before the roster landed is text at first, and becomes the card when the roster says who they are - without
 // waiting for the room to re-render (audit 2026-11-17, L5). Profiles arriving can change displayFor().isChurch too.
+// 'trinity-profiles' fires once per incoming profile, so the bubble re-asks on every event but only RE-RENDERS when
+// the answer changes (re-audit 2026-11-17): the kind lives in state and is set only on a change.
 function ChatCardBubble({ m, ctx, me, mod, react, plain }) {
-  const [trustTick, setTrustTick] = useC(0);
-  useCE(() => {
-    const bump = () => setTrustTick(n => n + 1);
-    window.addEventListener('trinity-church-trust', bump);
-    window.addEventListener('trinity-profiles', bump);
-    return () => { window.removeEventListener('trinity-church-trust', bump); window.removeEventListener('trinity-profiles', bump); };
-  }, []);
   const c = m.card || {};
-  const ck = React.useMemo(() => chatCardKind(c, m.pubkey), [m.card, m.pubkey, trustTick]);   // per-author allow-list: a member's "finance" card is NOT drawn as the church's
+  const [ck, setCk] = useC(() => chatCardKind(c, m.pubkey));   // per-author allow-list: a member's "finance" card is NOT drawn as the church's
+  const ckRef = useCR(ck);
+  ckRef.current = ck;
+  useCE(() => {
+    const recheck = () => { const k = chatCardKind(m.card || {}, m.pubkey); if (k !== ckRef.current) { ckRef.current = k; setCk(k); } };
+    recheck();   // a new card/author on this bubble
+    window.addEventListener('trinity-church-trust', recheck);
+    window.addEventListener('trinity-profiles', recheck);
+    return () => { window.removeEventListener('trinity-church-trust', recheck); window.removeEventListener('trinity-profiles', recheck); };
+  }, [m.card, m.pubkey]);
   if (ck === 'verse' || ck === 'commentary') {
     const sc = chatShareCard(c);
     const thoughts = chatCardThoughts(sc, m.text);

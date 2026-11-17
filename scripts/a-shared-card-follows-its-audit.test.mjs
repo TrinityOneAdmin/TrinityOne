@@ -38,8 +38,21 @@ function winWithEvents() {
   return { ls, addEventListener(t, f) { (ls[t] = ls[t] || []).push(f); }, removeEventListener(t, f) { ls[t] = (ls[t] || []).filter(x => x !== f); },
     fire(t) { (ls[t] || []).slice().forEach(f => f()); } };
 }
-function screen(names, F, extra = {}) {
+function screen(names, F, extra = {}, counter = null) {
   const { React, draw } = miniReact();
+  if (counter) {
+    // Count the state SETS of the card bubble (each one is a re-render in real React), installed before the file binds
+    // useState. ChatCardBubble's kind is the one state in a Bubble tree made with a LAZY initializer, which is how
+    // it is told apart: useIdentity (Row's avatar, pre-existing) also re-renders on every profile event and is not
+    // what this measures. `counter.states` proves the instrument saw the bubbles' state at all.
+    const orig = React.useState;
+    React.useState = (init) => {
+      const [v, set] = orig(init);
+      if (typeof init !== 'function') return [v, set];
+      counter.states++;
+      return [v, (x) => { counter.sets++; set(x); }];
+    };
+  }
   const win = Object.assign(winWithEvents(), { Fellowship: F, matchMedia: () => ({ matches: true }) });
   const mod = loadScreen('app/screens-chat.jsx', names, {
     React, window: win,
@@ -158,14 +171,30 @@ test('N7: the credit is >= 11px in a token with AA contrast (4.5:1) on the card 
   for (let i = 0; i < 2; i++) assert.ok(ratio(fg[i], bg[i]) >= 4.5, `${i ? 'dark' : 'light'}: ${fg[i]} on ${bg[i]} is ${ratio(fg[i], bg[i]).toFixed(2)}:1`);
 });
 
-const DIRTY = 'John‮ 3:16​⁦';
-const ZW = 'a‌b‍c';   // ZWNJ/ZWJ are KEPT
+const DIRTY = 'John\u202E 3:16\u200B\u2066';
+const ZW = 'a\u200Cb\u200Dc';   // ZWNJ/ZWJ are KEPT
+// A HEBREW VERSE WITH A RIGHT-TO-LEFT MARK, as Bible modules carry them (re-audit 2026-11-17): the marks LRM/RLM/ALM
+// stay; an RLO (U+202E, an override) is stripped.
+const HEB = '\u05DB\u05B4\u05BC\u05D9 \u05DB\u05B5\u05BF\u05DF\u200F 3:16 \u200E\u061C';
+const HEB_RLO = '\u202E' + HEB + '\u202C';
 test('N7: the real chatShareCard strips bidi controls and zero-width characters (ZWNJ/ZWJ kept)', () => {
   const s = screen(['chatShareCard'], {});
-  const c = s.mod.chatShareCard({ type: 'verse', ref: DIRTY, text: ZW + '﻿', version: '‎' });
+  // EDITED (re-audit): the controls-only field is now an ISOLATE (U+2067), since LRM is a kept mark
+  const c = s.mod.chatShareCard({ type: 'verse', ref: DIRTY, text: ZW + '\uFEFF', version: '\u2067' });
   assert.equal(c.ref, 'John 3:16');
   assert.equal(c.text, ZW);
   assert.equal(c.version, undefined, 'a field that is only controls is dropped');
+});
+test('N7 POINT OF USE: a Hebrew verse keeps its RLM/LRM/ALM on the drawn card; an RLO is stripped', () => {
+  const s = screen(['Bubble', 'evtToMsg', 'chatShareCard', 'chatCardFallback'], { myPubkey: ME, displayFor: () => ({ handle: 'Anna' }) });
+  const card = s.mod.chatShareCard({ type: 'verse', ref: 'John 3:16', text: HEB_RLO, version: 'WLC' });
+  assert.equal(card.text, HEB, 'the marks were lost or the override survived');
+  const tree = s.draw(s.mod.Bubble, { m: s.mod.evtToMsg(ev({ type: 'verse', ref: 'John 3:16', text: HEB_RLO, version: 'WLC' }, s.mod.chatCardFallback(card))), ctx: { church: {}, shareText() {}, openShare() {} }, summary: [], live: false });
+  const drawn = find(tree, n => n.props && n.props['data-chat-card'] === 'verse');
+  assert.equal(drawn.length, 1, 'the Hebrew verse card did not draw');
+  const words = texts(drawn[0]).join('');
+  assert.ok(words.includes(HEB), 'the RLM/LRM/ALM did not survive onto the card');
+  assert.ok(!words.includes('\u202E'), 'the RLO reached the card');
 });
 test('N7: the real _chatCardClean, _dmWrap and _dmUnwrap strip them too', () => {
   const clean = new Function(fnBody(FEL, 'function _chatCardClean(x) {', '_chatCardClean') + '\nreturn _chatCardClean;')();
@@ -174,4 +203,37 @@ test('N7: the real _chatCardClean, _dmWrap and _dmUnwrap strip them too', () => 
   const o = new Function(`return ({ ${fnBody(FEL, '_dmWrap(text, replyTo, meta) {', '_dmWrap')}, ${fnBody(FEL, '_dmUnwrap(body) {', '_dmUnwrap')} });`)();
   assert.equal(JSON.parse(o._dmWrap('t', null, { card: { type: 'verse', ref: DIRTY, text: ZW } })).cd.ref, 'John 3:16');
   assert.equal(o._dmUnwrap(JSON.stringify({ v: 1, t: 't', cd: { type: 'verse', ref: DIRTY, text: ZW } })).card.ref, 'John 3:16');
+  // the marks survive every engine path; the override does not
+  assert.equal(clean({ type: 'verse', ref: 'R', text: HEB_RLO }).text, HEB);
+  assert.equal(JSON.parse(o._dmWrap('t', null, { card: { type: 'verse', ref: 'R', text: HEB_RLO } })).cd.text, HEB);
+  assert.equal(o._dmUnwrap(JSON.stringify({ v: 1, t: 't', cd: { type: 'verse', ref: 'R', text: HEB_RLO } })).card.text, HEB);
+});
+
+test('LOW (re-audit) POINT OF USE: profile events that change nothing do not re-render a card bubble; a roster change does', () => {
+  const FIN = { type: 'finance', title: 'T', periodLabel: 'Q3', sections: [{ kind: 'summary', income: 1234500, expenditure: 1, surplus: 2 }], currency: 'GBP', decimals: 2 };
+  const VERSE = { type: 'verse', ref: 'John 3:16', text: 'For God so loved the world', version: 'BSB' };
+  let roster = false;
+  const F = { myPubkey: ME, churchPub: CHURCH, isChurchVoice: pk => pk === CHURCH || (roster && pk === STEWARD), displayFor: () => ({ handle: 'x' }) };
+  const counter = { sets: 0, states: 0 };
+  const s = screen(['Bubble', 'evtToMsg'], F, {}, counter);
+  const ctx = { church: { name: 'x' }, shareText() {}, openShare() {} };
+  const finProps = { m: s.mod.evtToMsg(ev(FIN, 'Statement', STEWARD)), ctx, summary: [], live: false };
+  const vProps = { m: { ...s.mod.evtToMsg(ev(VERSE, '\u201cFor God so loved the world\u201d \u2014 John 3:16 \u00b7 BSB')), id: 'e2' }, ctx, summary: [], live: false };
+  // both bubbles in ONE tree, keyed, so each is its own instance (two separate draws would share the root's store)
+  const Both = () => s.React.createElement('div', null, s.React.createElement(s.mod.Bubble, { ...finProps, key: 'f' }), s.React.createElement(s.mod.Bubble, { ...vProps, key: 'v' }));
+  s.draw(Both, {});
+  assert.ok(counter.states >= 2, 'the instrument never saw the card bubbles\' state - it would measure nothing');
+  counter.sets = 0;
+  for (let i = 0; i < 25; i++) s.win.fire('trinity-profiles');
+  s.win.fire('trinity-church-trust');
+  assert.equal(counter.sets, 0, counter.sets + ' state sets (re-renders) from events that changed nothing');
+  roster = true;
+  s.win.fire('trinity-church-trust');
+  assert.ok(counter.sets >= 1, 'the roster change did not re-render the finance bubble');
+  const n = counter.sets;
+  for (let i = 0; i < 10; i++) s.win.fire('trinity-profiles');
+  assert.equal(counter.sets, n, 'settled again: further events must not re-render');
+  const after = texts(s.draw(Both, {})).join(' | ');
+  assert.match(after, /£12,345\.00/, 'the finance card did not draw after the roster change');
+  assert.match(after, /For God so loved the world/, 'the verse card was lost');
 });
