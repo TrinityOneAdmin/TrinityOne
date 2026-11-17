@@ -32,10 +32,10 @@ const FIN = { type: 'finance', title: 'Grace', periodLabel: 'Q3 2026', sections:
 const BODY = 'Grace - Q3 2026\n\nTotal income 12,345.00';
 
 // ── the console's publishPost, lifted ──
-function poster({ skeys = { g1: [GKEY] }, sealed = ['g1'], encrypt2 = nip44e } = {}) {
+function poster({ skeys = { g1: [GKEY] }, sealed = ['g1'], encrypt2 = nip44e, locked = false } = {}) {
   const body = fnBody(STEWARD, 'publishPost(content, group, replyTo, opts) {', 'publishPost');
   const published = [], warned = [];
-  const scope = { sk: new Uint8Array(32).fill(1), _skeys: skeys, _sealedGroupIds: new Set(sealed),
+  const scope = { sk: locked ? null : new Uint8Array(32).fill(1), _skeys: skeys, _sealedGroupIds: new Set(sealed),
     publish: (e) => { published.push(e); return Promise.resolve(e); }, feChurch: (e) => ({ ...e, id: 'ev1', pubkey: CHURCH }),
     now: () => 1763000000, NET: 'trinityone', pub: CHURCH, encrypt2, Promise, console: { warn: (...a) => warned.push(a.join(' ')) } };
   const api = new Function('scope', 'with (scope) { return ({ ' + body + ' }); }')(scope);
@@ -68,6 +68,25 @@ test('a card that cannot be sealed (over the nip44 65535-byte cap) REFUSES the p
   assert.equal(r, null, 'an unsealable card must refuse the post');
   assert.equal(p.published.length, 0, 'something was published although the card could not be sealed');
   assert.ok(p.warned.some(w => /could not be sealed/.test(w)), 'the refusal was not logged');
+  assert.equal(p.api.lastPostRefusal, 'unsealable', 'the refusal did not say why');
+});
+
+test('a BODY over the 65535-byte seal limit in a keyed room is refused too; the same body in an open room is sent', async () => {
+  const big = 'x'.repeat(70000);
+  const p = poster();
+  assert.equal(await p.api.publishPost(big, 'g1'), null, 'an over-limit body was sealed and sent');
+  assert.equal(p.published.length, 0);
+  assert.equal(p.api.lastPostRefusal, 'unsealable');
+  const q = poster({ skeys: {}, sealed: [] });
+  assert.ok(await q.api.publishPost(big, 'notices'), 'an open room has no seal limit - this must still send');
+  assert.equal(q.api.lastPostRefusal, '', 'a post that was not refused must clear the reason');
+});
+
+test('each refusal names its cause: locked, nokey', async () => {
+  const l = poster({ locked: true });
+  assert.equal(await l.api.publishPost('hi', 'notices'), null); assert.equal(l.api.lastPostRefusal, 'locked');
+  const k = poster({ skeys: {}, sealed: ['g1'] });
+  assert.equal(await k.api.publishPost('hi', 'g1'), null); assert.equal(k.api.lastPostRefusal, 'nokey');
 });
 
 // ── what each reader makes of the sealed event ──
@@ -138,10 +157,13 @@ test("ROUND TRIP, the console's own chat: subscribeGroupChat opens the sealed ca
 
 // ── the treasurer's screen: the refusal reads as a refusal ──
 const _FL = Object.assign({}, ...(await Promise.all(['finance-ledger', 'finance-store', 'finance-statement', 'finance-import', 'finance-reconcile', 'finance-reports'].map(n => import('../src/' + n + '.mjs')))));
-function treasurer(publishPost) {
+// `p` is a poster(): its SHIPPED publishPost is installed as the Steward's own method, so the refusal reason lands
+// on the very object the screen reads (S.lastPostRefusal), as it does in the console.
+function treasurer(p) {
   const fr = fakeReact();
   let encSubCb = null;
-  const Steward = fakeSteward({ actingChurch: '', encSubscribe: (_p, cb) => { encSubCb = cb; return () => {}; }, encPublish: async () => true, relayAuthed: () => true, publishPost });
+  const Steward = fakeSteward({ actingChurch: '', encSubscribe: (_p, cb) => { encSubCb = cb; return () => {}; }, encPublish: async () => true, relayAuthed: () => true,
+    publishPost: function (...a) { return p.api.publishPost.apply(this, a); } });
   const { window } = fakeBrowser({ Steward });
   window.FinanceLedger = _FL;
   const mods = loadConsole({ React: fr.React, window, expr: '{ DashFinanceBook, FinanceShareStatement }' });
@@ -167,16 +189,31 @@ function treasurer(publishPost) {
   return { drawM, btn, seen: () => ctexts(drawM()).join(' | ') };
 }
 
-test('POINT OF USE: a statement that cannot be sealed shows "Not sent", never "shared" or "check your connection"', async () => {
-  // the SHIPPED publishPost, for a sealed room whose card seal fails (the body seals; the card does not)
-  const p = poster({ encrypt2: (pt, k) => { if (pt.startsWith('{')) throw new Error('seal failed'); return nip44e(pt, k); } });
-  const t = treasurer((...a) => p.api.publishPost(...a));
+async function postAndRead(p) {
+  const t = treasurer(p);
   t.btn('Post to members').props.onClick({ stopPropagation() {}, preventDefault() {} }); t.drawM();
   t.btn('Yes, post to members').props.onClick({ stopPropagation() {}, preventDefault() {} });
   await new Promise(r => setTimeout(r, 5));
   const seen = t.seen();
-  assert.equal(p.published.length, 0, 'the statement went out although its card could not be sealed');
-  assert.match(seen, /Not sent\./, 'the treasurer was not told the statement was not sent: ' + seen.slice(0, 300));
-  assert.ok(!/check your connection/i.test(seen), 'a seal refusal was blamed on the connection');
+  assert.equal(p.published.length, 0, 'the statement went out although publishPost refused it');
+  assert.ok(!/check your connection/i.test(seen), 'a refusal was blamed on the connection');
   assert.ok(!/Shared with members/i.test(seen), 'the screen claimed success');
+  return seen;
+}
+
+test('POINT OF USE: a statement whose card cannot be sealed says it could not be sealed', async () => {
+  const p = poster({ encrypt2: (pt, k) => { if (pt.startsWith('{')) throw new Error('seal failed'); return nip44e(pt, k); } });
+  assert.match(await postAndRead(p), /Not sent\. This statement could not be sealed for that private group/);
+});
+
+test('POINT OF USE: a locked console says it is locked - even for an open group', async () => {
+  const p = poster({ locked: true, skeys: {}, sealed: [] });
+  const seen = await postAndRead(p);
+  assert.match(seen, /Not sent\. The console is locked/);
+  assert.ok(!/sealed|private group/i.test(seen), 'a locked console was described as a seal failure');
+});
+
+test('POINT OF USE: a private group with no key says the key is missing', async () => {
+  const p = poster({ skeys: {}, sealed: ['g1'] });
+  assert.match(await postAndRead(p), /Not sent\. This console does not have the key for that private group/);
 });

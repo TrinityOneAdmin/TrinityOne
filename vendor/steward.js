@@ -23500,21 +23500,42 @@ zoo`.split("\n");
     // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
     // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
     // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
+    //
+    // WHY A POST WAS REFUSED (console-finance-card-trust audit, 2026-11-17). A refusal still resolves `null` - every
+    // caller already reads that as "not sent" - and ALSO sets `Steward.lastPostRefusal` to the reason, synchronously,
+    // before the promise resolves: 'locked' (no key in this console), 'nokey' (a sealed room this console holds no
+    // key for), 'unsealable' (the body or a card would not seal, or is over the 65535-byte NIP-44 v2 limit). '' after
+    // any call that was not refused. Additive: only stew-finance.jsx postStatementToMembers reads it.
     publishPost(content, group, replyTo, opts) {
-      if (!sk) return Promise.resolve(null);
+      const refuse = (why) => {
+        try {
+          this.lastPostRefusal = why;
+        } catch (e) {
+        }
+        return Promise.resolve(null);
+      };
+      try {
+        this.lastPostRefusal = "";
+      } catch (e) {
+      }
+      if (!sk) return refuse("locked");
       let body = content || "", encTag = [];
       const gkey = group && (_skeys[group] || [])[0];
       if (gkey) {
+        if (new TextEncoder().encode(content || "").length > 65535) {
+          console.warn("[steward] refusing post into sealed room - the message is over the 65535-byte seal limit");
+          return refuse("unsealable");
+        }
         try {
           body = encrypt2(content || "", gkey);
           encTag = [["enc", "1"]];
         } catch (e) {
           console.warn("[steward] sealed-room encryption failed", e);
-          return Promise.resolve(null);
+          return refuse("unsealable");
         }
       } else if (group && _sealedGroupIds.has(group)) {
         console.warn("[steward] refusing plaintext post into sealed room \u2014 no key for", group);
-        return Promise.resolve(null);
+        return refuse("nokey");
       }
       const podTag = opts && opts.pod ? [["pod", opts.pod]] : [];
       let extraTags = Array.isArray(opts) ? opts : opts && opts.tags ? opts.tags : [];
@@ -23528,7 +23549,7 @@ zoo`.split("\n");
           });
         } catch (e) {
           console.warn("[steward] refusing post into sealed room - the card could not be sealed", e);
-          return Promise.resolve(null);
+          return refuse("unsealable");
         }
       }
       return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag, ...podTag, ...replyTo && replyTo.id ? [["e", replyTo.id, "", "reply"], ...replyTo.by ? [["p", replyTo.by]] : []] : [], ...extraTags], content: body }));
