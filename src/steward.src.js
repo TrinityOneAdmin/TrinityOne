@@ -10062,7 +10062,25 @@ window.Steward = {
       return Promise.resolve(null);
     }
     const podTag = opts && opts.pod ? [['pod', opts.pod]] : [];
-    const extraTags = Array.isArray(opts) ? opts : (opts && opts.tags ? opts.tags : []);
+    let extraTags = Array.isArray(opts) ? opts : (opts && opts.tags ? opts.tags : []);
+    // A CARD IN A SEALED ROOM IS SEALED TOO (console-finance-card-trust 2026-11-17). A kind-1's tags are public,
+    // so a finance statement's ['card','1',json] next to an encrypted body handed the figures to the relay and to
+    // anyone reading it. Sealed under the room key exactly as the member app does (fellowship.src.js publishMessage):
+    // ['card','1',<ciphertext>,'enc'], which _decEvt and subscribeGroupChat open with the key that opened the body.
+    // If it will not seal the post is REFUSED, like the no-key refusal above - never sent with the card in clear,
+    // and never quietly sent without it. Over 65535 UTF-8 bytes counts as "will not seal": that is the NIP-44 v2
+    // plaintext limit, and the bundled nostr-tools (2.23.5, measured) does NOT enforce it, so it is checked here.
+    if (encTag.length && extraTags.some(t => Array.isArray(t) && t[0] === 'card')) {
+      try {
+        extraTags = extraTags.map(t => {
+          if (!(Array.isArray(t) && t[0] === 'card')) return t;
+          const js = String(t[2] || '');
+          if (new TextEncoder().encode(js).length > 65535) throw new Error('card over the 65535-byte seal limit');
+          return ['card', t[1], nip44e(js, gkey), 'enc'];
+        });
+      }
+      catch (e) { console.warn('[steward] refusing post into sealed room - the card could not be sealed', e); return Promise.resolve(null); }
+    }
     return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...podTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : []), ...extraTags], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
@@ -10197,15 +10215,18 @@ window.Steward = {
         }
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
-        let text = e.content;
+        let text = e.content, openedWith = null;
         if (e.tags.some(t => t[0] === 'enc')) {
           const ring = _skeys[groupId]; if (!ring || !ring.length) return;
           let ok = false;
-          for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
+          for (const k of ring) { try { text = nip44d(e.content, k); ok = true; openedWith = k; break; } catch (x) {} }   // current key, then superseded
           if (!ok) return;
         }
+        // A SEALED card tag (['card','1',<ciphertext>,'enc'], publishPost / the member app's publishMessage) opens
+        // with the key that opened the body - inline, as _decEvt does. One that will not open, or an 'enc' card on
+        // a message whose body was not sealed, is no card: the body text shows.
         let card = null;
-        try { const ct = e.tags.find(t => t[0] === 'card'); if (ct && ct[2]) { const parsed = JSON.parse(ct[2]); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) card = parsed; } } catch (x) {}
+        try { const ct = e.tags.find(t => t[0] === 'card'); if (ct && ct[2]) { const parsed = JSON.parse(ct[3] === 'enc' ? (openedWith ? nip44d(ct[2], openedWith) : '') : ct[2]); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) card = parsed; } } catch (x) {}
         byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, card, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '', _podTag: (e.tags.find(t => t[0] === 'pod') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();

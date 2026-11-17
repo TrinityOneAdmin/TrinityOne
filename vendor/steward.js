@@ -23517,7 +23517,20 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const podTag = opts && opts.pod ? [["pod", opts.pod]] : [];
-      const extraTags = Array.isArray(opts) ? opts : opts && opts.tags ? opts.tags : [];
+      let extraTags = Array.isArray(opts) ? opts : opts && opts.tags ? opts.tags : [];
+      if (encTag.length && extraTags.some((t) => Array.isArray(t) && t[0] === "card")) {
+        try {
+          extraTags = extraTags.map((t) => {
+            if (!(Array.isArray(t) && t[0] === "card")) return t;
+            const js = String(t[2] || "");
+            if (new TextEncoder().encode(js).length > 65535) throw new Error("card over the 65535-byte seal limit");
+            return ["card", t[1], encrypt2(js, gkey), "enc"];
+          });
+        } catch (e) {
+          console.warn("[steward] refusing post into sealed room - the card could not be sealed", e);
+          return Promise.resolve(null);
+        }
+      }
       return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag, ...podTag, ...replyTo && replyTo.id ? [["e", replyTo.id, "", "reply"], ...replyTo.by ? [["p", replyTo.by]] : []] : [], ...extraTags], content: body }));
     },
     // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
@@ -23674,7 +23687,7 @@ zoo`.split("\n");
           }
           if (!e.tags.some((t) => t[0] === "t" && t[1] === groupId)) return;
           if (!e.tags.some((t) => t[0] === "p" && t[1] === pub)) return;
-          let text = e.content;
+          let text = e.content, openedWith = null;
           if (e.tags.some((t) => t[0] === "enc")) {
             const ring = _skeys[groupId];
             if (!ring || !ring.length) return;
@@ -23683,6 +23696,7 @@ zoo`.split("\n");
               try {
                 text = decrypt3(e.content, k);
                 ok = true;
+                openedWith = k;
                 break;
               } catch (x) {
               }
@@ -23693,7 +23707,7 @@ zoo`.split("\n");
           try {
             const ct = e.tags.find((t) => t[0] === "card");
             if (ct && ct[2]) {
-              const parsed = JSON.parse(ct[2]);
+              const parsed = JSON.parse(ct[3] === "enc" ? openedWith ? decrypt3(ct[2], openedWith) : "" : ct[2]);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) card = parsed;
             }
           } catch (x) {
