@@ -70,7 +70,9 @@ test('private conversations appear in the list of conversations', () => {
   const i = CHAT.indexOf('function ChatScreen');
   const fn = CHAT.slice(i, CHAT.indexOf('\nfunction ', i + 10));
   // Re-anchored 2026-10-09: the heading became a collapsible <CatLabel label="Private messages" ck="dm" /> (ec443e4, DM collapse chevron).
-  assert.match(fn, /<CatLabel label="Private messages" ck="dm" \/>/, 'the Chat list still hides private threads');
+  // Re-anchored 2026-11-17: the owner renamed the heading to "Messages". The render-based guard for the label
+  // itself is in adults-only-rooms-stay-hidden.test.mjs ("POINT OF USE: the Community list heads private threads").
+  assert.match(fn, /<CatLabel label="Messages" ck="dm" \/>/, 'the Chat list still hides private threads');
   // It must NOT open its own subscription: the app already holds one permanently for the unread dot, and a
   // second meant replaying and decrypting up to a thousand messages twice over, again on every foregrounding.
   assert.equal(/subscribeDMs/.test(fn), false, 'the Chat list opens a second private-message subscription');

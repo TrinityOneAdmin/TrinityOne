@@ -765,7 +765,7 @@ function ChatScreen({ ctx }) {
           header button stays; this puts the last few where they were already looking. */}
       {dmThreads.length ? (
         <React.Fragment>
-          <CatLabel label="Private messages" ck="dm" />
+          <CatLabel label="Messages" ck="dm" />
           {!collapsed.dm ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
             {dmThreads.slice(0, 3).map(c => {
               const F = window.Fellowship;
@@ -782,7 +782,7 @@ function ChatScreen({ ctx }) {
                 </button>
               );
             })}
-            {dmThreads.length > 3 ? <button onClick={() => ctx.openDMInbox()} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>All private messages ({dmThreads.length})</button> : null}
+            {dmThreads.length > 3 ? <button onClick={() => ctx.openDMInbox()} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>All messages ({dmThreads.length})</button> : null}
           </div> : null}
         </React.Fragment>
       ) : null}

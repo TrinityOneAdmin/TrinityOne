@@ -190,7 +190,7 @@ const ROOM_HELPERS = (() => {
   return new Function('window', CHAT_SRC.slice(at, end) + '\nreturn { ROOM_KIND_LABEL, roomKindLabel, roomIcon };')({});
 })();
 
-function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } = {}) {
+function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [], dmThreads = [] } = {}) {
   const src = transformSync(fnBody(CHAT_SRC, 'function ChatScreen({ ctx })', 'ChatScreen'),
     { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
   let nodes = [];
@@ -218,6 +218,7 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
   const useCallback_ = (fn, deps) => useMemo_(() => fn, deps);
   const h = (type, props, ...kids) => {
     const node = { type: typeof type === 'function' ? (type.name || 'fn') : type, props: props || {},
+      fn: typeof type === 'function' ? type : null,   // kept so a test can render a component ChatScreen defines inside itself
       kids: kids.flat(Infinity).filter(x => x != null) };
     nodes.push(node); return node;
   };
@@ -267,12 +268,15 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } 
   });
   const fn = new Function('scope', `with (scope) { ${src}; return ChatScreen; }`)(proxy);
   const props = { ctx: { church: { npub: CHURCH, name: 'St Mary' }, safeguard: { isMinor },
-    joinState: { loaded: true }, churchNetworks: [], dmThreads: [] } };
+    joinState: { loaded: true }, churchNetworks: [], dmThreads, openDM() {}, openDMInbox() {} } };
   const pass = () => { ci = 0; ei = 0; nodes = []; fn(props); };
   const flush = () => { const q = queued; queued = []; q.forEach(e => { try { e(); } catch (x) {} }); };
   pass();
   return {
     asked,
+    // every text child of the last pass, numbers included (draw() drops them) — a count is a number child
+    nodes: () => nodes,
+    text: () => nodes.map(n => n.kids.filter(k => typeof k === 'string' || typeof k === 'number').join('')).join(' | '),
     // THREE PASSES, BECAUSE THE TWO THINGS ARRIVE AT DIFFERENT TIMES — and a stale memo is invisible unless
     // a draw happens with only the missed dependency changed. On the phone the cached group list lands
     // synchronously inside the effect, so React re-renders with the rooms while `assumeMinor` is still
@@ -324,4 +328,25 @@ test('POINT OF USE: an adult still sees every room, so this is not a blank scree
   assert.match(shown, /Sunday Club/);
   assert.match(shown, /Addiction Recovery/,
     'the ordinary member lost their rooms — gating everybody is not a fix, it is a silent blank screen');
+});
+
+// Owner copy change 2026-11-17: the Community list's section for one-to-one threads is headed "Messages", and its
+// overflow link reads "All messages (N)" — not "Private messages" / "All private messages (N)". Rendered, not
+// text-matched (rule 3). Lives here because this file already renders the shipped ChatScreen.
+test('POINT OF USE: the Community list heads private threads "Messages", with an "All messages (N)" link', async () => {
+  const dmThreads = ['a', 'b', 'c', 'd'].map((p, i) => ({ peer: p.repeat(64), preview: 'hello ' + p, lastTs: 1000 + i }));
+  const r = renderChatScreen({ isMinor: false, assumeMinor: false, groups: ROOMS, dmThreads });
+  await r.draw();
+  const shown = r.text();
+  // The heading is a CatLabel, a component ChatScreen defines inside itself; this harness records it rather than
+  // rendering it, so render it here — its own body, with the props ChatScreen gave it — and read what it draws.
+  const dm = r.nodes().filter(n => n.type === 'CatLabel' && n.props.ck === 'dm');
+  assert.equal(dm.length, 1, 'the private-threads section has no collapsible heading (ck="dm")');
+  const before = r.nodes().length;
+  dm[0].fn(dm[0].props);
+  const heading = r.nodes().slice(before).filter(n => n.type === 'SectionLabel').flatMap(n => n.kids).join('');
+  assert.equal(heading, 'Messages', 'the private-threads heading is not "Messages". It drew: ' + heading);
+  assert.match(shown, /All messages \(4\)/, 'the overflow link does not read "All messages (4)". Rendered: ' + shown);
+  assert.ok(!/Private messages|All private messages/.test(shown), 'the old "Private messages" wording is still drawn. Rendered: ' + shown);
+  assert.match(shown, /hello a/, 'the threads themselves did not render — the heading test would be vacuous');
 });
