@@ -26,7 +26,7 @@ const TRANSLATED = 'BSB-TEXT For God so loved the world that He gave His one and
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const localISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
-function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {}, parseRef = null, chapters = {} } = {}) {
+function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {}, parseRef = null, chapters = {}, bibleLoaded = true } = {}) {
   const listeners = {};
   const opts = { feedBases };
   const { React, draw } = miniReact();
@@ -52,7 +52,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     Bible: {
       parseRef: parseRef || (r => (r === 'John 3:16' ? { book: 43, chap: 3, verse: 16 } : r === 'Psalms 23:1' ? { book: 19, chap: 23, verse: 1 } : null)),
       // `chapters` ({ 'book:chap': rows }) adds whole chapters of this phone's Bible (the passage tests below).
-      loaded: true, books: () => [43].concat(Object.keys(chapters).map(k => Number(k.split(':')[0]))),
+      loaded: bibleLoaded, books: () => [43].concat(Object.keys(chapters).map(k => Number(k.split(':')[0]))),
       getVerses: (b, c) => (chapters[b + ':' + c] ? chapters[b + ':' + c] : b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
       refKey: (loc, v) => loc.book + '.' + loc.chap + '.' + v,   // the reader's canonical key (the verse heart uses it)
@@ -105,7 +105,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
     bookmarkItems: [], toggleBookmark: (k) => { hearted.push(k); }, setBookmarkTags: () => {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, promptRefused, warned, cleared, fetched, fetchInits, probed, hearted, opts, store,
+  return { draw: () => draw(TodayScreen, { ctx }), bible: win.Bible, published, prompts, promptRefused, warned, cleared, fetched, fetchInits, probed, hearted, opts, store,
     fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
@@ -337,6 +337,25 @@ test('D1: the widget gets the member\'s text for a RANGE and a whole CHAPTER, ca
   assert.match(t['Numbers 7'], /^N1 word .* N2 word/, 'the chapter does not open with its first verses');
   for (const [r, x] of Object.entries(t)) assert.ok(x.length <= 600, `${r}: ${x.length} chars crossed into widget storage`);
   assert.ok(t['Numbers 7'].endsWith('\u2026') && !/N89 /.test(t['Numbers 7']), 'an 89-verse chapter was not capped with an ellipsis');
+});
+
+test('DEVICE 2026-11-17: the Bible loading AFTER the first write re-publishes the texts — with NO second probe', async () => {
+  const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Numbers 7', schedule: [] };
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
+    parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '4:7': chapterOf('N', 89) }, bibleLoaded: false });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'Today did not configure the widget');
+  assert.deepEqual(s.prompts[0].texts, {}, 'premise: with the Bible not loaded the first write has no texts');
+  s.bible.loaded = true; s.draw(); await settle();
+  assert.equal(s.probed.length, 1, 'the Bible loading probed the relays again (small pipes: the texts are local)');
+  assert.equal(s.prompts.length, 2, 'the Bible loaded but the widget was never given the texts (it says "Tap to read" for the hour)');
+  assert.deepEqual(Object.keys(s.prompts[1].texts).sort(), ['1 Samuel 8:11-18', 'Numbers 7']);
+  assert.deepEqual(s.prompts[1].cached, LIVE, 'the re-publish did not carry the copy the probe found');
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 2, 'a redraw with the same texts wrote the widget again');
+  s.bible.activeVersion = 'KJV'; s.draw(); await settle();
+  assert.equal(s.prompts.length, 3, 'a change of translation did not re-publish');
+  assert.equal(s.probed.length, 1);
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────

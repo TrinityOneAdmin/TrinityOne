@@ -2706,10 +2706,46 @@ function TodayScreen({ ctx }) {
         try { until = Number(await window.TrinityIdentity.rememberedUntil()) || 0; } catch (e) { until = 0; }
         if (until <= nowS) { if (!cancelled) clear(); return; }
       }
+      // A REFUSAL IS NOT SWALLOWED (2026-11-17): the native side refuses a config it could not keep (bad npub, a
+      // validUntil that is not future unix seconds). Forget this hour's throttle so the next run asks again, and say
+      // so in the log — before this, a config the native side dropped looked exactly like success.
+      // A validUntil the native side cannot bound also CLEARS what it holds (audit L2 of eab4bf9b): a config that
+      // cannot be bounded is never kept, and the previous one may name older relay addresses.
+      const refused = (e) => {
+        const cur = homeWidgetProbed[widgetChurch];
+        if (cur && cur.key === probeKey) delete homeWidgetProbed[widgetChurch];
+        const msg = (e && e.message) || String(e);
+        try { console.warn('[widget] publishPrompt refused:', msg); } catch (_) {}
+        if (/bad validUntil/.test(msg) && !cancelled) clear();
+      };
+      function publish(cached, texts) {
+        try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(refused); } catch (e) { refused(e); }
+      }
+      // The member's own translation for every passage the copy names, so the widget can show the words, not just
+      // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
+      const textsFor = (cached) => {
+        const texts = {};
+        const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
+        refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = widgetPassageText(r, Bible); if (t) texts[r] = t; });
+        return texts;
+      };
+      const textsKeyOf = (texts) => String(Bible.activeVersion || '') + '|' + JSON.stringify(texts);
       // SMALL PIPES (audit F6): the same church, addresses and prompt are probed at most once an hour per session.
       const probeKey = where.npub + '|' + bases.join(',') + '|' + vpRefsKey;
       const last = homeWidgetProbed[widgetChurch];
-      if (last && last.key === probeKey && nowS - last.at < 3600) return;
+      if (last && last.key === probeKey && nowS - last.at < 3600) {
+        // DEVICE 2026-11-17: Today first runs BEFORE the Bible module has loaded, so the copy went out with texts {}
+        // and this throttle then stopped the rewrite when Bible.loaded flipped — the widget said "Tap to read" for
+        // the rest of the hour. The throttle is for the NETWORK: when only the texts would differ (the Bible loaded,
+        // or the member changed translation), re-publish the copy we already have, with no second probe.
+        if (!last.copy) return;
+        const texts = textsFor(last.copy);
+        const tk = textsKeyOf(texts);
+        if (tk === last.textsKey) return;
+        last.textsKey = tk;
+        publish(last.copy, texts);
+        return;
+      }
       // THE PROBE IS NATIVE (audit re-check R1). On the APK the webview's fetch goes through Capacitor's
       // https://localhost/_capacitor_http_interceptor_ proxy (CapacitorHttp is enabled), so this page can neither
       // refuse a redirect nor tell which address answered. TrinityWidget.probe runs the background job's own GET:
@@ -2724,27 +2760,13 @@ function TodayScreen({ ctx }) {
       // Not shared anywhere -> clear (keep the hourly throttle). Unreachable / unknown -> leave what is there, bounded
       // by its validUntil, and ask again next time.
       if (!cached) { if (outcome === 'absent') clear(true); else delete homeWidgetProbed[widgetChurch]; return; }
-      // The member's own translation for every passage the copy names, so the widget can show the words, not just
-      // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
-      const texts = {};
-      const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
-      refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = widgetPassageText(r, Bible); if (t) texts[r] = t; });
-      // A REFUSAL IS NOT SWALLOWED (2026-11-17): the native side refuses a config it could not keep (bad npub, a
-      // validUntil that is not future unix seconds). Forget this hour's throttle so the next run asks again, and say
-      // so in the log — before this, a config the native side dropped looked exactly like success.
-      // A validUntil the native side cannot bound also CLEARS what it holds (audit L2 of eab4bf9b): a config that
-      // cannot be bounded is never kept, and the previous one may name older relay addresses.
-      const refused = (e) => {
-        const cur = homeWidgetProbed[widgetChurch];
-        if (cur && cur.key === probeKey) delete homeWidgetProbed[widgetChurch];
-        const msg = (e && e.message) || String(e);
-        try { console.warn('[widget] publishPrompt refused:', msg); } catch (_) {}
-        if (/bad validUntil/.test(msg) && !cancelled) clear();
-      };
-      try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(refused); } catch (e) { refused(e); }
+      const texts = textsFor(cached);
+      homeWidgetProbed[widgetChurch].copy = cached;
+      homeWidgetProbed[widgetChurch].textsKey = textsKeyOf(texts);
+      publish(cached, texts);
     })();
     return () => { cancelled = true; };
-  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, relaysTick]);   // eslint-disable-line
+  }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, Bible.activeVersion, relaysTick]);   // eslint-disable-line
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;
