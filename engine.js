@@ -1094,7 +1094,8 @@ window.safeImgUrl = function (v) {
   function isLoaded(url){ return Object.values(urlOf).includes(url); }
 
   async function getCatalog(){
-    if(!catalogPromise) catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : { categories: [] }).catch(() => ({ categories: [] }));
+    // A FAILED read is not remembered: the next caller (the online retry, a later install) tries again. A success, and a read still in flight, are shared.
+    if(!catalogPromise){ const mine = catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : Promise.reject(new Error("catalog " + r.status))).catch(() => { if(catalogPromise === mine) catalogPromise = null; return { categories: [] }; }); }
     return catalogPromise;
   }
 
@@ -1103,7 +1104,7 @@ window.safeImgUrl = function (v) {
   // fine inside the Capacitor APK (native HTTP).
   let mirrorPromise = null;
   async function getMirror(){
-    if(!mirrorPromise) mirrorPromise = fetch("ebible-catalog.json").then(r => r.ok ? r.json() : null).catch(() => null);
+    if(!mirrorPromise){ const mine = mirrorPromise = fetch("ebible-catalog.json").then(r => r.ok ? r.json() : Promise.reject(new Error("mirror " + r.status))).catch(() => { if(mirrorPromise === mine) mirrorPromise = null; return null; }); }
     return mirrorPromise;
   }
 

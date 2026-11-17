@@ -116,3 +116,50 @@ test('RELAUNCH 8 — a catalogue that answers at 14 s (after the 6 s bound) does
   await sleep(17000);
   assert.ok(!JSON.parse(st.ls.get('trinityone.installed'))[bad].quarantined, 'a late catalogue quarantined a published Bible whose bytes would not read');
 });
+
+// ---- audit round 2: G1 (mirror shared), G2 (boot answer cleared), N3 (a failed read is retried) ----
+const namedUsfm = (name) => realFflate.zipSync({ '02-GEN.usfm': new TextEncoder().encode(`\\id GEN ${name}\n\\c 1\n\\p\n\\v 1 In the beginning ${name}.\n`) });
+
+test('RELAUNCH 9 — FOUR https records, the eBible mirror NEVER answers: ONE bounded wait in total, not one per record (G1)', async () => {
+  const st = newStores(); const mods = new Map(); const ls = {};
+  for (let i = 0; i < 4; i++) { const u = `https://example.invalid/m${i}.zip`; mods.set(u, usfmZip('Mirror ' + i)); ls[u] = rec(u, 'M' + i, 'Mirror ' + i); }
+  st.stores.set('modules', mods); st.ls.set('trinityone.installed', JSON.stringify(ls));
+  const p = phone({ state: st, mirrorHangs: true }); const t0 = Date.now(); await p.boot();
+  for (let i = 0; i < 700 && p.Bible.versions().length < 4; i++) await sleep(20);
+  const took = Date.now() - t0;
+  assert.equal(p.Bible.versions().length, 4, 'not every https record loaded (' + p.Bible.versions().length + ')');
+  assert.ok(took < 8500, `it took ${took} ms: each https record paid its own 6 s mirror wait`);
+});
+
+test('RELAUNCH 10 — after a boot whose catalogue timed out, a LATER install reads the catalogue fresh: the lookalike label is back (G2)', async () => {
+  const url = 'https://example.invalid/slow.zip'; const st = newStores();
+  st.stores.set('modules', new Map([[url, usfmZip('Slow Catalogue Guest')]]));
+  st.ls.set('trinityone.installed', JSON.stringify({ [url]: rec(url, 'SCG', 'Slow Catalogue Guest') }));
+  const p = phone({ state: st, catalogDelay: 8000 }); await p.boot();
+  for (let i = 0; i < 700 && p.Bible.versions().length < 1; i++) await sleep(20);   // boot waited its one bound (6 s) and gave up on the catalogue
+  await sleep(2600);                                                                // ...and the catalogue has now arrived
+  const r = await p.Bible.installFromBytes(namedUsfm('American Standard Version'), 'asv.zip');
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.name, 'American Standard Version (from a file)', 'the boot\'s "catalogue unreadable" answer outlived the boot: ' + r.name);
+});
+
+test('RELAUNCH 11 — a failed catalogue read is NOT remembered: a later install tries again and gets the label (N3)', async () => {
+  const p = await readyPhone();
+  p.net.catalogDown = true;
+  const a = await p.Bible.installFromBytes(namedUsfm('King James Version'), 'kjv.zip');
+  assert.equal(a.ok, true, JSON.stringify(a));
+  assert.equal(a.name, 'King James Version', 'with the lists down the label cannot be known (offline behaviour)');
+  p.net.catalogDown = false;
+  const b = await p.Bible.installFromBytes(namedUsfm('American Standard Version'), 'asv.zip');
+  assert.equal(b.name, 'American Standard Version (from a file)', 'the failed read was remembered for the whole session: ' + b.name);
+});
+
+test('RELAUNCH 12 — a failed eBible-mirror read is NOT remembered either: a later install of a mirror name is labelled (N3)', async () => {
+  const p = await readyPhone();
+  p.net.catalogDown = 'mirror';
+  const a = await p.Bible.installFromBytes(namedUsfm('Abureni NT Portions'), 'a.zip');
+  assert.equal(a.name, 'Abureni NT Portions', 'with the mirror list down the label cannot be known');
+  p.net.catalogDown = false;
+  const b = await p.Bible.installFromBytes(namedUsfm('God so Sokior-ok Iwon'), 'b.zip');
+  assert.equal(b.name, 'God so Sokior-ok Iwon (from a file)', 'the failed mirror read was remembered for the whole session: ' + b.name);
+});
