@@ -888,7 +888,7 @@ function cardMoney(minor, currency, decimals) {
 // through safeCssColor — and safeCssColor also blocks a url() beacon smuggled in the untrusted profile accent.
 function cardInk(accent) {
   const h = typeof accent === 'string' ? accent.trim() : '';
-  if (!/^#[0-9a-fA-F]{3,8}$/.test(h)) return safeCssColor(accent, 'var(--clay)');
+  if (!/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(h)) return safeCssColor(accent, 'var(--clay)');
   let c = h.slice(1);
   if (c.length === 3) c = c.split('').map(x => x + x).join('');
   if (c.length < 6) return '#2b2723';

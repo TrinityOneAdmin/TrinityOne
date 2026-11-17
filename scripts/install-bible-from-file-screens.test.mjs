@@ -557,3 +557,42 @@ test('S26 — the line\'s text has no trailing or leading whitespace (a JSX comm
     assert.equal(span.kids.length, 1, `${category}: the span holds more than the words (${span.kids.length} children)`);
   }
 });
+
+test('S27 — a brand colour that is not valid CSS (5 or 7 hex digits) is refused: the real App keeps the member\'s accent', async () => {
+  const none = await clayText({ dark: false, accent: 'indigo' });
+  for (const bad of ['#12345', '#1234567', '#12', '#123456789', '#12345g']) {
+    for (const dark of [false, true]) {
+      const plain = await clayText({ dark, accent: 'indigo' });
+      const r = await clayText({ dark, accent: 'indigo', brand: bad });
+      assert.equal(r.value, plain.value, `${bad} (dark=${dark}): the invalid brand changed --clay-text`);
+      assert.equal(r.clay, plain.clay, `${bad} (dark=${dark}): the invalid brand became --clay`);
+    }
+  }
+  const ok = await clayText({ dark: false, accent: 'indigo', brand: '#2E7D32' });
+  assert.notEqual(ok.value, none.value, 'control: a valid 6-digit brand must still be taken');
+  for (const good of ['#abcd', '#2E7D32ff']) assert.notEqual((await clayText({ dark: false, accent: 'indigo', brand: good })).clay, none.clay, `${good} (4 and 8 digits are valid CSS) was refused`);
+});
+
+test('S28 — dark mode: a very dark brand (navy) is LIGHTENED without losing its hue, and reads at >= 4.5:1', async () => {
+  const hueOf = (hex) => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255); const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!d) return -1;
+    const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return h * 60; };
+  const navy = '#001F3F';
+  const { value } = await clayText({ dark: true, accent: 'clay', brand: navy });
+  assert.ok(ratioOf(value, '#211B13') >= 4.5, `navy in dark mode is ${ratioOf(value, '#211B13').toFixed(2)}:1 (${value})`);
+  assert.ok(Math.abs(hueOf(value) - hueOf(navy)) <= 5, `navy lost its hue: ${value} is ${hueOf(value).toFixed(0)} deg, navy is ${hueOf(navy).toFixed(0)}`);
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
+  assert.ok(b - Math.max(r, g) >= 60, `navy went grey, not blue: ${value}`);
+  for (const dark2 of ['#3B0A45', '#0B3D2E']) {   // a dark purple and a dark green keep their hue too
+    const v = (await clayText({ dark: true, accent: 'clay', brand: dark2 })).value;
+    assert.ok(Math.abs(hueOf(v) - hueOf(dark2)) <= 6, `${dark2} -> ${v} changed hue (${hueOf(dark2).toFixed(0)} -> ${hueOf(v).toFixed(0)})`);
+    assert.ok(ratioOf(v, '#211B13') >= 4.5);
+  }
+});
+
+test('S29 — the shared safeCssColor (engine.js) takes 3, 4, 6 and 8 hex digits and refuses 5 and 7', () => {
+  const { win } = phone();
+  assert.equal(typeof win.safeCssColor, 'function', 're-anchor: the engine does not define window.safeCssColor');
+  for (const ok of ['#abc', '#abcd', '#c25a38', '#c25a38cc']) assert.equal(win.safeCssColor(ok, 'FALLBACK'), ok);
+  for (const bad of ['#ab', '#abcde', '#c25a38c', '#c25a38ccd', '#c25a3g', 'red', 'url(x)']) assert.equal(win.safeCssColor(bad, 'FALLBACK'), 'FALLBACK', bad + ' was accepted');
+  assert.equal(win.safeCssColor('var(--clay)', 'FALLBACK'), 'var(--clay)');
+});

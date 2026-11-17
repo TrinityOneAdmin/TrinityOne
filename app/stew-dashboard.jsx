@@ -2549,7 +2549,7 @@ function StewDashboard({ initial = 'overview' }) {
     return () => clearTimeout(t);
   }, [church.isNetwork]);
   // the church's brand accent (a hex) recolours the whole console too, derived from the one hex
-  const ca = (typeof church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(church.accent.trim())) ? church.accent.trim() : null;
+  const ca = (typeof church.accent === 'string' && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(church.accent.trim())) ? church.accent.trim() : null;
   const accentStyle = ca ? {
     '--clay': ca,
     '--clay-ink': `color-mix(in oklab, ${ca} 86%, #000)`,
@@ -2935,7 +2935,7 @@ async function churchMarkDataUrl({ picture, name, accent } = {}) {
   const pic = await invImgDataUrl(picture);
   if (pic) return pic;
   const initials = (String(name || '').trim().split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase()) || 'CH';
-  const acc = (typeof accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(accent.trim())) ? accent.trim() : '#b4462f';
+  const acc = (typeof accent === 'string' && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accent.trim())) ? accent.trim() : '#b4462f';
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#ffffff"/><circle cx="60" cy="60" r="60" fill="' + acc + '"/><text x="60" y="76" font-family="Georgia, serif" font-size="46" fill="#ffffff" text-anchor="middle">' + initials.replace(/[<>&]/g, '') + '</text></svg>';
   try { return await svgToPng(svg, 240); } catch (e) { return null; }
 }
@@ -8061,7 +8061,7 @@ function BulkInviteModal({ onClose }) {
     const base = window.Steward.joinUrl().replace('/?follow=', '/join?follow=');   // the smart /join landing (offers the app, or instant-web)
     const cn = church.name ? '&c=' + encodeURIComponent(church.name) : '';
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
-    const acc = (typeof church.accent === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(church.accent.trim())) ? church.accent.trim() : '#b4533f';
+    const acc = (typeof church.accent === 'string' && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(church.accent.trim())) ? church.accent.trim() : '#b4533f';
     const mark = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });   // church dp/badge
     const markImg = mark ? `<img class="mark" src="${esc(mark)}" alt="">` : '';
     const slips = list.map(name => {
