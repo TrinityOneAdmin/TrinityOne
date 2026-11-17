@@ -4,7 +4,8 @@
 // The expanded verse-of-the-day card has a button beside Minimise that swaps in a random verse from VOTD_POOL,
 // different from the one showing. The pick is kept on this phone for the rest of the day under
 // `trinityone.votd-pick` = { day, ref }; the next day the normal verse returns. The tap must not open the
-// share sheet; tapping the card shares whatever verse is showing, in the active translation where it has one.
+// share sheet; the card's Share button shares whatever verse is showing, in the active translation where it has
+// one, and tapping the card opens that verse in the Bible (owner 2026-11-17; the card tap used to share).
 //
 // POINT OF USE (CLAUDE.md rule 1): the REAL TodayScreen from app/screens-today.jsx is compiled and drawn, and
 // the button is found by its aria-label and tapped — a tap that BUBBLES to every ancestor's onClick unless
@@ -84,10 +85,12 @@ function mount(env) {
     fetch: async () => ({ ok: false, json: async () => ({}) }),
   });
   const shared = [];
+  const nav = { gotoRef: [], openReader: 0 };
   const ctx = {
     church: { name: 'Grace', initials: 'GC', npub: 'np1' },
     openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
     toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet(v) { shared.push(v); },
+    gotoRef(b, c, v) { nav.gotoRef.push([b, c, v]); }, openReader() { nav.openReader++; },
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {}, playSermon() {},
   };
   draw(TodayScreen, { ctx });
@@ -95,6 +98,7 @@ function mount(env) {
   const card = () => find(tree, n => n.props && n.props['data-votd-card'] === '1')[0];
   const refShown = () => { const c = card(); assert.ok(c, 're-anchor: the expanded verse-of-the-day card was not drawn'); const t = texts(c).join(' '); const p = POOL.find(x => t.includes(x.ref)); return p && p.ref; };
   const btn = () => find(tree, n => n.type === 'button' && n.props['aria-label'] === 'Another verse')[0];
+  const shareBtn = () => { const b = find(tree, n => n.type === 'button' && n.props['aria-label'] === 'Share this verse')[0]; assert.ok(b, 'no "Share this verse" button on the card'); return b; };
   // A browser tap: the target's onClick, then every DOM ancestor's, until something stops propagation.
   const tap = (target) => {
     const path = [];
@@ -110,7 +114,7 @@ function mount(env) {
     tree = draw(TodayScreen, { ctx });
     return { stopped };
   };
-  return { refShown, btn, tap, card, shared, store, get tree() { return tree; } };
+  return { refShown, btn, shareBtn, tap, card, shared, nav, store, get tree() { return tree; } };
 }
 
 // TIME-ZONE INDEPENDENT DAY KEYS (audit 2026-11-13): every instant below is chosen so that its LOCAL calendar
@@ -137,7 +141,7 @@ test('fixture: in this time zone the instants separate the local day from the UT
 
 const freshEnv = (over = {}) => ({ store: new Map([['trinityone.votd-min', '0']]), date: DAY1, rand: [], ...over });
 
-test('tapping "Another verse" changes the verse, does not open the share sheet, and the card then shares the NEW verse in the active translation', () => {
+test('tapping "Another verse" changes the verse, does not open the share sheet; Share then shares the NEW verse in the active translation, and the card opens it', () => {
   const env = freshEnv();
   const day = dayVerse(env.date);
   const other = POOL.find(p => p.ref !== day.ref);
@@ -158,11 +162,17 @@ test('tapping "Another verse" changes the verse, does not open the share sheet, 
   assert.ok(p, 're-anchor: the verse text paragraph was not found on the card');
   const live = find(s.card(), n => n.props && n.props['aria-live'] === 'polite' && find(n, m => m === p).length > 0);
   assert.equal(live.length, 1, 'a new verse is not announced to a screen reader (no polite live region around the verse text)');
-  s.tap(s.card());
-  assert.equal(s.shared.length, 1, 'tapping the card did not open the share sheet');
-  assert.equal(s.shared[0].ref, other.ref, 'the card shared a verse other than the one showing');
+  // SHARING moved from the card tap to the card's Share button (owner 2026-11-17); every payload check is kept.
+  s.tap(s.shareBtn());
+  assert.equal(s.shared.length, 1, 'tapping Share did not open the share sheet');
+  assert.equal(s.shared[0].ref, other.ref, 'Share shared a verse other than the one showing');
   assert.equal(s.shared[0].text, LIVE[BOOK[other.ref.split(' ')[0]]], 'the shared verse is not the active translation’s text');
   assert.equal(s.shared[0].version, 'KJV');
+  assert.equal(s.nav.gotoRef.length + s.nav.openReader, 0, 'tapping Share also navigated');
+  // …and the CARD TAP now opens the NEW verse in the Bible, at that verse.
+  s.tap(s.card());
+  assert.deepEqual(s.nav.gotoRef, [[BOOK[other.ref.split(' ')[0]], +other.ref.split(' ')[1].split(':')[0], +other.ref.split(':')[1]]], 'after "Another verse" the card tap did not open the verse now showing');
+  assert.equal(s.shared.length, 1, 'the card tap opened the share sheet');
 });
 
 test('the pick survives a restart (real lsGet/lsSet over storage) and the next day the day’s verse returns', () => {
@@ -211,10 +221,14 @@ test('a picked verse missing from the active translation falls back to the pool 
   env.rand = [(POOL.indexOf(other) + 0.5) / POOL.length];
   const s = mount(env);
   s.tap(s.btn());
-  s.tap(s.card());
+  s.tap(s.shareBtn());
   assert.equal(s.shared[0].ref, other.ref);
   assert.equal(s.shared[0].text, other.text, 'a verse missing from the translation did not fall back to the pool text');
   assert.equal(s.shared[0].version, 'WEB');
+  // The active Bible lacks the book, so the card cannot open the verse: it opens the reader instead.
+  s.tap(s.card());
+  assert.equal(s.nav.openReader, 1, 'a verse missing from the translation: the card tap did not fall back to the reader');
+  assert.equal(s.nav.gotoRef.length, 0);
 });
 
 test('with a church main colour the button wears the same ink as Minimise, so it stays readable', () => {

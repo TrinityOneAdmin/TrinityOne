@@ -75,6 +75,7 @@ function todayScreen(MD, calls) {
   const ctx = {
     church: { name: 'Grace', initials: 'SB', npub: 'np1' },
     openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
+    gotoRef: (...a) => calls.nav.push(['gotoRef', ...a]), openReader: () => calls.nav.push(['openReader']),
     toast: m => calls.toasts.push(m), toggleBookmark: k => { calls.toggled.push(k); if (MD.has('bookmarks', k)) { MD.remove('bookmarks', k); return false; } else { MD.put('bookmarks', { id: k, ref: k }); return true; } },
     setBookmarkTags: (ref, tags) => { const existing = MD.list('bookmarks').find(b => b.ref === ref || b.id === ref); if (existing) MD.put('bookmarks', { ...existing, tags: tags.filter(Boolean) }); },
     get bookmarkItems() { return MD.list('bookmarks'); },
@@ -90,15 +91,19 @@ const K = '43.3.16';
 function member(seed) {
   const MD = realMyData();
   if (seed) MD.put('bookmarks', { id: K, ref: K, ...seed });
-  const calls = { toggled: [], shared: [], toasts: [] };
+  const calls = { toggled: [], shared: [], toasts: [], nav: [] };
   const screen = todayScreen(MD, calls);
   const view = () => screen.draw();
   const tapHeart = () => {
     const h = heart(view());
     assert.equal(h.length, 1, 'no Favourites heart on the expanded verse card');
     let stopped = false;
-    h[0].props.onClick({ stopPropagation() { stopped = true; } });
-    assert.equal(stopped, true, 'propagation not stopped, so the card would open the share sheet');
+    const ev = { stopPropagation() { stopped = true; } };
+    h[0].props.onClick(ev);
+    // A browser would carry an unstopped tap on to the card, which opens the Bible: do the same here.
+    if (!stopped) { const c = find(view(), n => n.props && n.props['data-votd-card'] === '1')[0]; if (c) c.props.onClick(ev); }
+    assert.equal(stopped, true, 'propagation not stopped, so the tap would reach the card and open the Bible');
+    assert.deepEqual(calls.nav, [], 'the heart navigated');
   };
   const state = () => MD.get('bookmarks', K);
   const label = () => heart(view())[0].props['aria-label'];
