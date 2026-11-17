@@ -40,7 +40,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [], prompts = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
+  const published = [], prompts = [], promptRefused = [], warned = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
   const win = {
     addEventListener(t, h) { (listeners[t] = listeners[t] || []).push(h); }, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
@@ -61,14 +61,21 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
         for (const b of bases) { if (!/^https:\/\//.test(b)) continue; if (unreachable.includes(b) || redirectTo[b]) { fail++; continue; }
           if (feed[b] && npub === CHURCH_NPUB) { if (!best || (feed[b].ts || 0) > (best.ts || 0)) best = feed[b]; } else n404++; }
         return best ? { outcome: 'found', copy: best } : (n404 && !fail ? { outcome: 'absent' } : { outcome: 'unreachable' }); }, publishVotd: (a) => { published.push(a); return Promise.resolve(); },
-      publishPrompt: (a) => { prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
+      // TrinityWidgetPlugin.promptArgs's contract (JVM-tested: native/trinity-widget/android/src/test/…/PublishPromptArgsTest):
+      // validUntil must be a NUMBER of unix SECONDS, in the future and at most 366 days out; anything else is REFUSED.
+      // (Until 2026-11-17 the native side read it with PluginCall.getLong, silently stored 0 and dropped the config at
+      // the next redraw while resolving — a stub that accepted everything could never show that.)
+      publishPrompt: (a) => { const v = a && a.validUntil, nowS = Math.floor(date.getTime() / 1000);
+        if (!/^npub1[a-z0-9]{58}$/.test(String(a && a.npub))) { promptRefused.push(a); return Promise.reject(new Error('bad npub')); }
+        if (typeof v !== 'number' || !Number.isFinite(v) || Math.trunc(v) <= nowS || Math.trunc(v) > nowS + 366 * 86400) { promptRefused.push(a); return Promise.reject(new Error('bad validUntil')); }
+        prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
   };
   let pickStore = null;
   const globals = {
     React, window: win, localStorage,
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
     navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
-    setTimeout, clearTimeout, setInterval, clearInterval, console,
+    setTimeout, clearTimeout, setInterval, clearInterval, console: { ...console, warn: (...a) => { warned.push(a.join(' ')); } },
     Icon, ChurchBadge,
     lsGet: (k, d) => (k === 'trinityone.streak' ? { count: 7, last: localISO(date) } : k === 'trinityone.votd-pick' ? pickStore : d),
     lsSet: (k, v) => { if (k === 'trinityone.votd-pick') pickStore = v; },
@@ -95,7 +102,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
     bookmarkItems: [], toggleBookmark: (k) => { hearted.push(k); }, setBookmarkTags: () => {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, cleared, fetched, fetchInits, probed, hearted, opts, store,
+  return { draw: () => draw(TodayScreen, { ctx }), published, prompts, promptRefused, warned, cleared, fetched, fetchInits, probed, hearted, opts, store,
     fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
@@ -289,6 +296,17 @@ test('1b: before any relay is admitted, Today writes NO address (and does not cl
   s.draw(); await settle();
   assert.equal(s.prompts.length, 0);
   assert.equal(s.probed.length + s.fetched.length, 0, 'Today probed something although no relay was admitted');
+});
+
+test('DEVICE 2026-11-17: a config the native side REFUSES is not taken for success — logged, and asked again on the next run', async () => {
+  // A validUntil in milliseconds (or anything not future unix seconds) is refused by TrinityWidgetPlugin.promptArgs.
+  const s = todayScreen({ church: 'grace', pin: true, rememberedUntil: 1800000000 * 1000, feedBases: ['https://a8.example'], feed: { 'https://a8.example': COPY } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 0, 'the fake plugin accepted a validUntil the real one refuses');
+  assert.equal(s.promptRefused.length, 1, 'Today did not try to configure the widget');
+  assert.ok(s.warned.some(w => /publishPrompt refused: bad validUntil/.test(w)), 'the refusal was swallowed without a word');
+  s.fire('trinity-relays-verified'); s.draw(); await settle();
+  assert.equal(s.probed.length, 2, 'after a refusal Today kept the hourly throttle, so the widget stays unconfigured for an hour');
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────

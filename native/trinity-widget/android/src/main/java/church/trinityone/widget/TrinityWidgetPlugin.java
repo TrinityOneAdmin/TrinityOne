@@ -62,22 +62,54 @@ public class TrinityWidgetPlugin extends Plugin {
 
     @PluginMethod
     public void publishPrompt(PluginCall call) {
-        try {
-            JSONObject p = new JSONObject();
-            String npub = call.getString("npub", "");
-            if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) { call.reject("bad npub"); return; }
-            p.put("npub", npub);
-            p.put("bases", call.getArray("bases"));
-            p.put("validUntil", call.getLong("validUntil", 0L));
-            JSObject texts = call.getObject("texts");
-            p.put("texts", texts == null ? new JSONObject() : texts);
-            JSObject cached = call.getObject("cached");
-            p.put("cached", cached == null ? JSONObject.NULL : PromptFetchJob.sanitise(cached));
-            WidgetStore.write(ctx(), WidgetStore.K_PROMPT, p);
-        } catch (Exception e) { call.reject("bad prompt"); return; }
+        JSONObject p;
+        try { p = promptArgs(call, System.currentTimeMillis()); }
+        catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
+        catch (Exception e) { call.reject("bad prompt"); return; }
+        WidgetStore.write(ctx(), WidgetStore.K_PROMPT, p);
         PromptFetchJob.schedule(ctx());
         WidgetStore.refresh(ctx());
         call.resolve();
+    }
+
+    /** No caller asks for more than this: a week with no PIN, "remember me" (30 days) with one. */
+    static final long MAX_VALID_S = 366L * 86400L;
+
+    /**
+     * publishPrompt's arguments → the config WidgetStore keeps. Pure (no Context), so the JVM test
+     * (src/test/.../PublishPromptArgsTest) runs exactly the code publishPrompt runs.
+     *
+     * NUMBERS: never PluginCall.getLong / getInt / getDouble. They return the default unless the bridge's value is
+     * already that exact boxed type, and the bridge parses JSON with org.json, which hands back an Integer for any
+     * whole number that fits in 32 bits. A unix-seconds validUntil (1795510000) is such a number, so getLong returned
+     * 0, WidgetStore.promptConfig deleted the config on the next redraw, and the church prompt never reached the
+     * widget (device-found on the Oppo, 2026-11-17). Read the raw value as a Number instead.
+     */
+    static JSONObject promptArgs(PluginCall call, long nowMs) throws Exception {
+        JSONObject p = new JSONObject();
+        String npub = call.getString("npub", "");
+        if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) throw new IllegalArgumentException("bad npub");
+        p.put("npub", npub);
+        p.put("bases", call.getArray("bases"));
+        long until = seconds(call.getData(), "validUntil");
+        // Refused rather than stored: a config that is already past (or 0) would be deleted at the next redraw, which
+        // looks like success to the app; one in milliseconds would never expire and defeat the native lock bound.
+        if (until * 1000L <= nowMs || until > nowMs / 1000L + MAX_VALID_S) throw new IllegalArgumentException("bad validUntil");
+        p.put("validUntil", until);
+        JSObject texts = call.getObject("texts");
+        p.put("texts", texts == null ? new JSONObject() : texts);
+        JSObject cached = call.getObject("cached");
+        p.put("cached", cached == null ? JSONObject.NULL : PromptFetchJob.sanitise(cached));
+        return p;
+    }
+
+    /** A whole number of seconds from the bridge, whatever boxed type org.json chose (Integer, Long, Double); else 0. */
+    static long seconds(JSONObject data, String key) {
+        Object v = data == null ? null : data.opt(key);
+        if (!(v instanceof Number)) return 0L;
+        double d = ((Number) v).doubleValue();
+        if (Double.isNaN(d) || Double.isInfinite(d)) return 0L;
+        return ((Number) v).longValue();
     }
 
     /**

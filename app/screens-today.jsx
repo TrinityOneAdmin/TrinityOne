@@ -2697,7 +2697,15 @@ function TodayScreen({ ctx }) {
       const texts = {};
       const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
       refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = votdInTranslation({ ref: r, text: '' }, Bible); if (t.text) texts[r] = t.text; });
-      try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(() => {}); } catch (e) {}
+      // A REFUSAL IS NOT SWALLOWED (2026-11-17): the native side refuses a config it could not keep (bad npub, a
+      // validUntil that is not future unix seconds). Forget this hour's throttle so the next run asks again, and say
+      // so in the log — before this, a config the native side dropped looked exactly like success.
+      const refused = (e) => {
+        const cur = homeWidgetProbed[widgetChurch];
+        if (cur && cur.key === probeKey) delete homeWidgetProbed[widgetChurch];
+        try { console.warn('[widget] publishPrompt refused:', (e && e.message) || e); } catch (_) {}
+      };
+      try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(refused); } catch (e) { refused(e); }
     })();
     return () => { cancelled = true; };
   }, [widgetOn, widgetChurch, widgetLocked, widgetHasPin, resourcesOn, vpRefsKey, Bible.loaded, relaysTick]);   // eslint-disable-line
