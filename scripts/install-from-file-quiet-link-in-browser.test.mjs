@@ -130,11 +130,12 @@ test('Dictionaries and Commentaries say "Have a file? Install it"; Bibles say "H
 
 for (const theme of ['light', 'dark']) {
   test(`the line's text is at least 4.5:1 against its background in ${theme} mode`, { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
-    await waitEngine();
+    await ev(`localStorage.setItem('trinityone.settings', JSON.stringify({ dark: ${theme === 'dark'} }))`);   // the app's own setting, as the Profile switch writes it
+    await send('Page.reload'); await sleep(1500); await waitEngine(); await sleep(3000);
     await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 800, deviceScaleFactor: 1, mobile: true }); await sleep(600);
     const r = JSON.parse(await ev(`(async () => { ${PAGE_HELPERS}
       await clickText(/^Library$/); await wait(600); await clickText(/^Bibles/); await wait(900);
-      const root = document.querySelector('.trinity'); root.classList.toggle('dark', ${theme === 'dark'}); await wait(400);
+      const root = document.querySelector('.trinity');
       const b = document.querySelector('button[data-install-from-file]');
       return JSON.stringify({ dark: root.classList.contains('dark'), ratio: contrast(b), color: getComputedStyle(b).color }); })()`));
     assert.equal(r.dark, theme === 'dark');

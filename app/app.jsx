@@ -2715,6 +2715,9 @@ function App() {
   const rootStyle = {
     '--clay': ap.c, '--clay-ink': ap.i, '--clay-soft': ap.s, '--clay-deep': ap.d, '--on-clay': ap.on || '#fff',
     ...(brand || {}),
+    // text-sized accent for the Library's install-from-a-file line: light uses the darker clay-ink (5.08:1 on paper; the plain accent is 3.78:1),
+    // dark keeps the accent itself (already 7:1). Follows the member's accent choice.
+    '--clay-text': t.dark ? ap.c : ap.i,
     '--read-scale': t.readScale,
   };
 
