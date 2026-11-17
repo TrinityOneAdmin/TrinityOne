@@ -37,6 +37,14 @@ final class WidgetStore {
     static final String K_VOTD = "votd";
     static final String K_PROMPT = "prompt";
 
+    /**
+     * ONE lock for every read-modify-write of K_PROMPT (re-audit X-a of e19bfb9d): the app's bridge thread
+     * (publishPrompt, publishTexts, clearPrompt, clear/setEnabled off) and the background job's thread (PromptFetchJob)
+     * both rewrite it. SharedPreferences updates its in-memory map synchronously, so holding this across read → write
+     * makes each change whole. Never held across the network: the job's GET pass runs outside it.
+     */
+    static final Object PROMPT_LOCK = new Object();
+
     static final class Page {
         final String label, ref, text;
         final boolean prompt;
@@ -76,15 +84,17 @@ final class WidgetStore {
 
     /** The prompt config, or null. Enforces validUntil WITHOUT the app: past it, the config is deleted. */
     static JSONObject promptConfig(Context c, long now) {
-        JSONObject p = read(c, K_PROMPT);
-        if (p == null) return null;
-        long until = p.optLong("validUntil", 0);
-        if (until <= 0 || until * 1000L <= now) {
-            write(c, K_PROMPT, null);
-            PromptFetchJob.cancel(c);
-            return null;
+        synchronized (PROMPT_LOCK) {
+            JSONObject p = read(c, K_PROMPT);
+            if (p == null) return null;
+            long until = p.optLong("validUntil", 0);
+            if (until <= 0 || until * 1000L <= now) {
+                write(c, K_PROMPT, null);
+                PromptFetchJob.cancel(c);
+                return null;
+            }
+            return p;
         }
-        return p;
     }
 
     /** The active prompt entry: { ref, becameMs } or null. */

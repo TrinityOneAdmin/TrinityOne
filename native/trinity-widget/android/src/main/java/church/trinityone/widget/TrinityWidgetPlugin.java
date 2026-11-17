@@ -68,7 +68,7 @@ public class TrinityWidgetPlugin extends Plugin {
         catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
         catch (Exception e) { call.reject("bad prompt"); return; }
         PromptStore st = promptStore();
-        st.write(p);
+        synchronized (WidgetStore.PROMPT_LOCK) { st.write(p); }
         st.schedule();
         st.refresh();
         call.resolve();
@@ -78,8 +78,10 @@ public class TrinityWidgetPlugin extends Plugin {
      *  publishPrompt ITSELF with a recording store (audit M1 of eab4bf9b): no Context exists off-device. */
     interface PromptStore { JSONObject read(); void write(JSONObject cfg); void schedule(); void refresh(); }
 
-    PromptStore promptStore() {
-        final Context c = ctx();
+    PromptStore promptStore() { return storeFor(ctx()); }
+
+    /** The real store, also used by PromptFetchJob. */
+    static PromptStore storeFor(final Context c) {
         return new PromptStore() {
             @Override public JSONObject read() { return WidgetStore.read(c, WidgetStore.K_PROMPT); }
             @Override public void write(JSONObject cfg) { WidgetStore.write(c, WidgetStore.K_PROMPT, cfg); }
@@ -114,10 +116,12 @@ public class TrinityWidgetPlugin extends Plugin {
         if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) throw new IllegalArgumentException("bad npub");
         JSObject texts = call.getObject("texts");
         if (texts == null) throw new IllegalArgumentException("bad texts");
-        JSONObject cfg = st.read();
-        if (cfg == null || !npub.equals(cfg.optString("npub", ""))) return false;
-        cfg.put("texts", texts);
-        st.write(cfg);
+        synchronized (WidgetStore.PROMPT_LOCK) {
+            JSONObject cfg = st.read();
+            if (cfg == null || !npub.equals(cfg.optString("npub", ""))) return false;
+            cfg.put("texts", texts);
+            st.write(cfg);
+        }
         st.refresh();
         return true;
     }
@@ -185,7 +189,7 @@ public class TrinityWidgetPlugin extends Plugin {
 
     @PluginMethod
     public void clearPrompt(PluginCall call) {
-        WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null);
+        synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
         PromptFetchJob.cancel(ctx());
         WidgetStore.refresh(ctx());
         call.resolve();
@@ -208,7 +212,7 @@ public class TrinityWidgetPlugin extends Plugin {
 
     private void forget() {
         WidgetStore.write(ctx(), WidgetStore.K_VOTD, null);
-        WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null);
+        synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
         WidgetStore.forgetAllOrders(ctx());
         PromptFetchJob.cancel(ctx());
         WidgetStore.refresh(ctx());

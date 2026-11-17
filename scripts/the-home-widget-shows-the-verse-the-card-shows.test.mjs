@@ -26,7 +26,7 @@ const TRANSLATED = 'BSB-TEXT For God so loved the world that He gave His one and
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const localISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
-function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {}, parseRef = null, chapters = {}, bibleLoaded = true } = {}) {
+function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {}, parseRef = null, chapters = {}, bibleLoaded = true, withPublishTexts = true } = {}) {
   const listeners = {};
   const opts = { feedBases };
   const { React, draw } = miniReact();
@@ -82,6 +82,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
         native.prompt.texts = JSON.parse(JSON.stringify(a.texts)); return Promise.resolve({ updated: true }); },
       clearPrompt: () => { cleared.push(1); native.prompt = null; return Promise.resolve(); } } } } : undefined,
   };
+  if (!withPublishTexts && win.Capacitor) delete win.Capacitor.Plugins.TrinityWidget.publishTexts;   // an older APK
   let pickStore = null;
   const globals = {
     React, window: win, localStorage,
@@ -371,6 +372,20 @@ test('DEVICE 2026-11-17: the Bible loading AFTER the first write sends the texts
   assert.equal(s.textsSent.length, 2, 'a change of translation did not re-send the texts');
   assert.equal(s.probed.length, 1);
   assert.equal(s.prompts.length, 1);
+});
+
+test('X-b: an APK WITHOUT publishTexts gets nothing when the Bible loads late — never the whole config again', async () => {
+  const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Numbers 7', schedule: [] };
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
+    parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '4:7': chapterOf('N', 89) }, bibleLoaded: false, withPublishTexts: false });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'premise: the first write happened');
+  s.native.prompt.cached = null;   // the background job withdrew the copy meanwhile
+  s.bible.loaded = true; s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'without publishTexts Today fell back to publishPrompt (it would put a withdrawn copy back)');
+  assert.equal(s.textsSent.length, 0);
+  assert.equal(s.native.prompt.cached, null);
+  assert.equal(s.probed.length, 1);
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────

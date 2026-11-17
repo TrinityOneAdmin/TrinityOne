@@ -74,10 +74,17 @@ public class PromptFetchJob extends JobService {
         Probe pr = probe(npub, bases);
         // Apply what we found to the config AS IT IS NOW, not to the copy read before the network (re-audit S1 of
         // d6f0e32c): while we were fetching, the app may have cleared it, switched church, or updated its texts.
-        JSONObject now2 = WidgetStore.read(c, WidgetStore.K_PROMPT);
-        try { if (!applyFetch(now2, npub, pr)) return; } catch (Exception e) { return; }
-        WidgetStore.write(c, WidgetStore.K_PROMPT, now2);
-        WidgetStore.refresh(c);
+        if (commit(TrinityWidgetPlugin.storeFor(c), npub, pr)) WidgetStore.refresh(c);
+    }
+
+    /** read → applyFetch → write, under WidgetStore.PROMPT_LOCK (re-audit X-a); true = written. */
+    static boolean commit(TrinityWidgetPlugin.PromptStore st, String npub, Probe pr) {
+        synchronized (WidgetStore.PROMPT_LOCK) {
+            JSONObject now2 = st.read();
+            try { if (!applyFetch(now2, npub, pr)) return false; } catch (Exception e) { return false; }
+            st.write(now2);
+            return true;
+        }
     }
 
     /**
