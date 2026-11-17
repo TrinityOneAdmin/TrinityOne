@@ -74,3 +74,45 @@ test('RELAUNCH 5 — a RELATIVE record that is not in the catalogue does not fet
   for (let i = 0; i < 100 && p.Bible.versions().length < 1; i++) await sleep(20);
   assert.ok(!p.fetched.includes('ebible-catalog.json'), 'the 414 KB eBible list was fetched for a relative url: ' + p.fetched);
 });
+
+// ---- audit c0421cca F2/F3/F4: ONE bounded answer per list per boot ----
+const refusedZip = async () => {
+  const good = Buffer.from(realFflate.zipSync({ 'ok.bbl.mybible': await bibleDb('OK', 'Ok Bible', 'x') })); const at = good.length - 22;
+  const loc = Buffer.alloc(20); loc.writeUInt32LE(0x07064b50, 0);
+  return new Uint8Array(Buffer.concat([good.subarray(0, at), loc, good.subarray(at)]));
+};
+const rec = (url, abbr, name) => ({ url, id: abbr, abbr, name, kind: 'bible', category: 'bibles' });
+
+test('RELAUNCH 6 — FIVE catalogue records plus the member\'s own Bible, catalogue NEVER answers: the member\'s Bible appears after ONE bounded wait, not five', async () => {
+  const urls = ['modules/engbsb.zip', 'modules/eng-kjv.zip', 'modules/eng-web.zip', 'modules/eng-asv.zip', 'modules/ahirani-usfm.zip'];
+  const st = newStores(); const mods = new Map(); const ls = {};
+  urls.forEach((u, i) => { mods.set(u, usfmZip('Cat ' + i)); ls[u] = rec(u, 'C' + i, 'Cat ' + i); });
+  const own = 'imported/aaaaaaaaaaaa/mine.zip'; mods.set(own, usfmZip('My Own Bible')); ls[own] = rec(own, 'MINE', 'My Own Bible');
+  st.stores.set('modules', mods); st.ls.set('trinityone.installed', JSON.stringify(ls));
+  const p = phone({ state: st, catalogHangs: true }); const t0 = Date.now(); await p.boot();
+  for (let i = 0; i < 700 && !p.Bible.versions().some(v => v.name === 'My Own Bible'); i++) await sleep(20);
+  const took = Date.now() - t0;
+  assert.ok(p.Bible.versions().some(v => v.name === 'My Own Bible'), 'the member\'s own Bible never appeared');
+  assert.ok(took < 8500, `it took ${took} ms: every catalogue record paid its own 6 s wait (q18b: 69 s for ten)`);
+  assert.ok(Object.values(JSON.parse(st.ls.get('trinityone.installed'))).every(r => !r.quarantined), 'a record was branded unsafe because the catalogue never answered');
+});
+
+test('RELAUNCH 7 — a catalogue record whose bytes the reader refuses, catalogue hung: the record after it still loads in ONE bounded wait (the "readable?" question does not wait for ever)', async () => {
+  const bad = 'modules/eng-kjv.zip', own = 'imported/bbbbbbbbbbbb/mine.zip';
+  const st = newStores(); st.stores.set('modules', new Map([[bad, await refusedZip()], [own, usfmZip('Behind The Refusal')]]));
+  st.ls.set('trinityone.installed', JSON.stringify({ [bad]: rec(bad, 'KJV', 'King James'), [own]: rec(own, 'BTR', 'Behind The Refusal') }));
+  const p = phone({ state: st, catalogHangs: true }); const t0 = Date.now(); await p.boot();
+  for (let i = 0; i < 700 && !p.Bible.versions().some(v => v.name === 'Behind The Refusal'); i++) await sleep(20);
+  assert.ok(p.Bible.versions().some(v => v.name === 'Behind The Refusal'), 'the record after the refused one never loaded');
+  assert.ok(Date.now() - t0 < 8500, `it took ${Date.now() - t0} ms`);
+  assert.ok(!JSON.parse(st.ls.get('trinityone.installed'))[bad].quarantined, 'a catalogue Bible was branded unsafe while the catalogue was hung');
+});
+
+test('RELAUNCH 8 — a catalogue that answers at 14 s (after the 6 s bound) does not turn a timed-out "not ours" into "readable" and quarantine a catalogue Bible (q18b-race)', async () => {
+  const bad = 'modules/eng-kjv.zip';
+  const st = newStores(); st.stores.set('modules', new Map([[bad, await refusedZip()]]));
+  st.ls.set('trinityone.installed', JSON.stringify({ [bad]: rec(bad, 'KJV', 'King James') }));
+  const p = phone({ state: st, catalogDelay: 14000 }); await p.boot();
+  await sleep(17000);
+  assert.ok(!JSON.parse(st.ls.get('trinityone.installed'))[bad].quarantined, 'a late catalogue quarantined a published Bible whose bytes would not read');
+});

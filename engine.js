@@ -891,7 +891,7 @@ window.safeImgUrl = function (v) {
   async function publishedPins(){
     const out = {};
     try{
-      const cat = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] });
+      const cat = await _catAns();
       for(const c of (cat && cat.categories) || [])
         for(const it of (c.items || []))
           if(it && it.url && it.sha256) out[it.url] = String(it.sha256).toLowerCase();
@@ -1506,14 +1506,14 @@ window.safeImgUrl = function (v) {
     const out = new Set(), cat = _CAT_OF_KIND[kind];
     const add = (it, abbrToo = true) => { if(it && catOf(it) === cat){ if(it.name) out.add(_nameKey(it.name)); if(abbrToo && it.abbr) out.add(_nameKey(it.abbr)); } };
     add(DEFAULT_MODULE); add(DEFAULT_LEXICON);
-    try{ const c = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] }); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
+    try{ const c = await _catAns(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
     // the 1,290 eBible translations the Library offers by name: a file must not wear one either
-    if(kind === "bible"){ try{ const m = await _within(getMirror(), LIST_WAIT_MS, null); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
+    if(kind === "bible"){ try{ const m = await _mirAns(); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
     return out;
   }
   async function _pinnedEntry(h){
     for(const it of [DEFAULT_MODULE, DEFAULT_LEXICON]) if(it.url && KNOWN_HASHES[it.url] === h) return it;
-    try{ const c = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] }); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
+    try{ const c = await _catAns(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
     return null;
   }
   // take a just-loaded module back out of memory (no record, no bytes involved)
@@ -1959,6 +1959,13 @@ window.safeImgUrl = function (v) {
   // on them, and nothing may wait on them for ever: a list that has not answered in LIST_WAIT_MS counts as unreadable.
   const LIST_WAIT_MS = 6000;
   const _within = (p, ms, fallback) => new Promise((res) => { const t = setTimeout(() => res(fallback), ms); Promise.resolve(p).then(v => { clearTimeout(t); res(v); }, () => { clearTimeout(t); res(fallback); }); });
+  // ONE bounded answer per list per boot. restoreInstalled sets _bootLists; every reader of a list during the boot (the pin
+  // list, the link check, the readable check, reserved names) shares that one promise, so a catalogue that never answers costs
+  // ONE LIST_WAIT_MS in total, not one per record, and every record sees the SAME answer (a record cannot be judged "not ours"
+  // by a timed-out read and then "readable" by a later one). Outside the boot each call is its own bounded read.
+  let _bootLists = null;
+  const _catAns = () => { const f = () => _within(getCatalog(), LIST_WAIT_MS, null); if(!_bootLists) return f(); return _bootLists.cat || (_bootLists.cat = f()); };
+  const _mirAns = () => { const f = () => _within(getMirror(), LIST_WAIT_MS, null); if(!_bootLists) return f(); return _bootLists.mir || (_bootLists.mir = f()); };
   async function moduleLinkAllowed(url){
     if(typeof url !== "string" || !url) return false;
     if(url === DEFAULT_MODULE.url) return true;
@@ -1966,16 +1973,16 @@ window.safeImgUrl = function (v) {
     // own Bible waited at every launch behind a 414 KB list download (10 s on the web build while it compiles, minutes on a thin
     // pipe, for ever if the connection hangs), and every record after it waited too.
     if(url.indexOf("imported/") === 0) return false;
-    try{ const c = await _within(getCatalog(), LIST_WAIT_MS, { categories: [] }); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
+    try{ const c = await _catAns(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
     // the mirror's urls are all https: a relative url cannot be in it, so do not fetch it for one
-    if(/^https?:/i.test(url)){ try{ const m = await _within(getMirror(), LIST_WAIT_MS, null); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){} }
+    if(/^https?:/i.test(url)){ try{ const m = await _mirAns(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){} }
     return false;
   }
   // Can we READ the lists that say what is ours? (getCatalog resolves {categories:[]} on failure, getMirror null.)
   async function _listsReadable(){
     try{
-      const c = await _within(getCatalog(), LIST_WAIT_MS, null); if(!(c && (c.categories || []).length)) return false;
-      const m = await _within(getMirror(), LIST_WAIT_MS, null); return !!(m && (m.items || []).length);
+      const c = await _catAns(); if(!(c && (c.categories || []).length)) return false;
+      const m = await _mirAns(); return !!(m && (m.items || []).length);
     }catch(e){ return false; }
   }
   // told by event if the app is already listening, else kept for takeLinkNotice() at mount (same shape as the quarantine notice)
@@ -1985,7 +1992,9 @@ window.safeImgUrl = function (v) {
   function takeLinkNotice(){ const v = _linkRefusedPending; _linkRefusedPending = false; return v; }
   async function autoLoad(){
     loadingFlag = true; notify();
+    _bootLists = {};
     try{ await restoreInstalled(); }catch(e){ console.error(e); }
+    finally{ _bootLists = null; }
     const url = new URLSearchParams(location.search).get("module");
     // RECORD IT, as the file-import path already does. fetchAndCacheModule() writes the bytes into the same
     // IndexedDB every other module lives in, and this path used to leave no record of them: the module was
