@@ -891,7 +891,7 @@ window.safeImgUrl = function (v) {
   async function publishedPins(){
     const out = {};
     try{
-      const cat = await getCatalog();
+      const cat = await _catAns();
       for(const c of (cat && cat.categories) || [])
         for(const it of (c.items || []))
           if(it && it.url && it.sha256) out[it.url] = String(it.sha256).toLowerCase();
@@ -1094,7 +1094,8 @@ window.safeImgUrl = function (v) {
   function isLoaded(url){ return Object.values(urlOf).includes(url); }
 
   async function getCatalog(){
-    if(!catalogPromise) catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : { categories: [] }).catch(() => ({ categories: [] }));
+    // A FAILED read is not remembered: the next caller (the online retry, a later install) tries again. A success, and a read still in flight, are shared.
+    if(!catalogPromise){ const mine = catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : Promise.reject(new Error("catalog " + r.status))).catch(() => { if(catalogPromise === mine) catalogPromise = null; return { categories: [] }; }); }
     return catalogPromise;
   }
 
@@ -1103,7 +1104,7 @@ window.safeImgUrl = function (v) {
   // fine inside the Capacitor APK (native HTTP).
   let mirrorPromise = null;
   async function getMirror(){
-    if(!mirrorPromise) mirrorPromise = fetch("ebible-catalog.json").then(r => r.ok ? r.json() : null).catch(() => null);
+    if(!mirrorPromise){ const mine = mirrorPromise = fetch("ebible-catalog.json").then(r => r.ok ? r.json() : Promise.reject(new Error("mirror " + r.status))).catch(() => { if(mirrorPromise === mine) mirrorPromise = null; return null; }); }
     return mirrorPromise;
   }
 
@@ -1502,18 +1503,21 @@ window.safeImgUrl = function (v) {
     } else if(kind === "dict") held = hasDict(abbr) || dicts.some(d => K(d.abbr) === ka);
     return held || reserved.has(ka) || reserved.has(kn);
   }
+  // The 'lookalike-name' label ('(from a file)') depends on these lists. Within the per-boot bound a slow list is read once and shared; a list
+  // that has not answered by then counts as empty, so a file may then wear a catalogue name WITHOUT the label (it did already when offline).
+  // Labelling is advisory: it never decides what loads, so this is documented rather than waited on.
   async function _reservedNames(kind){
     const out = new Set(), cat = _CAT_OF_KIND[kind];
     const add = (it, abbrToo = true) => { if(it && catOf(it) === cat){ if(it.name) out.add(_nameKey(it.name)); if(abbrToo && it.abbr) out.add(_nameKey(it.abbr)); } };
     add(DEFAULT_MODULE); add(DEFAULT_LEXICON);
-    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
+    try{ const c = await _catAns(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
     // the 1,290 eBible translations the Library offers by name: a file must not wear one either
-    if(kind === "bible"){ try{ const m = await getMirror(); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
+    if(kind === "bible"){ try{ const m = await _mirAns(); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }, false); }catch(e){} }   // NAMES only: 990 of its abbreviations are 3 letters or fewer (AMP, NT, RV...) and a genuine "Amplified Bible" must not be labelled for one
     return out;
   }
   async function _pinnedEntry(h){
     for(const it of [DEFAULT_MODULE, DEFAULT_LEXICON]) if(it.url && KNOWN_HASHES[it.url] === h) return it;
-    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
+    try{ const c = await _catAns(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.sha256 && String(it.sha256).toLowerCase() === h) return it; }catch(e){}
     return null;
   }
   // take a just-loaded module back out of memory (no record, no bytes involved)
@@ -1854,6 +1858,19 @@ window.safeImgUrl = function (v) {
   function books(version){ const s = src(version); return s ? s.books.slice() : []; }
   function maxChapter(b, version){ const s = src(version); return s ? (s.maxChap[b] || 1) : 1; }
   function getVerses(b, c, version){ const s = src(version); return s ? s.getVerses(b, c) : []; }
+  // First chapter of a book that this Bible really HAS text for (a partial Bible - a draft, a portion, a single chapter - need not
+  // start at 1), or null. Used by the reader's "not in this Bible" screen and by "Read it now" after an install.
+  function firstChapter(b, version){ const n = maxChapter(b, version); for(let c = 1; c <= n; c++){ try{ if(getVerses(b, c, version).length) return c; }catch(e){} } return null; }
+  // A passage THIS Bible has: `loc` itself if it has text there, else that book's first chapter, else its first book's first chapter.
+  function passageFor(version, loc){
+    try{
+      if(loc && loc.book != null && loc.chap != null && getVerses(loc.book, loc.chap, version).length) return { book: loc.book, chap: loc.chap };
+      const bs = books(version);
+      if(loc && bs.indexOf(loc.book) >= 0){ const c = firstChapter(loc.book, version); if(c != null) return { book: loc.book, chap: c }; }
+      for(const b of bs){ const c = firstChapter(b, version); if(c != null) return { book: b, chap: c }; }
+    }catch(e){}
+    return null;
+  }
   // commentary for a passage: installed commentary modules + footnotes baked into the active Bible
   function getCommentary(b, c, version){
     const out = [];
@@ -1955,18 +1972,34 @@ window.safeImgUrl = function (v) {
   }
 
   // ── boot: restore installed modules, then optional ?module=<url> autoload ──
+  // The lists are NETWORK reads (catalog.json, and the 414 KB eBible mirror list). A member's own imported file must never wait
+  // on them, and nothing may wait on them for ever: a list that has not answered in LIST_WAIT_MS counts as unreadable.
+  const LIST_WAIT_MS = 6000;
+  const _within = (p, ms, fallback) => new Promise((res) => { const t = setTimeout(() => res(fallback), ms); Promise.resolve(p).then(v => { clearTimeout(t); res(v); }, () => { clearTimeout(t); res(fallback); }); });
+  // ONE bounded answer per list per boot. restoreInstalled sets _bootLists; every reader of a list during the boot (the pin
+  // list, the link check, the readable check, reserved names) shares that one promise, so a catalogue that never answers costs
+  // ONE LIST_WAIT_MS in total, not one per record, and every record sees the SAME answer (a record cannot be judged "not ours"
+  // by a timed-out read and then "readable" by a later one). Outside the boot each call is its own bounded read.
+  let _bootLists = null;
+  const _catAns = () => { const f = () => _within(getCatalog(), LIST_WAIT_MS, null); if(!_bootLists) return f(); return _bootLists.cat || (_bootLists.cat = f()); };
+  const _mirAns = () => { const f = () => _within(getMirror(), LIST_WAIT_MS, null); if(!_bootLists) return f(); return _bootLists.mir || (_bootLists.mir = f()); };
   async function moduleLinkAllowed(url){
     if(typeof url !== "string" || !url) return false;
     if(url === DEFAULT_MODULE.url) return true;
-    try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
-    try{ const m = await getMirror(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){}
+    // An imported/ key is a member's own file and can never be published: answer at once, no list read. Before this, the member's
+    // own Bible waited at every launch behind a 414 KB list download (10 s on the web build while it compiles, minutes on a thin
+    // pipe, for ever if the connection hangs), and every record after it waited too.
+    if(url.indexOf("imported/") === 0) return false;
+    try{ const c = await _catAns(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.url === url) return true; }catch(e){}   // (an import ROW has no url, so no `kind` test is needed here)
+    // the mirror's urls are all https: a relative url cannot be in it, so do not fetch it for one
+    if(/^https?:/i.test(url)){ try{ const m = await _mirAns(); for(const it of (m && m.items) || []) if(it && it.url === url) return true; }catch(e){} }
     return false;
   }
   // Can we READ the lists that say what is ours? (getCatalog resolves {categories:[]} on failure, getMirror null.)
   async function _listsReadable(){
     try{
-      const c = await getCatalog(); if(!(c && (c.categories || []).length)) return false;
-      const m = await getMirror(); return !!(m && (m.items || []).length);
+      const c = await _catAns(); if(!(c && (c.categories || []).length)) return false;
+      const m = await _mirAns(); return !!(m && (m.items || []).length);
     }catch(e){ return false; }
   }
   // told by event if the app is already listening, else kept for takeLinkNotice() at mount (same shape as the quarantine notice)
@@ -1976,7 +2009,9 @@ window.safeImgUrl = function (v) {
   function takeLinkNotice(){ const v = _linkRefusedPending; _linkRefusedPending = false; return v; }
   async function autoLoad(){
     loadingFlag = true; notify();
+    _bootLists = {};
     try{ await restoreInstalled(); }catch(e){ console.error(e); }
+    finally{ _bootLists = null; }
     const url = new URLSearchParams(location.search).get("module");
     // RECORD IT, as the file-import path already does. fetchAndCacheModule() writes the bytes into the same
     // IndexedDB every other module lives in, and this path used to leave no record of them: the module was
@@ -2048,7 +2083,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, crossrefList, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, firstChapter, passageFor, getCommentary, commentaryList, getCrossRefs, crossrefLicense, crossrefList, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 
