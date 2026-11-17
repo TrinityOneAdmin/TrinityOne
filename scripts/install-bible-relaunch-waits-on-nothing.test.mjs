@@ -55,3 +55,22 @@ test('RELAUNCH 3 — an https record still waits for the lists (bounded), and a 
   assert.equal(p.Bible.versions()[0].name, 'After The Hang');
   assert.ok(!JSON.parse(st.ls.get('trinityone.installed'))[url].quarantined, 'a record was branded unsafe because a list never answered');
 });
+
+test('RELAUNCH 4 — a catalogue that NEVER answers delays the member\'s Bible by the pins\' bounded wait ONLY (not twice), and it loads', async () => {
+  const { state, abbr } = await installedState(usfmZip('Catalogue Hang Bible'));
+  const p = phone({ state, catalogHangs: true }); const t0 = Date.now(); await p.boot();
+  for (let i = 0; i < 520 && p.Bible.versions().length < 1; i++) await sleep(20);
+  const took = Date.now() - t0;
+  assert.equal(p.Bible.versions().length, 1, 'the imported Bible never loaded while the catalogue hung');
+  assert.match(p.Bible.getVerses(1, 1, abbr)[0].text, /Catalogue Hang Bible/);
+  assert.ok(took < 8500, `it waited ${took} ms: once for the pins (6 s) is the most it should cost; the "is it ours?" question must not wait again`);
+});
+
+test('RELAUNCH 5 — a RELATIVE record that is not in the catalogue does not fetch the eBible list either (its urls are all https)', async () => {
+  const key = 'modules/not-ours.zip';
+  const st = newStores(); st.stores.set('modules', new Map([[key, usfmZip('Relative Stranger')]]));
+  st.ls.set('trinityone.installed', JSON.stringify({ [key]: { url: key, id: 'RS', abbr: 'RS', name: 'Relative Stranger', kind: 'bible', category: 'bibles' } }));
+  const p = phone({ state: st }); await p.boot();
+  for (let i = 0; i < 100 && p.Bible.versions().length < 1; i++) await sleep(20);
+  assert.ok(!p.fetched.includes('ebible-catalog.json'), 'the 414 KB eBible list was fetched for a relative url: ' + p.fetched);
+});

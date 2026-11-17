@@ -49,7 +49,7 @@ export const cached = (state, key) => ((state.stores.get('modules') || new Map()
 // ── the phone: the REAL engine.js ────────────────────────────────────────────────────────────────────────────
 // `readyState: 'loading'` holds boot (autoLoad) back until `boot()` is called, exactly as a page that has not yet
 // fired DOMContentLoaded does; that is what lets a test start an install DURING boot.
-export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, catalogJson = null, search = '', catalogDown = false, mirrorHangs = false, readyState = 'loading', unzipCalls = null } = {}) {
+export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, catalogJson = null, search = '', catalogDown = false, mirrorHangs = false, catalogHangs = false, readyState = 'loading', unzipCalls = null } = {}) {
   const onlineCbs = [];
   const win = { addEventListener(t, fn) { if (t === 'online') onlineCbs.push(fn); }, location: { search } };
   const net = { serveBsb };
@@ -76,6 +76,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   const fetched = [];
   const fetch = async (url) => {
     fetched.push(String(url));
+    if (catalogHangs && String(url) === 'catalog.json') return new Promise(() => {});
     if (catalogDown && ((catalogDown !== 'mirror' && String(url) === 'catalog.json') || (catalogDown !== 'catalog' && String(url) === 'ebible-catalog.json'))) throw new Error('catalogue unreadable (test)');
     if (String(url) === 'catalog.json') { if (catalogDelay) await sleep(catalogDelay); }
     if (String(url) === 'catalog.json') return { ok: true, json: async () => (catalogJson ? JSON.parse(JSON.stringify(catalogJson)) : JSON.parse(readFileSync(ROOT + 'catalog.json', 'utf8'))) };
