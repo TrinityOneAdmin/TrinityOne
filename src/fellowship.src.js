@@ -984,7 +984,12 @@ function _decEvt(cp, e) {
 function _chatCardClean(x) {
   if (!x || typeof x !== 'object' || Array.isArray(x) || (x.type !== 'verse' && x.type !== 'commentary')) return null;
   const o = { type: x.type };
-  for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) if (typeof x[k] === 'string' && x[k] && x[k].length <= n) o[k] = x[k];
+  for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) {
+    // bidi controls and zero-width characters are stripped (ZWNJ/ZWJ kept: scripts need them) so a card cannot
+    // reorder or hide what it shows; kept in step with chatShareCard (app/screens-chat.jsx) and _dmWrap/_dmUnwrap
+    const v = typeof x[k] === 'string' ? x[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : '';
+    if (v && v.length <= n) o[k] = v;
+  }
   return o.text ? o : null;
 }
 
@@ -6147,7 +6152,7 @@ window.Fellowship = {
     let cd = null;
     if (kx && typeof kx === 'object' && !Array.isArray(kx) && (kx.type === 'verse' || kx.type === 'commentary')) {
       cd = { type: kx.type };
-      for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) if (typeof kx[k] === 'string' && kx[k] && kx[k].length <= n) cd[k] = kx[k];
+      for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) { const v = typeof kx[k] === 'string' ? kx[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : ''; if (v && v.length <= n) cd[k] = v; }   // bidi/zero-width stripped, as _chatCardClean
       if (!cd.text) cd = null;
     }
     if (!hasR && !nr && !ev && !co && !cd) return text;
@@ -6170,7 +6175,7 @@ window.Fellowship = {
         let card = null;
         if (kx && typeof kx === 'object' && !Array.isArray(kx) && (kx.type === 'verse' || kx.type === 'commentary')) {
           card = { type: kx.type };
-          for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) if (typeof kx[k] === 'string' && kx[k] && kx[k].length <= n) card[k] = kx[k];
+          for (const [k, n] of [['ref', 120], ['text', 4000], ['version', 40], ['source', 120], ['credit', 1000]]) { const v = typeof kx[k] === 'string' ? kx[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '') : ''; if (v && v.length <= n) card[k] = v; }   // bidi/zero-width stripped, as _chatCardClean
           if (!card.text) card = null;
         }
         return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || '')) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null, ...(card ? { card } : {}) };

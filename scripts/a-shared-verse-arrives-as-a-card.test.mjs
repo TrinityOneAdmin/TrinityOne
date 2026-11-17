@@ -244,9 +244,18 @@ test('a card with no thoughts draws no empty bubble under it', () => {
   assert.equal(thoughtsOf(r.tree), null);
 });
 
-test('a body that does not start with the card\'s words is shown IN FULL under the card — nothing a sender wrote is hidden', () => {
-  const r = receive(cardEvt(VERSE, 'something else entirely'));
-  assert.equal(thoughtsOf(r.tree), 'something else entirely');
+// EDITED 2026-11-17 after the audit (M2): this used to draw the card AND the whole body under it. A card whose
+// words are not the body's would show members words the console (which shows only the body) never sees, so now
+// such a message is drawn as its plain body, no card. Same count.
+test('a body that does not start with the card\'s words draws the plain body and NO card (the card is bound to the body)', () => {
+  for (const body of ['something else entirely', PLAIN.slice(0, -1), 'x' + PLAIN, PLAIN + 'tail-without-a-blank-line']) {
+    const r = receive(cardEvt({ ...VERSE, text: 'A 4000-char sermon the console never shows' }, body));
+    assert.equal(cards(r.tree, 'verse').length, 0, 'an unbound card was drawn for body ' + JSON.stringify(body.slice(0, 30)));
+    assert.equal(thoughtsOf(r.tree), null);
+    assert.ok(texts(r.tree).includes(body), 'the plain body is not shown');
+    assert.ok(!texts(r.tree).join(' ').includes('console never shows'));
+    assert.equal(r.mod.shareTextOf(r.m), body, 'an unbound card must share its body, not the card');
+  }
 });
 
 test('POINT OF USE: the real DMThread draws the card, the thoughts under it', async () => {
@@ -317,7 +326,8 @@ test('hostile card fields never throw, never draw raw, and fall back to the body
     assert.match(texts(r.tree).join(' | '), /FALLBACK BODY/);
   }
   // an over-long ref is dropped, a markup-looking text is drawn as TEXT (React text node), never as html
-  const r = receive(cardEvt({ type: 'verse', ref: 'r'.repeat(500), text: '<img src=x onerror=alert(1)>' }, 'B'));
+  // (the body is the cleaned card's own words, as an honest sender builds it - the card is bound to its body)
+  const r = receive(cardEvt({ type: 'verse', ref: 'r'.repeat(500), text: '<img src=x onerror=alert(1)>' }, '“<img src=x onerror=alert(1)>” — '));
   const c = cards(r.tree, 'verse');
   assert.equal(c.length, 1);
   assert.equal(find(c[0], n => n.type === 'img').length, 0);

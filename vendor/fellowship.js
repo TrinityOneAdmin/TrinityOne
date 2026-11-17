@@ -7486,7 +7486,10 @@
   function _chatCardClean(x) {
     if (!x || typeof x !== "object" || Array.isArray(x) || x.type !== "verse" && x.type !== "commentary") return null;
     const o = { type: x.type };
-    for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 1e3]]) if (typeof x[k] === "string" && x[k] && x[k].length <= n) o[k] = x[k];
+    for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 1e3]]) {
+      const v = typeof x[k] === "string" ? x[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, "") : "";
+      if (v && v.length <= n) o[k] = v;
+    }
     return o.text ? o : null;
   }
   var NET = "trinityone";
@@ -12276,7 +12279,10 @@
       let cd = null;
       if (kx && typeof kx === "object" && !Array.isArray(kx) && (kx.type === "verse" || kx.type === "commentary")) {
         cd = { type: kx.type };
-        for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 1e3]]) if (typeof kx[k] === "string" && kx[k] && kx[k].length <= n) cd[k] = kx[k];
+        for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 1e3]]) {
+          const v = typeof kx[k] === "string" ? kx[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, "") : "";
+          if (v && v.length <= n) cd[k] = v;
+        }
         if (!cd.text) cd = null;
       }
       if (!hasR && !nr && !ev && !co && !cd) return text;
@@ -12301,7 +12307,10 @@
           let card = null;
           if (kx && typeof kx === "object" && !Array.isArray(kx) && (kx.type === "verse" || kx.type === "commentary")) {
             card = { type: kx.type };
-            for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 1e3]]) if (typeof kx[k] === "string" && kx[k] && kx[k].length <= n) card[k] = kx[k];
+            for (const [k, n] of [["ref", 120], ["text", 4e3], ["version", 40], ["source", 120], ["credit", 1e3]]) {
+              const v = typeof kx[k] === "string" ? kx[k].replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, "") : "";
+              if (v && v.length <= n) card[k] = v;
+            }
             if (!card.text) card = null;
           }
           return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null, ...card ? { card } : {} };

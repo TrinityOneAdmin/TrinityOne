@@ -1095,8 +1095,18 @@ function commentaryLicenceWarns(license, imported) {
 // its own notice untouched - we never shorten a notice we have not vetted, and its copyright warning relies on it.
 // "Share outside the app" always sends the full notice; a direct message sends none (owner).
 const COMMENTARY_INAPP_CREDITS = {
-  OSN: { needs: [/Mission Mutual/, /CC BY-SA 4\.0/], credit: '— Aquifer Open Study Notes © Mission Mutual, adapted from Tyndale Open Study Notes · CC BY-SA 4.0' },
+  OSN: { needs: [/Mission Mutual/, /CC BY-SA 4\.0/], credit: '— Aquifer Open Study Notes © Mission Mutual, adapted from Tyndale Open Study Notes · CC BY-SA 4.0',
+    // the module's own Details notice, as shipped - what a re-share OUT of the app carries (commentaryFullCredit)
+    full: 'Aquifer Open Study Notes © Mission Mutual · CC BY-SA 4.0 · an adaptation of Tyndale Open Study Notes © 2023 Tyndale House Publishers, also CC BY-SA 4.0' },
 };
+// The reverse, for a share OUT of the app (audit 2026-11-17, M1): a received commentary card carries the SHORT
+// credit; outside the app the owner's rule is the full notice. Any other credit (an imported module's own notice,
+// an unknown one) is returned unchanged. Called by chatCardOutsideText in app/screens-chat.jsx.
+function commentaryFullCredit(credit) {
+  const c = String(credit || '');
+  for (const k of Object.keys(COMMENTARY_INAPP_CREDITS)) { const e = COMMENTARY_INAPP_CREDITS[k]; if (e.credit === c && e.full) return e.full; }
+  return c;
+}
 function commentaryInAppCredit(abbr, license, imported) {
   const l = String(license || '');
   if (imported) return l;

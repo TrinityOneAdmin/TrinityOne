@@ -124,7 +124,8 @@ test('POINT OF USE: a group commentary card shows the short credit in noticeably
   const cr = find(card[0], n => n.props && n.props['data-card-credit'] === '1');
   assert.equal(cr.length, 1, 'the credit is not on the card');
   assert.equal(texts(cr[0]).filter(t => t !== '1').join(''), SHORT);
-  assert.ok(px(cr[0].props.style.fontSize) <= px(body.props.style.fontSize) * 0.75,
+  // 11px credit under a 14.5px body (audit NIT 7 raised it from 10px for legibility; it is still ~3/4 the size)
+  assert.ok(px(cr[0].props.style.fontSize) <= px(body.props.style.fontSize) * 0.8,
     `credit ${cr[0].props.style.fontSize} is not noticeably smaller than body ${body.props.style.fontSize}`);
   const th = find(tree, n => n.props && n.props['data-card-thoughts'] === '1');
   assert.equal(texts(find(th[0], n => n.type === 'p')[0]).join(''), 'So helpful');
