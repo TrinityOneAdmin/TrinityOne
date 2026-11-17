@@ -21,6 +21,16 @@
 //   2. the photo-suppression list `nophoto:` (subscribeChurchSafeguard)
 //   3. a group key envelope `groupkey:` (_ingestGroupKey)
 //
+// MEASURED ON THIS TREE (2026-11-17, a4d72505), each pinned by a plain test below:
+//   group definition  open phone REVERTS to A without a restart (the roster arrives live and the store re-filters);
+//                     a fresh phone shows A. The relay stops serving B.
+//   nophoto           open phone KEEPS B; a fresh phone shows A, so the two phones disagree. The relay stops
+//                     serving B but goes on ENFORCING B (Ben refused, Amy accepted) until it restarts, after which
+//                     it enforces A (Ben accepted, Amy refused).
+//   group key         open phone KEEPS key B; a fresh phone is given key A: two phones, two keys, one room.
+//                     The relay stops serving B.
+//   The removed steward's next write is refused by the relay.
+//
 // TWO BLOCKS. The `todo` tests state the DESIRED behaviour — a phone keeps showing B after the steward goes —
 // and report without failing the suite. The plain tests record what was MEASURED on this tree today, so a change
 // in either direction turns something red and has to be explained.
