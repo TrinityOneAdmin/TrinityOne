@@ -1815,15 +1815,23 @@ function ReadScreen({ ctx }) {
             <div style={{ width: 40, height: 3, borderRadius: 2, background: 'var(--clay)', margin: '14px auto 0', opacity: .5 }} />
           </div>
 
-          {verses.length === 0 && !Bible.books(version).includes(loc.book) ? (
+          {verses.length === 0 ? (() => {
+            // The Bible may lack the whole BOOK (a partial file) or only THIS CHAPTER of a book it has (a draft, a portion, a USFM that
+            // starts at chapter 2). Both must say so and offer a way in: a blank page under a chapter heading says nothing at all.
+            const hasBook = Bible.books(version).includes(loc.book);
+            const first = hasBook ? Bible.firstChapter(loc.book, version) : null;
+            const target = first != null ? { book: loc.book, chap: first } : (() => { const b = Bible.books(version)[0]; return b ? { book: b, chap: Bible.firstChapter(b, version) || 1 } : null; })();
+            return (
             <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--ink-2)' }}>
-              <div style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 18 }}>{bname} isn't in {version}</div>
-              <button onClick={() => { const b = Bible.books(version)[0]; if (b) ctx.setLoc({ book: b, chap: 1 }); }}
+              <div style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 18 }}>{hasBook ? bname + ' ' + loc.chap + ' isn\'t in ' + version : bname + ' isn\'t in ' + version}</div>
+              {target && <button onClick={() => ctx.setLoc({ book: target.book, chap: target.chap })}
                 style={{ padding: '10px 20px', borderRadius: 10, background: 'var(--clay)', color: 'var(--on-clay)', border: 'none', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
-                Go to {Bible.bookName(Bible.books(version)[0])} 1
-              </button>
+                Go to {Bible.bookName(target.book)} {target.chap}
+              </button>}
             </div>
-          ) : !compare ? (
+            );
+          })()
+          : !compare ? (
             <p className={cx('reader-body', !showStrongs && 'hide-strong')}
               style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
               {verses.map((row) => {

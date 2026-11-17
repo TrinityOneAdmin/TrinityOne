@@ -1854,6 +1854,19 @@ window.safeImgUrl = function (v) {
   function books(version){ const s = src(version); return s ? s.books.slice() : []; }
   function maxChapter(b, version){ const s = src(version); return s ? (s.maxChap[b] || 1) : 1; }
   function getVerses(b, c, version){ const s = src(version); return s ? s.getVerses(b, c) : []; }
+  // First chapter of a book that this Bible really HAS text for (a partial Bible - a draft, a portion, a single chapter - need not
+  // start at 1), or null. Used by the reader's "not in this Bible" screen and by "Read it now" after an install.
+  function firstChapter(b, version){ const n = maxChapter(b, version); for(let c = 1; c <= n; c++){ try{ if(getVerses(b, c, version).length) return c; }catch(e){} } return null; }
+  // A passage THIS Bible has: `loc` itself if it has text there, else that book's first chapter, else its first book's first chapter.
+  function passageFor(version, loc){
+    try{
+      if(loc && loc.book != null && loc.chap != null && getVerses(loc.book, loc.chap, version).length) return { book: loc.book, chap: loc.chap };
+      const bs = books(version);
+      if(loc && bs.indexOf(loc.book) >= 0){ const c = firstChapter(loc.book, version); if(c != null) return { book: loc.book, chap: c }; }
+      for(const b of bs){ const c = firstChapter(b, version); if(c != null) return { book: b, chap: c }; }
+    }catch(e){}
+    return null;
+  }
   // commentary for a passage: installed commentary modules + footnotes baked into the active Bible
   function getCommentary(b, c, version){
     const out = [];
@@ -2066,7 +2079,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, crossrefList, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, firstChapter, passageFor, getCommentary, commentaryList, getCrossRefs, crossrefLicense, crossrefList, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 

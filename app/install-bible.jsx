@@ -116,6 +116,18 @@ function ifsKindWord(kind) {
   return kind === 'comment' ? 'commentary' : kind === 'dict' ? 'dictionary' : kind === 'crossref' ? 'cross-references' : 'Bible';
 }
 
+// "Read it now": make the new Bible active AND move the reader to a passage it really has. setActive alone leaves the reader on
+// the member's old place, and a partial Bible (a draft, a portion, one book) has no text there: a blank page under a chapter heading.
+// The current place is kept when the new Bible has text at it.
+function ifsReadNow(abbr, ctx) {
+  try { window.Bible.setActive(abbr); } catch (e) {}
+  try {
+    const at = window.Bible.passageFor && window.Bible.passageFor(abbr, ctx && ctx.loc);
+    const here = ctx && ctx.loc;
+    if (at && ctx && ctx.setLoc && !(here && here.book === at.book && here.chap === at.chap)) ctx.setLoc({ book: at.book, chap: at.chap });
+  } catch (e) {}
+}
+
 function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
   const s = state || {};
   const open = !!state;
@@ -139,13 +151,13 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
   } else if (s.phase === 'result' && r.ok && r.already) {
     title = 'You already have this ' + word; name = r.name; body = 'Nothing was changed.';
     buttons = r.kind === 'bible' || !r.kind
-      ? [{ label: 'Read it now', primary: true, onClick: () => { try { window.Bible.setActive(r.abbr); } catch (e) {} ctx && ctx.go && ctx.go('read'); ctx && ctx.closeStore && ctx.closeStore(); close(); } }, { label: 'Done', onClick: close }]
+      ? [{ label: 'Read it now', primary: true, onClick: () => { ifsReadNow(r.abbr, ctx); ctx && ctx.go && ctx.go('read'); ctx && ctx.closeStore && ctx.closeStore(); close(); } }, { label: 'Done', onClick: close }]
       : [{ label: 'Done', primary: true, onClick: close }];
   } else if (s.phase === 'result' && r.ok) {
     title = Word + ' installed'; name = r.name;
     body = r.renamed ? 'You already have a different ' + word + ' with this name, so this one is labelled to tell them apart.' : 'It is on this phone now. You can read it with no internet.';
     buttons = r.kind === 'bible'
-      ? [{ label: 'Read it now', primary: true, onClick: () => { try { window.Bible.setActive(r.abbr); } catch (e) {} ctx && ctx.go && ctx.go('read'); ctx && ctx.closeStore && ctx.closeStore(); close(); } }, { label: 'Done', onClick: close }]
+      ? [{ label: 'Read it now', primary: true, onClick: () => { ifsReadNow(r.abbr, ctx); ctx && ctx.go && ctx.go('read'); ctx && ctx.closeStore && ctx.closeStore(); close(); } }, { label: 'Done', onClick: close }]
       : [{ label: 'Open Library', primary: true, onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('installed', r.kind === 'dict' ? 'dictionaries' : 'commentaries'); } }, { label: 'Done', onClick: close }];
   } else if (s.phase === 'result') {
     tone = 'var(--clay-ink)'; icon = 'x';
