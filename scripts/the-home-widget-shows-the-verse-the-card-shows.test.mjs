@@ -13,6 +13,7 @@
 process.env.TZ = 'Europe/London';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { compileScreen, loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 
 const POOL = [
@@ -25,7 +26,7 @@ const TRANSLATED = 'BSB-TEXT For God so loved the world that He gave His one and
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const localISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
-function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {} } = {}) {
+function todayScreen({ widget = '1', plugin = true, church = '', locked = false, pin = false, rememberedUntil = 0, feedBases = null, feed = {}, resources = true, nativeEnabled = null, unreachable = [], redirectTo = {}, parseRef = null, chapters = {} } = {}) {
   const listeners = {};
   const opts = { feedBases };
   const { React, draw } = miniReact();
@@ -49,8 +50,10 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     ChurchBadge,
     TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: POOL },
     Bible: {
-      parseRef: r => (r === 'John 3:16' ? { book: 43, chap: 3, verse: 16 } : r === 'Psalms 23:1' ? { book: 19, chap: 23, verse: 1 } : null),
-      loaded: true, books: () => [43], getVerses: (b, c) => (b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
+      parseRef: parseRef || (r => (r === 'John 3:16' ? { book: 43, chap: 3, verse: 16 } : r === 'Psalms 23:1' ? { book: 19, chap: 23, verse: 1 } : null)),
+      // `chapters` ({ 'book:chap': rows }) adds whole chapters of this phone's Bible (the passage tests below).
+      loaded: true, books: () => [43].concat(Object.keys(chapters).map(k => Number(k.split(':')[0]))),
+      getVerses: (b, c) => (chapters[b + ':' + c] ? chapters[b + ':' + c] : b === 43 && c === 3 ? [{ v: 16, text: TRANSLATED }] : []),
       maxChapter: () => 1, activeVersion: 'BSB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }),
       refKey: (loc, v) => loc.book + '.' + loc.chap + '.' + v,   // the reader's canonical key (the verse heart uses it)
     },
@@ -305,8 +308,35 @@ test('DEVICE 2026-11-17: a config the native side REFUSES is not taken for succe
   assert.equal(s.prompts.length, 0, 'the fake plugin accepted a validUntil the real one refuses');
   assert.equal(s.promptRefused.length, 1, 'Today did not try to configure the widget');
   assert.ok(s.warned.some(w => /publishPrompt refused: bad validUntil/.test(w)), 'the refusal was swallowed without a word');
+  // audit L2: a config that cannot be bounded is never kept — the old one (maybe older relay addresses) is cleared.
+  assert.equal(s.cleared.length, 1, 'a validUntil refusal left the previous native config in place');
   s.fire('trinity-relays-verified'); s.draw(); await settle();
   assert.equal(s.probed.length, 2, 'after a refusal Today kept the hourly throttle, so the widget stays unconfigured for an hour');
+});
+
+// DEVICE D1 2026-11-17: the live prompt "1 Samuel 8:11-18; Matthew 20:27-29; Numbers 7" showed "Tap to read" for
+// Numbers 7 — the texts map was filled one VERSE per ref. parseRef here is the REAL one, lifted from engine.js.
+const ENGINE = readFileSync(new URL('../engine.js', import.meta.url), 'utf8');
+const realParseRef = (() => {
+  const a = ENGINE.indexOf('  const BOOK_NAMES = ['), b = ENGINE.indexOf('  const USFM_BOOK = {');
+  assert.ok(a > 0 && b > a, 're-anchor: engine.js parseRef moved');
+  return new Function(ENGINE.slice(a, b) + '\nreturn parseRef;')();
+})();
+const chapterOf = (tag, n) => Array.from({ length: n }, (_, i) => ({ v: i + 1, text: `${tag}${i + 1} ` + 'word '.repeat(12).trim() + '.' }));
+test('D1: the widget gets the member\'s text for a RANGE and a whole CHAPTER, capped, under the ref as given', async () => {
+  const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Matthew 20:27-29; Numbers 7', schedule: [] };
+  const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
+    parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '40:20': chapterOf('M', 34), '4:7': chapterOf('N', 89) } });
+  s.draw(); await settle();
+  assert.equal(s.prompts.length, 1, 'Today did not configure the widget');
+  const t = s.prompts[0].texts;
+  assert.deepEqual(Object.keys(t).sort(), ['1 Samuel 8:11-18', 'Matthew 20:27-29', 'Numbers 7'], 'a passage got no text (the widget says "Tap to read")');
+  assert.match(t['Matthew 20:27-29'], /^M27 .*M28 .*M29 word/, 'the range is not its verses joined');
+  assert.doesNotMatch(t['Matthew 20:27-29'], /M26 |M30 /, 'the range ran past its ends');
+  assert.match(t['1 Samuel 8:11-18'], /^S11 /);
+  assert.match(t['Numbers 7'], /^N1 word .* N2 word/, 'the chapter does not open with its first verses');
+  for (const [r, x] of Object.entries(t)) assert.ok(x.length <= 600, `${r}: ${x.length} chars crossed into widget storage`);
+  assert.ok(t['Numbers 7'].endsWith('\u2026') && !/N89 /.test(t['Numbers 7']), 'an 89-verse chapter was not capped with an ellipsis');
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────

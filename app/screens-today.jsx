@@ -2352,6 +2352,38 @@ function votdInTranslation(pick, Bible) {
   }
   return out;
 }
+// The home-screen widget's text for ONE passage of the church's verse prompt, in the member's own translation.
+// DEVICE 2026-11-17: a range ("1 Samuel 8:11-18") or a whole chapter ("Numbers 7") got NO text and the widget said
+// "Tap to read", because votdInTranslation reads one verse. Here: a same-chapter range = its verses joined; a whole
+// chapter = its opening verses; a range into the next chapter = its first verse to the end of that chapter. Capped
+// at WIDGET_PASSAGE_MAX characters at a word boundary, ending in "…" (the widget truncates anyway, and this crosses
+// the bridge into widget storage). '' when this phone's Bible lacks it — the widget then shows the reference alone.
+const WIDGET_PASSAGE_MAX = 600;
+function widgetPassageText(ref, Bible) {
+  const loc = Bible && Bible.parseRef ? Bible.parseRef(ref) : null;
+  if (!loc || !Bible.loaded || !Bible.books().includes(loc.book)) return '';
+  const rows = Bible.getVerses(loc.book, loc.chap) || [];
+  const num = v => parseInt(v, 10);
+  let pick = rows;
+  if (loc.verse != null) {
+    const intoNextChapter = /[-\u2013\u2014]\s*\d+:\d+/.test(String(ref));
+    const end = loc.verseEnd || (intoNextChapter ? Infinity : loc.verse);
+    pick = rows.filter(r => num(r.v) >= loc.verse && num(r.v) <= end);
+  }
+  let out = '';
+  for (const r of pick) {
+    const t = String((r && r.text) || '').replace(/\s+/g, ' ').trim();
+    if (!t) continue;
+    out = out ? out + ' ' + t : t;
+    if (out.length > WIDGET_PASSAGE_MAX) break;
+  }
+  if (out.length > WIDGET_PASSAGE_MAX) {
+    const cut = out.slice(0, WIDGET_PASSAGE_MAX - 1);
+    const sp = cut.lastIndexOf(' ');
+    out = (sp > WIDGET_PASSAGE_MAX / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '') + '\u2026';
+  }
+  return out;
+}
 function votdLocalISO(d) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
@@ -2696,14 +2728,18 @@ function TodayScreen({ ctx }) {
       // the reference. A passage this phone's Bible lacks is left out; the widget then shows the reference.
       const texts = {};
       const refs = String(cached.ref || '').split('; ').concat((Array.isArray(cached.schedule) ? cached.schedule : []).map(s => (s && s.ref) || ''));
-      refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = votdInTranslation({ ref: r, text: '' }, Bible); if (t.text) texts[r] = t.text; });
+      refs.map(r => String(r || '').trim()).filter(Boolean).forEach(r => { const t = widgetPassageText(r, Bible); if (t) texts[r] = t; });
       // A REFUSAL IS NOT SWALLOWED (2026-11-17): the native side refuses a config it could not keep (bad npub, a
       // validUntil that is not future unix seconds). Forget this hour's throttle so the next run asks again, and say
       // so in the log — before this, a config the native side dropped looked exactly like success.
+      // A validUntil the native side cannot bound also CLEARS what it holds (audit L2 of eab4bf9b): a config that
+      // cannot be bounded is never kept, and the previous one may name older relay addresses.
       const refused = (e) => {
         const cur = homeWidgetProbed[widgetChurch];
         if (cur && cur.key === probeKey) delete homeWidgetProbed[widgetChurch];
-        try { console.warn('[widget] publishPrompt refused:', (e && e.message) || e); } catch (_) {}
+        const msg = (e && e.message) || String(e);
+        try { console.warn('[widget] publishPrompt refused:', msg); } catch (_) {}
+        if (/bad validUntil/.test(msg) && !cancelled) clear();
       };
       try { Promise.resolve(W.publishPrompt({ npub: where.npub, bases, validUntil: until, texts, cached })).catch(refused); } catch (e) { refused(e); }
     })();
