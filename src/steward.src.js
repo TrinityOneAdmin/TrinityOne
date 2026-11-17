@@ -10051,18 +10051,46 @@ window.Steward = {
   // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
   // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
   // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
+  //
+  // WHY A POST WAS REFUSED (console-finance-card-trust audit, 2026-11-17). A refusal still resolves `null` - every
+  // caller already reads that as "not sent" - and ALSO sets `Steward.lastPostRefusal` to the reason, synchronously,
+  // before the promise resolves: 'locked' (no key in this console), 'nokey' (a sealed room this console holds no
+  // key for), 'unsealable' (the body or a card would not seal, or is over the 65535-byte NIP-44 v2 limit). '' after
+  // any call that was not refused. Additive: only stew-finance.jsx postStatementToMembers reads it.
   publishPost(content, group, replyTo, opts) {
-    if (!sk) return Promise.resolve(null);
+    const refuse = (why) => { try { this.lastPostRefusal = why; } catch (e) {} return Promise.resolve(null); };
+    try { this.lastPostRefusal = ''; } catch (e) {}
+    if (!sk) return refuse('locked');
     let body = content || '', encTag = [];
     const gkey = group && (_skeys[group] || [])[0];
     if (gkey) {
-      try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) { console.warn('[steward] sealed-room encryption failed', e); return Promise.resolve(null); }
+      // the same 65535-byte limit as a card (below): the bundled nostr-tools does not enforce it
+      if (new TextEncoder().encode(content || '').length > 65535) { console.warn('[steward] refusing post into sealed room - the message is over the 65535-byte seal limit'); return refuse('unsealable'); }
+      try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) { console.warn('[steward] sealed-room encryption failed', e); return refuse('unsealable'); }
     } else if (group && _sealedGroupIds.has(group)) {
       console.warn('[steward] refusing plaintext post into sealed room — no key for', group);
-      return Promise.resolve(null);
+      return refuse('nokey');
     }
     const podTag = opts && opts.pod ? [['pod', opts.pod]] : [];
-    const extraTags = Array.isArray(opts) ? opts : (opts && opts.tags ? opts.tags : []);
+    let extraTags = Array.isArray(opts) ? opts : (opts && opts.tags ? opts.tags : []);
+    // A CARD IN A SEALED ROOM IS SEALED TOO (console-finance-card-trust 2026-11-17). A kind-1's tags are public,
+    // so a finance statement's ['card','1',json] next to an encrypted body handed the figures to the relay and to
+    // anyone reading it. Sealed under the room key exactly as the member app does (fellowship.src.js publishMessage):
+    // ['card','1',<ciphertext>,'enc'], which _decEvt and subscribeGroupChat open with the key that opened the body.
+    // If it will not seal the post is REFUSED, like the no-key refusal above - never sent with the card in clear,
+    // and never quietly sent without it. Over 65535 UTF-8 bytes counts as "will not seal": that is the NIP-44 v2
+    // plaintext limit, and the bundled nostr-tools (2.23.5, measured) does NOT enforce it, so it is checked here.
+    if (encTag.length && extraTags.some(t => Array.isArray(t) && t[0] === 'card')) {
+      try {
+        extraTags = extraTags.map(t => {
+          if (!(Array.isArray(t) && t[0] === 'card')) return t;
+          const js = String(t[2] || '');
+          if (new TextEncoder().encode(js).length > 65535) throw new Error('card over the 65535-byte seal limit');
+          return ['card', t[1], nip44e(js, gkey), 'enc'];
+        });
+      }
+      catch (e) { console.warn('[steward] refusing post into sealed room - the card could not be sealed', e); return refuse('unsealable'); }
+    }
     return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...podTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : []), ...extraTags], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
@@ -10154,17 +10182,26 @@ window.Steward = {
     // The MEMBER app is unchanged and still filters these out completely — fellowship.src.js has its own
     // subscribeHidden and screens-chat.jsx drops them. This is a moderator's view of their own decision,
     // and it must never become a way for a congregation to read what a steward removed.
+    // A FINANCE STATEMENT IS THE CHURCH SPEAKING (console-finance-card-trust 2026-11-17). Nothing on the relay
+    // restricts a ['card'] tag, so a member could hand-build one and this console drew it as the church's own
+    // statement - in the bubble, in a reply's quote, and in a pin a steward then signs as the church. The member
+    // app draws one only from the church key or a steward on the church-signed roster (Fellowship.isChurchVoice);
+    // this is the same rule. FAILS CLOSED until a roster has been read (`_careRosterKnown`): the body text shows
+    // instead. Decided at EVERY emit, and the roster's arrival re-emits (_memberEmitters below), so a steward's
+    // card appears once the roster lands. Any other card type is untouched (cardRenderable draws finance only).
+    const cardFor = (card, by) => (card && card.type === 'finance' && !(by && (by === pub || (_careRosterKnown && _careRoster.has(by))))) ? null : card;
     const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
       // ONE pass: a second .map that re-read `rx` would put the reactions back on a removed message.
-      if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || '', removed: true, text: '', replyTo: '', quote: null, reactions: [], myReaction: '' };
+      if (hidden.has(m.id)) return { ...m, card: cardFor(m.card, m.by), name: names.get(m.by) || '', removed: true, text: '', replyTo: '', quote: null, reactions: [], myReaction: '' };
       // A reply's quote is the message it answers, resolved here (as the member app does from its own list).
       // A REMOVED message is never quoted: that would reprint, one row down, the words the steward took away.
       // quote is null when the target is not loaded (older than the window) — the UI says "an earlier message".
       const q = m.replyTo ? byId.get(m.replyTo) : null;
-      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
-      const r = rx.get(m.id); return { ...m, quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
+      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: cardFor(q.card, q.by) } : null;
+      const r = rx.get(m.id); return { ...m, card: cardFor(m.card, m.by), quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
+    _memberEmitters.add(emit);   // the steward roster arrived or changed: re-decide every finance card - see cardFor
     // resolve sender names in one batched kind-0 sub (debounced) — avoids a sub per author (relay cap)
     const resolveName = (pk) => {
       if (!pk || seen.has(pk)) return; seen.add(pk); pending.push(pk);
@@ -10188,15 +10225,18 @@ window.Steward = {
         }
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
         if (!e.tags.some(t => t[0] === 'p' && t[1] === pub)) return;   // this church's scope
-        let text = e.content;
+        let text = e.content, openedWith = null;
         if (e.tags.some(t => t[0] === 'enc')) {
           const ring = _skeys[groupId]; if (!ring || !ring.length) return;
           let ok = false;
-          for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
+          for (const k of ring) { try { text = nip44d(e.content, k); ok = true; openedWith = k; break; } catch (x) {} }   // current key, then superseded
           if (!ok) return;
         }
+        // A SEALED card tag (['card','1',<ciphertext>,'enc'], publishPost / the member app's publishMessage) opens
+        // with the key that opened the body - inline, as _decEvt does. One that will not open, or an 'enc' card on
+        // a message whose body was not sealed, is no card: the body text shows.
         let card = null;
-        try { const ct = e.tags.find(t => t[0] === 'card'); if (ct && ct[2]) { const parsed = JSON.parse(ct[2]); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) card = parsed; } } catch (x) {}
+        try { const ct = e.tags.find(t => t[0] === 'card'); if (ct && ct[2]) { const parsed = JSON.parse(ct[3] === 'enc' ? (openedWith ? nip44d(ct[2], openedWith) : '') : ct[2]); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) card = parsed; } } catch (x) {}
         byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, card, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '', _podTag: (e.tags.find(t => t[0] === 'pod') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
@@ -10204,7 +10244,7 @@ window.Steward = {
       oneose() { emit(); },
     });
     const hideSub = window.Steward.subscribeHidden((set) => { hidden = set; emit(); });
-    return () => { try { sub.close(); } catch {} try { hideSub(); } catch {} clearTimeout(batchTimer); nameSubs.forEach(s => { try { s.close(); } catch {} }); };
+    return () => { _memberEmitters.delete(emit); try { sub.close(); } catch {} try { hideSub(); } catch {} clearTimeout(batchTimer); nameSubs.forEach(s => { try { s.close(); } catch {} }); };
   },
   // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
   reactGroup(groupId, msgId, targetPub, emoji) {

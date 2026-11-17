@@ -23500,24 +23500,58 @@ zoo`.split("\n");
     // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
     // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
     // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
+    //
+    // WHY A POST WAS REFUSED (console-finance-card-trust audit, 2026-11-17). A refusal still resolves `null` - every
+    // caller already reads that as "not sent" - and ALSO sets `Steward.lastPostRefusal` to the reason, synchronously,
+    // before the promise resolves: 'locked' (no key in this console), 'nokey' (a sealed room this console holds no
+    // key for), 'unsealable' (the body or a card would not seal, or is over the 65535-byte NIP-44 v2 limit). '' after
+    // any call that was not refused. Additive: only stew-finance.jsx postStatementToMembers reads it.
     publishPost(content, group, replyTo, opts) {
-      if (!sk) return Promise.resolve(null);
+      const refuse = (why) => {
+        try {
+          this.lastPostRefusal = why;
+        } catch (e) {
+        }
+        return Promise.resolve(null);
+      };
+      try {
+        this.lastPostRefusal = "";
+      } catch (e) {
+      }
+      if (!sk) return refuse("locked");
       let body = content || "", encTag = [];
       const gkey = group && (_skeys[group] || [])[0];
       if (gkey) {
+        if (new TextEncoder().encode(content || "").length > 65535) {
+          console.warn("[steward] refusing post into sealed room - the message is over the 65535-byte seal limit");
+          return refuse("unsealable");
+        }
         try {
           body = encrypt2(content || "", gkey);
           encTag = [["enc", "1"]];
         } catch (e) {
           console.warn("[steward] sealed-room encryption failed", e);
-          return Promise.resolve(null);
+          return refuse("unsealable");
         }
       } else if (group && _sealedGroupIds.has(group)) {
         console.warn("[steward] refusing plaintext post into sealed room \u2014 no key for", group);
-        return Promise.resolve(null);
+        return refuse("nokey");
       }
       const podTag = opts && opts.pod ? [["pod", opts.pod]] : [];
-      const extraTags = Array.isArray(opts) ? opts : opts && opts.tags ? opts.tags : [];
+      let extraTags = Array.isArray(opts) ? opts : opts && opts.tags ? opts.tags : [];
+      if (encTag.length && extraTags.some((t) => Array.isArray(t) && t[0] === "card")) {
+        try {
+          extraTags = extraTags.map((t) => {
+            if (!(Array.isArray(t) && t[0] === "card")) return t;
+            const js = String(t[2] || "");
+            if (new TextEncoder().encode(js).length > 65535) throw new Error("card over the 65535-byte seal limit");
+            return ["card", t[1], encrypt2(js, gkey), "enc"];
+          });
+        } catch (e) {
+          console.warn("[steward] refusing post into sealed room - the card could not be sealed", e);
+          return refuse("unsealable");
+        }
+      }
       return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag, ...podTag, ...replyTo && replyTo.id ? [["e", replyTo.id, "", "reply"], ...replyTo.by ? [["p", replyTo.by]] : []] : [], ...extraTags], content: body }));
     },
     // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
@@ -23621,14 +23655,16 @@ zoo`.split("\n");
       const nameSubs = [];
       let pending = [], batchTimer = null;
       let hidden = /* @__PURE__ */ new Set();
+      const cardFor = (card, by) => card && card.type === "finance" && !(by && (by === pub || _careRosterKnown && _careRoster.has(by))) ? null : card;
       const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
-        if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
+        if (hidden.has(m.id)) return { ...m, card: cardFor(m.card, m.by), name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
         const q = m.replyTo ? byId.get(m.replyTo) : null;
-        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
+        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: cardFor(q.card, q.by) } : null;
         const r = rx.get(m.id);
-        return { ...m, quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
+        return { ...m, card: cardFor(m.card, m.by), quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
       const emit = () => onMsgs(attach());
+      _memberEmitters.add(emit);
       const resolveName = (pk) => {
         if (!pk || seen.has(pk)) return;
         seen.add(pk);
@@ -23672,7 +23708,7 @@ zoo`.split("\n");
           }
           if (!e.tags.some((t) => t[0] === "t" && t[1] === groupId)) return;
           if (!e.tags.some((t) => t[0] === "p" && t[1] === pub)) return;
-          let text = e.content;
+          let text = e.content, openedWith = null;
           if (e.tags.some((t) => t[0] === "enc")) {
             const ring = _skeys[groupId];
             if (!ring || !ring.length) return;
@@ -23681,6 +23717,7 @@ zoo`.split("\n");
               try {
                 text = decrypt3(e.content, k);
                 ok = true;
+                openedWith = k;
                 break;
               } catch (x) {
               }
@@ -23691,7 +23728,7 @@ zoo`.split("\n");
           try {
             const ct = e.tags.find((t) => t[0] === "card");
             if (ct && ct[2]) {
-              const parsed = JSON.parse(ct[2]);
+              const parsed = JSON.parse(ct[3] === "enc" ? openedWith ? decrypt3(ct[2], openedWith) : "" : ct[2]);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) card = parsed;
             }
           } catch (x) {
@@ -23709,6 +23746,7 @@ zoo`.split("\n");
         emit();
       });
       return () => {
+        _memberEmitters.delete(emit);
         try {
           sub.close();
         } catch {

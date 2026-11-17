@@ -2466,6 +2466,15 @@ function DashFinanceBook() {
     // claim was still false. Throw, so the existing catch in doPost shows the reason and keeps the dialog open.
     // A sealed group with no key makes publishPost resolve `null` → the throw fires honestly, same as a refusal.
     const ok = await S.publishPost(lead + text, groupId, null, [['card', '1', JSON.stringify(cardEnvelope)]]);
+    // NULL IS A REFUSAL BEFORE ANYTHING WAS SENT (console-finance-card-trust 2026-11-17), not a connection fault, so
+    // never "check your connection". publishPost says which refusal in S.lastPostRefusal; each gets its own words.
+    if (ok === null) {
+      const why = S.lastPostRefusal;
+      if (why === 'locked') throw new Error('Not sent. The console is locked, so nothing left it. Unlock it and try again.');
+      if (why === 'nokey') throw new Error('Not sent. This console does not have the key for that private group, so nothing left it. Choose a different group, or try again once the key has arrived.');
+      if (why === 'unsealable') throw new Error('Not sent. This statement could not be sealed for that private group (it may be too long), so nothing left it. Choose a different group, or a shorter statement.');
+      throw new Error('Not sent. Nothing left this console. Try again.');
+    }
     if (!ok) throw new Error('That didn’t post — nothing reached your church. Check your connection and try again.');
   };
   React.useEffect(() => {   // gentle donation nudge — at most MONTHLY, snoozed ~3 months after a gift, once per session
