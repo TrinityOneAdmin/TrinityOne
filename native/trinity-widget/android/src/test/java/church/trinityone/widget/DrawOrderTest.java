@@ -61,6 +61,16 @@ public class DrawOrderTest {
     }
 
     @Test
+    public void theRealOnReceiveRoutesTheFlipBroadcast() {
+        Rec h = new Rec();
+        android.content.Intent i = org.mockito.Mockito.mock(android.content.Intent.class);
+        org.mockito.Mockito.when(i.getAction()).thenReturn(TrinityWidgetProvider.ACTION_FLIP);
+        org.mockito.Mockito.when(i.getIntExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_ID, android.appwidget.AppWidgetManager.INVALID_APPWIDGET_ID)).thenReturn(9);
+        withHost(h).onReceive(null, i);
+        assertEquals(List.of("flip 9"), h.log);
+    }
+
+    @Test
     public void otherBroadcastsAreLeftToAppWidgetProvider_andABadIdFlipsNothing() {
         Rec h = new Rec();
         assertFalse(withHost(h).handle(null, "android.appwidget.action.APPWIDGET_UPDATE", 9));

@@ -53,4 +53,6 @@ dependencies {
     // that fits in 32 bits comes back as an Integer), which is the trap the tests exist for.
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.json:json:20231013"
+    // Mockito (offline cache): only to hand onReceive an Intent, which off-device is an android.jar stub.
+    testImplementation "org.mockito:mockito-core:5.2.0"
 }
