@@ -21,6 +21,7 @@ import org.json.JSONObject;
  *   setEnabled({ on })      → on: the widget appears in the launcher's widget list. off: clears everything.
  *   publishVotd({ days })   → the 60-day verse table (app/screens-today.jsx)
  *   publishPrompt({ npub, bases, validUntil, texts, cached }) → the church's public verse prompt config
+ *   publishTexts({ npub, texts }) → { updated } — ONLY the texts of the stored config, if it is that church's
  *   clearPrompt()           → back to the daily verse only; stops the background fetch
  *   clear()                 → forget everything
  *   requestPin()            → Android 8+: ask the launcher to place the widget
@@ -75,11 +76,12 @@ public class TrinityWidgetPlugin extends Plugin {
 
     /** Where publishPrompt puts an accepted config. An interface so the JVM test (PublishPromptTest) can run
      *  publishPrompt ITSELF with a recording store (audit M1 of eab4bf9b): no Context exists off-device. */
-    interface PromptStore { void write(JSONObject cfg); void schedule(); void refresh(); }
+    interface PromptStore { JSONObject read(); void write(JSONObject cfg); void schedule(); void refresh(); }
 
     PromptStore promptStore() {
         final Context c = ctx();
         return new PromptStore() {
+            @Override public JSONObject read() { return WidgetStore.read(c, WidgetStore.K_PROMPT); }
             @Override public void write(JSONObject cfg) { WidgetStore.write(c, WidgetStore.K_PROMPT, cfg); }
             @Override public void schedule() { PromptFetchJob.schedule(c); }
             @Override public void refresh() { WidgetStore.refresh(c); }
@@ -87,6 +89,38 @@ public class TrinityWidgetPlugin extends Plugin {
     }
 
     long nowMs() { return System.currentTimeMillis(); }
+
+    /**
+     * publishTexts({ npub, texts }) → { updated }. The member's translation of the passages changed (the Bible module
+     * finished loading, or the member switched translation) but nothing about the church's copy did. Re-audit S1 of
+     * d6f0e32c: re-sending the whole config through publishPrompt put back the copy the APP last probed, over a newer
+     * or withdrawn one the background job (PromptFetchJob) had stored since. This touches ONLY "texts", and only in a
+     * stored config for the same church: no config, or another church's → nothing changes (updated: false).
+     * cached, bases and validUntil are never touched, and nothing is scheduled.
+     */
+    @PluginMethod
+    public void publishTexts(PluginCall call) {
+        boolean updated;
+        try { updated = applyTexts(call, promptStore()); }
+        catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
+        catch (Exception e) { call.reject("bad texts"); return; }
+        JSObject r = new JSObject();
+        r.put("updated", updated);
+        call.resolve(r);
+    }
+
+    static boolean applyTexts(PluginCall call, PromptStore st) throws Exception {
+        String npub = call.getString("npub", "");
+        if (npub == null || !npub.matches("^npub1[a-z0-9]{58}$")) throw new IllegalArgumentException("bad npub");
+        JSObject texts = call.getObject("texts");
+        if (texts == null) throw new IllegalArgumentException("bad texts");
+        JSONObject cfg = st.read();
+        if (cfg == null || !npub.equals(cfg.optString("npub", ""))) return false;
+        cfg.put("texts", texts);
+        st.write(cfg);
+        st.refresh();
+        return true;
+    }
 
     /** No caller asks for more than this: a week with no PIN, "remember me" (30 days) with one. */
     static final long MAX_VALID_S = 366L * 86400L;

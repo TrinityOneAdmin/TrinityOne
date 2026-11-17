@@ -27,6 +27,20 @@ public class DrawOrderTest {
     }
 
     @Test
+    public void onUpdateItselfDrawsThroughDrawAll() {
+        // re-audit N-b of d6f0e32c: the real onUpdate, with only its three Android seams swapped.
+        final Rec h = new Rec(); final List<String> after = new ArrayList<>();
+        TrinityWidgetProvider p = new TrinityWidgetProvider() {
+            @Override String orderNow(android.content.Context c, long now) { return "V|John 3:16\n"; }
+            @Override Host host(android.content.Context c, android.appwidget.AppWidgetManager m) { return h; }
+            @Override void afterDraw(android.content.Context c, long now) { after.add("after"); }
+        };
+        p.onUpdate(null, null, new int[] { 9 });
+        assertEquals(List.of("update 9 front", "dataChanged [9]", "front 9", "record 9"), h.log);
+        assertEquals(List.of("after"), after);
+    }
+
+    @Test
     public void aChangedOrderAsksForPageZeroTwice_andIsRecordedOnlyAfter() {
         Rec h = new Rec();
         TrinityWidgetProvider.drawAll(h, new int[] { 9 }, "P|Numbers 7\nV|John 3:16\n");

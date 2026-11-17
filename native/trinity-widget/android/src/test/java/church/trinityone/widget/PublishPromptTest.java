@@ -36,6 +36,7 @@ public class PublishPromptTest {
         final List<String> log = new ArrayList<>(); JSONObject written;
         @Override PromptStore promptStore() {
             return new PromptStore() {
+                @Override public JSONObject read() { log.add("read"); return null; }
                 @Override public void write(JSONObject cfg) { written = cfg; log.add("write"); }
                 @Override public void schedule() { log.add("schedule"); }
                 @Override public void refresh() { log.add("refresh"); }

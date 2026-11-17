@@ -72,21 +72,28 @@ public class PromptFetchJob extends JobService {
         JSONArray bases = cfg.optJSONArray("bases");
         if (!npub.matches("^npub1[a-z0-9]{58}$") || bases == null) return;
         Probe pr = probe(npub, bases);
-        JSONObject best = pr.best; boolean saw404 = pr.saw404, saw200 = pr.saw200, sawFail = pr.sawFail;
-        try {
-            JSONObject cur = cfg.optJSONObject("cached");
-            if (saw200) {
-                if (cur == null || best.optLong("ts", 0) >= cur.optLong("ts", 0)) cfg.put("cached", best);
-            } else if (saw404 && !sawFail) {
-                cfg.put("cached", JSONObject.NULL);
-            } else {
-                return;
-            }
-            // Re-read the config before writing: the app may have cleared it while we were on the network.
-            if (WidgetStore.read(c, WidgetStore.K_PROMPT) == null) return;
-            WidgetStore.write(c, WidgetStore.K_PROMPT, cfg);
-        } catch (Exception e) { return; }
+        // Apply what we found to the config AS IT IS NOW, not to the copy read before the network (re-audit S1 of
+        // d6f0e32c): while we were fetching, the app may have cleared it, switched church, or updated its texts.
+        JSONObject now2 = WidgetStore.read(c, WidgetStore.K_PROMPT);
+        try { if (!applyFetch(now2, npub, pr)) return; } catch (Exception e) { return; }
+        WidgetStore.write(c, WidgetStore.K_PROMPT, now2);
         WidgetStore.refresh(c);
+    }
+
+    /**
+     * The outcome rules (class comment) applied to `current`, the config as stored now. False = write nothing: no
+     * config any more, a different church's config (switched while we fetched), or nothing proven (network failures,
+     * or a 404 beside a failure). Only "cached" is changed; texts, bases and validUntil are left as they are.
+     */
+    static boolean applyFetch(JSONObject current, String npub, Probe pr) throws Exception {
+        if (current == null || !npub.equals(current.optString("npub", ""))) return false;
+        JSONObject cur = current.optJSONObject("cached");
+        if (pr.saw200 && pr.best != null) {
+            if (cur == null || pr.best.optLong("ts", 0) >= cur.optLong("ts", 0)) current.put("cached", pr.best);
+            return true;
+        }
+        if (pr.saw404 && !pr.sawFail) { current.put("cached", JSONObject.NULL); return true; }
+        return false;
     }
 
     /** What one pass over the bases found. */

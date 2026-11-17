@@ -21,9 +21,23 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
     @Override
     public void onUpdate(final Context c, final AppWidgetManager m, int[] ids) {
         long now = System.currentTimeMillis();
-        // pages() also enforces validUntil before anything is drawn.
-        String order = WidgetStore.pageOrder(WidgetStore.pages(c, now));
-        drawAll(new Host() {
+        drawAll(host(c, m), ids, orderNow(c, now));
+        afterDraw(c, now);
+    }
+
+    // onUpdate's three seams, so the JVM test (DrawOrderTest) runs onUpdate ITSELF and sees it reach drawAll (re-audit
+    // N-b of d6f0e32c). Each is the plain Android call it names; nothing else overrides them.
+
+    /** The page order now. pages() also enforces validUntil before anything is drawn. */
+    String orderNow(Context c, long now) { return WidgetStore.pageOrder(WidgetStore.pages(c, now)); }
+
+    void afterDraw(Context c, long now) {
+        scheduleNextChange(c, now);
+        if (WidgetStore.read(c, WidgetStore.K_PROMPT) != null) PromptFetchJob.schedule(c);   // re-arm after a reboot
+    }
+
+    Host host(final Context c, final AppWidgetManager m) {
+        return new Host() {
             @Override public String shownOrder(int id) { return WidgetStore.shownOrder(c, id); }
             @Override public void update(int id, boolean front) { m.updateAppWidget(id, views(c, id, front)); }
             @Override public void dataChanged(int[] done) { m.notifyAppWidgetViewDataChanged(done, R.id.trinity_widget_stack); }
@@ -33,9 +47,7 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
                 m.partiallyUpdateAppWidget(id, v);
             }
             @Override public void recordOrder(int id, String o) { WidgetStore.recordOrder(c, id, o); }
-        }, ids, order);
-        scheduleNextChange(c, now);
-        if (WidgetStore.read(c, WidgetStore.K_PROMPT) != null) PromptFetchJob.schedule(c);   // re-arm after a reboot
+        };
     }
 
     /** What drawAll needs from the launcher and the prefs — an interface so the JVM test (DrawOrderTest) runs the order. */

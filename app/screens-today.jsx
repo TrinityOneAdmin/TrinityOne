@@ -2737,13 +2737,19 @@ function TodayScreen({ ctx }) {
         // DEVICE 2026-11-17: Today first runs BEFORE the Bible module has loaded, so the copy went out with texts {}
         // and this throttle then stopped the rewrite when Bible.loaded flipped — the widget said "Tap to read" for
         // the rest of the hour. The throttle is for the NETWORK: when only the texts would differ (the Bible loaded,
-        // or the member changed translation), re-publish the copy we already have, with no second probe.
-        if (!last.copy) return;
+        // or the member changed translation), send ONLY the texts, with no second probe — through publishTexts, which
+        // changes nothing but the texts of the stored config for this church (re-audit S1 of d6f0e32c: re-sending the
+        // whole config put this session's copy back over a newer or withdrawn one the background job had stored).
+        // An APK without publishTexts sends nothing here rather than the whole config.
+        if (!last.copy || !W.publishTexts) return;
         const texts = textsFor(last.copy);
         const tk = textsKeyOf(texts);
         if (tk === last.textsKey) return;
         last.textsKey = tk;
-        publish(last.copy, texts);
+        try {
+          Promise.resolve(W.publishTexts({ npub: where.npub, texts }))
+            .catch((e) => { if (last.textsKey === tk) last.textsKey = ''; try { console.warn('[widget] publishTexts refused:', (e && e.message) || e); } catch (_) {} });
+        } catch (e) {}
         return;
       }
       // THE PROBE IS NATIVE (audit re-check R1). On the APK the webview's fetch goes through Capacitor's

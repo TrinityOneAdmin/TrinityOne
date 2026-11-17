@@ -41,7 +41,8 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     setItem(k, v) { store.set(k, String(v)); },
     removeItem(k) { store.delete(k); },
   };
-  const published = [], prompts = [], promptRefused = [], warned = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
+  const native = { prompt: null };   // what the fake plugin holds in "widget storage"
+  const published = [], prompts = [], textsSent = [], promptRefused = [], warned = [], cleared = [], fetched = [], fetchInits = [], probed = [], hearted = [];
   const win = {
     addEventListener(t, h) { (listeners[t] = listeners[t] || []).push(h); }, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [],
@@ -71,7 +72,15 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
       publishPrompt: (a) => { const v = a && a.validUntil, nowS = Math.floor(date.getTime() / 1000);
         if (!/^npub1[a-z0-9]{58}$/.test(String(a && a.npub))) { promptRefused.push(a); return Promise.reject(new Error('bad npub')); }
         if (typeof v !== 'number' || !Number.isFinite(v) || Math.trunc(v) <= nowS || Math.trunc(v) > nowS + 366 * 86400) { promptRefused.push(a); return Promise.reject(new Error('bad validUntil')); }
-        prompts.push(a); return Promise.resolve(); }, clearPrompt: () => { cleared.push(1); return Promise.resolve(); } } } } : undefined,
+        prompts.push(a); native.prompt = JSON.parse(JSON.stringify(a)); return Promise.resolve(); },
+      // TrinityWidgetPlugin.publishTexts (JVM-tested: PublishTextsTest): ONLY the stored config's texts, and only for
+      // the same church; nothing stored or another church's -> { updated: false }, nothing changes.
+      publishTexts: (a) => { textsSent.push(a);
+        if (!/^npub1[a-z0-9]{58}$/.test(String(a && a.npub))) return Promise.reject(new Error('bad npub'));
+        if (!a.texts || typeof a.texts !== 'object') return Promise.reject(new Error('bad texts'));
+        if (!native.prompt || native.prompt.npub !== a.npub) return Promise.resolve({ updated: false });
+        native.prompt.texts = JSON.parse(JSON.stringify(a.texts)); return Promise.resolve({ updated: true }); },
+      clearPrompt: () => { cleared.push(1); native.prompt = null; return Promise.resolve(); } } } } : undefined,
   };
   let pickStore = null;
   const globals = {
@@ -105,7 +114,7 @@ function todayScreen({ widget = '1', plugin = true, church = '', locked = false,
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
     bookmarkItems: [], toggleBookmark: (k) => { hearted.push(k); }, setBookmarkTags: () => {},
   };
-  return { draw: () => draw(TodayScreen, { ctx }), bible: win.Bible, published, prompts, promptRefused, warned, cleared, fetched, fetchInits, probed, hearted, opts, store,
+  return { draw: () => draw(TodayScreen, { ctx }), bible: win.Bible, native, published, prompts, textsSent, promptRefused, warned, cleared, fetched, fetchInits, probed, hearted, opts, store,
     fire: (t) => (listeners[t] || []).forEach(h => h({})), today: localISO(date), nowS: Math.floor(date.getTime() / 1000) };
 }
 
@@ -339,23 +348,29 @@ test('D1: the widget gets the member\'s text for a RANGE and a whole CHAPTER, ca
   assert.ok(t['Numbers 7'].endsWith('\u2026') && !/N89 /.test(t['Numbers 7']), 'an 89-verse chapter was not capped with an ellipsis');
 });
 
-test('DEVICE 2026-11-17: the Bible loading AFTER the first write re-publishes the texts — with NO second probe', async () => {
+test('DEVICE 2026-11-17: the Bible loading AFTER the first write sends the texts — ONLY the texts, with NO second probe', async () => {
   const LIVE = { generator: 'TrinityOne', v: 1, ts: 1790000000, ref: '1 Samuel 8:11-18; Numbers 7', schedule: [] };
   const s = todayScreen({ church: 'grace', feedBases: ['https://a8.example'], feed: { 'https://a8.example': LIVE },
     parseRef: realParseRef, chapters: { '9:8': chapterOf('S', 22), '4:7': chapterOf('N', 89) }, bibleLoaded: false });
   s.draw(); await settle();
   assert.equal(s.prompts.length, 1, 'Today did not configure the widget');
   assert.deepEqual(s.prompts[0].texts, {}, 'premise: with the Bible not loaded the first write has no texts');
+  // Re-audit S1: meanwhile the BACKGROUND JOB found the copy withdrawn and stored null.
+  s.native.prompt.cached = null;
   s.bible.loaded = true; s.draw(); await settle();
   assert.equal(s.probed.length, 1, 'the Bible loading probed the relays again (small pipes: the texts are local)');
-  assert.equal(s.prompts.length, 2, 'the Bible loaded but the widget was never given the texts (it says "Tap to read" for the hour)');
-  assert.deepEqual(Object.keys(s.prompts[1].texts).sort(), ['1 Samuel 8:11-18', 'Numbers 7']);
-  assert.deepEqual(s.prompts[1].cached, LIVE, 'the re-publish did not carry the copy the probe found');
-  s.draw(); await settle();
-  assert.equal(s.prompts.length, 2, 'a redraw with the same texts wrote the widget again');
-  s.bible.activeVersion = 'KJV'; s.draw(); await settle();
-  assert.equal(s.prompts.length, 3, 'a change of translation did not re-publish');
+  assert.equal(s.textsSent.length, 1, 'the Bible loaded but the widget was never given the texts (it says "Tap to read" for the hour)');
+  assert.deepEqual(Object.keys(s.native.prompt.texts).sort(), ['1 Samuel 8:11-18', 'Numbers 7']);
+  assert.equal(s.prompts.length, 1, 'the texts went through publishPrompt, which replaces the whole config');
+  assert.equal(s.native.prompt.cached, null, 'the texts re-send put back a copy the background job had withdrawn');
+  // Re-audit N-a: a re-run with the same texts (here: relay admission settles again) sends nothing.
+  s.fire('trinity-relays-verified'); s.draw(); await settle();
+  assert.equal(s.textsSent.length, 1, 'a re-run with the same texts wrote the widget again');
   assert.equal(s.probed.length, 1);
+  s.bible.activeVersion = 'KJV'; s.draw(); await settle();
+  assert.equal(s.textsSent.length, 2, 'a change of translation did not re-send the texts');
+  assert.equal(s.probed.length, 1);
+  assert.equal(s.prompts.length, 1);
 });
 
 // ── audit fixes (AUDIT-phone-widget-c60c0f72-2026-11-16) ─────────────────────────────────────────────────────
