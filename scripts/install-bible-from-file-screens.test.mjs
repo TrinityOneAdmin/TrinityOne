@@ -67,7 +67,8 @@ test('S1 — the quiet "Have a … file? Install it" line is on every category a
       const btn = linkOf(tree);
       const where = `category ${category}, tab ${view}`;
       assert.equal(btn.length, 1, `${where}: the link is not on the Library screen`);
-      assert.equal(wordsOf(btn[0]), LINK[category || 'none'], `${where}: wrong words`);
+      const want = (category === null && view === 'language') ? LINK.bibles : LINK[category || 'none'];   // no category + All bibles tab shows only Bibles (round 2, N2)
+      assert.equal(wordsOf(btn[0]), want, `${where}: wrong words`);
       assert.equal(s.calls.pick, 0, 'the picker opened before anyone pressed anything');
       btn[0].props.onClick();
       assert.equal(s.calls.pick, 1, `${where}: pressing the link did not reach Bible.pickFile`);

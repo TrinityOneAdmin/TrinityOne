@@ -18,13 +18,13 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 td,th{border:1px solid #ccc;padding:8px;vertical-align:top;text-align:left}th{background:#f3eee8}code{background:#f3f3f3;padding:1px 4px;border-radius:4px}
 .bad th{background:#f6dcd8}pre{background:#f3f3f3;padding:10px;border-radius:6px;overflow:auto}@media(prefers-color-scheme:dark){body{background:#181614;color:#eee}td,th{border-color:#444}th{background:#2a2420}.bad th{background:#4a2420}code,pre{background:#2a2a2a}}</style></head><body>
 <h1>TrinityOne test Bibles</h1>
-<p>Small sample files for trying <b>Library &rarr; Install a Bible from a file</b>, and <b>Open with TrinityOne</b> on Android. Every
+<p>Small sample files for trying <b>Library &rarr; Bibles &rarr; Have a Bible file? Install it</b>, and <b>Open with TrinityOne</b> on Android. Every
 good file is built from public-domain text or text written for this folder, and each is installed by an automated test
 (<code>scripts/install-bible-samples.test.mjs</code>) so it is known to work. Regenerate with
 <code>node scripts/make-test-bibles.mjs &lt;dir&gt;</code> from the repository.</p>
 <h2>Put them on the phone</h2>
 <pre>adb push /mnt/storage/projects/TrinityOne-internal/test-bibles/ /sdcard/Download/test-bibles/</pre>
-<p>Then in TrinityOne: Library &rarr; <b>Install a Bible from a file</b> &rarr; Downloads &rarr; test-bibles &rarr; pick a file. Or open the Files
+<p>Then in TrinityOne: Library &rarr; Bibles &rarr; <b>Have a Bible file? Install it</b> &rarr; Downloads &rarr; test-bibles &rarr; pick a file. Or open the Files
 app, tap a file in Download/test-bibles, and choose TrinityOne (confirm, then <b>Install</b>). The result screen names the kind
 (Bible, commentary, dictionary, cross-references) and the name shown below.</p>
 <h2>Files that should install</h2>

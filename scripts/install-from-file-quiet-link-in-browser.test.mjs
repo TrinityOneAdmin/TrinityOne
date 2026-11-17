@@ -102,3 +102,42 @@ test('tapping the link opens the real file input', { skip: !CHROME ? 'no chromiu
   })()`);
   assert.ok(clicked >= 1, 'pressing the link did not open the file input');
 });
+
+// ── round 2: Dictionaries and Commentaries wording, and the text's contrast in light and dark ──
+const PAGE_HELPERS = `
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  const clickText = async (re) => { for (let i = 0; i < 60; i++) { const el = [...document.querySelectorAll('button, [role=button], div')].reverse().find(x => re.test((x.textContent || '').trim()) && (x.textContent || '').length < 60); if (el) { el.click(); return true; } await wait(250); } return false; };
+  const lum = (rgb) => { const c = rgb.map(v => { v /= 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }); return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]; };
+  const parse = (s) => { const m = s.match(/[\\d.]+/g).map(Number); return { rgb: m.slice(0, 3), a: m.length > 3 ? m[3] : 1 }; };
+  const bgOf = (el) => { for (let e = el; e; e = e.parentElement) { const p = parse(getComputedStyle(e).backgroundColor); if (p.a > .95) return p.rgb; } return [255, 255, 255]; };
+  const contrast = (el) => { const f = parse(getComputedStyle(el).color).rgb, b = bgOf(el); const a = lum(f), c = lum(b); return (Math.max(a, c) + .05) / (Math.min(a, c) + .05); };
+  const goBack = () => { const h = [...document.querySelectorAll('h1')].find(x => /Bibles|Dictionaries|Commentaries/.test(x.textContent)); const b = h && h.parentElement.parentElement.querySelector('button'); if (b) b.click(); return !!b; };
+`;
+test('Dictionaries and Commentaries say "Have a file? Install it"; Bibles say "Have a Bible file? Install it"', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  await waitEngine();
+  await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 800, deviceScaleFactor: 1, mobile: true }); await sleep(600);
+  const got = JSON.parse(await ev(`(async () => { ${PAGE_HELPERS}
+    const out = {}; await clickText(/^Library$/); await wait(600);
+    for (const [key, re] of [['dictionaries', /^Dictionaries/], ['commentaries', /^Commentaries/], ['bibles', /^Bibles/]]) {
+      const opened = await clickText(re); await wait(900);
+      const b = document.querySelector('button[data-install-from-file]');
+      out[key] = { opened, text: b ? b.textContent.trim() : null }; goBack(); await wait(700);
+    }
+    return JSON.stringify(out); })()`));
+  assert.deepEqual([got.dictionaries.text, got.commentaries.text, got.bibles.text],
+    ['Have a file? Install it', 'Have a file? Install it', 'Have a Bible file? Install it'], JSON.stringify(got));
+});
+
+for (const theme of ['light', 'dark']) {
+  test(`the line's text is at least 4.5:1 against its background in ${theme} mode`, { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+    await waitEngine();
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 800, deviceScaleFactor: 1, mobile: true }); await sleep(600);
+    const r = JSON.parse(await ev(`(async () => { ${PAGE_HELPERS}
+      await clickText(/^Library$/); await wait(600); await clickText(/^Bibles/); await wait(900);
+      const root = document.querySelector('.trinity'); root.classList.toggle('dark', ${theme === 'dark'}); await wait(400);
+      const b = document.querySelector('button[data-install-from-file]');
+      return JSON.stringify({ dark: root.classList.contains('dark'), ratio: contrast(b), color: getComputedStyle(b).color }); })()`));
+    assert.equal(r.dark, theme === 'dark');
+    assert.ok(r.ratio >= 4.5, `${theme}: contrast ${r.ratio.toFixed(2)}:1 (${r.color}) is under AA 4.5:1`);
+  });
+}

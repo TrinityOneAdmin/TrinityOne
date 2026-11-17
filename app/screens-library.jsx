@@ -993,7 +993,7 @@ function InstalledBrowser({ ctx, category, force }) {
   };
 
   // SHARE ONE MODULE, AS ONE FILE (share-app.jsx's shareOneFile). Offered only on a row isShareableModule allows
-  // — what a recipient's Library → Install a Bible from a file can take. The bytes are the engine's own cached copy; if they are not
+  // — what a recipient's Library → Bibles → "Have a Bible file? Install it" can take. The bytes are the engine's own cached copy; if they are not
   // there, say so and share nothing. Backing out of the share sheet is not an error and shows nothing.
   const canShareRow = (r) => typeof window.isShareableModule === 'function' && window.isShareableModule(r);
   // A SHARE THAT NEVER SETTLES MUST NOT LOCK EVERY ROW. If Android recreates the activity while the member is in
@@ -1186,9 +1186,9 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
         <button onClick={() => window.Bible.pickFile()} data-install-from-file style={{
           display: 'flex', alignItems: 'center', gap: 7, minHeight: 44, boxSizing: 'border-box', maxWidth: 'calc(100% - 36px)', margin: '0 18px', padding: '0 2px',
           border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
-          fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--clay)' }}>
+          fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--clay-text, var(--clay))' }}>
           <Icon name="file" size={16} stroke={2} />
-          <span>{category === 'bibles' ? 'Have a Bible file? Install it' : 'Have a file? Install it'}</span>
+          <span>{(category === 'bibles' || (!category && view === 'language')) ? 'Have a Bible file? Install it' : 'Have a file? Install it'}   {/* the All-bibles tab (no category) shows only Bibles */}</span>
         </button>
       </div>
 

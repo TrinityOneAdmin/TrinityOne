@@ -15,6 +15,7 @@
   --on-clay:    #fff;   /* text on a clay fill (dark theme overrides to a dark ink) */
   --clay-deep:  #9C4327;
   --clay-ink:   #A8462A;
+  --clay-text:  #A8462A;   /* a11y: --clay as small text on paper is 3.78:1; this is 5.08:1 */
   --clay-soft:  #F3DECF;
 
   --gold:       #C8962E;
