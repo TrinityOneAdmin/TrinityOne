@@ -86,17 +86,35 @@ async function textAfterReload(abbr, book, chapter, verse) {
   return ev(`(() => { const v = window.Bible.getVerses(${book}, ${chapter}, ${JSON.stringify(abbr)}).find(x => Number(x.v) === ${verse}); return v ? v.text : ''; })()`);
 }
 
+// After a relaunch, make `abbr` the active Bible and open the Read tab; if the reader says the chapter is not there, press its button.
+// Returns what the READER SCREEN shows (document text), not what the engine would answer.
+async function readerAfterReload(abbr) {
+  return JSON.parse(await ev(`(async () => {
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const clickText = async (re) => { for (let i = 0; i < 40; i++) { const el = [...document.querySelectorAll('button, [role=button], div')].reverse().find(x => re.test((x.textContent || '').trim()) && (x.textContent || '').length < 60); if (el) { el.click(); return true; } await wait(250); } return false; };
+    window.Bible.setActive(${JSON.stringify(abbr)}); await wait(800);
+    const tab = await clickText(/^Read$/); await wait(1500);
+    let body = document.body.innerText; let pressed = false;
+    if (/isn.t in/.test(body)) { pressed = await clickText(/^Go to /); await wait(1500); body = document.body.innerText; }
+    return JSON.stringify({ tab, pressed, body });
+  })()`));
+}
+
 test('a USFM ZIP installed from the Library reads in the reader at once, and again after a relaunch', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
   await waitEngine(); await sleep(3000);
   const s = (await buildSamples()).find(x => x.file.startsWith('01-'));
-  const r = await installViaLibrary(s.file, s.bytes, 'For God so loved the world');
+  const r = await installViaLibrary(s.file, s.bytes, 'In the beginning was the Word');
   assert.deepEqual([r.tab, r.store, r.btn], [true, true, true], 'the Library screen did not offer the button: ' + JSON.stringify(r));
   assert.equal(r.result && r.result.ok, true, JSON.stringify(r));
   assert.equal(r.sheet, true, 'the result sheet was not shown');
   assert.equal(r.read, true, '"Read it now" is not on the sheet');
   assert.equal(r.active, r.result.abbr, 'the new Bible is not the active one after "Read it now"');
+  assert.equal(r.readerHasText, true, 'after "Read it now" the READER SCREEN shows no text of the new Bible');
   const txt = await textAfterReload(r.result.abbr, 43, 3, 16);
   assert.match(txt, /For God so loved the world/, 'after a relaunch the imported Bible has no text: ' + JSON.stringify(txt));
+  const after = await readerAfterReload(r.result.abbr);
+  assert.equal(after.tab, true, 'the Read tab was not found');
+  assert.match(after.body, /In the beginning was the Word|For God so loved/, 'after a relaunch the READER SCREEN shows no text of the imported Bible: ' + after.body.slice(0, 400));
 });
 
 test('a single-book USFM file installed from the Library reads, and reads again after a relaunch', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
@@ -104,6 +122,10 @@ test('a single-book USFM file installed from the Library reads, and reads again 
   const s = (await buildSamples()).find(x => x.file.startsWith('02-'));
   const r = await installViaLibrary(s.file, s.bytes, 'The elder to Gaius');
   assert.equal(r.result && r.result.ok, true, JSON.stringify(r));
+  assert.equal(r.readerHasText, true, 'after "Read it now" the READER SCREEN shows no text of the single-book Bible (it should open 3 John 1)');
   const txt = await textAfterReload(r.result.abbr, 64, 1, 1);
   assert.match(txt, /The elder to Gaius the beloved/, 'after a relaunch the single-book Bible has no text: ' + JSON.stringify(txt));
+  const after = await readerAfterReload(r.result.abbr);
+  assert.equal(after.tab, true, 'the Read tab was not found');
+  assert.match(after.body, /The elder to Gaius/, 'after a relaunch the READER SCREEN shows no text of the single-book Bible (pressed the Go to button: ' + after.pressed + '): ' + after.body.slice(0, 400));
 });
