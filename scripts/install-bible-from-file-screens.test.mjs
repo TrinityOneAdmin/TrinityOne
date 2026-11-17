@@ -587,8 +587,8 @@ test('S28 — dark mode: a very dark brand (navy) is LIGHTENED without losing it
     assert.ok(Math.abs(hueOf(v) - hueOf(dark2)) <= 6, `${dark2} -> ${v} changed hue (${hueOf(dark2).toFixed(0)} -> ${hueOf(v).toFixed(0)})`);
     assert.ok(ratioOf(v, '#211B13') >= 4.6, `${dark2} -> ${v} is ${ratioOf(v, '#211B13').toFixed(3)}:1, under the code's own 4.6 target`);
   }
-  // light mode: a pale green brand. Judging before rounding left #91f5aa at 4.57:1 (#467652); it must reach the code's own 4.6 target on the paper.
-  for (const pale of ['#91f5aa', '#ffd9a0']) {
+  // light mode: Judging before rounding left some brands just under the target (e.g. #0096a5 -> 4.582:1); each must reach the code's own 4.6 target on the paper.
+  for (const pale of ['#91f5aa', '#ffd9a0', '#0096a5', '#00b4d2', '#0fa5f0', '#00f087']) {   // the last four are brands the judge-then-round rule left at 4.58 to 4.59
     const v = (await clayText({ dark: false, accent: 'clay', brand: pale })).value;
     assert.ok(ratioOf(v, '#F4EEE2') >= 4.6, `${pale} -> ${v} in light mode is ${ratioOf(v, '#F4EEE2').toFixed(3)}:1, under 4.6`);
   }
