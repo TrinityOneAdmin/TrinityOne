@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.widget.RemoteViews;
 
 /**
@@ -37,6 +38,12 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
         m.notifyAppWidgetViewDataChanged(ids, R.id.trinity_widget_stack);
         scheduleNextChange(c, now);
         if (WidgetStore.read(c, WidgetStore.K_PROMPT) != null) PromptFetchJob.schedule(c);   // re-arm after a reboot
+    }
+
+    /** Resized: the verse's line count depends on the height (TrinityWidgetService.linesForThisWidget), so redraw. */
+    @Override
+    public void onAppWidgetOptionsChanged(Context c, AppWidgetManager m, int id, Bundle newOptions) {
+        m.notifyAppWidgetViewDataChanged(new int[] { id }, R.id.trinity_widget_stack);
     }
 
     static PendingIntent openApp(Context c, boolean template) {

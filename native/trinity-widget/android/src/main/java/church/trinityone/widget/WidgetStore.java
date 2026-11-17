@@ -171,6 +171,28 @@ final class WidgetStore {
         return next;
     }
 
+    /**
+     * How many lines of verse fit a widget this many dp tall, so the text ends in "…" instead of being cut through a
+     * line (trinity_widget_item.xml). Leans SMALL on purpose: one line too few costs an early "…", one too many is
+     * the clipped line this exists to prevent. textSp = the size the verse is drawn at its smallest (12 with API 26+
+     * autosize, else 15). heightDp <= 0 (a launcher that reports no size) → 4, what fits the declared 110dp minimum
+     * at normal font size.
+     *
+     *   widget − root padding 12 → StackView; a page gets 90% of it (StackView's stack perspective) − page padding 24
+     *   − header (the 20dp mark, or the 12sp label if larger, + 8 gap) − reference (12sp + 6 gap) − 8 slack
+     *   (launcher padding we cannot see) → ÷ one line (1.25 × textSp × font scale).
+     */
+    static int verseLines(int heightDp, float fontScale, float textSp) {
+        if (heightDp <= 0) return 4;
+        float fs = fontScale > 0 ? fontScale : 1f;
+        float page = (heightDp - 12f) * 0.9f - 24f;
+        float header = Math.max(20f, 12f * 1.25f * fs) + 8f;
+        float ref = 12f * 1.25f * fs + 6f;
+        float line = 1.25f * textSp * fs;
+        int n = (int) Math.floor((page - header - ref - 8f) / line);
+        return Math.max(1, Math.min(12, n));
+    }
+
     static ComponentName provider(Context c) { return new ComponentName(c, TrinityWidgetProvider.class); }
 
     static boolean enabled(Context c) {
