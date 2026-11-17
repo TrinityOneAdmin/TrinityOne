@@ -31,7 +31,7 @@ public class TrinityWidgetService extends RemoteViewsService {
         @Override public void onCreate() {}
         @Override public void onDataSetChanged() {
             pages = WidgetStore.pages(c, System.currentTimeMillis());
-            rotation = widgetId == AppWidgetManager.INVALID_APPWIDGET_ID ? 0 : WidgetStore.rotation(c, widgetId);
+            rotation = widgetId == AppWidgetManager.INVALID_APPWIDGET_ID ? 0 : WidgetStore.rotation(c, widgetId, WidgetStore.pageOrder(pages));
             verseLines = linesForThisWidget();
         }
 

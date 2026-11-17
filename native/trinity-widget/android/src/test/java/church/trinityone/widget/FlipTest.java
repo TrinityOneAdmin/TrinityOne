@@ -66,12 +66,12 @@ public class FlipTest {
     public void theRealFlipRotatesThePages_andNotifiesADataChange_notAPartialUpdate() {
         Prefs p = new Prefs(); Context c = context(p); AppWidgetManager m = mock(AppWidgetManager.class);
         new TrinityWidgetProvider().host(c, m).flip(9);
-        assertEquals(1, WidgetStore.rotation(c, 9));
+        assertEquals(1, WidgetStore.rotation(c, 9, ""));
         verify(m).notifyAppWidgetViewDataChanged(new int[] { 9 }, R.id.trinity_widget_stack);
         verify(m, never()).partiallyUpdateAppWidget(anyInt(), any(RemoteViews.class));
         new TrinityWidgetProvider().host(c, m).flip(9);
-        assertEquals(2, WidgetStore.rotation(c, 9));
-        assertEquals(0, WidgetStore.rotation(c, 12));
+        assertEquals(2, WidgetStore.rotation(c, 9, ""));
+        assertEquals(0, WidgetStore.rotation(c, 12, ""));
     }
 
     @Test
@@ -86,16 +86,29 @@ public class FlipTest {
     }
 
     @Test
+    public void aRotationMadeAgainstAnotherPageSetIsIgnoredAndCleared() {
+        // re-audit E-2 of cfc3fd22: the page set changes before the next full redraw clears the flip in drawAll.
+        Prefs p = new Prefs(); Context c = context(p);
+        String a = "P|Numbers 7\nV|John 3:16\n", b = "P|Psalms 23\nV|John 3:16\n";
+        WidgetStore.rotate(c, 9, a);
+        assertEquals(1, WidgetStore.rotation(c, 9, a));
+        assertEquals("a stale rotation was applied to a new page set", 0, WidgetStore.rotation(c, 9, b));
+        assertEquals("the stale rotation was not cleared", 0, WidgetStore.rotation(c, 9, a));
+        WidgetStore.rotate(c, 9, b);
+        assertEquals(1, WidgetStore.rotation(c, 9, b));
+    }
+
+    @Test
     public void aPageSetChangeClearsTheFlip_andForgettingClearsIt() {
         Prefs p = new Prefs(); Context c = context(p); AppWidgetManager m = mock(AppWidgetManager.class);
         TrinityWidgetProvider.Host h = new TrinityWidgetProvider().host(c, m);
         h.flip(9); h.clearFlip(9);
-        assertEquals(0, WidgetStore.rotation(c, 9));
+        assertEquals(0, WidgetStore.rotation(c, 9, ""));
         h.flip(9); WidgetStore.forgetOrder(c, 9);
-        assertEquals(0, WidgetStore.rotation(c, 9));
+        assertEquals(0, WidgetStore.rotation(c, 9, ""));
         h.flip(9); h.flip(12); WidgetStore.recordOrder(c, 9, "V|x\n"); WidgetStore.forgetAllOrders(c);
-        assertEquals(0, WidgetStore.rotation(c, 9));
-        assertEquals(0, WidgetStore.rotation(c, 12));
+        assertEquals(0, WidgetStore.rotation(c, 9, ""));
+        assertEquals(0, WidgetStore.rotation(c, 12, ""));
         assertEquals(null, WidgetStore.shownOrder(c, 9));
     }
 }

@@ -76,7 +76,7 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
             @Override public void recordOrder(int id, String o) { WidgetStore.recordOrder(c, id, o); }
             // Device D-1: NOT a partial showNext (ColorOS ignores it) — rotate the adapter and notify the data change.
             @Override public void flip(int id) {
-                WidgetStore.rotate(c, id);
+                WidgetStore.rotate(c, id, WidgetStore.pageOrder(WidgetStore.pages(c, System.currentTimeMillis())));
                 m.notifyAppWidgetViewDataChanged(new int[] { id }, R.id.trinity_widget_stack);
             }
             @Override public void clearFlip(int id) { WidgetStore.clearFlip(c, id); }

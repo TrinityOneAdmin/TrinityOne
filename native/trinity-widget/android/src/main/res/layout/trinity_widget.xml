@@ -9,7 +9,10 @@
      tall (the declared minimum is 110dp); 16dp keeps its right edge inside for any card >= 144dp wide (minimum 180dp).
      The root's padding is 0: the page is the same colour and radius as the card, so the inset bought nothing.
      WidgetStore.verseLines mirrors these numbers. -->
+<!-- layoutDirection ltr (re-audit E-1 of cfc3fd22): the app supports RTL, and mirrored, the -16dp widen, the
+     right-edge dots and the flip strip land on the wrong side while StackView still places pages from the left. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layoutDirection="ltr"
     android:id="@+id/trinity_widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"

@@ -53,7 +53,7 @@ public class FactoryFlipTest {
             verify(v).setTextViewText(R.id.trinity_widget_text, "On the day Moses");
             verify(v).setImageViewResource(R.id.trinity_widget_dot0, R.drawable.trinity_widget_dot_on);
         }
-        WidgetStore.rotate(c, 9);     // what a tap on the dots does (FlipTest drives it through the provider)
+        WidgetStore.rotate(c, 9, WidgetStore.pageOrder(WidgetStore.pages(c, System.currentTimeMillis())));   // what a tap does (FlipTest drives the provider)
         f.onDataSetChanged();         // what the data-changed notice makes the launcher ask for
         try (MockedConstruction<RemoteViews> rv = mockConstruction(RemoteViews.class)) {
             f.getViewAt(0);

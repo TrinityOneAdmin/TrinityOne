@@ -204,11 +204,11 @@ final class WidgetStore {
     /** Every widget's recorded order (re-audit R3): with them gone, the next draw puts page 0 in front again. */
     static void forgetAllOrders(Context c) {
         SharedPreferences.Editor e = prefs(c).edit();
-        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER) || k.startsWith(K_FLIP)) e.remove(k);
+        for (String k : prefs(c).getAll().keySet()) if (k.startsWith(K_ORDER) || k.startsWith(K_FLIP) || k.startsWith(K_FLIP_FOR)) e.remove(k);
         e.apply();
     }
 
-    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).remove(K_FLIP + widgetId).apply(); }
+    static void forgetOrder(Context c, int widgetId) { prefs(c).edit().remove(K_ORDER + widgetId).remove(K_FLIP + widgetId).remove(K_FLIP_FOR + widgetId).apply(); }
 
     /**
      * TAP TO FLIP, device D-1 (2026-11-17): ColorOS's launcher ignores a PARTIAL update (showNext / setDisplayedChild)
@@ -220,11 +220,26 @@ final class WidgetStore {
      */
     static final String K_FLIP = "flip.";
 
-    static int rotation(Context c, int widgetId) { return prefs(c).getInt(K_FLIP + widgetId, 0); }
+    /** + widget id → the pageOrder the rotation was made against (re-audit E-2 of cfc3fd22). */
+    static final String K_FLIP_FOR = "flipfor.";
 
-    static void rotate(Context c, int widgetId) { prefs(c).edit().putInt(K_FLIP + widgetId, (rotation(c, widgetId) + 1) % 1000).apply(); }
+    /** The rotation to apply to `order` — 0, and the stored flip cleared, when it was made against another page set
+     *  (a page-set change can reach the factory before the next full redraw clears it in drawAll). */
+    static int rotation(Context c, int widgetId, String order) {
+        SharedPreferences p = prefs(c);
+        int rot = p.getInt(K_FLIP + widgetId, 0);
+        if (rot == 0) return 0;
+        if (order != null && order.equals(p.getString(K_FLIP_FOR + widgetId, null))) return rot;
+        clearFlip(c, widgetId);
+        return 0;
+    }
 
-    static void clearFlip(Context c, int widgetId) { prefs(c).edit().remove(K_FLIP + widgetId).apply(); }
+    static void rotate(Context c, int widgetId, String order) {
+        int next = (rotation(c, widgetId, order) + 1) % 1000;
+        prefs(c).edit().putInt(K_FLIP + widgetId, next).putString(K_FLIP_FOR + widgetId, order).apply();
+    }
+
+    static void clearFlip(Context c, int widgetId) { prefs(c).edit().remove(K_FLIP + widgetId).remove(K_FLIP_FOR + widgetId).apply(); }
 
     /** Adapter position → the page it shows, under a rotation. Dots use THIS (the page's own index), so each page keeps
      *  its dot whichever way it reached the front. */

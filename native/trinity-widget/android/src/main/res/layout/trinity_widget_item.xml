@@ -9,7 +9,10 @@
      short page to the BOTTOM of the widget. An oversized minimum makes the page resolve to exactly its slot (an
      AT_MOST spec caps it), so the page fills its slot. The slot's own 10% offset is countered in trinity_widget.xml.
      Paddings and gaps here are mirrored by WidgetStore.verseLines. -->
+<!-- layoutDirection ltr (re-audit E-1 of cfc3fd22): the app supports RTL, and mirrored, the -16dp widen, the
+     right-edge dots and the flip strip land on the wrong side while StackView still places pages from the left. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layoutDirection="ltr"
     android:id="@+id/trinity_widget_item"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
