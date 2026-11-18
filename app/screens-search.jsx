@@ -30,11 +30,17 @@ function SearchScreen({ ctx, onBack }) {
   const [wordId, setWordId] = useSrch(null);
   const seeds = ['light', 'love', 'God', 'beginning', 'life'];
 
+  // A RESULT LINE IS PUT IN THE PAGE AS HTML, so a `<` or `>` in a verse's TEXT must be escaped first: the Adele Old
+  // Testament quotes with << >>, and `<<Come.>>` was read as a tag and its words dropped from the line (2026-11-18,
+  // audit of the mid-line-verse plan, F1). `&` is left alone so the entities MySword text carries keep rendering.
+  // The term is escaped the same way, so a search for "<<" still finds and marks it.
+  const esc = (s) => String(s).replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const hl = (text) => {
-    if (!active) return text;
-    try { return text.replace(new RegExp('(' + active.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'),
+    const t = esc(text);
+    if (!active) return t;
+    try { return t.replace(new RegExp('(' + esc(active).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'),
       '<mark style="background:var(--hl-yellow);color:inherit;border-radius:3px;padding:0 2px;">$1</mark>'); }
-    catch (e) { return text; }
+    catch (e) { return t; }
   };
 
   return (

@@ -1847,12 +1847,18 @@ function ReadScreen({ ctx }) {
           {verses.length === 0 ? (() => {
             // The Bible may lack the whole BOOK (a partial file) or only THIS CHAPTER of a book it has (a draft, a portion, a USFM that
             // starts at chapter 2). Both must say so and offer a way in: a blank page under a chapter heading says nothing at all.
-            const hasBook = Bible.books(version).includes(loc.book);
-            const first = hasBook ? Bible.firstChapter(loc.book, version) : null;
-            const target = first != null ? { book: loc.book, chap: first } : (() => { const b = Bible.books(version)[0]; return b ? { book: b, chap: Bible.firstChapter(b, version) || 1 } : null; })();
+            // The button goes to a passage the Bible REALLY has (engine passageFor: this chapter, else this book's first chapter
+            // with text, else the first book's). It used to fall back to `firstChapter(books[0]) || 1`, so in a Bible whose
+            // books held no text it offered "Go to <the page you are on>" (2026-11-18). No passage anywhere: no button, and
+            // the page says the Bible has no text, which is the truth a member can act on.
+            const bks = Bible.books(version);
+            const hasBook = bks.includes(loc.book);
+            const at = Bible.passageFor ? Bible.passageFor(version, loc) : null;
+            const target = at && !(at.book === loc.book && at.chap === loc.chap) ? at : null;
+            const noText = !at && bks.length > 0;
             return (
             <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--ink-2)' }}>
-              <div style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 18 }}>{hasBook ? bname + ' ' + loc.chap + ' isn\'t in ' + version : bname + ' isn\'t in ' + version}</div>
+              <div style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 18 }}>{noText ? version + ' has no text TrinityOne can read' : hasBook ? bname + ' ' + loc.chap + ' isn\'t in ' + version : bname + ' isn\'t in ' + version}</div>
               {target && <button onClick={() => ctx.setLoc({ book: target.book, chap: target.chap })}
                 style={{ padding: '10px 20px', borderRadius: 10, background: 'var(--clay)', color: 'var(--on-clay)', border: 'none', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
                 Go to {Bible.bookName(target.book)} {target.chap}

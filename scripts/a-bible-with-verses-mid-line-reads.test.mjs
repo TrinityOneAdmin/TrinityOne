@@ -145,10 +145,39 @@ test('T2 — a footnote in a mid-line Bible is filed under ITS verse, with << >>
 });
 
 // ── T3: the install gate ────────────────────────────────────────────────────────────────────────────────────
+test('T3 — a Bible with no readable verse is REFUSED at install, nothing is kept, and the sheet says why', async () => {
+  const bytes = zipOf({ '02-GEN.usfm': NO_TEXT });
+  const { p, r, Bible } = await installed(bytes, 'empty.zip');
+  assert.deepEqual({ ok: r.ok, reason: r.reason }, { ok: false, reason: 'no-text' }, JSON.stringify(r));
+  assert.deepEqual(records(p.state), {}, 'a record was written for a refused Bible');
+  assert.equal([...((p.state.stores.get('modules') || new Map()).keys())].length, 0, 'bytes were stored for a refused Bible');
+  assert.equal(Bible.versions().length, 0, 'the refused Bible is still registered in the reader');
+  const said = sheet(r);   // the very object installFromBytes returned
+  assert.match(said, /has no text TrinityOne can read/, 'the sheet does not say why: ' + said);
+  assert.match(said, /Nothing was installed/);
+});
 
+test('T3 control — a Bible whose FIRST book is empty but another has text still installs', async () => {
+  const { r } = await installed(GEN_EMPTY_EXO_TEXT(), 'half.zip');
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
 
+test('T3 control — a MySword Bible whose Bible table is empty is refused the same way', async () => {
+  const db = await sqliteBytes("CREATE TABLE Details (Description TEXT, Abbreviation TEXT); INSERT INTO Details VALUES ('Empty SQL', 'ESQ'); CREATE TABLE Bible (Book INT, Chapter INT, Verse INT, Scripture TEXT);");
+  const { r } = await installed(db, 'empty.bbl.mybible');
+  assert.deepEqual({ ok: r.ok, reason: r.reason }, { ok: false, reason: 'no-text' }, JSON.stringify(r));
+});
 
 // ── T4: the reader's "Go to" button ──────────────────────────────────────────────────────────────────────────
+test('T4a — "Go to" on an empty chapter goes to a chapter WITH text, never back to the same page', async () => {
+  const { r, Bible } = await installed(GEN_EMPTY_EXO_TEXT(), 'half.zip');
+  const v = reader(Bible, r.abbr, { book: GEN, chap: 1 });
+  const b = goButtons(v.tree);
+  assert.equal(b.length, 1, 'no "Go to" button. Drew: ' + v.said);
+  assert.match(texts(b[0]).join(''), /Go to Exodus 1/, 'the button offers ' + texts(b[0]).join(''));
+  b[0].props.onClick();
+  assert.deepEqual(v.went, [{ book: EXO, chap: 1 }]);
+});
 
 // a record + bytes exactly as _installOne writes them (imported/<sha12>/<name>, checked) — what an older build left
 async function seeded(bytes, name, abbr) {
@@ -162,6 +191,15 @@ async function seeded(bytes, name, abbr) {
   return { p, url, Bible: p.Bible };
 }
 
+test('T4b — an EMPTY Bible already on a phone: no "Go to" button, the reader says so, and it stays removable', async () => {
+  const { p, url, Bible } = await seeded(zipOf({ '02-GEN.usfm': NO_TEXT }), 'empty.zip', 'EMPTY');
+  assert.ok(Bible.versions().some(x => x.abbr === 'EMPTY'), 'boot did not load the stored Bible (boot must not refuse it)');
+  const v = reader(Bible, 'EMPTY', { book: GEN, chap: 1 });
+  assert.equal(goButtons(v.tree).length, 0, 'a "Go to" button on a Bible with no text anywhere: ' + v.said);
+  assert.match(v.said, /EMPTY has no text TrinityOne can read/, 'the reader does not say the Bible has no text. Drew: ' + v.said);
+  assert.doesNotMatch(v.html, /Words with no verse marker/);
+  assert.ok(records(p.state)[url], 'the stored record vanished at boot — it must stay listed so it can be removed');
+});
 
 // ── T6: installed copies heal without a reinstall ───────────────────────────────────────────────────────────
 test('T6a — an install keeps the bytes it was given, unchanged (what lets a later build re-read them)', async () => {
@@ -182,3 +220,28 @@ test('T6b — a mid-line Bible stored by an older build READS after the next lau
 });
 
 // ── T9: Search shows the << >> quotation in a result line ────────────────────────────────────────────────────
+test('T9 — a Search result from a << >> verse shows the quotation as text, not swallowed as a tag', async () => {
+  const { r, Bible } = await installed(midlineZip(), 'midline.zip');
+  Bible.setActive(r.abbr);
+  const { React, draw } = miniReact();
+  const g = {
+    React,
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    IconBtn: ({ name, onClick }) => React.createElement('button', { title: name, onClick }),
+    Chip: (p) => React.createElement('button', { onClick: p.onClick }, p.children),
+    ScreenScroll: (p) => p.children, Spinner: () => React.createElement('i', {}),
+    safeCssColor: (c) => c || 'var(--clay)', location: { search: '' },
+    window: { Bible, TrinityData: {}, sanitizeHtml: h => h, addEventListener() {}, removeEventListener() {} },
+    document: { addEventListener() {}, removeEventListener() {} },
+  };
+  const { SearchScreen } = loadScreen('app/screens-search.jsx', ['SearchScreen'], g);
+  const props = { ctx: { toast() {}, go() {}, gotoRef() {}, openStore() {} }, onBack: null };
+  let tree = draw(SearchScreen, props);
+  find(tree, n => n.type === 'input')[0].props.onChange({ target: { value: 'said' } });
+  tree = draw(SearchScreen, props);
+  find(tree, n => n.type === 'input')[0].props.onKeyDown({ key: 'Enter' });
+  tree = draw(SearchScreen, props);
+  const html = drawnHtml(tree);
+  assert.match(html, /<mark[^>]*>said<\/mark>/, 'the search did not find Genesis 1:7 — re-anchor this test. Drew: ' + html);
+  assert.match(html, /&lt;&lt;Come\.&gt;&gt;/, 'the quotation was put in the page as markup: ' + html);
+});

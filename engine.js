@@ -1697,6 +1697,13 @@ window.safeImgUrl = function (v) {
         try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }, peek.files); }
         catch(e){ console.warn("install: loadModuleBytes refused the file", e); return _fail("unusable"); }
         if(!r || !r.abbr) return _fail("unusable");
+        // A BIBLE WITH NO VERSE WE CAN READ IS NOT INSTALLED (2026-11-18). buildFromUSFM lists a book from its \c lines
+        // alone, so a file whose verses this engine could not read (until today: several verses on one line) installed
+        // as a Bible with no text, and the reader looped "isn't in" on every page. passageFor walks the books to the
+        // first chapter with text (book 1 for a real Bible; every book once for an empty one). Before cachePut:
+        // nothing is stored and no record is written. A Bible ALREADY stored is not judged here — boot (restoreInstalled)
+        // keeps it, listed and removable — and hosted installs (catalogue, eBible mirror) do not pass through this line.
+        if(r.kind === "bible" && !passageFor(r.abbr)){ _undoLoaded("bible", r.abbr); return _fail("no-text"); }
         const shown = (r.kind === "bible" && modules[r.abbr] && modules[r.abbr].name) || (r.kind === "comment" && commentaries[r.abbr] && commentaries[r.abbr].name)
           || (r.kind === "crossref" && crossrefs[r.abbr] && crossrefs[r.abbr].name) || name;
         // Bytes that ARE a catalogue module (pinned) are filed as that catalogue module, so the Library shows it
