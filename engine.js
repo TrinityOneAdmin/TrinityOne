@@ -411,6 +411,9 @@ window.safeImgUrl = function (v) {
     if(!s) return "";
     s = s.replace(/\\f\b[\s\S]*?\\f\*/g, "").replace(/\\fe\b[\s\S]*?\\fe\*/g, "");
     s = s.replace(/\\x\b[\s\S]*?\\x\*/g, "");
+    // \va (alternate verse number) and \vp (published verse number) are not verse words: the markers alone were
+    // stripped below, leaving "6a" / "7" inside the verse (2026-11-18; 0 in the shipped Bibles)
+    s = s.replace(/\\va\b[\s\S]*?\\va\*/g, "").replace(/\\vp\b[\s\S]*?\\vp\*/g, "");
     s = s.replace(/\\wj\*/g, "</span>").replace(/\\wj\b ?/g, '<span class="red">');
     s = s.replace(/\\add\*/g, "</i>").replace(/\\add\b ?/g, '<i class="sup">');
     s = s.replace(/\\nd\*/g, "</span>").replace(/\\nd\b ?/g, '<span class="nd">');
@@ -446,6 +449,12 @@ window.safeImgUrl = function (v) {
   const _HEB = "aleph|alef|beth|bet|gimel|gimmel|daleth|dalet|he|hey|vav|waw|zayin|zain|heth|het|cheth|chet|teth|tet|yodh|yod|jod|kaph|kapf|kaf|caph|lamedh|lamed|mem|nun|samekh|samech|ayin|pe|peh|tsadhe|tsade|tsaddi|tzadhe|tzaddi|tzade|qoph|qof|koph|resh|shin|sin|tav|taw";
   const HEBREW_LETTER = new RegExp("^(?:" + _HEB + ")(?:\\s+(?:and|&)\\s+(?:" + _HEB + "))?\\.?$", "i");
   function parseUSFM(text){
+    // A "<" OR ">" IN THE FILE IS TEXT, NOT MARKUP (2026-11-18). The Adele Old Testament writes its quotation marks
+    // as << >> (3,179 of them); raw, they reached the verse html and the reader, stripTags and usfmText all read
+    // `<<Yahwe …>>` as a tag and dropped the words. No USFM marker contains either character, every tag below is a
+    // constant, and usfmText decodes &lt;/&gt; back for `text`. `&` is deliberately left alone: the shipped WEB and
+    // ASV carry a bare `&`, and escaping it would change their html. None of the shipped Bibles has a < or >.
+    text = String(text).replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const idm = text.match(/\\id\s+(\w+)/);
     const code = idm ? idm[1].toUpperCase() : null;
     const chapters = {};
@@ -460,12 +469,30 @@ window.safeImgUrl = function (v) {
     // director of music…`. The \d branch below took the whole rest of the line as the title, so verse 1 was
     // swallowed into it: its words landed at the start of verse 2, or (with no other \v) the chapter had no
     // verses at all. Split such a line at its verse marker, so the title stays the title (and, as scripture,
-    // in verse 1's text — owner, 2026-10-01) and verse 1 keeps its words. Only \d lines: no shipped module has
-    // a \v mid-line anywhere else (surveyed 2026-10-01), and changing that is a separate question.
+    // in verse 1's text — owner, 2026-10-01) and verse 1 keeps its words.
+    //
+    // …AND EVERY OTHER LINE TOO (2026-11-18). Bible-society USFM (eBible / Digital Bible Library "release" bundles)
+    // writes several verses on one line — `\p \v 1 … \v 2 …` — and the branches below only see a marker that starts a
+    // line, so every chapter of such a file came out EMPTY (three owner files: 0 verses of 5,657 / 7,958 / 7,959).
+    // So each line is cut before every `\v <n>` and every block marker (paragraph, poetry, heading, \b, \d…), and each
+    // piece then meets the branches below exactly as a line-start marker does. The \d split above is one case of it.
+    //   · NOT inside a note: a `\v` (or anything) between \f…\f*, \fe…\fe* or \x…\x* is the note's, not a cut. If a
+    //     note is still open at the end of the line (malformed), the line is cut again ignoring notes, so a verse is
+    //     never swallowed by a note that does not close.
+    //   · A block marker counts only when whitespace (or the line end) follows its name, so character styles that
+    //     share a prefix — \pn \qs \qt \qac \sc \sig \bd \bk \rq — are not cut. \va / \vp are not cut either.
+    //   · NOT \c: buildFromUSFM counts chapters from line-start \c and mirrors this parser; `\c 2 \p \v 1 …` still
+    //     reads, because the cut lands before \p and \v.
+    // On the five shipped Bibles none of these cuts ever fires (0 mid-line \v or block markers; they write one marker
+    // per line), so their output is byte-identical — scripts/shipped-bibles-read-the-same.test.mjs holds that.
     const lines = [];
+    const CUT = /\\(fe|f|x)(\*|\s)|\\(?=v\s+\S|(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr|q\d?|qm\d?|qa|b|s\d?|ms\d?|mr|r|sp|d)(?:\s|$))/g;
+    const cutsOf = (line, notes) => { const at = []; let depth = 0, m; CUT.lastIndex = 0;
+      while((m = CUT.exec(line))){ if(m[1]){ if(notes) depth = m[2] === "*" ? Math.max(0, depth - 1) : depth + 1; } else if(!depth && m.index > 0) at.push(m.index); }
+      return { at, open: depth > 0 }; };
     for(const line of text.split(/\r?\n/)){
-      const at = /^\\d\b/.test(line) ? line.search(/\\v\s/) : -1;
-      if(at > 0){ lines.push(line.slice(0, at)); lines.push(line.slice(at)); } else lines.push(line);
+      let c = cutsOf(line, true); if(c.open) c = cutsOf(line, false);   // a note left open never hides a verse
+      let from = 0; for(const i of c.at){ lines.push(line.slice(from, i)); from = i; } lines.push(line.slice(from));
     }
     for(const line of lines){
       let m;
@@ -616,8 +643,13 @@ window.safeImgUrl = function (v) {
       if(!parsed[b]){
         const raw = rawByBook[b];
         parsed[b] = raw ? (parseUSFM(raw).chapters || {}) : {};
-        // extract \f … \f* footnotes per chapter+verse before the raw text is discarded
-        if(raw){ const fn = {}; let ch = 0, v = 0; for(const line of raw.split(/\r?\n/)){ let m; if((m = line.match(/^\\c\s+(\d+)/))){ ch = +m[1]; v = 0; continue; } if((m = line.match(/^\\v\s+(\d+)/))) v = +m[1]; const fre = /\\f\b([\s\S]*?)\\f\*/g; let fm; while((fm = fre.exec(line))){ const t = fm[1].replace(/^\s*[+\-*]\s*/, "").replace(/\\fr\s[^\\]*/, "").replace(/\\f[rtkqa]\s?/g, "").replace(/\\\+?[a-z]+\d?\*?/gi, "").trim(); if(t && ch){ (fn[ch] = fn[ch] || {})[v] = (fn[ch][v] || []).concat(t); } } } fnByChap[b] = fn; }
+        // extract \f … \f* footnotes per chapter+verse before the raw text is discarded.
+        // ONE LEFT-TO-RIGHT SCAN per line (2026-11-18): a `\v n` moves the current verse, a whole note is filed under it,
+        // and an \fe…\fe* or \x…\x* is stepped over whole, so a `\v` written inside any note never moves the verse.
+        // This used to take the verse from a LINE-START \v only, so a file with several verses on a line filed every
+        // footnote of a chapter under verse 0. On line-start files the only \v is at index 0: same result as before.
+        // The note text is escaped like parseUSFM's (getCommentary wraps it in <p> as html).
+        if(raw){ const fn = {}; let ch = 0, v = 0; for(const line of raw.split(/\r?\n/)){ let m; if((m = line.match(/^\\c\s+(\d+)/))){ ch = +m[1]; v = 0; continue; } const fre = /\\f\b([\s\S]*?)\\f\*|\\v\s+(\d+)|\\(?:fe|x)\b[\s\S]*?\\(?:fe|x)\*/g; let fm; while((fm = fre.exec(line))){ if(fm[2] !== undefined){ v = +fm[2]; continue; } if(fm[1] === undefined) continue; const t = fm[1].replace(/^\s*[+\-*]\s*/, "").replace(/\\fr\s[^\\]*/, "").replace(/\\f[rtkqa]\s?/g, "").replace(/\\\+?[a-z]+\d?\*?/gi, "").trim().replace(/</g, "&lt;").replace(/>/g, "&gt;"); if(t && ch){ (fn[ch] = fn[ch] || {})[v] = (fn[ch][v] || []).concat(t); } } } fnByChap[b] = fn; }
         rawByBook[b] = null;
       }
       return parsed[b];
@@ -1665,6 +1697,13 @@ window.safeImgUrl = function (v) {
         try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }, peek.files); }
         catch(e){ console.warn("install: loadModuleBytes refused the file", e); return _fail("unusable"); }
         if(!r || !r.abbr) return _fail("unusable");
+        // A BIBLE WITH NO VERSE WE CAN READ IS NOT INSTALLED (2026-11-18). buildFromUSFM lists a book from its \c lines
+        // alone, so a file whose verses this engine could not read (until today: several verses on one line) installed
+        // as a Bible with no text, and the reader looped "isn't in" on every page. passageFor walks the books to the
+        // first chapter with text (book 1 for a real Bible; every book once for an empty one). Before cachePut:
+        // nothing is stored and no record is written. A Bible ALREADY stored is not judged here — boot (restoreInstalled)
+        // keeps it, listed and removable — and hosted installs (catalogue, eBible mirror) do not pass through this line.
+        if(r.kind === "bible" && !passageFor(r.abbr)){ _undoLoaded("bible", r.abbr); return _fail("no-text"); }
         const shown = (r.kind === "bible" && modules[r.abbr] && modules[r.abbr].name) || (r.kind === "comment" && commentaries[r.abbr] && commentaries[r.abbr].name)
           || (r.kind === "crossref" && crossrefs[r.abbr] && crossrefs[r.abbr].name) || name;
         // Bytes that ARE a catalogue module (pinned) are filed as that catalogue module, so the Library shows it

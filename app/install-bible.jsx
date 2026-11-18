@@ -174,6 +174,11 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
     }
     else if (r.reason === 'too-big') { title = 'That file is too big'; body = 'TrinityOne takes files up to 50 MB. Nothing was installed.'; buttons = [ok]; }
     else if (r.reason === 'no-space') { title = 'Not enough room on this phone'; body = 'Nothing was installed. Free some space and try again.'; buttons = [ok]; }
+    // engine.js _installOne: a Bible file with chapters but not one verse this phone can read (2026-11-18)
+    else if (r.reason === 'no-text') {
+      title = 'This Bible has no text TrinityOne can read'; body = 'Nothing was installed.';
+      buttons = [ok, { label: 'How do I get a Bible?', onClick: () => { close(); ctx && ctx.openStore && ctx.openStore('featured', 'bibles'); } }];
+    }
     else if (r.reason === 'unreadable') { title = 'TrinityOne couldn’t read that file'; body = 'Nothing was installed.'; buttons = [ok]; }
     else {
       title = 'TrinityOne can’t use this file';
