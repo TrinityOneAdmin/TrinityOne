@@ -282,3 +282,41 @@ test('T-B 9: members hub torn down to 0 refs after sign-in, nothing reopened —
   off2(); await sleep(100);
   app.clean(); app.close();
 });
+
+// ── T-B 10 (build audit V2): B's extra full is at most ONCE per hub per session ─────────────────────────────────
+// B clears fullPreAuth only once a relay's ACCEPTANCE of our AUTH has been recorded (_relayAuthOkAt). When that is
+// never recorded — a relay that refuses the AUTH (a clock outside its window), or the nostr-tools pool.relays quirk
+// the build audit reproduced (scratchpad/hubaudit/quirk.mjs; own ticket) — every open with an AUTH signed was a full
+// download of the corpus. Driven here with a relay that refuses every AUTH, so acceptance is never recorded on any
+// socket, deterministically. The cap must bound the DATA only: eosedAt must still not move on an incremental answer.
+test('T-B 10: with acceptance never recorded, B re-downloads everything at most once — and eosedAt still does not move', async (t) => {
+  reset(r1, 'gate'); r1.challengeEveryReq = true; r1.refuseAuth = true;
+  r1.add(doc(church, 'trinityone/joinpolicy:' + cp, { approval: true }, nowS() - 60), false);
+  const prior = process.listeners('unhandledRejection');   // see T-B 7: nostr-tools rethrows a refused AUTH
+  process.removeAllListeners('unhandledRejection');
+  const swallow = (err, p) => { if (/auth refused/.test(String(err && err.message))) return; for (const l of prior) l(err, p); };
+  process.on('unhandledRejection', swallow);
+  t.after(() => { process.removeListener('unhandledRejection', swallow); for (const l of prior) process.on('unhandledRejection', l); });
+  const app = memberApp({ me: ruth, relays: [r1.url] });
+  app.api._onChurchDocs(cp, { onevent() {}, oneose() {} });
+  assert.ok(await until(() => app.docsHub(cp).fullAt > 0 && app.t._relayAuthedAt > 0), 'the first full was answered and an AUTH was signed');
+  assert.ok(await until(() => r1.log.some(l => l.dir === 'out' && l.msg[0] === 'OK' && l.msg[2] === false)), 'the relay refused it');
+  await sleep(50);
+  assert.equal(app.t._relayAuthOkAt, 0, 'acceptance never recorded');
+  const fromReq = app.hubReqs(cp).length;
+  const eoses = () => r1.log.filter(l => l.dir === 'out' && l.msg[0] === 'EOSE').length;
+  let eosedAtAfterRefull = null;
+  for (let i = 0; i < 5; i++) {   // the post-auth refetch, then four resumes, each answered before the next
+    const n = eoses();
+    app.api.refetchChurchDocs();
+    assert.ok(await until(() => eoses() > n), `refetch ${i + 1} answered`);
+    await sleep(50);
+    if (i === 0) eosedAtAfterRefull = app.docsHub(cp).eosedAt;
+  }
+  const fulls = app.hubReqs(cp).slice(fromReq).filter(isFull).length;
+  assert.ok(fulls <= 1, `B re-downloaded the whole corpus ${fulls} times in one session — it must be at most once`);
+  assert.equal(fulls, 1, 'the one post-auth full still happens');
+  assert.equal(app.docsHub(cp).eosedAt, eosedAtAfterRefull, 'an incremental answer moved eosedAt while the full was still pre-acceptance (the cap must not loosen F12)');
+  await sleep(100);
+  app.clean(); app.close();
+});
