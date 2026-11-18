@@ -273,6 +273,10 @@
       (B.BOOK_NAMES || []).slice(0, 66).forEach((n, i) => { const k = squash(n); if (k && !m[k]) m[k] = i + 1; });
       if (typeof B.bookAbbr === 'function') for (let i = 1; i <= 66; i++) { const k = squash(B.bookAbbr(i)); if (k && !(k in m)) m[k] = i; }
     } catch (e) {}
+    // numbered books in the other spellings people use: "I John", "II Kings", "First Samuel" (round-3 N5). Without these,
+    // "I John 3" fell through to "John" 3.
+    const ROMAN = { 1: ['i', 'first'], 2: ['ii', 'second'], 3: ['iii', 'third'] };
+    Object.keys(m).forEach(k => { const d = /^([123])([a-z]+)$/.exec(k); if (d) ROMAN[d[1]].forEach(r => { if (!(r + d[2] in m)) m[r + d[2]] = m[k]; }); });
     _bookMap = m;
     return m;
   }
@@ -329,8 +333,10 @@
     // (re-audit N1): "01 Genesis/001.mp3" yes; "Read by John Doe/01.mp3" or ".../Disc 1/Track 07.mp3" no — those go to
     // the check screen rather than being filed under John or Mark because of a reader's name.
     if (parts.length >= 2) {
-      const folderName = parts[parts.length - 2].replace(/^[\d\s._-]+/, '');
-      const book = bookMap()[squash(folderName)];
+      // the WHOLE folder name first ("1 John", "1John", "I John", "1 Kings" are books in their own right — round-3 N5);
+      // only if that is not a book, drop a SEPARATED leading track number ("01 ", "01_", "01-") and try once more
+      const folderFull = parts[parts.length - 2];
+      const book = bookMap()[squash(folderFull)] || bookMap()[squash(folderFull.replace(/^\d+[\s._-]+/, ''))];
       if (book) {
         const tb = tokenize(base);
         const num = tb.find(t => /^\d+$/.test(t));

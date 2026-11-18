@@ -439,3 +439,25 @@ test('RE-AUDIT N3 — where rename will not overwrite, the old copy is set aside
   assert.deepEqual([...disk.keys()], ['audio/WEB/43/1.mp3']);
   assert.equal(tagOf(disk.get('audio/WEB/43/1.mp3')), 'old');
 });
+
+// ════════════════ round-3 audit N5: a numbered book is not "John" ════════════════
+test('ROUND-3 N5 — "1 John", "2 John", "3 John", "1 Kings" folders and file names land in THAT book, never in John or Kings by a dropped number', async () => {
+  const { S } = storeWorld();
+  const want = {
+    '1 John/01.mp3': [62, 1], '2 John/01.mp3': [63, 1], '3 John/01.mp3': [64, 1], '01_1John/01.mp3': [62, 1], '1 Kings/03.mp3': [11, 3],
+    '01 Genesis/001.mp3': [1, 1], 'Genesis/01.mp3': [1, 1], 'I John/02.mp3': [62, 2], 'II Kings/04.mp3': [12, 4],
+    // file names, same trap
+    '1 John 3.mp3': [62, 3], '1John_03.mp3': [62, 3], '01_1John_02.mp3': [62, 2], 'I John 4.mp3': [62, 4], 'II_Kings_05.mp3': [12, 5],
+    'First Samuel 7.mp3': [9, 7], '3 John.mp3': [64, 1], '62_1John_05.mp3': [62, 5],
+  };
+  for (const [name, [book, chap]] of Object.entries(want)) {
+    const m = S.matchName(name);
+    assert.ok(m, name + ' was not recognised');
+    assert.deepEqual([m.book, m.chap], [book, chap], name);
+  }
+  // on import, the 1 John folder fills 1 John, and John stays empty
+  const w = storeWorld();
+  const { id } = await imp(w, [['1 John/01.mp3', mp3('1j1')], ['1 John/02.mp3', mp3('1j2')]]);
+  assert.deepEqual(await w.S.listBook(id, 43), [], '1 John was filed under John');
+  assert.equal(await bytesAt(w, id, 62, 2), '1j2');
+});
