@@ -1054,7 +1054,9 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
   const fold = (cls, title, inside) => '<details class="fold ' + cls + '"><summary>' + title + '</summary>' + inside + '</details>';
   // On an iPhone every .apk is behind the "Android phones" chevron, so the leaders chevron holds only the
   // steward's TestFlight link. Elsewhere it holds the tucked steward .apk (if any) and that link.
-  const leaders = fold('leaders', 'For church leaders', (!ios && steward ? card(steward, true) : '') + stewardIphone);
+  // An Android visitor is not shown the steward's iPhone link (owner, 2026-11-18): no iPhone content on Android.
+  const leadersBody = (!ios && steward ? card(steward, true) : '') + (android ? '' : stewardIphone);
+  const leaders = leadersBody ? fold('leaders', 'For church leaders', leadersBody) : '';
   const main = ios
     ? '<section class="card"><h2>TrinityOne for iPhone</h2><p class="blurb">' + E(APK_BLURBS['trinityone.apk']) + '</p>' + iphoneSteps + '</section>'
       + leaders
