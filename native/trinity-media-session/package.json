@@ -1,0 +1,11 @@
+{
+  "name": "@trinityone/media-session",
+  "version": "4.0.0-trinityone.1",
+  "private": true,
+  "description": "Lock-screen, notification and Bluetooth audio controls plus the mediaPlayback foreground service (Android). Vendored from @jofr/capacitor-media-session 4.0.0 and patched; a local Capacitor plugin tracked in git and pulled into the gitignored android/ project by `npx cap sync android` (scripts/sync-web.sh). See NOTICE at the repo root.",
+  "license": "GPL-3.0-or-later",
+  "files": ["android/src/main/", "android/build.gradle", "LICENSE"],
+  "capacitor": {
+    "android": { "src": "android" }
+  }
+}

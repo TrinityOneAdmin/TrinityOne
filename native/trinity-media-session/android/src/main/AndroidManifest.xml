@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vendored from @jofr/capacitor-media-session 4.0.0 (GPL-3.0-or-later; see ../../../LICENSE and the repo's NOTICE).
+  MODIFIED by TrinityOne, 2026-11-18:
+   · FOREGROUND_SERVICE_MEDIA_PLAYBACK: targetSdk 34 refuses a mediaPlayback foreground service without it (Android 14+).
+   · the service is exported="false" (plan P4). The MediaButtonReceiver stays, and stays exported: every notification
+     button is a PendingIntent built by MediaButtonReceiver.buildMediaButtonPendingIntent, which returns null when no
+     receiver component exists, so removing it would kill every button. It reaches our own non-exported service.
+  The console (steward) APK builds from the same android/ project, so it carries this service and these permissions
+  too; nothing there starts it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <application>
+        <service
+            android:name=".MediaSessionService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true" >
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

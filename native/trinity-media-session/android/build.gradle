@@ -1,0 +1,54 @@
+// Lock-screen / notification / Bluetooth controls and the mediaPlayback foreground service, as a local Capacitor
+// plugin (native/trinity-media-session). Vendored from @jofr/capacitor-media-session 4.0.0 (GPL-3.0-or-later) and
+// patched: see the plan TrinityOne-internal/PLAN-AUDIO-PLAYBACK-FIXES-2026-11-18.html and the repo's NOTICE.
+// Laid out like native/trinity-widget/android/build.gradle. One new Maven dependency: androidx.media:media:1.6.0
+// (Apache-2.0), which upstream already used.
+ext {
+    androidxCoreVersion = project.hasProperty('androidxCoreVersion') ? rootProject.ext.androidxCoreVersion : '1.12.0'
+}
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.1'
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace "io.github.jofr.capacitor.mediasessionplugin"
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 34
+    defaultConfig {
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 22
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 34
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    lintOptions {
+        abortOnError false
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+    implementation "androidx.core:core:$androidxCoreVersion"
+    implementation "androidx.media:media:1.6.0"
+}

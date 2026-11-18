@@ -12,6 +12,10 @@ ios/
 # output stays ignored.
 !/native/trinity-widget/android/
 /native/trinity-widget/android/build/
+# …and the vendored lock-screen controls plugin (native/trinity-media-session, GPL-3.0-or-later, see NOTICE), on the
+# same pattern. Without this exception `git add` silently drops its Java.
+!/native/trinity-media-session/android/
+/native/trinity-media-session/android/build/
 *.apk
 dist/
 *.log

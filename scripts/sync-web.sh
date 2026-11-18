@@ -100,6 +100,11 @@ if [ -d "$ROOT/android" ]; then
     mkdir -p "$ROOT/node_modules/@trinityone"
     ln -s ../../native/trinity-widget "$ROOT/node_modules/@trinityone/widget"
   fi
+  # The same for the vendored lock-screen controls plugin (native/trinity-media-session, "file:" in package.json).
+  if [ -d "$ROOT/native/trinity-media-session" ] && [ ! -e "$ROOT/node_modules/@trinityone/media-session" ]; then
+    mkdir -p "$ROOT/node_modules/@trinityone"
+    ln -s ../../native/trinity-media-session "$ROOT/node_modules/@trinityone/media-session"
+  fi
   npx cap sync android
   # WebView debugging is now controlled by the Gradle BUILD VARIANT, not by the Capacitor config.
   # MainActivity overrides setWebContentsDebuggingEnabled() at runtime using BuildConfig.WEB_DEBUG:
