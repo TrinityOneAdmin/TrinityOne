@@ -374,7 +374,7 @@ test('re-seat — the verbatim carry keeps the OLD key on leaders/members; the s
   assert.deepEqual([before.leaders, before.members], [[oldK.pub, other], [other, oldK.pub]], 'the pre-block carry was not verbatim — a refused block would leave changed groups');
   assert.equal(JSON.stringify(before).includes(newK.pub), false, 'a group names the new key before any block');
   const sw = await eng._swapKeyInChurchGroups(r, oldK.pub, newK.pub);
-  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [], other: [] });
+  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [], other: [], unchecked: [] });
   const after = JSON.parse((await churchCopy(GROUP_D + g)).content);
   assert.deepEqual(after.leaders, [newK.pub, other], 'the new key did not take the old one’s place on leaders');
   assert.deepEqual(after.members, [other, newK.pub], 'the new key did not take the old one’s place on members');
@@ -413,10 +413,10 @@ test('N1 — the swap never re-saves the church’s copy over ANOTHER steward’
   const sw = await eng._swapKeyInChurchGroups(r1, oldK.pub, newK.pub);
   assert.equal(eng.sent.slice(sentBefore).length, 0, 'the church’s older copy was re-saved over another steward’s newer edit');
   // L1 (a): left alone, but SAID — that newer copy still names the old, blocked key
-  assert.deepEqual(sw, { swapped: [], failed: [], other: ['the group “old”'] }, 'a group another steward changed, still naming the old key, was skipped silently');
+  assert.deepEqual(sw, { swapped: [], failed: [], other: ['the group “old”'], unchecked: [] }, 'a group another steward changed, still naming the old key, was skipped silently');
 });
 
-test('L1 (b) / L2 — a relay that does not answer: the group is listed as failed and nothing is re-saved', async () => {
+test('L1 (b) / L2 — a relay that does not answer: the group is listed as UNCHECKED and nothing is re-saved', async () => {
   const oldK = await newSteward(); const newK = H.key();
   const eng0 = owner(); await setRoster(eng0, [oldK.pub], { [oldK.pub]: ['content'] });
   const g = cp.slice(0, 16) + '-swapdead';
@@ -425,7 +425,8 @@ test('L1 (b) / L2 — a relay that does not answer: the group is listed as faile
     const eng = owner(X, { relays: () => urls });
     const sw = await eng._swapKeyInChurchGroups({ carried: [], superseded: [GROUP_D + g] }, oldK.pub, newK.pub);
     assert.equal(eng.sent.length, 0, 'a swap was published although not every relay answered (' + urls.length + ' relays)');
-    assert.equal(sw.failed.length, 1, 'a group was skipped SILENTLY when ' + (urls.length === 1 ? 'no relay' : 'one relay') + ' answered: ' + JSON.stringify(sw));
+    assert.equal(sw.unchecked.length, 1, 'a group was skipped SILENTLY when ' + (urls.length === 1 ? 'no relay' : 'one relay') + ' answered: ' + JSON.stringify(sw));
+    assert.deepEqual(sw.failed, [], 'an UNCHECKED group was reported as one they were known to be on (round 6)');
     assert.deepEqual(sw.swapped, []);
   }
 });
@@ -439,6 +440,62 @@ test('nit (i) — the swap’s copy is strictly newer than a FUTURE-dated church
   const pub2 = churchSent(eng, GROUP_D + g).at(-1);
   assert.ok(pub2 && pub2.created_at > C.created_at, 'the swapped copy is not strictly newer than the copy it replaces: ' + JSON.stringify(sw));
   assert.deepEqual(JSON.parse((await churchCopy(GROUP_D + g)).content).leaders, [newK.pub]);
+});
+
+// ══ ROUND 6: care-team lists (owner answer j) and the swap's bounded publish ══════════════════════════════════════════
+const CARETEAM_D = 'trinityone/careteam:';
+async function careTeamCase({ capsAtRemoval, minors = { known: true, list: [] } }) {
+  const eng = owner(); const dana = await newSteward(); const x = H.key().pub, kid = H.key().pub;
+  eng.window.Steward.readMinors = async () => minors;   // the children list as Steward.readMinors would read it off the relay
+  await setRoster(eng, [dana.pub], { [dana.pub]: ['care', 'content'] });   // the relay takes her list only while she holds care
+  await sleep(1100);   // careteam:<cp> is one document per church: theirs must be newer than any church copy an earlier test left
+  await mustPut(raw(dana, CARETEAM_D + cp, { pubs: [x, kid] }, { at: Math.floor(Date.now() / 1000) }));
+  await setRoster(eng, [dana.pub], { [dana.pub]: capsAtRemoval });          // …then the owner sets what she holds at removal
+  const r = await eng._removeStewardKeeping(dana.pub);
+  assert.ok(r.wrote);
+  return { r, sent: churchSent(eng, CARETEAM_D + cp), x, kid };
+}
+test('answer (j) — a care-team list whose author no longer held Care when removed is NOT carried, and is listed', async () => {
+  const { r, sent } = await careTeamCase({ capsAtRemoval: ['content'] });
+  assert.equal(sent.length, 0, 'the care-team list of a steward without Care was switched back on under the church');
+  assert.deepEqual(r.carry.notCarried.filter(n => n.d === CARETEAM_D + cp).map(n => n.why), ['no-care']);
+  assert.match(r.carry.notCarried.find(n => n.d === CARETEAM_D + cp).label, /no longer had the Care permission/);
+});
+test('answer (j) — a care-team list whose author DID hold Care is carried', async () => {
+  const { r, sent, x, kid } = await careTeamCase({ capsAtRemoval: ['care', 'content'], minors: { known: true, list: [] } });
+  assert.equal(sent.length, 1, 'not carried: ' + JSON.stringify(r.carry));
+  assert.deepEqual(JSON.parse(sent[0].content).pubs, [x, kid], 'with no children, the list is carried as written');
+});
+test('never a child — a carried care-team list loses anyone the children list names; an unreadable children list = not carried', async () => {
+  const eng = owner(); const dana = await newSteward(); const x = H.key().pub, kid = H.key().pub;
+  await setRoster(eng, [dana.pub], { [dana.pub]: ['care'] });
+  await sleep(1100);
+  await mustPut(raw(dana, CARETEAM_D + cp, { pubs: [x, kid] }, { at: Math.floor(Date.now() / 1000) }));
+  eng.window.Steward.readMinors = async () => ({ known: true, list: [kid] });
+  const r = await eng._carryOverStewardDocs(dana.pub);
+  const sent = churchSent(eng, CARETEAM_D + cp);
+  assert.equal(sent.length, 1, JSON.stringify(r));
+  assert.deepEqual(JSON.parse(sent[0].content).pubs, [x], 'a child was carried onto the care team');
+  const eng2 = owner(); const eve = await newSteward();
+  await setRoster(eng2, [eve.pub], { [eve.pub]: ['care'] });
+  await sleep(1100);
+  await mustPut(raw(eve, CARETEAM_D + cp, { pubs: [x, kid] }, { at: Math.floor(Date.now() / 1000) }));
+  eng2.window.Steward.readMinors = async () => ({ known: false, list: [] });
+  const r2 = await eng2._carryOverStewardDocs(eve.pub);
+  assert.equal(churchSent(eng2, CARETEAM_D + cp).length, 0, 'carried although the children list could not be read');
+  assert.deepEqual(r2.notCarried.filter(n => n.d === CARETEAM_D + cp).map(n => n.why), ['children-unread']);
+});
+test('nit 5 (round 6) — a swap re-save that never answers is bounded, and the group is listed failed', async () => {
+  const eng = owner(); const oldK = await newSteward(); const newK = H.key();
+  await setRoster(eng, [oldK.pub], { [oldK.pub]: ['content'] });
+  const g = cp.slice(0, 16) + '-swaphang';
+  await mustPut(raw(church, GROUP_D + g, { name: 'Hangs', leaders: [oldK.pub] }, { tagChurch: false }));
+  eng.SWAP_PUBLISH_MS = 400;
+  eng.publish = () => new Promise(() => {});   // a relay that takes the event and never answers
+  const t0 = Date.now();
+  const sw = await eng._swapKeyInChurchGroups({ carried: [], superseded: [GROUP_D + g] }, oldK.pub, newK.pub);
+  assert.ok(Date.now() - t0 < 5000, 'the swap waited on a publish that never answers');
+  assert.deepEqual(sw.failed, ['the group “Hangs”']);
 });
 
 test('nit 5 — a steward copy far ahead of the clock (the re-sign cannot catch up) is listed as "newer", not "tie"', async () => {

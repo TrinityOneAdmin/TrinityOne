@@ -69,7 +69,7 @@ function reseater(refuse = [], { steward = false } = {}) {
     // recorded in call order with the setters, so its place before the block is measured, not assumed (2026-11-18)
     _carryOverStewardDocs: async (pk, o) => { calls.push({ name: 'carry', args: [pk, o] }); return { carried: [{ d: 'trinityone/group:g', label: 'a group', ev: { content: '{}', tags: [] } }], notCarried: [], superseded: [], refused: '' }; },
     // the re-seat's second half: the new key takes the old one's place in the carried group definitions — after the block
-    _swapKeyInChurchGroups: async (carry, from, to) => { calls.push({ name: 'swap', args: [carry, from, to] }); return { swapped: ['a group'], failed: [] }; },
+    _swapKeyInChurchGroups: async (carry, from, to) => { calls.push({ name: 'swap', args: [carry, from, to] }); return { swapped: ['a group'], failed: ['a failed group'], other: ['a group another steward changed'], unchecked: ['a group no relay showed'] }; },
   };
   Steward.isOrWasSteward = (pk) => steward && String(pk).toLowerCase() === String(oldK).toLowerCase();
   const names = Object.keys(scope);
@@ -208,6 +208,9 @@ test('block-old on a STEWARD’s key: verbatim carry BEFORE the block, the key s
   const sw = r.calls.find(x => x.name === 'swap');
   assert.deepEqual([sw.args[1], sw.args[2]], [oldK, newK]);
   assert.ok(out.carry && out.carry.carried.length === 1, 'the result does not report what the carry kept, so the screen cannot say it');
+  // every list the swap answers reaches the screen (round 6: swapOther had no test)
+  assert.deepEqual([out.carry.swapped, out.carry.swapFailed, out.carry.swapOther, out.carry.swapUnchecked],
+    [['a group'], ['a failed group'], ['a group another steward changed'], ['a group no relay showed']], 'a swap result did not reach carry: ' + JSON.stringify(out.carry));
 });
 test('a REFUSED block on a steward’s key: no key swap at all, and the error is the honest "nothing was changed"', async () => {
   const r = reseater(['setBlocked'], { steward: true });

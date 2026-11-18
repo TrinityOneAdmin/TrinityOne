@@ -21351,6 +21351,19 @@ zoo`.split("\n");
         content = JSON.stringify(g);
       }
     }
+    if (!dead && d.startsWith("trinityone/careteam:")) {
+      let body;
+      try {
+        body = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (!body || typeof body !== "object" || !Array.isArray(body.pubs)) return { skip: "unreadable" };
+      const m = window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
+      if (!m || !m.known) return { skip: "children-unread" };
+      const minors = new Set((m.list || []).map((p) => String(p || "").toLowerCase()));
+      content = JSON.stringify({ ...body, pubs: body.pubs.filter((p) => !minors.has(String(p || "").toLowerCase())) });
+    }
     if (!dead && d.startsWith("trinityone/care:")) {
       let body;
       try {
@@ -21447,6 +21460,9 @@ zoo`.split("\n");
       setTimeout(() => finish(false), ms);
     });
     const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
+    const onRoster = [..._careRoster].some((p) => String(p).toLowerCase() === who);
+    const capEntry = Object.keys(_stewardCaps || {}).find((k) => k.toLowerCase() === who);
+    const heldCare = onRoster && (capEntry == null || !Array.isArray(_stewardCaps[capEntry]) || _stewardCaps[capEntry].some((c) => String(c).toLowerCase() === "care"));
     const mine = /* @__PURE__ */ new Map();
     const keepMine = (e) => {
       if (!e || e.kind !== 30078 || String(e.pubkey).toLowerCase() !== who) return;
@@ -21522,6 +21538,10 @@ zoo`.split("\n");
           else notC(d, rivals.some((x) => x.at === (S.created_at || 0)) ? "tie" : "newer", label);
           continue;
         }
+        if (d.startsWith("trinityone/careteam:") && !heldCare) {
+          notC(d, "no-care", "the care team list (they no longer had the Care permission)");
+          continue;
+        }
         jobs.push((async () => {
           let tmpl = null;
           try {
@@ -21565,9 +21585,10 @@ zoo`.split("\n");
     }
     return out;
   }
+  var SWAP_PUBLISH_MS = 8e3;
   async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
-    const out = { swapped: [], failed: [], other: [] };
+    const out = { swapped: [], failed: [], other: [], unchecked: [] };
     if (!from || !to || from === to || !carry || !sk || !pub) return out;
     const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
     const labelOf = /* @__PURE__ */ new Map();
@@ -21628,7 +21649,7 @@ zoo`.split("\n");
       const ev = newest.get(d);
       const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
       if (!whole) {
-        out.failed.push(label);
+        out.unchecked.push(label);
         continue;
       }
       if (!ev || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
@@ -21665,7 +21686,11 @@ zoo`.split("\n");
           await new Promise((r) => setTimeout(r, 1e3));
           signed = feChurch({ ...tmpl, created_at: now() }, sk);
         }
-        ok = (signed.created_at || 0) > (ev.created_at || 0) ? await publish(signed) : false;
+        let tm = null;
+        ok = (signed.created_at || 0) > (ev.created_at || 0) ? await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+          tm = setTimeout(() => r(false), SWAP_PUBLISH_MS);
+        })]) : false;
+        if (tm) clearTimeout(tm);
       } catch (e) {
         ok = false;
       }
@@ -26358,10 +26383,12 @@ zoo`.split("\n");
             carryOld.swapped = sw.swapped;
             carryOld.swapFailed = sw.failed;
             carryOld.swapOther = sw.other;
+            carryOld.swapUnchecked = sw.unchecked;
           } catch (e) {
             carryOld.swapped = [];
-            carryOld.swapFailed = ["some of the groups they were on"];
+            carryOld.swapFailed = [];
             carryOld.swapOther = [];
+            carryOld.swapUnchecked = ["the groups they may have been on"];
           }
         }
       }

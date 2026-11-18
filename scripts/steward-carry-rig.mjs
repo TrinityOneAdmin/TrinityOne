@@ -138,7 +138,7 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   scope[ssSigner] = finalizeEvent;
   const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who) {',
     'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {', 'function _dropJustRemoved(list, rosterAt) {', 'async function _swapKeyInChurchGroups(carry, oldPk, newPk) {'].map(a => fnBody(STEWARD, a, a));
-  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = '].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
+  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = '].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
   const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {'].map(a => fnBody(STEWARD, '    ' + a, a).trim());
