@@ -2791,11 +2791,14 @@ const FULL_SYNC_S = 86400;         // at most one full (no-since) catch-all sync
 const HUB_SAVE_CAP = 3000000;      // don't persist a buffer bigger than ~3MB — drop the cursor instead
 const DOCSHUB_KEY = 'trinityone.docshub.';   // + churchPubHex -> { since, fullAt, events }
 const MEMHUB_KEY = 'trinityone.memhub.';     // + churchPubHex -> { since, fullAt, members }
-// The saved hub's version. A hub saved WITHOUT it (every phone before 2026-11-18) loads with fullAt = 0, so its next
-// open is one full fetch: phones left with a stamped-but-never-received daily full (the cancelled-fetch bug, see
-// _hubEosed) get their older documents on first launch instead of within 24 h. Written on every save, so it costs
-// one full per church per phone, once (a downgrade then re-upgrade costs one more). The old fields are unchanged.
-const HUB_V = 2;
+// SAVED-HUB VERSION 2 (`v: 2` in both saves, read in both loaders, _docsHub and _memHub). A hub saved WITHOUT it
+// (every phone before 2026-11-18) loads with fullAt = 0, so its next open is one full fetch: phones left with a
+// stamped-but-never-received daily full (the cancelled-fetch bug, see _hubEosed) get their older documents on first
+// launch instead of within 24 h. Written on every save, so it costs one full per church per phone, once (a downgrade
+// then re-upgrade costs one more). The old fields are unchanged.
+// A LITERAL, not a module constant, on purpose: tests lift _memHub/_docsHub out of the bundle by name, and a new
+// top-level name inside them throws inside the loader's try — the saved hub is silently dropped and those tests then
+// fail for a reason that has nothing to do with what they test (measured: three DM-routing files on 2026-11-18).
 const _dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
 const _slimEvt = (e) => ({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content });   // drop sig — the relay already verified it
 const _hubCursor = (hub, e) => { const t = e.created_at || 0; if (t > hub.since && t <= Math.floor(Date.now() / 1000) + FUTURE_SKEW) { hub.since = t; hub.dirty = true; } };
@@ -3277,7 +3280,7 @@ function _docsHubSaveNow(hub) {
   hub.dirty = false;
   const key = DOCSHUB_KEY + hub.cp;
   try {
-    const s = JSON.stringify({ v: HUB_V, since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
+    const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
     if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }   // too big to trust a cursor over
     localStorage.setItem(key, s);
   } catch { try { localStorage.removeItem(key); } catch {} }
@@ -3291,7 +3294,7 @@ function _docsHub(cp) {
   try {
     const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || 'null');
     if (raw && Array.isArray(raw.events)) {
-      hub.since = raw.since || 0; hub.fullAt = (raw.v || 0) >= HUB_V ? (raw.fullAt || 0) : 0;   // see HUB_V
+      hub.since = raw.since || 0; hub.fullAt = (raw.v || 0) >= 2 ? (raw.fullAt || 0) : 0;   // saved-hub version 2, see MEMHUB_KEY
       for (const e of raw.events) { if (e && e.pubkey && Array.isArray(e.tags)) _hubBufSet(hub, e.pubkey + '|' + _dtag(e), e); }
     }
   } catch {}
@@ -3490,7 +3493,7 @@ function _memHubSaveNow(hub) {
   hub.dirty = false;
   const key = MEMHUB_KEY + hub.cp;
   try {
-    const s = JSON.stringify({ v: HUB_V, since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
+    const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
     if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }
     localStorage.setItem(key, s);
   } catch { try { localStorage.removeItem(key); } catch {} }
@@ -3504,7 +3507,7 @@ function _memHub(cp) {
   let seeded = false;
   try {
     const raw = JSON.parse(localStorage.getItem(MEMHUB_KEY + cp) || 'null');
-    if (raw && Array.isArray(raw.members)) { hub.since = raw.since || 0; hub.fullAt = (raw.v || 0) >= HUB_V ? (raw.fullAt || 0) : 0; for (const m of raw.members) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } seeded = true; }
+    if (raw && Array.isArray(raw.members)) { hub.since = raw.since || 0; hub.fullAt = (raw.v || 0) >= 2 ? (raw.fullAt || 0) : 0; for (const m of raw.members) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } seeded = true; }
   } catch {}
   if (!seeded) { for (const m of loadMembersCache(cp)) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } }   // legacy roster cache: instant paint, no cursor (first sync is full)
   return hub;
