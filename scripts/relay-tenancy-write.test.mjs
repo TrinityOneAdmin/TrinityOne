@@ -339,14 +339,16 @@ test('CONTROL: …and can answer the safety roll-call of BOTH', async () => {
     'a dual member cannot mark themselves safe to B');
 });
 
-test('CONTROL: a church can still post in its own group, and so can a network it declared', async () => {
+test('CONTROL: a church can still post in its own group; the network it declared can no longer (N1)', async () => {
   // Scoping to "effective member" ALONE would refuse the church key itself and its network — neither appears in
   // any member roster. The write side must mirror churchReader(): the church, its network, its stewards, or an
   // effective member.
   assert.equal((await publish(pub, chat(A, OPEN_GID, 'the church itself posts')))[0], true,
     'church A can no longer post in its own group');
-  assert.equal((await publish(pub, chat(netA, OPEN_GID, 'the network posts')))[0], true,
-    'a network A declared can no longer post in A’s group');
+  // N1 (2026-10-21): this used to assert the network key CAN post in A's group. A joined network key now has no
+  // authority over the church's content, so the CONTROL for the network half is that it is refused.
+  assert.equal((await publish(pub, chat(netA, OPEN_GID, 'the network posts')))[0], false,
+    'a network A declared posted into A’s group -- churchWriter must carry no networkOf (N1)');
 });
 
 // S1b — FOUND BY THE CONTROL ABOVE, 2026-07-30, and it was not in the audit.
@@ -369,4 +371,18 @@ test('S1b: a network declared by A has NO authority in B’s group', async () =>
   assert.equal(attack[0], false,
     'a key that church A declared as its network can post into church B’s group. Network authority must be ' +
     'scoped to the church that declared it — the relay-wide NETWORKS union is not an authority anywhere.');
+});
+
+// LIVENESS CONTROL (audit 2026-11-18). A declared network key can no longer write or read church content a stranger cannot (tested: a-declared-network-key-is-a-stranger-for-everything-else), so there is no write differential to
+// prove netA's declaration took. This does: careAdmin() admits any rostered key EXCEPT a network key of that church. Last in the file on
+// purpose, because it rewrites A's care-team roster. Sabotage: delete `else s.add(np)` in note()'s NETWORK_D branch -> netA reads minors:.
+test('CONTROL: netA is on A\'s care team and is STILL refused minors:, while the ordinary care-team member is served it (the join is live)', async () => {
+  const kid = K(), md = MINORS_D + A.pub;
+  assert.equal((await publish(pub, doc(A, MINORS_D + A.pub, { pubkeys: [kid.pub] }, [['church', A.pub]], now() + 60)))[0], true, 'A could not publish its children list');
+  assert.equal((await publish(pub, doc(A, ROSTER_D + TEAM, { people: [{ pub: alice.pub }, { pub: netA.pub }] }, [['church', A.pub]], now() + 61)))[0], true, 'A could not rewrite its care team');
+  await sleep(250);
+  const asAlice = await connect(); const a = await reqCollect(asAlice, 'l1', { kinds: [30078], '#d': [md] }, alice.sk); asAlice.close();
+  const asNet = await connect(); const n = await reqCollect(asNet, 'l2', { kinds: [30078], '#d': [md] }, netA.sk); asNet.close();
+  assert.equal(a.length, 1, 're-anchor: the ordinary care-team member cannot read minors: -- the roster fixture did not take');
+  assert.equal(n.length, 0, 'netA, on A\'s care team, read minors: -- the join was never recorded (networkOf false) or careAdmin lost its refusal');
 });

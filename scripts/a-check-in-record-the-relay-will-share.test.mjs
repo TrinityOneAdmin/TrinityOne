@@ -280,7 +280,7 @@ before(async () => {
   // and that group's roster names the person. careAdmin() is the grant being taken away here, so a fixture
   // that only *claimed* to make one would be testing nothing.
   await send(w, doc(church, D.MEALS_SETTINGS, { enabled: true, adminGroupId: CARE_TEAM }));
-  await send(w, doc(church, D.ROSTER + CARE_TEAM, { pubs: [careBoss.pub] }));
+  await send(w, doc(church, D.ROSTER + CARE_TEAM, { pubs: [careBoss.pub, netKey.pub] }));   // the network key is listed too (audit 2026-11-18): careAdmin() refuses it ONLY if networkOf() is true, which makes the control below depend on the join
   // A NETWORK KEY, declared BY THE CHURCH OVER ITSELF — the only way one can be declared (note()'s NETWORK_D
   // branch requires CHURCH_PUBS.has(e.pubkey)).
   await send(w, doc(church, D.NETWORK + netKey.pub, { joined: now() }));
@@ -633,9 +633,12 @@ test('FIXTURE CONTROL: the roster, the care team, the network and the parent map
   assert.equal(one(await asks(careBoss, { kinds: [30078], '#d': [minorsDoc] }), minorsDoc), 1,
     'careBoss is not a care-team admin on this relay — careAdmin() needs meals-settings AND the named ' +
     'group\'s roster, and one of the two did not take');
-  assert.equal(one(await asks(netKey, { kinds: [30078], '#d': [minorsDoc] }), minorsDoc), 1,
-    'the network key was not recorded — networkOf() is false, so "the network still reads it" below would ' +
-    'be measuring nothing');
+  // WALL (2026-11-18, owner decision): the network key no longer reads `minors:`, and (isMember narrowing) no longer writes anything a
+  // stranger cannot, so neither can prove it was recorded. What is left to show is that the church's declaration is stored and served
+  // back to the church; non-vacuity of the refusals is proved by per-door sabotage (re-add networkOf at the door), see the commit.
+  assert.equal(one(await asks(church, { kinds: [30078], authors: [church.pub], '#d': [D.NETWORK + netKey.pub] }), D.NETWORK + netKey.pub), 1,
+    'the church\'s network declaration was not stored -- the network link never formed, so "the network is refused" below would be measuring nothing');
+  assert.deepEqual(await asks(netKey, { kinds: [30078], '#d': [minorsDoc] }), [], 'the network key, listed on the care team beside careBoss (who reads minors: above), READ `minors:` -- the join was never recorded (networkOf false) or the wall is gone');
   assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [minorsDoc] }), [],
     're-anchor: an ordinary member reads `minors:`, so the two controls above prove nothing');
 });
@@ -690,13 +693,15 @@ test('…AND A TREASURER IS REFUSED THE HELPER ENVELOPE AND THE CLEARANCE', asyn
   assert.equal(one(await asks(church, { kinds: [30078], '#d': [perm] }), perm), 1, 'the church lost its own clearance document');
 });
 
-test('WHO MUST KEEP IT, EVERY ONE: church, network, safeguarding steward, legacy steward, helper, guardian', async () => {
+test('WHO MUST KEEP IT, EVERY ONE: church, safeguarding steward, helper, guardian -- and the network key is REFUSED (wall, 2026-11-18)', async () => {
   // The other half of the narrowing, and the half that makes it safe. A gate that closed on the treasurer and
   // also on the crèche is a worse outcome than the bug — the register is what a church runs its Sunday from.
   await putShipped({ id: 'narrow-2', childName: 'A Child', code: '2002', session: S_NOW, guardians: [gina.pub] });
   await sleep(200);
   const dtag = D.CHECKIN + 'narrow-2';
-  for (const [who, name] of [[church, 'THE CHURCH KEY'], [netKey, 'THE NETWORK KEY THE CHURCH DECLARED'],
+  assert.deepEqual(await asks(netKey, { kinds: [30078], '#d': [dtag] }), [],
+    'THE NETWORK KEY THE CHURCH DECLARED WAS SERVED THE CHILDREN\'S REGISTER (owner decision 2026-11-18: none of the check-in register)');
+  for (const [who, name] of [[church, 'THE CHURCH KEY'],
                              [sgLead, 'THE SAFEGUARDING STEWARD'],
                              [ada, 'THE IN-WINDOW CLEARED HELPER'], [gina, 'THE GUARDIAN THE RECORD NAMES']])
     assert.equal(one(await asks(who, { kinds: [30078], '#d': [dtag] }), dtag), 1,
@@ -795,7 +800,8 @@ test('A RECORD THE CHURCH DID NOT WRITE — the one that proves checkinReader an
   assert.equal(ok, true, 'fixture: the relay refused the in-window helper\'s own check-in record: ' + msg);
   await sleep(200);
   const dtag = D.CHECKIN + 'byhelper-1';
-  for (const [who, name] of [[church, 'THE CHURCH KEY'], [netKey, 'THE NETWORK KEY'], [sgLead, 'THE SAFEGUARDING STEWARD'],
+  assert.deepEqual(await asks(netKey, { kinds: [30078], '#d': [dtag] }), [], 'THE NETWORK KEY WAS SERVED A HELPER-AUTHORED CHECK-IN ROW (wall, 2026-11-18)');
+  for (const [who, name] of [[church, 'THE CHURCH KEY'], [sgLead, 'THE SAFEGUARDING STEWARD'],
                              [gina, 'THE GUARDIAN THE RECORD NAMES']])
     assert.equal(one(await asks(who, { kinds: [30078], '#d': [dtag] }), dtag), 1,
       name + ' CANNOT READ A ROW ITS OWN CRECHE VOLUNTEER WROTE. The register is one document per child and ' +
