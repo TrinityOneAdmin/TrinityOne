@@ -314,7 +314,7 @@ test('LOW 1 — Reconnect with "taken" on a steward’s old key shows progress, 
   assert.equal(asked.length, 1, 'the re-seat was not asked for');
   assert.equal(asked[0].opts.blockOld, true);
   assert.match(reads(draw(C, props)), /Reconnecting… keeping what they set up/, 'no progress shown while the carry runs (up to ~20 s)');
-  d.res({ carry: { carried: [{ d: 'trinityone/group:g', label: 'the group “Youth”' }], notCarried: [{ d: 'n', why: 'time', label: 'a photo setting' }], superseded: [], swapFailed: ['the group “Choir”'] }, blockedOld: true, failed: [] });
+  d.res({ carry: { carried: [{ d: 'trinityone/group:g', label: 'the group “Youth”' }], notCarried: [{ d: 'n', why: 'time', label: 'a photo setting' }], superseded: [], swapped: ['the group “Youth”'], swapFailed: ['the group “Choir”'] }, blockedOld: true, failed: [] });
   await flush();
   const said = reads(draw(C, props));
   assert.match(said, /These couldn’t be kept and may change back: a photo setting\./, 'the result of the carry is not said');
@@ -342,5 +342,52 @@ test('nit 7 — unticking a SECOND steward’s last box while the first is still
   d2.res({ wrote: true, carry: { carried: [], notCarried: [], superseded: [] }, next: [DELEGATE, OTHER_STEW] });
   await flush();
   assert.doesNotMatch(reads(p.view()), /Removing their permissions…/, 'an indicator stayed after both finished');
+});
+
+// ══ ROUND 4 (audit of round 3) ══════════════════════════════════════════════════════════════════════════════════════
+async function reconnectDone(carry) {
+  const OLD = '3'.repeat(64), NEW = '4'.repeat(64);
+  const steward = { actingChurch: '', isOrWasSteward: (pk) => pk === OLD, parseMemberKey: (t) => (t === 'new-code' ? NEW : null),
+    reseatMember: () => Promise.resolve({ carry, blockedOld: true, failed: [] }) };
+  const g = { ...common(), CkModal: (p) => (p && p.children) || null, StewQRScanner: () => null, stewOnPhoneApp: () => false,
+    window: { Steward: steward, useStewardSafeguard: () => ({ minors: [], approved: [], expiry: {}, minorsKnown: true }), useStewardGuardians: () => ({ links: {}, closed: {} }),
+      useStewardBlocked: () => [], useStewardRosters: () => [], useStewardRotas: () => [], useMealsSettings: () => ({}), useStewardReseats: () => [] } };
+  const { C, draw } = await compiled('ReseatModal', g);
+  const props = { member: OLD, memberName: 'Ruth', realName: '', isMinor: false, admittedList: [], onClose() {} };
+  let tree = draw(C, props);
+  find(tree, n => n && n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: true } });
+  tree = draw(C, props);
+  find(tree, n => n && n.type === 'input' && n.props.type !== 'checkbox')[0].props.onChange({ target: { value: 'new-code' } });
+  await press(draw(C, props), /Yes — this is Ruth/);
+  await flush();
+  return reads(draw(C, props));
+}
+test('N3 — "Groups they set up now name their new key" only when at least one group was actually swapped', async () => {
+  const none = await reconnectDone({ carried: [{ d: 'trinityone/group:g', label: 'the group “Youth”' }], notCarried: [], superseded: [], swapped: [], swapFailed: ['the group “Youth”'] });
+  assert.doesNotMatch(none, /Groups they set up now name their new key/, 'claimed the groups moved when every swap failed');
+  assert.match(none, /if they were in any invite-only groups/, 'the hand step says "other" although no group was moved');
+  const some = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: ['the group “Youth”'], swapFailed: [] });
+  assert.match(some, /Groups they set up now name their new key\./, 'a group moved on a RETRIED re-seat (superseded, not carried) is not said');
+});
+
+test('N2 — a second untick-all’s result does not wipe the first one’s "couldn’t be kept" list; each names its steward', async () => {
+  const d1 = deferred(), d2 = deferred();
+  const r = panelRig({ keep: (pk) => (pk === DELEGATE ? d1.p : d2.p), caps: { [DELEGATE]: ['care'], [OTHER_STEW]: ['content'] } });
+  r.globals.window.Steward.stewardLabels = () => ({ [DELEGATE]: 'Tom Ridley', [OTHER_STEW]: 'Ann Other' });
+  const p = await openPanel(r);
+  await press(p.view(), /What this helper may do/, { which: 0 });
+  find(p.view(), n => n && n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: false } });
+  await flush();
+  await press(p.view(), /What this helper may do/, { which: 1 });
+  const boxes = find(p.view(), n => n && n.type === 'input' && n.props.type === 'checkbox');
+  boxes[boxes.length - 1].props.onChange({ target: { checked: false } });
+  await flush();
+  d1.res({ wrote: true, carry: { carried: [], notCarried: [{ d: 'x', why: 'time', label: 'a photo setting' }], superseded: [] }, next: [DELEGATE, OTHER_STEW] });
+  await flush();
+  d2.res({ wrote: true, carry: { carried: [{ d: 'y', label: 'a group' }], notCarried: [], superseded: [] }, next: [DELEGATE, OTHER_STEW] });
+  await flush();
+  const said = reads(p.view());
+  assert.match(said, /Tom Ridley: These couldn’t be kept and may change back: a photo setting\./, 'THE FIRST STEWARD’S NOT-KEPT LIST WAS WIPED by the second result');
+  assert.match(said, /Ann Other: Everything they set up stays as they left it/, 'the second result is not shown, or does not say whose it is');
 });
 

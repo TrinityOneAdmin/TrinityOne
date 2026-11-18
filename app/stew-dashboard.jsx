@@ -7949,9 +7949,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             : 'The phones of ' + res.childrenNotTold + ' of their children have not been told about the new key yet, so they can’t message each other until they have — open Members to send it again. '}</b> : null}
           {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
-          {res && res.carry && (res.carry.carried || []).some(c => String(c.d || '').startsWith('trinityone/group:')) ? 'Groups they set up now name their new key. ' : ''}
+          {res && res.carry && (res.carry.swapped || []).length ? 'Groups they set up now name their new key. ' : ''}
           {res && res.carry && (res.carry.swapFailed || []).length ? <b>{'Couldn’t put their new key on ' + res.carry.swapFailed.join(', ') + ' — open Groups and add them. '}</b> : null}
-          One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.carried || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
+          One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.swapped || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
           again. Ordinary groups need nothing — they are already back in those.
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
@@ -11393,18 +11393,22 @@ function DashStewardsPanel({ church }) {
     setGoneRemoval(s => { if (!s.size) return s; let ch = false; const n = new Set(s); for (const pk of n) if (!stewardSet.has(pk)) { n.delete(pk); ch = true; } return ch ? n : s; });
   }, [stewards]);
   const visibleStewards = stewards.filter(pk => !goneRemoval.has(pk));   // the board drops a row once its removal has landed
-  // WHAT THE CARRY-OVER KEPT (plan §3.7). Its own line beside the removal note, so a list of what could NOT be kept is
-  // never cleared with a confirmation that times out.
-  const [carryNote, setCarryNote] = React.useState(null);
+  // WHAT THE CARRY-OVER KEPT (plan §3.7). Its own lines beside the removal note, ONE PER STEWARD and each naming them, so a
+  // list of what could NOT be kept is never cleared by a confirmation — its own timing out, or another steward's result
+  // arriving (audit round 3, N2: a second untick-all used to overwrite the first one's list).
+  const [carryNotes, setCarryNotes] = React.useState({});   // pk -> { tone, text }
+  const setCarryNote = (pk, note) => setCarryNotes(m => { const n = { ...m }; if (note) n[pk] = note; else delete n[pk]; return n; });
+  const carryNoteOf = (pk, who, carry) => { const v = stewCarryNote(carry); return v ? { ...v, text: who + ': ' + v.text } : null; };
   // whose permissions are being cleared (untick-all) — see setCaps. A SET: the engine runs them one at a time anyway, so a
   // second steward's untick queues behind the first instead of silently doing nothing (audit round 2, nit).
   const [capsClearing, setCapsClearing] = React.useState(() => new Set());
   const capsClearOn = (pk, on) => setCapsClearing(s => { const n = new Set(s); if (on) n.add(pk); else n.delete(pk); return n; });
   React.useEffect(() => {   // "everything kept" is a confirmation, so a moment; a list of what was not kept stays
-    if (!carryNote || carryNote.tone !== 'ok') return undefined;
-    const t = setTimeout(() => setCarryNote(cur => (cur === carryNote ? null : cur)), 8000);
+    const oks = Object.entries(carryNotes).filter(([, v]) => v && v.tone === 'ok');
+    if (!oks.length) return undefined;
+    const t = setTimeout(() => setCarryNotes(m => { const n = { ...m }; for (const [pk, v] of oks) if (n[pk] === v) delete n[pk]; return n; }), 8000);
     return () => clearTimeout(t);
-  }, [carryNote]);
+  }, [carryNotes]);
   // WOULD-BE HELPERS STILL WAITING, and the record of the owner's answers — one hook, shared with the Overview banner
   // (useHelperRequests / pendingHelperRequests above), so the banner's count and this list are the same list.
   // markHandled(pk, at) records "the owner answered this person's request of time `at`" — on approve (add), remove, and
@@ -11465,10 +11469,10 @@ function DashStewardsPanel({ church }) {
     if (Array.isArray(list) && list.length === 0) {
       if (capsClearing.has(pk)) return;   // already clearing this one; the editor says so
       const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
-      const failed = (why) => setCarryNote({ tone: 'fail', text: why === 'roster-unknown'
+      const failed = (why) => setCarryNote(pk, { tone: 'fail', text: why === 'roster-unknown'
         ? 'Couldn’t change what ' + who + ' may do yet — this console hasn’t finished reading who your stewards are. Nothing was changed. Try again in a moment.'
         : 'Couldn’t remove ' + who + '’s permissions — the change didn’t save. Nothing was changed. Try again.' });
-      setCarryNote(null);
+      setCarryNote(pk, null);
       let p;
       try { p = Promise.resolve(window.Steward.removeStewardKeeping(pk, { capsOnly: true })); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
       capsClearOn(pk, true);
@@ -11476,7 +11480,7 @@ function DashStewardsPanel({ church }) {
         capsClearOn(pk, false);
         if (!r || r.refused) { failed(r && r.refused); return; }
         if (!r.wrote) { failed(''); return; }
-        setCarryNote(stewCarryNote(r.carry));
+        setCarryNote(pk, carryNoteOf(pk, who, r.carry));
       }, () => { capsClearOn(pk, false); failed(''); });
       return;
     }
@@ -11548,7 +11552,7 @@ function DashStewardsPanel({ church }) {
   const spKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
   const remove = (pk) => {
     if (pendingRemoval.has(pk)) return;   // already revoking this one — the control is spent until the write settles
-    setConfirmRemove(null); setRemoveNote(null); setCarryNote(null);
+    setConfirmRemove(null); setRemoveNote(null); setCarryNote(pk, null);
     dropOptimistic(pk);   // the row reads "Removing…" until the roster write lands; restored below if it did not (no false "removed")
     let next = stewards.filter(p => p !== pk);
     const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
@@ -11586,7 +11590,7 @@ function DashStewardsPanel({ church }) {
       if (outcome !== 'landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
       landed = true;
       landedRemoval(pk);   // the row leaves now, not before
-      setCarryNote(stewCarryNote(carried));
+      setCarryNote(pk, carryNoteOf(pk, who, carried));
       // TELL THE REMOVED HELPER (2026-11-05, helper-delegation). ONLY here, in the landed branch — never before
       // `settle` — because the relay stops serving them the stewards: roster the instant they are off it, so a
       // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>
@@ -11767,12 +11771,12 @@ function DashStewardsPanel({ church }) {
           <button onClick={() => setRemoveNote(null)} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}
-      {carryNote ? (
-        <div role={carryNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: carryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (carryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+      {Object.entries(carryNotes).map(([npk, carryNote]) => carryNote ? (
+        <div key={'carry:' + npk} role={carryNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: carryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (carryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
           <div style={{ flex: 1, minWidth: 0 }}>{carryNote.text}</div>
-          <button onClick={() => setCarryNote(null)} title="Dismiss" aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+          <button onClick={() => setCarryNote(npk, null)} title="Dismiss" aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
         </div>
-      ) : null}
+      ) : null)}
       {visibleStewards.length === 0
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No helpers yet.</div>
         : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{visibleStewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}
