@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — TrinityOne</title>
+<meta name="description" content="How TrinityOne handles your information, in plain English.">
+<style>
+  :root { --paper:#F4EEE2; --surface:#FFFDF8; --ink:#221C16; --ink-2:#6B6052; --line:rgba(34,28,22,.12); --clay:#C25A38; --clay-soft:#F3DECF; --sage-soft:#D8E6DC; --gold-tint:#F3E4C4; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:2rem; line-height:1.2; margin:0 0 4px; }
+  h2 { font-size:1.25rem; margin:40px 0 8px; padding-top:16px; border-top:1px solid var(--line); }
+  h3 { font-size:1.05rem; margin:20px 0 4px; }
+  p, li { margin:0 0 10px; }
+  ul { padding-left:22px; }
+  a { color:var(--clay); }
+  .meta { color:var(--ink-2); font-size:.95rem; margin-bottom:24px; }
+  .box { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 20px; margin:16px 0; }
+  .box.short { background:var(--sage-soft); border:0; }
+  .box.warn { background:var(--gold-tint); border:0; }
+  .tag { display:inline-block; font-size:.78rem; font-weight:600; padding:1px 8px; border-radius:99px; margin-left:4px; vertical-align:1px; }
+  .t-dev { background:var(--sage-soft); } .t-enc { background:#DDE6F3; } .t-open { background:var(--clay-soft); }
+  dl { margin:0; } dt { font-weight:600; margin-top:12px; } dd { margin:0 0 4px; }
+  footer { margin-top:48px; color:var(--ink-2); font-size:.9rem; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Privacy</h1>
+<p class="meta">Applies to the TrinityOne website, the TrinityOne app, the Steward Console, the TrinityOne Suite and the TrinityOne relay software.<br>
+Last updated: <strong>18 November 2026</strong></p>
+
+<div class="box short">
+<h3 style="margin-top:0">The short version</h3>
+<ul>
+  <li>No account, email address or phone number is needed to use TrinityOne.</li>
+  <li>There are no ads, no analytics and no tracking, and nobody sells your data.</li>
+  <li>Your notes, highlights, prayer lists and journal stay on your device.</li>
+  <li>Church life (chat, rotas, events, care) is stored on <strong>relays</strong>, which are servers chosen by your church. Private messages, encrypted groups, member names and finance records are encrypted, so the people running those relays cannot read them.</li>
+  <li>Your church decides how it uses TrinityOne, including its own safeguarding rules. If you have a question about your church's records, ask your church first.</li>
+</ul>
+</div>
+
+<h2>Who we are</h2>
+<p>TrinityOne is free, open-source software (<a href="https://github.com/TrinityOneAdmin/TrinityOne">source code on GitHub</a>). It is built by a volunteer community project. It is not a company, and it does not make money from your data.</p>
+<p>Because the software is open, you or anyone else can check what it does. This policy describes what the software is built to do.</p>
+<p>Contact: <a href="mailto:hello@trinityone.church">hello@trinityone.church</a></p>
+
+<h3>Who is responsible for what</h3>
+<p>TrinityOne is not one central service. Several different people can hold your information, and each is responsible for their own part:</p>
+<ul>
+  <li><strong>You</strong> hold your own key (your 12 words) and everything stored on your device.</li>
+  <li><strong>Your church</strong> decides what it records about its members: who belongs, who is on a rota, who is marked as a child, its safeguarding records and its giving records. For most purposes your church is responsible for those records, and it uses TrinityOne as a tool to keep them.</li>
+  <li><strong>Whoever runs a relay</strong> stores the data that passes through it. That might be the TrinityOne project's shared relays, your church's own computer, or another church's computer that your church's stewards chose to share the load with.</li>
+  <li><strong>The TrinityOne project</strong> is responsible for this website and for the shared relays it runs.</li>
+</ul>
+
+<h2>What stays on your device</h2>
+<p>These are never sent to a relay:</p>
+<ul>
+  <li>Your notes, highlights, bookmarks, journal and prayer lists <span class="tag t-dev">device only</span></li>
+  <li>Your reading plans and reading progress <span class="tag t-dev">device only</span></li>
+  <li>Your secret key and your 12-word recovery phrase <span class="tag t-dev">device only</span></li>
+  <li>Your optional PIN, which locks the app on your device <span class="tag t-dev">device only</span></li>
+</ul>
+<p>If you make a backup file, it is saved wherever you choose to put it.</p>
+
+<h2>What goes to relays</h2>
+<p>To take part in your church's life, the app sends some information to relays. Here is what goes there and who can read it.</p>
+<dl>
+  <dt>Private messages <span class="tag t-enc">encrypted</span></dt>
+  <dd>Only you and the person you are writing to can read them. The relay can see that a message passed between two keys, and when.</dd>
+  <dt>Encrypted group chats <span class="tag t-enc">encrypted</span></dt>
+  <dd>Only members of that group can read them.</dd>
+  <dt>Member names on the church list <span class="tag t-enc">sealed</span></dt>
+  <dd>These are sealed to the church, so the relay stores text it cannot read.</dd>
+  <dt>Finance and giving records <span class="tag t-enc">encrypted</span></dt>
+  <dd>See <a href="#finance">Giving and finance records</a> below.</dd>
+  <dt>Unread-message markers <span class="tag t-enc">encrypted</span></dt>
+  <dd>These keep track of what you have read across your devices.</dd>
+  <dt>Your profile name and picture <span class="tag t-open">readable</span></dt>
+  <dd>Treat these as visible to anyone who can reach the relay. Use whatever name you are comfortable with.</dd>
+  <dt>Church content <span class="tag t-open">readable by the relay</span></dt>
+  <dd>Announcements, events, the calendar, rotas and run-sheets, room bookings, prayer requests and polls, and messages in groups that are not encrypted. The relay only shows these to the people your church allows, but the people running the relay could read them.</dd>
+  <dt>Safeguarding records</dt>
+  <dd>Whether your church has marked someone as a child, who their guardians are, and which adults are cleared to work with children. Your church records these. The relay uses them to enforce your church's rules, for example by stopping an adult who is not cleared from messaging a child.</dd>
+  <dt>Care and practical help</dt>
+  <dd>Requests for help and meal rotas, including dietary needs or allergies if someone chooses to add them.</dd>
+  <dt>Basic technical information</dt>
+  <dd>Your public key (a long number that identifies you to the network, not your name), the times things were sent, and which church they belong to.</dd>
+</dl>
+
+<h3>Your internet address</h3>
+<p>Like any server, a relay sees your internet (IP) address while you are connected. The TrinityOne relay software does not write IP addresses to its logs. It holds them briefly in memory to stop people flooding the server. The project's shared relays and this website are reached through <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a>, which sees your IP address and keeps its own logs under its own policy. A relay run by a church may be set up differently.</p>
+
+<h2>What we never collect</h2>
+<ul>
+  <li>No email address, phone number or password to sign up</li>
+  <li>No advertising, and no advertising IDs</li>
+  <li>No analytics, crash reporting or tracking tools</li>
+  <li>No cookies used to track you on the website</li>
+  <li>No contacts, location or microphone access</li>
+</ul>
+<p>We do not sell, rent or trade information, and we have none to sell.</p>
+
+<h2>Religious belief</h2>
+<p>Using a church app shows that you belong to, or have an interest in, a church. Many data-protection laws treat religious belief as specially protected information. TrinityOne is designed so that as little as possible about you is readable by anyone outside your church. A church keeps records about its own members as part of its normal religious activities.</p>
+
+<h2>Children and young people</h2>
+<p>TrinityOne does not ask anyone's age and does not set its own age limit. Children usually join through their church or a parent, and <strong>each church sets its own safeguarding rules</strong>. TrinityOne gives churches tools to enforce those rules, such as:</p>
+<ul>
+  <li>children seeing only the rooms meant for them</li>
+  <li>guardians being linked to a child</li>
+  <li>only cleared adults being able to message a child</li>
+</ul>
+<p>Nothing in TrinityOne shows ads to children or builds a profile of them. Parents and guardians with questions about a child's records should contact the child's church.</p>
+
+<h2 id="finance">Giving and finance records</h2>
+<p>A church can use the optional Finance module to keep its own accounts and giving records. These may include:</p>
+<ul>
+  <li>donors' names and addresses</li>
+  <li>amounts given</li>
+  <li>tax-relief declarations, where the church's local law provides for them</li>
+</ul>
+<p>These records are encrypted. Only the church's stewards who have finance access can read them. The church is responsible for these records and for any reports it sends to a tax authority.</p>
+<h3>Wallet giving (coming later)</h3>
+<p>A separate feature for giving from your own digital wallet is planned but not yet available. TrinityOne will never hold or move your money. We will update this policy before it goes live.</p>
+
+<h2>Notifications</h2>
+<p><strong>In the app on your phone:</strong> reminders, such as for serving on a rota, are scheduled on your device.</p>
+<p><strong>In a web browser:</strong> if you allow notifications, your browser gives the relay a delivery address, which the relay stores with your public key and your notification choices. The relay then sends short notices, such as "New announcement", "Can you serve?" or a group's name, to your browser maker's push service (for example Google, Apple, Mozilla or Microsoft), which passes them to your device. Each notice is encrypted on its way, so the push service cannot read it, but it can see that a notice was sent to your device and when. You can turn notifications off in the app or in your browser at any time.</p>
+
+<h2>Other services the app may contact</h2>
+<p>Each of these is used only when you use the feature that needs it. Each can see your IP address and what you asked for.</p>
+<ul>
+  <li><strong>Bible downloads:</strong> eBible.org and GitHub, when you install a translation or commentary.</li>
+  <li><strong>Audio Bible:</strong> helloao.org, which can see which chapter you play.</li>
+  <li><strong>Videos:</strong> YouTube's privacy-enhanced (no-cookie) player, when your church links a video.</li>
+  <li><strong>Church podcasts:</strong> the feed or website your church links to.</li>
+  <li><strong>Self-hosting:</strong> Cloudflare or Tailscale, if your church uses them to connect its own relay to the internet.</li>
+</ul>
+
+<h2>Device permissions</h2>
+<ul>
+  <li><strong>Camera:</strong> only to scan a QR code to join a church. Images are not stored or sent.</li>
+  <li><strong>Saving files and photos:</strong> only to save a backup file or a share card when you ask.</li>
+  <li><strong>Notifications:</strong> only if you allow them.</li>
+</ul>
+
+<h2>How long information is kept</h2>
+<ul>
+  <li><strong>On your device:</strong> until you delete it or remove the app.</li>
+  <li><strong>Chat and messages on relays:</strong> each church has a storage allowance on a relay. When it fills up, the oldest messages are removed first.</li>
+  <li><strong>Church records on relays</strong> (rotas, groups, member lists, safeguarding and finance records): kept until the church changes or removes them.</li>
+  <li><strong>Relays run by churches</strong> set their own rules. Churches can also keep backups of their own records.</li>
+  <li><strong>Refused-write log:</strong> the relay keeps a small log of writes it refused, holding only the first part of a public key, never an IP address. It is overwritten as it fills.</li>
+</ul>
+
+<h2>Deleting your information</h2>
+<ul>
+  <li><strong>On your device:</strong> remove the app, or clear its data.</li>
+  <li><strong>Your own messages:</strong> you can delete them in the app. TrinityOne relays honour the deletion. Copies may remain on relays outside TrinityOne, in someone's screenshots, or in a church's backup made before you deleted.</li>
+  <li><strong>Records your church keeps about you:</strong> ask your church's stewards.</li>
+  <li><strong>On the project's shared relays:</strong> email us. We hold no name or email for you, so we may ask you to prove the key is yours from inside the app.</li>
+</ul>
+<p>Because TrinityOne runs across many independent relays, nobody can promise to remove every copy everywhere. We will not pretend otherwise.</p>
+
+<h2>Your rights</h2>
+<p>Wherever you live, you can ask whoever holds your information to show it to you, correct it, delete it, or stop using it. For church records, ask your church. For this website and the shared relays, email <a href="mailto:hello@trinityone.church">hello@trinityone.church</a>.</p>
+<p>You also have the right to complain to the data-protection or privacy regulator where you live.</p>
+
+<h2>Where information is stored</h2>
+<p>Relays, including the project's shared relays, can be in any country. Your church's stewards choose which relays hold your church's data. If you use TrinityOne outside the country where a relay sits, your information crosses borders when you use the app.</p>
+
+<h2>Keeping it safe</h2>
+<p>TrinityOne protects your information in several ways:</p>
+<ul>
+  <li>Messages, groups, names and finance records are encrypted.</li>
+  <li>Every change is signed.</li>
+  <li>An optional PIN locks the app.</li>
+  <li>Relays check every write against your church's rules.</li>
+</ul>
+<p>No system is perfect. Keep your 12 words safe and private: they <em>are</em> your account, and nobody, including us, can recover them for you. To report a security problem, see our <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/SECURITY.md">security page</a>.</p>
+
+<h2>The website</h2>
+<p>trinityone.church is hosted on Cloudflare. It uses no analytics and no tracking cookies. If you email us, we use your email only to reply. We have no mailing list.</p>
+
+<h2>Changes to this policy</h2>
+<p>If we change this policy, we will update the date at the top. We will mention important changes on this website and in the app.</p>
+
+<footer>TrinityOne · open-source software for churches · <a href="mailto:hello@trinityone.church">hello@trinityone.church</a></footer>
+</main>
+</body>
+</html>
