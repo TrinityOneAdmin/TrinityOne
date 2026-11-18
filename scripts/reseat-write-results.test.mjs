@@ -69,7 +69,7 @@ function reseater(refuse = [], { steward = false } = {}) {
     // recorded in call order with the setters, so its place before the block is measured, not assumed (2026-11-18)
     _carryOverStewardDocs: async (pk, o) => { calls.push({ name: 'carry', args: [pk, o] }); return { carried: [{ d: 'trinityone/group:g', label: 'a group', ev: { content: '{}', tags: [] } }], notCarried: [], superseded: [], refused: '' }; },
     // the re-seat's second half: the new key takes the old one's place in the carried group definitions — after the block
-    _swapKeyInCarriedGroups: async (carried, from, to) => { calls.push({ name: 'swap', args: [carried, from, to] }); return []; },
+    _swapKeyInChurchGroups: async (carry, from, to) => { calls.push({ name: 'swap', args: [carry, from, to] }); return { swapped: ['a group'], failed: [] }; },
   };
   Steward.isOrWasSteward = (pk) => steward && String(pk).toLowerCase() === String(oldK).toLowerCase();
   const names = Object.keys(scope);

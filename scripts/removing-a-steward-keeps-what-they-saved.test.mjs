@@ -373,11 +373,46 @@ test('re-seat — the verbatim carry keeps the OLD key on leaders/members; the s
   const before = JSON.parse((await churchCopy(GROUP_D + g)).content);
   assert.deepEqual([before.leaders, before.members], [[oldK.pub, other], [other, oldK.pub]], 'the pre-block carry was not verbatim — a refused block would leave changed groups');
   assert.equal(JSON.stringify(before).includes(newK.pub), false, 'a group names the new key before any block');
-  const failed = await eng._swapKeyInCarriedGroups(r.carried, oldK.pub, newK.pub);
-  assert.deepEqual(failed, []);
+  const sw = await eng._swapKeyInChurchGroups(r, oldK.pub, newK.pub);
+  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [] });
   const after = JSON.parse((await churchCopy(GROUP_D + g)).content);
   assert.deepEqual(after.leaders, [newK.pub, other], 'the new key did not take the old one’s place on leaders');
   assert.deepEqual(after.members, [other, newK.pub], 'the new key did not take the old one’s place on members');
+});
+
+test('N1 — a RETRIED re-seat (first block refused) still puts the new key on the groups: the swap reads the church’s own copies', async () => {
+  const eng = owner(); const oldK = await newSteward(); const newK = H.key(), other = H.key().pub, untouched = H.key().pub;
+  await setRoster(eng, [oldK.pub], { [oldK.pub]: ['content'] });
+  const g = cp.slice(0, 16) + '-retry', gOther = cp.slice(0, 16) + '-notheirs';
+  await mustPut(raw(oldK, GROUP_D + g, { name: 'Retry', leaders: [oldK.pub, other] }));
+  await mustPut(raw(oldK, GROUP_D + gOther, { name: 'Not on it', leaders: [untouched] }));   // authored by them, but they are not on it
+  const r1 = await eng._carryOverStewardDocs(oldK.pub, {});           // attempt 1 — its block is then refused, so no swap
+  assert.ok(r1.carried.some(x => x.d === GROUP_D + g), 'FIXTURE: attempt 1 did not carry the group');
+  await sleep(1100);
+  const r2 = await eng._carryOverStewardDocs(oldK.pub, {});           // attempt 2: the church's copies are now the newer ones
+  assert.ok(!r2.carried.some(x => x.d === GROUP_D + g) && r2.superseded.includes(GROUP_D + g), 'FIXTURE: the retry is not the superseded case: ' + JSON.stringify({ c: r2.carried.map(x => x.d), s: r2.superseded }));
+  const sentBefore = eng.sent.length;
+  const sw = await eng._swapKeyInChurchGroups(r2, oldK.pub, newK.pub);   // after attempt 2's block lands
+  const after = JSON.parse((await churchCopy(GROUP_D + g)).content);
+  assert.deepEqual(after.leaders, [newK.pub, other], 'THE RETRIED RE-SEAT LEFT THE GROUP NAMING ONLY THE OLD, BLOCKED KEY');
+  assert.equal(sw.swapped.length, 1, 'the screen is not told the group moved: ' + JSON.stringify(sw));
+  assert.equal(eng.sent.slice(sentBefore).filter(e => dOf(e) === GROUP_D + gOther).length, 0, 'a group the old key is not on was re-saved');
+  assert.deepEqual(sw.failed, [], 'N4: a group that needed no change was listed as failed');
+});
+
+test('N1 — the swap never re-saves the church’s copy over ANOTHER steward’s later edit', async () => {
+  const eng = owner(); const oldK = await newSteward(), eve = await newSteward(); const newK = H.key();
+  await setRoster(eng, [oldK.pub, eve.pub], { [oldK.pub]: ['content'], [eve.pub]: ['content'] });
+  const g = cp.slice(0, 16) + '-evelater';
+  await mustPut(raw(oldK, GROUP_D + g, { name: 'old', leaders: [oldK.pub] }));
+  const r1 = await eng._carryOverStewardDocs(oldK.pub, {});
+  assert.ok(r1.carried.length, 'FIXTURE: not carried');
+  await sleep(1100);
+  await mustPut(raw(eve, GROUP_D + g, { name: 'eve, later', leaders: [oldK.pub, eve.pub] }, { at: Math.floor(Date.now() / 1000) + 1 }));
+  const sentBefore = eng.sent.length;
+  const sw = await eng._swapKeyInChurchGroups(r1, oldK.pub, newK.pub);
+  assert.equal(eng.sent.slice(sentBefore).length, 0, 'the church’s older copy was re-saved over another steward’s newer edit');
+  assert.deepEqual(sw, { swapped: [], failed: [] });
 });
 
 test('nit 5 — a steward copy far ahead of the clock (the re-sign cannot catch up) is listed as "newer", not "tie"', async () => {

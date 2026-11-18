@@ -8034,7 +8034,7 @@ function _carryLabel(d, content) {
 // The copy the church will publish in place of theirs: same content and tags, a fresh created_at (it must beat the
 // church's own older copy), the `for` tag left to feChurch. Two exceptions, both owner answers:
 //   (f) on the BLOCK path a group definition loses the blocked person from `leaders` and `members` (cleartext JSON) — a
-//       RE-SEAT carries verbatim instead and swaps the key after its block lands (_swapKeyInCarriedGroups);
+//       RE-SEAT carries verbatim instead and swaps the key after its block lands (_swapKeyInChurchGroups);
 //   (g) a care need's skip part is re-made: a new secret sealed to the recipient BY THE CHURCH, new per-day hashes.
 // Answers { skip: reason } when it cannot make a faithful copy.
 async function _carryTemplate(S, blocked, who) {
@@ -8204,29 +8204,61 @@ async function _carryOverStewardDocs(pk, opts) {
   }
   return out;
 }
-// A RE-SEAT'S SECOND HALF (reseatMember, after its block landed): in the group definitions the carry just re-saved under
-// the church, the person's NEW key takes the old one's place on `leaders` and `members` (deduped). Re-publishes the church's
-// own copy (from the carried, signed event), so it is readable after the old key is blocked. Answers the labels of groups
-// that could not be re-saved, for the screen to name.
-async function _swapKeyInCarriedGroups(carried, oldPk, newPk) {
+// A RE-SEAT'S SECOND HALF (reseatMember, after its block landed): the person's NEW key takes the old one's place on
+// `leaders` and `members` (deduped) in the CHURCH'S OWN current copy of each group definition the carry dealt with — the
+// ones it carried now AND the ones it found the church had already re-saved ("superseded"), which is what a RETRIED
+// re-seat sees: attempt 1 carried them, its block was refused, and attempt 2's carry finds the church's copies newer
+// (audit round 3, N1). The church's copies are still readable after the old key is blocked.
+// It changes a group only when the church's copy is the NEWEST copy anyone holds at that address (so it never re-saves
+// the church's older copy over another steward's later edit) and that copy names the old key (so it never touches a group
+// the old key was not on). Every relay in relays() must answer, or the group is left alone and listed as failed.
+// Answers { swapped: [labels], failed: [labels] } — failed lists only groups that needed the change and did not get it.
+async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
   const from = String(oldPk || '').toLowerCase(), to = String(newPk || '').toLowerCase();
-  const failed = [];
-  if (!from || !to || from === to) return failed;
-  for (const c of (carried || [])) {
-    const ev = c && c.ev;
-    if (!ev || !String(c.d).startsWith('trinityone/group:') || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;
+  const out = { swapped: [], failed: [] };
+  if (!from || !to || from === to || !carry || !sk || !pub) return out;
+  const isGroup = (d) => String(d || '').startsWith('trinityone/group:');
+  const labelOf = new Map();
+  for (const c of (carry.carried || [])) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
+  for (const d of (carry.superseded || [])) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, '');
+  const ds = [...labelOf.keys()];
+  if (!ds.length) return out;
+  const urls = relays();
+  const ask = (url) => new Promise((resolve) => {
+    const evs = []; let done = false, sub = null;
+    const finish = (complete) => { if (done) return; done = true; try { if (sub) sub.close(); } catch (e) {} let a = false; try { a = _keyReadAuthedOn(url); } catch (e) { a = false; } resolve({ evs, complete: !!complete && a }); };
+    try { sub = pool.subscribeMany([url], [{ kinds: [30078], '#d': ds, limit: ds.length * 50 }], { onevent(e) { evs.push(e); }, oneose() { finish(true); }, maxWait: 11000 }); } catch (e) { finish(false); return; }
+    if (done) { try { sub.close(); } catch (e) {} }
+    setTimeout(() => finish(false), 6000);
+  });
+  const answers = urls.length ? await Promise.all(urls.map(ask)) : [];
+  const whole = answers.length > 0 && answers.every(a => a.complete);
+  const newest = new Map();
+  for (const a of answers) for (const e of a.evs) {
+    const d = ((e && e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    if (!labelOf.has(d)) continue;
+    const ch = ((e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
+    if (ch && ch !== pub) continue;
+    const cur = newest.get(d);
+    if (!cur || (e.created_at || 0) > (cur.created_at || 0) || ((e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub)) newest.set(d, e);   // a tie with someone else is not the church's to settle
+  }
+  for (const d of ds) {
+    const ev = newest.get(d);
+    const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
+    if (!ev || ev.pubkey !== pub || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;   // not the church's newest live copy: leave it
     let g; try { g = JSON.parse(ev.content); } catch (e) { continue; }
     if (!g || typeof g !== 'object') continue;
     let changed = false;
-    const swap = (a) => { const out = []; for (const x of a) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !out.some(y => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v); } return out; };
+    const swap = (arr) => { const o = []; for (const x of arr) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !o.some(y => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v); } return o; };
     if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
     if (Array.isArray(g.members)) g.members = swap(g.members);
-    if (!changed) continue;
+    if (!changed) continue;                                   // the old key is not on it: nothing to do, nothing to report
+    if (!whole) { out.failed.push(label); continue; }          // a relay did not answer: a newer copy may exist there
     let ok = false;
     try { ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: (ev.tags || []).filter(t => t[0] !== 'for'), content: JSON.stringify(g) }, sk)); } catch (e) { ok = false; }
-    if (!ok) failed.push(c.label);
+    (ok ? out.swapped : out.failed).push(label);
   }
-  return failed;
+  return out;
 }
 // ONE ROSTER CHANGE AT A TIME ON THIS CONSOLE (plan §3.2, R1, R2). Remove (and unticking every capability, owner answer c)
 // runs the carry and then writes the roster, and with a 20 s carry a second removal built from the screen's roster would
@@ -12798,9 +12830,9 @@ window.Steward = {
       catch (e) { carryOld = { carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }; }
       const blocked = await w(() => window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]));
       if (!blocked) throw new Error('Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.');
-      if (carryOld && carryOld.carried && carryOld.carried.length) {
-        try { carryOld.swapFailed = await _swapKeyInCarriedGroups(carryOld.carried, oldH, newH); }
-        catch (e) { carryOld.swapFailed = carryOld.carried.filter(x => x.ev && String(x.d).startsWith('trinityone/group:')).map(x => x.label); }
+      if (carryOld && !carryOld.refused) {
+        try { const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH); carryOld.swapped = sw.swapped; carryOld.swapFailed = sw.failed; }
+        catch (e) { carryOld.swapped = []; carryOld.swapFailed = ['some of the groups they were on']; }   // not known which: said as such, never a list of every group
       }
     }
 

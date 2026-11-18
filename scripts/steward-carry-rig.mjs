@@ -137,16 +137,16 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   assert.ok(ssSigner, 'setStewards no longer publishes finalizeEvent(...) — re-anchor this rig');
   scope[ssSigner] = finalizeEvent;
   const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who) {',
-    'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {', 'function _dropJustRemoved(list, rosterAt) {', 'async function _swapKeyInCarriedGroups(carried, oldPk, newPk) {'].map(a => fnBody(STEWARD, a, a));
+    'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {', 'function _dropJustRemoved(list, rosterAt) {', 'async function _swapKeyInChurchGroups(carry, oldPk, newPk) {'].map(a => fnBody(STEWARD, a, a));
   const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = '].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
   const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {'].map(a => fnBody(STEWARD, '    ' + a, a).trim());
   const api = new Function('scope', `${vars.join('\n')}\nwith (scope) { ${feBody}\n${ingBody}\n${tops.join('\n')}\n`
-    + ` return { feChurch, stewIngestKey, _carryTemplate, _carryOverStewardDocs, _removeStewardKeeping, _swapKeyInCarriedGroups, methods: ({ ${methods.join(',\n')} }), pub: ({ ${pub3.join(',\n')} }) }; }`)(scope);
+    + ` return { feChurch, stewIngestKey, _carryTemplate, _carryOverStewardDocs, _removeStewardKeeping, _swapKeyInChurchGroups, methods: ({ ${methods.join(',\n')} }), pub: ({ ${pub3.join(',\n')} }) }; }`)(scope);
   Object.assign(scope, api.methods);
   scope.feChurch = api.feChurch; scope.stewIngestKey = api.stewIngestKey;
-  scope._carryOverStewardDocs = api._carryOverStewardDocs; scope._removeStewardKeeping = api._removeStewardKeeping; scope._carryTemplate = api._carryTemplate; scope._swapKeyInCarriedGroups = api._swapKeyInCarriedGroups;
+  scope._carryOverStewardDocs = api._carryOverStewardDocs; scope._removeStewardKeeping = api._removeStewardKeeping; scope._carryTemplate = api._carryTemplate; scope._swapKeyInChurchGroups = api._swapKeyInChurchGroups;
   scope.window.Steward.setStewards = (...a) => scope.setStewards(...a);
   Object.assign(scope.window.Steward, api.pub);
   return scope;

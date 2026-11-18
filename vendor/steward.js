@@ -21565,13 +21565,68 @@ zoo`.split("\n");
     }
     return out;
   }
-  async function _swapKeyInCarriedGroups(carried, oldPk, newPk) {
+  async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
-    const failed = [];
-    if (!from || !to || from === to) return failed;
-    for (const c of carried || []) {
-      const ev = c && c.ev;
-      if (!ev || !String(c.d).startsWith("trinityone/group:") || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
+    const out = { swapped: [], failed: [] };
+    if (!from || !to || from === to || !carry || !sk || !pub) return out;
+    const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
+    const labelOf = /* @__PURE__ */ new Map();
+    for (const c of carry.carried || []) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
+    for (const d of carry.superseded || []) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, "");
+    const ds = [...labelOf.keys()];
+    if (!ds.length) return out;
+    const urls = relays();
+    const ask = (url) => new Promise((resolve) => {
+      const evs = [];
+      let done = false, sub = null;
+      const finish = (complete) => {
+        if (done) return;
+        done = true;
+        try {
+          if (sub) sub.close();
+        } catch (e) {
+        }
+        let a = false;
+        try {
+          a = _keyReadAuthedOn(url);
+        } catch (e) {
+          a = false;
+        }
+        resolve({ evs, complete: !!complete && a });
+      };
+      try {
+        sub = pool.subscribeMany([url], [{ kinds: [30078], "#d": ds, limit: ds.length * 50 }], { onevent(e) {
+          evs.push(e);
+        }, oneose() {
+          finish(true);
+        }, maxWait: 11e3 });
+      } catch (e) {
+        finish(false);
+        return;
+      }
+      if (done) {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+      }
+      setTimeout(() => finish(false), 6e3);
+    });
+    const answers = urls.length ? await Promise.all(urls.map(ask)) : [];
+    const whole = answers.length > 0 && answers.every((a) => a.complete);
+    const newest = /* @__PURE__ */ new Map();
+    for (const a of answers) for (const e of a.evs) {
+      const d = ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      if (!labelOf.has(d)) continue;
+      const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+      if (ch && ch !== pub) continue;
+      const cur = newest.get(d);
+      if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
+    }
+    for (const d of ds) {
+      const ev = newest.get(d);
+      const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
+      if (!ev || ev.pubkey !== pub || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
       let g;
       try {
         g = JSON.parse(ev.content);
@@ -21580,28 +21635,32 @@ zoo`.split("\n");
       }
       if (!g || typeof g !== "object") continue;
       let changed = false;
-      const swap = (a) => {
-        const out = [];
-        for (const x of a) {
+      const swap = (arr) => {
+        const o = [];
+        for (const x of arr) {
           const hit = String(x || "").toLowerCase() === from;
           if (hit) changed = true;
           const v = hit ? to : x;
-          if (v && !out.some((y) => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v);
+          if (v && !o.some((y) => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v);
         }
-        return out;
+        return o;
       };
       if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
       if (Array.isArray(g.members)) g.members = swap(g.members);
       if (!changed) continue;
+      if (!whole) {
+        out.failed.push(label);
+        continue;
+      }
       let ok = false;
       try {
         ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(g) }, sk));
       } catch (e) {
         ok = false;
       }
-      if (!ok) failed.push(c.label);
+      (ok ? out.swapped : out.failed).push(label);
     }
-    return failed;
+    return out;
   }
   var _rosterTurn = Promise.resolve();
   function _dropJustRemoved(list, rosterAt) {
@@ -26282,11 +26341,14 @@ zoo`.split("\n");
         }
         const blocked = await w(() => window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]));
         if (!blocked) throw new Error("Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.");
-        if (carryOld && carryOld.carried && carryOld.carried.length) {
+        if (carryOld && !carryOld.refused) {
           try {
-            carryOld.swapFailed = await _swapKeyInCarriedGroups(carryOld.carried, oldH, newH);
+            const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH);
+            carryOld.swapped = sw.swapped;
+            carryOld.swapFailed = sw.failed;
           } catch (e) {
-            carryOld.swapFailed = carryOld.carried.filter((x) => x.ev && String(x.d).startsWith("trinityone/group:")).map((x) => x.label);
+            carryOld.swapped = [];
+            carryOld.swapFailed = ["some of the groups they were on"];
           }
         }
       }
