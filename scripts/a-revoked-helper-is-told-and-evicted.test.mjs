@@ -273,7 +273,7 @@ function ownerStubs(over = {}) {
     // optimistic-revoke console-UI (stew-dashboard.jsx DashStewardsPanel, pendingRemoval state): the board hides the row while the write settles.
     // UI-only — no-ops here — but remove() guards on pendingRemoval.has(pk) and calls drop/restoreOptimistic.
     pendingRemoval: new Set(), dropOptimistic: () => {}, restoreOptimistic: () => {},
-    landedRemoval: () => {}, setCarryNote: () => {}, stewCarryNote: () => null, carryNoteOf: () => null,   // the row leaves on landing; what was kept (2026-11-17; per steward since 2026-11-18)
+    landedRemoval: () => {}, setCarryNote: () => {}, setCarryNoteTimed: () => {}, stewCarryNote: () => null, carryNoteOf: () => null,   // the row leaves on landing; what was kept (2026-11-17; per steward since 2026-11-18)
     setAdding: () => {}, setScanning: () => {}, setQ: () => {}, setCode: () => {}, setAddErr: () => {}, setApproving: () => {},
     setNewLabel: () => {}, setNewCaps: () => {},
     stewards: [PK, 'other-steward'], labels: {}, caps: {}, byPub: new Map(), niceName: () => 'A helper',

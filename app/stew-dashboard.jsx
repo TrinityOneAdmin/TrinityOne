@@ -7951,8 +7951,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
           {res && res.carry && (res.carry.swapped || []).length ? 'Groups they set up now name their new key. ' : ''}
           {res && res.carry && (res.carry.swapFailed || []).length ? <b>{'Couldn’t put their new key on ' + res.carry.swapFailed.join(', ') + ' — open Groups and add them. '}</b> : null}
+          {res && res.carry && (res.carry.swapOther || []).length ? <b>{'Another steward has changed ' + res.carry.swapOther.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
           One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.swapped || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
-          again. Ordinary groups need nothing — they are already back in those.
+          again.{res && res.carry && ((res.carry.swapFailed || []).length || (res.carry.swapOther || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
             thief reading the church for ever, and the screen said nothing either way. It can only be true
@@ -11403,12 +11404,12 @@ function DashStewardsPanel({ church }) {
   // second steward's untick queues behind the first instead of silently doing nothing (audit round 2, nit).
   const [capsClearing, setCapsClearing] = React.useState(() => new Set());
   const capsClearOn = (pk, on) => setCapsClearing(s => { const n = new Set(s); if (on) n.add(pk); else n.delete(pk); return n; });
-  React.useEffect(() => {   // "everything kept" is a confirmation, so a moment; a list of what was not kept stays
-    const oks = Object.entries(carryNotes).filter(([, v]) => v && v.tone === 'ok');
-    if (!oks.length) return undefined;
-    const t = setTimeout(() => setCarryNotes(m => { const n = { ...m }; for (const [pk, v] of oks) if (n[pk] === v) delete n[pk]; return n; }), 8000);
-    return () => clearTimeout(t);
-  }, [carryNotes]);
+  // "everything kept" is a confirmation, so a moment; a list of what was not kept stays. EACH NOTE ITS OWN 8 s, from when it
+  // was set (audit round 4: one shared timer restarted whenever any note changed, so an all-kept line could outlive 8 s).
+  const setCarryNoteTimed = (pk, note) => {
+    setCarryNote(pk, note);
+    if (note && note.tone === 'ok') setTimeout(() => setCarryNotes(m => { if (m[pk] !== note) return m; const n = { ...m }; delete n[pk]; return n; }), 8000);
+  };
   // WOULD-BE HELPERS STILL WAITING, and the record of the owner's answers — one hook, shared with the Overview banner
   // (useHelperRequests / pendingHelperRequests above), so the banner's count and this list are the same list.
   // markHandled(pk, at) records "the owner answered this person's request of time `at`" — on approve (add), remove, and
@@ -11480,7 +11481,7 @@ function DashStewardsPanel({ church }) {
         capsClearOn(pk, false);
         if (!r || r.refused) { failed(r && r.refused); return; }
         if (!r.wrote) { failed(''); return; }
-        setCarryNote(pk, carryNoteOf(pk, who, r.carry));
+        setCarryNoteTimed(pk, carryNoteOf(pk, who, r.carry));
       }, () => { capsClearOn(pk, false); failed(''); });
       return;
     }
@@ -11590,7 +11591,7 @@ function DashStewardsPanel({ church }) {
       if (outcome !== 'landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
       landed = true;
       landedRemoval(pk);   // the row leaves now, not before
-      setCarryNote(pk, carryNoteOf(pk, who, carried));
+      setCarryNoteTimed(pk, carryNoteOf(pk, who, carried));
       // TELL THE REMOVED HELPER (2026-11-05, helper-delegation). ONLY here, in the landed branch — never before
       // `settle` — because the relay stops serving them the stewards: roster the instant they are off it, so a
       // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>

@@ -391,3 +391,40 @@ test('N2 — a second untick-all’s result does not wipe the first one’s "cou
   assert.match(said, /Ann Other: Everything they set up stays as they left it/, 'the second result is not shown, or does not say whose it is');
 });
 
+
+// ══ ROUND 5 (audit of round 4) ══════════════════════════════════════════════════════════════════════════════════════
+test('L1 — Reconnect names a group another steward changed (still naming the old key), and drops "ordinary groups need nothing"', async () => {
+  const other = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: [], swapFailed: [], swapOther: ['the group “Choir”'] });
+  assert.match(other, /Another steward has changed the group “Choir” since, and it still names their old key — check it by hand\./, 'a group left naming the old key is not said');
+  assert.doesNotMatch(other, /Ordinary groups need nothing/, 'says nothing is needed while a group still names the old key');
+  const failed = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: [], swapFailed: ['the group “Choir”'], swapOther: [] });
+  assert.doesNotMatch(failed, /Ordinary groups need nothing/, 'says nothing is needed while a group could not be updated');
+  const clean = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: ['the group “Choir”'], swapFailed: [], swapOther: [] });
+  assert.match(clean, /Ordinary groups need nothing — they are already back in those\./, 'CONTROL: the line went missing when it is true');
+});
+
+test('nit — each "everything kept" line has its OWN 8 s: a later note does not extend an earlier one', async () => {
+  const timers = [];
+  const d1 = deferred(), d2 = deferred();
+  const r = panelRig({ keep: (pk) => (pk === DELEGATE ? d1.p : d2.p), caps: { [DELEGATE]: ['care'], [OTHER_STEW]: ['content'] } });
+  r.globals.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+  r.globals.window.Steward.stewardLabels = () => ({ [DELEGATE]: 'Tom Ridley', [OTHER_STEW]: 'Ann Other' });
+  const p = await openPanel(r);
+  await press(p.view(), /What this helper may do/, { which: 0 });
+  find(p.view(), n => n && n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: false } });
+  await flush();
+  await press(p.view(), /What this helper may do/, { which: 1 });
+  const boxes = find(p.view(), n => n && n.type === 'input' && n.props.type === 'checkbox');
+  boxes[boxes.length - 1].props.onChange({ target: { checked: false } });
+  await flush();
+  const kept = { carried: [{ d: 'y', label: 'a group' }], notCarried: [], superseded: [] };
+  d1.res({ wrote: true, carry: kept, next: [DELEGATE, OTHER_STEW] }); await flush();
+  const t1 = timers.filter(t => t.ms === 8000).length;
+  d2.res({ wrote: true, carry: kept, next: [DELEGATE, OTHER_STEW] }); await flush();
+  const eights = timers.filter(t => t.ms === 8000);
+  assert.ok(t1 >= 1 && eights.length >= 2, 'each note did not get its own 8 s deadline: ' + eights.length);
+  eights[0].fn();   // the FIRST note's deadline passes
+  const said = reads(p.view());
+  assert.doesNotMatch(said, /Tom Ridley: Everything they set up/, 'the first all-kept line outlived its own 8 s');
+  assert.match(said, /Ann Other: Everything they set up/, 'the second line was cleared by the first one’s deadline');
+});
