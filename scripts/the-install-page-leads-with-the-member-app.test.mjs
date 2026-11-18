@@ -132,8 +132,10 @@ async function pageAs(ua) {
 }
 const closedAll = (l) => l.details.length >= 1 && l.details.every((d) => !d.open);
 
-test('an iPhone is shown the TestFlight steps, with every .apk behind a closed chevron', async () => {
-  const { html, vary } = await pageAs(UA_IPHONE);
+const UA_IPAD = 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+const UA_IPOD = 'Mozilla/5.0 (iPod touch; CPU iPhone OS 15_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1';
+for (const [label, ua] of [['iPhone', UA_IPHONE], ['iPad (iOS UA)', UA_IPAD], ['iPod', UA_IPOD]]) test('an ' + label + ' is shown the TestFlight steps, with every .apk behind a closed chevron', async () => {
+  const { html, vary } = await pageAs(ua);
   const links = linkContainers(html);
   assert.equal(linkTo(links, TF_MEMBER).details.length, 0,
     'on an iPhone the member TestFlight link is hidden inside a <details>, so the page leads with nothing it can install');
@@ -146,8 +148,8 @@ test('an iPhone is shown the TestFlight steps, with every .apk behind a closed c
   const steward = linkTo(links, TF_STEWARD);
   assert.ok(closedAll(steward) && steward.details.some((d) => d.cls.split(/\s+/).includes('leaders')),
     'the steward TestFlight link is not inside the closed "For church leaders" chevron');
-  assert.ok(!/church wifi is enough/.test(html),
-    'the iPhone page repeats the wifi-only claim, which is not true of TestFlight');
+  assert.ok(!/mobile data/i.test(html),
+    'the iPhone page repeats the no-mobile-data claim, which is not true of TestFlight');
   assert.ok(/User-Agent/i.test(vary), 'the page differs by User-Agent but does not say so in Vary, so a cache could serve the iPhone page to Android');
 });
 
@@ -161,5 +163,9 @@ for (const [label, ua] of [['Android', UA_ANDROID], ['desktop', UA_DESKTOP]]) {
       'the member TestFlight link is in plain view on the ' + label + ' page, competing with the download that works there');
     assert.ok(closedAll(linkTo(links, TF_STEWARD)), 'the steward TestFlight link is in plain view on the ' + label + ' page');
     assert.ok(/User-Agent/i.test(vary), 'no Vary: User-Agent on the ' + label + ' page');
+    // An iPad sends a Mac UA and lands here, so the lede must not promise it an app-store-free install.
+    const lede = (html.match(/<p class="lede">([\s\S]*?)<\/p>/) || [])[1] || '';
+    assert.match(lede, /^Android phones:/, 'the wifi/no-app-store promise is no longer scoped to Android phones');
+    assert.match(lede, /iPhone or iPad/, 'the lede does not point an iPad (which arrives with a Mac UA) to its chevron');
   });
 }

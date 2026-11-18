@@ -1036,7 +1036,7 @@ function installPageHtml({ held, base, qr, ios = false }) {
     + '<li>Tap <b>Get TrinityOne</b>, then tap <b>Install</b> in TestFlight.<br><a class="dl" href="' + E(IOS_TESTFLIGHT.member) + '">Get TrinityOne</a></li>'
     + '<li>Open TrinityOne and scan your church’s joining code.</li>'
     + '</ol>'
-    + '<p class="note">TestFlight builds can expire after 90 days. If the app stops opening, tap <b>Get TrinityOne</b> again.</p>';
+    + '<p class="note">TestFlight copies stop working after 90 days. When a newer version is ready, TestFlight offers it as an update.</p>';
   const stewardIphone = '<div class="inner"><p class="blurb">' + (ios ? '' : 'On iPhone: ') + 'TrinityOne Steward comes through TestFlight too.</p>'
     + '<a class="dl quiet" href="' + E(IOS_TESTFLIGHT.steward) + '">Get TrinityOne Steward' + (ios ? '' : ' for iPhone') + '</a></div>';
   const androidSteps = '<ol class="steps">'
@@ -1057,7 +1057,9 @@ function installPageHtml({ held, base, qr, ios = false }) {
       + fold('iphone', 'iPhone or iPad', '<div class="inner">' + iphoneSteps + '</div>');
   const lede = ios
     ? 'During the pilot, the iPhone app comes through Apple’s TestFlight app. You will need an internet connection to install it.'
-    : 'These files are served straight from your church’s own machine. You do not need an app store, and you do not need mobile data — the church wifi is enough.';
+    // iPadOS Safari sends a Mac User-Agent, so an iPad gets THIS page: the wifi-only promise is scoped to
+    // Android, and an iPad is pointed at the chevron that is for it.
+    : 'Android phones: these files come straight from your church’s own machine — no app store and no mobile data needed. On an iPhone or iPad? See “iPhone or iPad” below.';
   return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
     + '<title>Install TrinityOne</title><style>'
