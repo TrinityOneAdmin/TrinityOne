@@ -66,7 +66,7 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/devotional:':   { write: 'steward',   read: 'members', scope: 'tag' },
   'trinityone/rota:':         { write: 'steward',   read: 'members', scope: 'tag',    note: 'narrowed to the serving teams / stewards when rota-settings says so' },
   'trinityone/rota-settings': { write: 'steward',   read: 'members', scope: 'author', note: 'who may FETCH rota:/runsheet: — church-signed {visibility}' },
-  'trinityone/verse-prompt':  { write: 'steward',   read: 'members', scope: 'author', gatedBy: "authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any')", note: 'the church’s verse prompt {ref, note, schedule}; bare d-tag, singleton per church, tombstoned with a deleted tag. Declared 2026-10-10, five days after the client feature (a2d1d12) and nine after registry enforcement (3fbc94c). Writes: the church key falls to the catch-all as before; a steward of the church named by the [church] tag holding the content capability is admitted by its own rule (2026-11-18, RETEST-vp-other — before that a helper’s prompt was refused). Reads fall to canRead’s default-deny member rule (an effective member, steward, care admin or the church; a stranger is refused), and the owning church resolves from the author or the [church] tag' },
+  'trinityone/verse-prompt':  { write: 'steward',   read: 'members', scope: 'author', gatedBy: "authed === cp || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)", note: 'the church’s verse prompt {ref, note, schedule}; bare d-tag, singleton per church, tombstoned with a deleted tag. Declared 2026-10-10, five days after the client feature (a2d1d12) and nine after registry enforcement (3fbc94c). Writes: the church key falls to the catch-all as before; a steward of the church named by the [church] tag holding the content capability is admitted by its own rule (2026-11-18, RETEST-vp-other — before that a helper’s prompt was refused). Reads fall to canRead’s default-deny member rule (an effective member, steward, care admin or the church; a stranger is refused), and the owning church resolves from the author or the [church] tag' },
   'trinityone/roster:':       { write: 'steward',   read: 'members', scope: 'tag' },
   'trinityone/service:':      { write: 'steward',   read: 'members', scope: 'tag' },
   'trinityone/request:':      { write: 'steward',   read: 'members', scope: 'tag' },
@@ -155,7 +155,7 @@ export const DOC_TYPES = Object.freeze({
   // its own copy (authed === e.pubkey) and the ENVELOPE to that church's effective members by the default member rule —
   // which is why the content is sealed: a member, a steward or the relay sees ciphertext, never the list of would-be
   // helpers. A stranger is refused. Writer: Steward.markStewardRequestHandled; reader: subscribeHandledStewardRequests.
-  'trinityone/stewardhandled:': { write: 'church', read: 'members', scope: 'author', gatedBy: 'if (isAnyChurch || isNetwork) return true;', note: 'the owner’s remembered answers to helper requests; sealed to the church key, so members get ciphertext only' },
+  'trinityone/stewardhandled:': { write: 'church', read: 'members', scope: 'author', gatedBy: 'if (isAnyChurch) return true;', note: 'the owner’s remembered answers to helper requests; sealed to the church key, so members get ciphertext only' },
   // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). d=stewardrevoke:<removed helper pub>, CHURCH-SIGNED.
   // When the owner revokes a helper the relay (correctly) stops serving them the church's documents — including the
   // stewards: roster that would tell their app it was dropped — so their console kept a dead "ghost" church on screen.
@@ -286,7 +286,8 @@ export const DOC_TYPES = Object.freeze({
   // ARCHITECTURE-AUDIT-2026-07-30 A6. The other three finance docs, from app/stew-finance.jsx — a file the
   // old extraction never read. gateway.mjs gates them explicitly and generically, on BOTH sides:
   //     accept():   if (d.startsWith('finance/')) { const cp = finCp(e); return !!cp && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance')); }
-  //     canRead():  if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
+  //     canRead():  if (d.startsWith('finance/')) return authed === cp || stewardCan(authed, cp, 'finance');
+  //     (2026-11-18, owner: a joined network key reads NO finance; `networkOf(authed, cp) ||` was removed from this line.)
   // so the same church-or-finance-steward rule as the journal, without the seq ordering.
   //
   // ⚠ `read: 'church'` WAS FALSE FOR THESE FOUR TYPES UNTIL 2026-09-16, and the registry existing is how it
@@ -305,7 +306,7 @@ export const DOC_TYPES = Object.freeze({
   // settlement; a credit note is its own reversing entry), so a same-id overwrite mislabels/loses metadata but
   // CANNOT corrupt the ledger. WRITE is the GENERIC finance/ write prefix (church key OR a finance steward) for
   // BOTH; NO capability widening (CONTEXT constraint 2). The invoice's human number is a FIELD; the doc id is
-  // opaque/random. finance/invoice: rides the generic finance/ READ (church / network / finance-steward) — it is
+  // opaque/random. finance/invoice: rides the generic finance/ READ (church / finance-steward; a network peer was served it until 2026-11-18) — it is
   // metadata, not PII. finance/contact: is DIFFERENT: it holds customer PII (hall-hirer names/addresses), so by
   // the owner's decision (2026-10-30) its READ is NARROWED exactly like finance/donor — an EXPLICIT canRead
   // branch ABOVE the generic finance/ read that DROPS networkOf (church key OR finance steward ONLY, never a
@@ -325,8 +326,8 @@ export const DOC_TYPES = Object.freeze({
   // giving. WRITE is finance-only, covered by the generic finance/ write prefix (accept() L~4573: church key or
   // a finance steward), exactly like the other replaceable finance docs; REPLACEABLE, no seq, OPAQUE id.
   // ⚠ READ IS NARROWER THAN THE OTHER finance/ docs, AND THAT IS THE POINT. The generic finance/ READ rule is
-  // `authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance')` — it serves aggregate finance
-  // (journal/accounts/funds) to a NETWORK PEER church. Donor PII must NOT reach a network peer, so canRead()
+  // `authed === cp || stewardCan(authed, cp, 'finance')` — until 2026-11-18 it ALSO had `networkOf(authed, cp) ||` and served aggregate
+  // finance (journal/accounts/funds) to a NETWORK PEER church; the owner withdrew that (HISTORY below). Donor PII must NOT reach a network peer, so canRead()
   // gives finance/donor an EXPLICIT rule ABOVE the generic one (gateway.mjs L~5438) that DROPS networkOf:
   // `authed === cp || stewardCan(authed, cp, 'finance')` — church key OR a finance steward ONLY. Never coupled
   // to members/safeguarding/care. The coarse `read: 'church'` column means "the church's own data, not

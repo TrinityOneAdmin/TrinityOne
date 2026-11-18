@@ -168,7 +168,8 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
   // the body of the function that makes it. fnBody brace-matches accept() out of the stripped source
   // (offsets are preserved, so slicing the stripped copy is the same region as the raw one).
   const ACCEPT = fnBody(GATEWAY_CODE, 'function accept(e) {', 'accept()');
-  const hits = ACCEPT.match(/if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/g) || [];
+  // WALL (2026-11-18): `isNetwork` left this pair on purpose -- a joined network key no longer has the catch-all.
+  const hits = ACCEPT.match(/if \(!isAnyChurch && !memberDocTypeOk\(d\)\) return false;/g) || [];
   assert.equal(hits.length, 1,
     'the catch-all refusal is not in accept()\'s own body ' + (hits.length ? '(it is there ' + hits.length + ' times)' : '(0 occurrences)') +
     '. It may still be somewhere in gateway.mjs — in a helper nothing calls, say — and a document nobody ' +
