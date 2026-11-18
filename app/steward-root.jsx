@@ -73,6 +73,21 @@ let _connWired = false, _connLast = 0, _connBusy = false;
 let _connSeen = null;   // Set of relay urls, or null before the first hook mounts
 function _connRelayUrls() { try { const l = window.Steward && window.Steward.relayList && window.Steward.relayList(); return Array.isArray(l) ? l.map(String) : []; } catch (e) { return []; } }
 function _connNoteRelays() { _connSeen = new Set(_connRelayUrls()); }
+// …AND A STREAM THAT OPENS LATER, OVER A SMALLER SET, NARROWS IT (2026-11-18, the helper who never got the books).
+// The snapshot above is taken when the ticker re-subscribes, but the gate can take a relay OUT of the set after that and
+// before the dashboard's streams open. Measured on a brand-new church (owner console, real wizard): the box was admitted
+// at 14376 ms, the ticker noted {box}, the gate dropped it at 14383, the roster / blocklist / books-key / check-in-key
+// streams opened at 15231 over NOTHING, and when the box was re-admitted at 17386 this ticker compared it with the
+// snapshot, found nothing new, and never re-opened them. The owner's console then never heard its own roster change and
+// never read the books-key envelope, so it never minted one and an approved Finance helper sat on "Waiting for the
+// books" until the owner reloaded. So every stream that opens (makeSub, below) drops from the snapshot whatever is not
+// in the set it actually opened over; a relay admitted after that reads as grown, and the streams are re-opened over
+// it. Nothing is opened or admitted here — this only forgets a relay the streams were never told about.
+function _connStreamOpened() {
+  if (_connSeen === null) return;
+  const now = new Set(_connRelayUrls());
+  for (const u of [..._connSeen]) if (!now.has(u)) _connSeen.delete(u);
+}
 function _connRelayGrew() {
   if (_connSeen === null) return false;
   return _connRelayUrls().some(u => !_connSeen.has(u));
@@ -274,7 +289,7 @@ function makeSub(getObj, method, makeInit) {
       if (!entry) {
         entry = { listeners: new Set(), unsub: null, last: undefined };
         _subShared[skey] = entry;
-        _connNoteOpen();   // the first real stream: the set it opens over is what the ticker compares with
+        _connStreamOpened();   // this stream opens over relayList() as it is NOW — see _connStreamOpened
         entry.unsub = o[method]((val) => { _subCache[key] = val; entry.last = val; for (const fn of [...entry.listeners]) { try { fn(val); } catch (e) {} } });
       }
       entry.listeners.add(setV);
