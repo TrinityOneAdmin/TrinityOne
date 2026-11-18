@@ -159,7 +159,8 @@ for (const [label, ua] of [['Android', UA_ANDROID], ['desktop', UA_DESKTOP]]) {
     const links = linkContainers(html);
     assert.equal(linkTo(links, '/trinityone.apk').details.length, 0, 'the member .apk is no longer in plain view for ' + label);
     assert.ok(closedAll(linkTo(links, '/trinityone-steward.apk')), 'the steward .apk is not behind a closed chevron for ' + label);
-    assert.ok(closedAll(linkTo(links, TF_STEWARD)), 'the steward TestFlight link is in plain view on the ' + label + ' page');
+    if (label === 'Android') assert.equal(links.filter((l) => l.href === TF_STEWARD).length, 0, 'an Android visitor is shown the steward iPhone (TestFlight) link');
+    else assert.ok(closedAll(linkTo(links, TF_STEWARD)), 'the steward TestFlight link is in plain view on the ' + label + ' page');
     assert.ok(/User-Agent/i.test(vary), 'no Vary: User-Agent on the ' + label + ' page');
     // An iPad sends a Mac UA and lands on this page, so the lede must not promise it an app-store-free install.
     const lede = (html.match(/<p class="lede">([\s\S]*?)<\/p>/) || [])[1] || '';
