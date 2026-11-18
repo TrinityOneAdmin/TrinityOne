@@ -121,8 +121,12 @@ echo "  Info.plist: usage strings + export-compliance + UIScene manifest + backg
 # format (objectVersion 48, explicit file refs), so an un-referenced .swift would never
 # compile. The SceneDelegate's root VC is the plugin's CAPBridgeViewController subclass,
 # which registers the BackupExclude instance in capacitorDidLoad().
+# Three separate idempotent steps, each with its own marker (round-5 R5-4), so an ios/ folder already patched by the
+# older script (SceneDelegate present, no plugin, root VC = CAPBridgeViewController()) still gets the plugin and its
+# registration instead of the whole append being skipped.
+# 3a. the SceneDelegate
 if grep -q "class SceneDelegate" "$APPDELEGATE"; then
-  echo "  AppDelegate.swift: SceneDelegate + BackupExclude already present — skipped"
+  echo "  AppDelegate.swift: SceneDelegate already present — skipped"
 else
   cat >> "$APPDELEGATE" <<'SWIFT'
 
@@ -151,6 +155,14 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
     }
 }
+SWIFT
+  echo "  AppDelegate.swift: SceneDelegate appended"
+fi
+# 3b. the BackupExclude plugin + its CAPBridgeViewController subclass
+if grep -q "class BackupExcludePlugin" "$APPDELEGATE"; then
+  echo "  AppDelegate.swift: BackupExclude plugin already present — skipped"
+else
+  cat >> "$APPDELEGATE" <<'SWIFT'
 
 // ─── ios-fixup: BackupExclude — TrinityOne's first custom iOS Capacitor plugin ───
 // Marks a folder under the app's Library directory with
@@ -243,7 +255,20 @@ public class BackupExcludeBridgeViewController: CAPBridgeViewController {
     }
 }
 SWIFT
-  echo "  AppDelegate.swift: SceneDelegate + BackupExclude plugin appended"
+  echo "  AppDelegate.swift: BackupExclude plugin appended"
+fi
+# 3c. the scene's root VC must be the subclass (it registers the plugin). An older patch set CAPBridgeViewController().
+if grep -q "rootViewController = CAPBridgeViewController()" "$APPDELEGATE"; then
+  python3 -I - "$APPDELEGATE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("rootViewController = CAPBridgeViewController()", "rootViewController = BackupExcludeBridgeViewController()")
+open(p, "w").write(s)
+PY
+  echo "  AppDelegate.swift: scene root VC -> BackupExcludeBridgeViewController"
+else
+  echo "  AppDelegate.swift: scene root VC already registers the plugin — skipped"
 fi
 
 # ── 4. App icon + splash: replace the default Capacitor icon ─────────────────

@@ -396,6 +396,7 @@ async function pickAudioBase() {
 async function downloadWebBook(book, onProgress, getAborted) {
   const S = window.TrinityAudioStore;
   const man = await getWebManifest(); const bk = man.chapters[String(book)]; if (!bk) throw new Error('no such book');
+  try { if (S.ensureGate) await S.ensureGate(); } catch (e) {}   // iOS: a closed gate is tried once more before choosing the store
   const base = await pickAudioBase();
   if (!base) throw new Error('No download server reachable — your church relay needs updating');
   const t = book <= 39 ? 'ot' : 'nt';
@@ -472,7 +473,9 @@ function AudioImportPanel({ imp, setImp, abortRef, onDone, ctx }) {
   const [ask, setAsk] = React.useState(null);              // n waiting for "replace?"
   const [form, setForm] = React.useState({ name: '', lang: 'English', reader: '', licence: 'own' });
   const [saving, setSaving] = React.useState(false);
-  const cancel = async () => { if (imp.phase === 'reading') { abortRef.current = true; return; } if (imp.id) await S.cancelImport(imp.id); setImp(null); };
+  // Cancel always frees the screen at once (round-5 R5-2): while reading, the import is told to stop and cleans up behind
+  // it; the panel does not wait for it
+  const cancel = async () => { if (imp.phase === 'reading') { abortRef.current = true; setImp(null); return; } if (imp.id) await S.cancelImport(imp.id); setImp(null); };
   const btn = (primary) => ({ flex: 1, padding: '12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, border: primary ? 'none' : '1px solid var(--line)', background: primary ? 'var(--clay)' : 'var(--surface)', color: primary ? 'var(--on-clay)' : 'var(--ink-2)' });
   const field = { width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5, marginBottom: 12 };
   const lbl = { fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 6, display: 'block' };
@@ -606,6 +609,7 @@ function AudioBiblesScreen({ open, onClose, ctx, incoming, onIncomingTaken }) {
       try { id = await S.beginImport(); } catch (e) { setImp({ phase: 'error', reason: 'no-registry' }); return true; }
       setImp(x => (x && x.phase === 'reading' ? { ...x, id } : x));
       const res = await S.importSources(id, sources, { onProgress: (p) => setImp(x => (x && x.phase === 'reading' ? { ...x, p } : x)), getAborted: () => impAbort.current });
+      if (res.ok && impAbort.current) { await S.cancelImport(id); setImp(null); return true; }   // cancelled just as it finished
       if (!res.ok) { setImp(res.reason === 'cancelled' ? null : { phase: 'error', reason: res.reason }); return true; }
       if (!res.chapters && !res.unplaced.length) { await S.cancelImport(id); setImp({ phase: 'error', reason: 'none' }); return true; }
       setImp({ phase: res.unplaced.length ? 'check' : 'name', id, res });

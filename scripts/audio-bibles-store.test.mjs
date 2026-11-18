@@ -519,3 +519,82 @@ test('iOS GATE — Android is never affected: no exclude call even if a BackupEx
   assert.ok(w.disk.has('audio/WEB/43/1.mp3'));
   assert.deepEqual([...w.fs.dirs], ['DATA']);
 });
+
+// ════════════════ round-5 (AUDIT ... fixes, "Round 5 (599d16a4)"): the iOS latch, the union, the timeout, the retry ════════════════
+const iosLaunch = (shared, backupExclude, calls = []) => storeWorld({ native: true, platform: 'ios', ...shared, backupExclude, excludeCalls: calls });
+
+test('R5-1 — THREE LAUNCHES on iOS (files on → plugin rejects → files on): nothing is hidden at any launch and nothing invites a re-download', async () => {
+  const shared = { ls: new Map(), idbData: new Map(), disk: new Map() };
+  seedWeb(shared.idbData, [[43, 1], [43, 2]]);
+  // launch 1: the gate opens; World English moves to files; a set is imported to files
+  const one = iosLaunch(shared, 'resolve');
+  await one.S.boot();
+  const { id: a } = await imp(one, [['John_3.mp3', mp3('a3')]]);
+  await one.S.finishImport(a, { name: 'A' });
+  assert.ok(shared.disk.has('audio/' + a + '/43/3.mp3') && shared.disk.has('audio/WEB/43/1.mp3'), 're-anchor: launch 1 did not use files');
+  assert.equal(shared.ls.get('trinityone.audioFilesIos'), '1', 'files were used but the latch was not set');
+  // launch 2: the plugin rejects. Files stay on; everything is still there; a new import goes to files, not IndexedDB
+  const two = iosLaunch(shared, 'reject');
+  await two.S.boot();
+  assert.equal(two.S.filesOn(), true, 'a rejected exclude on a later launch dropped back to IndexedDB');
+  assert.deepEqual((await two.S.listBook('WEB', 43)).map(x => x.chap), [1, 2], 'World English is hidden');
+  assert.equal(await two.S.hasChapter('WEB', 43, 2), true, 'World English would be downloaded again');
+  assert.equal(await bytesAt(two, a, 43, 3), 'a3', 'the imported set is hidden');
+  const { id: b } = await imp(two, [['John_4.mp3', mp3('b4')]]);
+  await two.S.finishImport(b, { name: 'B' });
+  assert.ok(shared.disk.has('audio/' + b + '/43/4.mp3'), 'a latched phone wrote a new set to IndexedDB');
+  assert.equal([...shared.idbData.keys()].length, 0);
+  // launch 3: the plugin answers again: still all there
+  const three = iosLaunch(shared, 'resolve');
+  await three.S.boot();
+  assert.deepEqual([await bytesAt(three, a, 43, 3), await bytesAt(three, b, 43, 4)], ['a3', 'b4']);
+  assert.deepEqual((await three.S.listBook('WEB', 43)).map(x => x.chap), [1, 2]);
+  // Remove on a latched phone deletes the files
+  assert.equal((await three.S.removeSet(a)).ok, true);
+  assert.equal(shared.disk.has('audio/' + a + '/43/3.mp3'), false, 'Remove left the files');
+});
+
+test('R5-1 — a set imported while the gate was closed (IndexedDB) is visible as soon as the gate opens, then moves to files at the next boot', async () => {
+  const shared = { ls: new Map(), idbData: new Map(), disk: new Map() };
+  const one = iosLaunch(shared, 'missing');
+  await one.S.boot();
+  const { id } = await imp(one, [['John_6.mp3', mp3('c6')], ['John_7.mp3', mp3('c7')]]);
+  await one.S.finishImport(id, { name: 'C' });
+  assert.ok(shared.idbData.has(id + '/43/6'), 're-anchor: the closed-gate import did not use IndexedDB');
+  const two = iosLaunch(shared, 'resolve');
+  await two.S.ensureGate();                                   // gate open, nothing moved yet
+  assert.equal(two.S.filesOn(), true);
+  assert.deepEqual((await two.S.listBook(id, 43)).map(x => x.chap), [6, 7], 'with files on, the IndexedDB set is hidden');
+  assert.equal(await bytesAt(two, id, 43, 7), 'c7');
+  const three = iosLaunch(shared, 'resolve');
+  await three.S.boot();                                       // the move takes the own set too
+  assert.deepEqual([...shared.idbData.keys()], [], 'the own set was not moved out of IndexedDB');
+  assert.ok(shared.disk.has('audio/' + id + '/43/6.mp3') && shared.disk.has('audio/' + id + '/43/7.mp3'));
+  assert.equal(await bytesAt(three, id, 43, 6), 'c6');
+});
+
+test('R5-2 — an exclude call that never answers times out: boot and imports finish; the run uses the latch state', async () => {
+  const shared = { ls: new Map(), idbData: new Map(), disk: new Map() };
+  const w = iosLaunch(shared, 'hang');
+  w.S.caps.excludeMs = 30;
+  await Promise.race([w.S.boot(), settle(400).then(() => { throw new Error('boot is still waiting on the plugin'); })]);
+  const id = await Promise.race([w.S.beginImport(), settle(400).then(() => 'STILL WAITING')]);
+  assert.match(String(id), /^[0-9a-f]{16}$/, 'an import is stuck behind the plugin');
+  assert.equal(w.S.filesOn(), false, 'not latched: a timed-out exclude must not turn files on');
+  // latched phone, plugin hangs: files stay on
+  shared.ls.set('trinityone.audioFilesIos', '1');
+  const l = iosLaunch(shared, 'hang'); l.S.caps.excludeMs = 30;
+  await l.S.boot();
+  assert.equal(l.S.filesOn(), true);
+});
+
+test('R5-3 — a closed, un-latched gate is tried once more when an import starts', async () => {
+  const calls = [];
+  // the first exclude call rejects, every later one confirms
+  const w = iosLaunch({ ls: new Map(), idbData: new Map(), disk: new Map() }, () => (calls.length === 0 ? 'reject' : 'resolve'), calls);
+  await w.S.boot();
+  assert.equal(w.S.filesOn(), false, 're-anchor: the first try did not fail');
+  const { id } = await imp(w, [['John_8.mp3', mp3('d8')]]);
+  assert.ok(calls.length >= 2, 'the gate was not tried again when the import started');
+  assert.ok(w.disk.has('audio/' + id + '/43/8.mp3'), 'after the retry opened the gate the import did not use files');
+});

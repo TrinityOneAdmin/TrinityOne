@@ -466,3 +466,53 @@ test('AUDIT #2 (point of use) — picking a file shows the progress panel AT ONC
   assert.match(texts(tree).join(' '), /Name it/, 'the import is held up by the World English move');
   assert.equal(w.S.rows().filter(r => r.source === 'own').length, 1, 'a second import was started alongside the first');
 });
+
+// ════════════════ round-5: iOS at the point of use ════════════════
+test('R5-1 (point of use) — iOS phone that already uses files, plugin now rejecting: Library still says "Downloaded", the set is listed, Listen plays it', async () => {
+  const shared = { ls: new Map([['trinityone.audioFilesIos', '1']]), idbData: new Map(), disk: new Map() };
+  shared.disk.set('audio/WEB/57/1.mp3', mp3('phm'));
+  // what an earlier launch with the gate open left: a ready set and World English, both in files
+  const id = 'abcdef0123456789';
+  shared.disk.set('audio/' + id + '/43/3.mp3', mp3('mine3'));
+  shared.ls.set('trinityone.audioSets', JSON.stringify([{ id, name: 'Mine', source: 'own', state: 'ready', chapters: 1, bytes: 64 }]));
+  const w = audioWorld({ native: true, platform: 'ios', backupExclude: 'reject', ...shared });
+  await w.S.boot();
+  const L = libraryScreen(w, { manifest: { chapters: { 57: { 1: [0, 1] } } } });
+  L.draw(); await settle(); const tree = L.draw();
+  assert.match(bookLine(tree, 57), /Downloaded/, 'World English in files is shown as not downloaded');
+  assert.equal(find(tree, n => n.props && n.props['data-own-set'] === id).length, 1);
+  w.lsSet('trinityone.audioVoice', id + '/david');
+  reader(w).listen(); await settle();
+  assert.equal(await blobTag(w.el.src), 'mine3', 'Listen does not play the set kept in files');
+});
+
+test('R5-2 (point of use) — with the plugin hanging, Cancel frees the screen at once and the import leaves nothing', async () => {
+  const w = audioWorld({ native: true, platform: 'ios', backupExclude: 'hang' });
+  w.S.caps.excludeMs = 150;
+  w.S.boot();
+  const L = libraryScreen(w);
+  L.draw(); await settle();
+  find(L.draw(), n => n.type === 'input' && n.props.type === 'file')[0].props.onChange({ target: { files: [new File([zipOf([['John_1.mp3', mp3('x')]])], 'a.zip')] } });
+  let tree = L.draw();
+  assert.match(texts(tree).join(' '), /Adding your audio Bible/);
+  btnText(tree, 'Cancel')[0].props.onClick(); tree = L.draw();
+  assert.doesNotMatch(texts(tree).join(' '), /Adding your audio Bible/, 'Cancel did not free the screen');
+  await new Promise(r => setTimeout(r, 300)); await settle(40);
+  assert.deepEqual([w.S.rows().filter(r => r.source === 'own').length, w.idbData.size, w.disk.size], [0, 0, 0], 'the cancelled import left something behind');
+});
+
+test('R5-3 (point of use) — a World English download on iOS tries a failed gate once more, then stores to files', async () => {
+  const calls = [];
+  const w = audioWorld({ native: true, platform: 'ios', backupExclude: () => (calls.length === 0 ? 'reject' : 'resolve'), excludeCalls: calls });
+  await w.S.boot();
+  assert.equal(w.S.filesOn(), false, 're-anchor');
+  const one = fflate.zipSync({ 'x.mp3': [mp3('dl1'), { level: 1 }] });
+  const csize = one[18] | (one[19] << 8) | (one[20] << 16) | (one[21] << 24);
+  w.win.Fellowship = { relays: ['wss://relay.example'], CANONICAL_RELAYS: [] };
+  w.win.netFetch = async () => ({ ok: true, arrayBuffer: async () => one.buffer.slice(0) });
+  libraryScreen(w, { manifest: { chapters: { 57: { 1: [0, csize] } } } });
+  await w.win.TrinityAudioBible.downloadWebBook(57);
+  assert.equal(calls.length, 2, 'the download did not try the gate again');
+  assert.equal(tagOf(w.disk.get('audio/WEB/57/1.mp3')), 'dl1');
+  assert.equal(w.idbData.size, 0, 'the chapter went to IndexedDB (backed up by iCloud)');
+});

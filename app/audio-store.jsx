@@ -29,12 +29,18 @@
   const ROOT = 'audio';
   // iOS uses file storage only after THIS run's BackupExclude.exclude({path:'audio'}) answered excluded:true (see iosGate)
   let iosBackupExcludeReady = false;
+  // THE iOS LATCH (round-5 R5-1). Once this phone has stored audio in files (a confirmed exclude, then a file written), it
+  // keeps using files on every later launch even if the plugin then rejects, is missing or times out: falling back to
+  // IndexedDB would hide every chapter already in files and put new ones where iCloud backs them up. One localStorage key.
+  const IOS_LATCH_KEY = 'trinityone.audioFilesIos';
+  const iosLatched = () => { try { return localStorage.getItem(IOS_LATCH_KEY) === '1'; } catch (e) { return false; } };
+  const isIos = () => { const c = cap(); return !!(c && typeof c.getPlatform === 'function' && c.getPlatform() === 'ios'); };
   const CAP_ENTRY = 64 * 1024 * 1024;              // inflated bytes in one entry
   const CAP_TOTAL = 3 * 1024 * 1024 * 1024;        // inflated bytes in one import
   const CAP_ENTRIES = 5000;
   const CAP_RAW = 4 * 1024 * 1024 * 1024 - 1;      // a zip over 4 GB is refused with words for now (zip64 entries under the caps import)
   // the limits the import checks; one object so a test can lower them and prove each one is enforced
-  const LIM = { entry: CAP_ENTRY, total: CAP_TOTAL, entries: CAP_ENTRIES, raw: CAP_RAW };
+  const LIM = { entry: CAP_ENTRY, total: CAP_TOTAL, entries: CAP_ENTRIES, raw: CAP_RAW, excludeMs: 5000 };
   const WRITE_CHUNK = 1024 * 1024;                 // ~1 MB per bridge call, never a 22 MB base64 string
   const MIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', ogg: 'audio/ogg' };
   const EXT_OF_MIME = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg' };
@@ -68,7 +74,7 @@
     const c = cap();
     const native = !!(c && typeof c.isNativePlatform === 'function' && c.isNativePlatform());
     const plat = c && typeof c.getPlatform === 'function' ? c.getPlatform() : '';
-    return native && !!FSP() && (plat === 'android' || (plat === 'ios' && iosBackupExcludeReady));
+    return native && !!FSP() && (plat === 'android' || (plat === 'ios' && (iosBackupExcludeReady || iosLatched())));
   }
   // Android: Directory.Data. iOS: Directory.Library, the same base the BackupExclude plugin resolves 'audio' against
   // (FileManager .libraryDirectory, per PR #24), so the folder the plugin excludes is the folder the files go in.
@@ -77,17 +83,33 @@
   // THE iOS GATE, run at the start of every boot (the exclusion is re-applied on every start). Only a resolved
   // {excluded:true} turns file storage on for this run; a missing plugin, a rejection or excluded:false leaves iOS on
   // IndexedDB. The plugin object is never returned from an async function (Capacitor's plugin proxy answers `then`).
+  // The exclude call is raced against LIM.excludeMs (~5 s, round-5 R5-2): a plugin that never answers counts as "no" for
+  // this run, so nothing that waits on the gate (the sweep, the move, every import) can hang. When latched, a failure is
+  // logged and files stay on; the attribute is already on the folder from the run that latched it.
   async function iosGate() {
-    iosBackupExcludeReady = false;
     const c = cap();
     if (!c || typeof c.getPlatform !== 'function' || c.getPlatform() !== 'ios') return false;
-    if (typeof c.isPluginAvailable !== 'function' || !c.isPluginAvailable('BackupExclude')) return false;
-    const P = c.Plugins && c.Plugins.BackupExclude;
-    if (!P || typeof P.exclude !== 'function') return false;
+    const P = (typeof c.isPluginAvailable === 'function' && c.isPluginAvailable('BackupExclude')) ? (c.Plugins && c.Plugins.BackupExclude) : null;
     let r = null;
-    try { r = await Promise.resolve(P.exclude({ path: 'audio' })).catch(() => null); } catch (e) { r = null; }
+    if (P && typeof P.exclude === 'function') {
+      let timer = null;
+      try {
+        r = await Promise.race([
+          Promise.resolve(P.exclude({ path: 'audio' })).catch(() => null),
+          new Promise(res => { timer = setTimeout(() => res(null), LIM.excludeMs); }),
+        ]);
+      } catch (e) { r = null; }
+      if (timer) clearTimeout(timer);
+    }
     iosBackupExcludeReady = !!(r && r.excluded === true);
+    if (!iosBackupExcludeReady && iosLatched()) { try { console.warn('TrinityOne audio: BackupExclude did not confirm Library/audio this run; staying on file storage'); } catch (e) {} }
     return iosBackupExcludeReady;
+  }
+  // round-5 R5-3: a closed, un-latched gate is tried once more when the member starts an import or a World English download
+  async function ensureGate() {
+    if (!isIos() || iosBackupExcludeReady || iosLatched()) return filesOn();
+    await iosGate();
+    return filesOn();
   }
 
   // ─────────────── registry ───────────────
@@ -106,6 +128,9 @@
     let s = ''; for (let i = 0; i < 8; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16);
     return s;   // 16 hex characters
   }
+  // which ids are also read from IndexedDB while files are on: World English (it may still be moving), and on iOS every
+  // set (round-5 R5-1b: a set imported in a run whose gate was closed sits in IndexedDB until the move takes it)
+  const idbToo = (id) => !filesOn() || id === 'WEB' || isIos();
   const validId = (id) => id === 'WEB' || /^[0-9a-f]{16}$/.test(String(id || ''));
 
   // ─────────────── IndexedDB (the web/Suite/iOS store, and World English's old home on Android) ───────────────
@@ -158,6 +183,7 @@
         await fDel(old);
       }
     } catch (e) { await fDel(tmp); throw e; }
+    if (isIos()) { try { if (!iosLatched()) localStorage.setItem(IOS_LATCH_KEY, '1'); } catch (e) {} }
   }
   async function fList(path) {
     try { const r = await FSP().readdir({ path, directory: DIR() }); return (r && r.files || []).map(f => (typeof f === 'string' ? { name: f, type: 'file', size: 0 } : f)); } catch (e) { return []; }
@@ -186,7 +212,7 @@
         const m = /^(\d+)\.(mp3|m4a|ogg)$/.exec(f.name || ''); if (m) out.set(+m[1], { chap: +m[1], ext: m[2], size: Number(f.size) || 0, where: 'file' });
       }
     }
-    if (!useFiles || id === 'WEB') {
+    if (idbToo(id)) {
       const pre = id + '/' + book + '/';
       for (const k of await idbKeys()) {
         if (k.indexOf(pre) !== 0) continue;
@@ -207,7 +233,7 @@
         for (const f of await fList(ROOT + '/' + id + '/' + d.name)) { const m = /^(\d+)\.(mp3|m4a|ogg)$/.exec(f.name || ''); if (m) add(+d.name, +m[1]); }
       }
     }
-    if (!useFiles || id === 'WEB') {
+    if (idbToo(id)) {
       for (const k of await idbKeys()) { const m = /^([^/]+)\/(\d+)\/(\d+)$/.exec(k); if (m && m[1] === id) add(+m[2], +m[3]); }
     }
     return out;
@@ -228,7 +254,7 @@
   }
   async function delEntry(id, sub, ext) {
     if (filesOn()) { if (ext) await fDel(fpath(id, sub, ext)); else for (const e of Object.keys(MIME)) await fDel(fpath(id, sub, e)); }
-    if (!filesOn() || id === 'WEB') await idbDel([id + '/' + sub]);
+    if (idbToo(id)) await idbDel([id + '/' + sub]);
   }
   async function move(id, fromSub, ext, toSub) {
     if (filesOn()) {
@@ -244,13 +270,13 @@
   // delete every byte of a set in the store(s) it can be in; returns the bytes it held where that is known
   async function wipe(id) {
     if (filesOn()) await fRmdir(ROOT + '/' + id);
-    if (!filesOn() || id === 'WEB') { const pre = id + '/'; await idbDel((await idbKeys()).filter(k => k.indexOf(pre) === 0)); }
+    if (idbToo(id)) { const pre = id + '/'; await idbDel((await idbKeys()).filter(k => k.indexOf(pre) === 0)); }
   }
   async function setBytes(id) {
     let n = 0;
     if (filesOn()) {
       for (const d of await fList(ROOT + '/' + id)) { if (!/^\d+$/.test(d.name || '')) continue; for (const f of await fList(ROOT + '/' + id + '/' + d.name)) n += Number(f.size) || 0; }
-      return n;
+      if (!idbToo(id)) return n;
     }
     const pre = id + '/';
     for (const k of await idbKeys()) { if (k.indexOf(pre) !== 0 || /\/_unplaced\//.test(k)) continue; const b = await idbGet(k); n += (b && b.size) || 0; }
@@ -468,6 +494,7 @@
   // Begin an import: writes the PENDING row first (a crash after this leaves something the boot sweep removes).
   async function beginImport() {
     await booted();
+    await ensureGate();
     const id = newId();
     if (!writeRow({ id, name: '', lang: '', reader: '', licence: '', source: 'own', recording: 'own-' + id, state: 'pending', chapters: 0, bytes: 0, unplaced: [] }))
       throw capErr('no-registry');
@@ -593,7 +620,7 @@
   }
   async function clearUnplaced(id) {
     if (filesOn()) await fRmdir(ROOT + '/' + id + '/_unplaced');
-    else { const pre = id + '/_unplaced/'; await idbDel((await idbKeys()).filter(k => k.indexOf(pre) === 0)); }
+    if (idbToo(id)) { const pre = id + '/_unplaced/'; await idbDel((await idbKeys()).filter(k => k.indexOf(pre) === 0)); }
   }
 
   // Remove (B2): mark the row pending → delete the files → delete the row. A crash in the middle leaves a pending row the
@@ -632,7 +659,8 @@
             }
           }
         }
-      } else {
+      }
+      if (!filesOn() || isIos()) {   // on iOS IndexedDB can hold sets from a run whose gate was closed: sweep it too
         const del = [];
         for (const k of await idbKeys()) {
           const [id, sub] = k.split('/');
@@ -650,28 +678,33 @@
   // nothing moves). Per chapter: write the file, stat it, THEN delete the IndexedDB key — a kill between the two leaves
   // the chapter in both stores, and the next run writes it again and deletes the key. Serialised with downloads.
   const WEB_ROW = { id: 'WEB', name: 'World English', lang: 'English', reader: 'David Williams', licence: 'public-domain', source: 'catalog', recording: 'web-williams', state: 'ready' };
+  // Round-5 R5-1c: the move also takes a READY own set's chapters out of IndexedDB (on iOS, a set imported in a run whose
+  // gate was closed), with the same per-chapter write → check → delete-the-old-copy order and the same resumability.
   async function migrateWeb() {
     if (!filesOn()) return { ran: false };
-    const webKeys = () => idbKeys().then(ks => ks.filter(k => /^WEB\/\d+\/\d+$/.test(k)));
-    let keys = await webKeys();
+    const ready = new Set(readySets().map(r => r.id));
+    const movable = () => idbKeys().then(ks => ks.filter(k => { const m = /^(WEB|[0-9a-f]{16})\/\d+\/\d+$/.exec(k); return m && (m[1] === 'WEB' || ready.has(m[1])); }));
+    const keys = await movable();
+    const hasWeb = keys.some(k => k.indexOf('WEB/') === 0);
     const r = row('WEB');
-    if (!keys.length) { if (r && r.migrating) patchRow('WEB', { migrating: false }); return { ran: true, moved: 0 }; }
-    if (!(r && r.migrating) && !writeRow({ ...WEB_ROW, ...(r || {}), state: 'ready', migrating: true })) return { ran: false, reason: 'no-registry' };
+    if (!hasWeb && r && r.migrating) patchRow('WEB', { migrating: false });
+    if (!keys.length) return { ran: true, moved: 0 };
+    if (hasWeb && !(r && r.migrating) && !writeRow({ ...WEB_ROW, ...(r || {}), state: 'ready', migrating: true })) return { ran: false, reason: 'no-registry' };
     let moved = 0;
     for (const k of keys) {
       const ok = await serial(async () => {
         const blob = await idbGet(k); if (!blob) return true;
-        const [, b, c] = k.split('/');
+        const [id, b, c] = k.split('/');
         const u8 = new Uint8Array(await blob.arrayBuffer());
         const ext = sniff(u8) || 'mp3';
-        try { await fWrite(fpath('WEB', b + '/' + c, ext), u8); } catch (e) { return false; }
+        try { await fWrite(fpath(id, b + '/' + c, ext), u8); } catch (e) { return false; }
         await idbDel([k]);
         return true;
       });
       if (!ok) return { ran: true, moved, stopped: true };
       moved++;
     }
-    if (!(await webKeys()).length) patchRow('WEB', { migrating: false });
+    if (hasWeb && !(await movable()).some(k => k.indexOf('WEB/') === 0)) patchRow('WEB', { migrating: false });
     return { ran: true, moved };
   }
 
@@ -706,7 +739,7 @@
     listBook, listAll, hasChapter, chapterBlob, chapterUrl,
     sniff, matchName, isZipHead, chunkSource,
     beginImport, importSources, placeUnplaced, leaveOut, cancelImport, finishImport, removeSet,
-    sweep, migrateWeb, putWebChapter, removeWebBook, boot,
+    sweep, migrateWeb, putWebChapter, removeWebBook, boot, ensureGate,
     CHAPTERS: CHAPTERS.slice(), USFM: USFM.slice(),
     caps: LIM,
   };

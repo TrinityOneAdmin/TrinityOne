@@ -107,20 +107,24 @@ export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failW
 }
 
 // ── a world: one localStorage, one IndexedDB, optionally the native disk; the store loaded for real ──
-// backupExclude (iOS only): 'resolve' | 'reject' | 'false' (answers excluded:false) | 'missing' — a fake of PR #24's plugin
+// backupExclude (iOS only): 'resolve' | 'reject' | 'false' (answers excluded:false) | 'hang' (never answers) | 'missing',
+// or a function returning one of those at each call — a fake of PR #24's plugin
 export function storeWorld({ native = false, platform = 'android', ls = new Map(), idbData = new Map(), disk = new Map(), fsOpts = {}, extra = {}, backupExclude = 'missing', excludeCalls = [] } = {}) {
   const idb = fakeIdb(idbData);
+  const modeOf = () => (typeof backupExclude === 'function' ? backupExclude() : backupExclude);
   const fs = fakeFs(disk, fsOpts);
   const localStorage = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => { ls.set(k, String(v)); }, removeItem: (k) => { ls.delete(k); } };
   const win = {
     fflate, indexedDB: idb.indexedDB, crypto: globalThis.crypto, btoa: globalThis.btoa,
     Capacitor: native ? { isNativePlatform: () => true, getPlatform: () => platform, convertFileSrc: fs.convertFileSrc,
-      isPluginAvailable: (n) => (n === 'BackupExclude' ? backupExclude !== 'missing' : n === 'Filesystem'),
-      Plugins: { Filesystem: fs.Filesystem, ...(backupExclude !== 'missing' ? { BackupExclude: { exclude: async (o) => {
-        excludeCalls.push({ ...o, fsCallsBefore: fs.calls.length });
-        if (backupExclude === 'reject') throw new Error('path must not be empty');
-        return { path: o.path, excluded: backupExclude === 'resolve' };
-      } } } : {}) } }
+      isPluginAvailable: (n) => (n === 'BackupExclude' ? modeOf() !== 'missing' : n === 'Filesystem'),
+      Plugins: { Filesystem: fs.Filesystem, get BackupExclude() { return modeOf() === 'missing' ? undefined : { exclude: async (o) => {
+        const mode = modeOf();
+        excludeCalls.push({ ...o, mode, fsCallsBefore: fs.calls.length });
+        if (mode === 'hang') return new Promise(() => {});
+        if (mode === 'reject') throw new Error('path must not be empty');
+        return { path: o.path, excluded: mode === 'resolve' };
+      } }; } } }
       : { isNativePlatform: () => false, getPlatform: () => 'web', Plugins: {} },
     ...extra,
   };
