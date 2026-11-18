@@ -21,6 +21,7 @@ import * as H from './relay-network-harness.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const running = [];
+let lastBase = '';
 
 // A box with exactly these files in apks/, and no update origin (so it fetches nothing on its own).
 async function boxHolding(names) {
@@ -33,6 +34,7 @@ async function boxHolding(names) {
   });
   running.push({ proc, dir });
   const base = 'http://127.0.0.1:' + port;
+  lastBase = base;
   for (let i = 0; i < 100; i++) { await sleep(200); try { if ((await fetch(base + '/status')).ok) break; } catch {} }
   const r = await fetch(base + '/install');
   assert.equal(r.status, 200, 'precondition: /install did not answer');
@@ -111,3 +113,59 @@ test('a box holding only the steward app does not hide the only thing it can off
     'with no member app on the box, the steward download was tucked away and the page showed nothing to download');
   assert.equal(links.filter((l) => l.href === '/trinityone.apk').length, 0, 'precondition: no member app on this box');
 });
+
+// ── An iPhone cannot install an .apk. During the pilot the iPhone app comes through Apple's TestFlight, so an
+// iPhone visitor is shown the TestFlight steps and every .apk goes behind a closed chevron. Decided on the
+// server from the User-Agent, because the page carries no script.
+const TF_MEMBER = 'https://testflight.apple.com/join/u5CZnMp9';
+const TF_STEWARD = 'https://testflight.apple.com/join/whHSMBEZ';
+const TF_APP = 'https://apps.apple.com/app/testflight/id899247664';
+const UA_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+const UA_ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+const UA_DESKTOP = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15';
+let _uaBox = null;
+async function pageAs(ua) {
+  if (!_uaBox) _uaBox = (async () => { await boxHolding(['trinityone.apk', 'trinityone-steward.apk']); return lastBase; })();
+  const r = await fetch((await _uaBox) + '/install', { headers: { 'User-Agent': ua } });
+  assert.equal(r.status, 200, 'precondition: /install did not answer');
+  return { html: await r.text(), vary: String(r.headers.get('vary') || '') };
+}
+const closedAll = (l) => l.details.length >= 1 && l.details.every((d) => !d.open);
+
+const UA_IPAD = 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+const UA_IPOD = 'Mozilla/5.0 (iPod touch; CPU iPhone OS 15_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1';
+for (const [label, ua] of [['iPhone', UA_IPHONE], ['iPad (iOS UA)', UA_IPAD], ['iPod', UA_IPOD]]) test('an ' + label + ' is shown the TestFlight steps, with every .apk behind a closed chevron', async () => {
+  const { html, vary } = await pageAs(ua);
+  const links = linkContainers(html);
+  assert.equal(linkTo(links, TF_MEMBER).details.length, 0,
+    'on an iPhone the member TestFlight link is hidden inside a <details>, so the page leads with nothing it can install');
+  assert.ok(!linkTo(links, TF_MEMBER).cls.split(/\s+/).includes('quiet'), 'the member TestFlight link lost its solid button');
+  assert.ok(links.some((l) => l.href === TF_APP), 'the iPhone page has no link to get TestFlight itself from the App Store');
+  for (const href of ['/trinityone.apk', '/trinityone-steward.apk']) {
+    assert.ok(closedAll(linkTo(links, href)),
+      'on an iPhone the Android file ' + href + ' is in plain view — the very button an iPhone cannot use');
+  }
+  const steward = linkTo(links, TF_STEWARD);
+  assert.ok(closedAll(steward) && steward.details.some((d) => d.cls.split(/\s+/).includes('leaders')),
+    'the steward TestFlight link is not inside the closed "For church leaders" chevron');
+  assert.ok(!/mobile data/i.test(html),
+    'the iPhone page repeats the no-mobile-data claim, which is not true of TestFlight');
+  assert.ok(/User-Agent/i.test(vary), 'the page differs by User-Agent but does not say so in Vary, so a cache could serve the iPhone page to Android');
+});
+
+for (const [label, ua] of [['Android', UA_ANDROID], ['desktop', UA_DESKTOP]]) {
+  test('a ' + label + ' visitor still gets the Android page, with the iPhone steps only behind a closed chevron', async () => {
+    const { html, vary } = await pageAs(ua);
+    const links = linkContainers(html);
+    assert.equal(linkTo(links, '/trinityone.apk').details.length, 0, 'the member .apk is no longer in plain view for ' + label);
+    assert.ok(closedAll(linkTo(links, '/trinityone-steward.apk')), 'the steward .apk is not behind a closed chevron for ' + label);
+    assert.ok(closedAll(linkTo(links, TF_MEMBER)),
+      'the member TestFlight link is in plain view on the ' + label + ' page, competing with the download that works there');
+    assert.ok(closedAll(linkTo(links, TF_STEWARD)), 'the steward TestFlight link is in plain view on the ' + label + ' page');
+    assert.ok(/User-Agent/i.test(vary), 'no Vary: User-Agent on the ' + label + ' page');
+    // An iPad sends a Mac UA and lands here, so the lede must not promise it an app-store-free install.
+    const lede = (html.match(/<p class="lede">([\s\S]*?)<\/p>/) || [])[1] || '';
+    assert.match(lede, /^Android phones:/, 'the wifi/no-app-store promise is no longer scoped to Android phones');
+    assert.match(lede, /iPhone or iPad/, 'the lede does not point an iPad (which arrives with a Mac UA) to its chevron');
+  });
+}

@@ -5,6 +5,10 @@
   var name = q.get('name') || '';
   var relay = q.get('relay') || '';
   var church = q.get('c') || '';
+  // THE IPHONE APP, DURING THE PILOT, COMES THROUGH APPLE'S TESTFLIGHT (public links already given to pilot
+  // churches; the same links /install shows an iPhone).
+  var TESTFLIGHT_APP = 'https://testflight.apple.com/join/u5CZnMp9';
+  var TESTFLIGHT_STORE = 'https://apps.apple.com/app/testflight/id899247664';
   var APK = './trinityone.apk';   // SECURITY-AUDIT-2026-06-24 L12: relative path so the download resolves on whichever host served the join page (Pages, gateway, or church relay) — not pinned to the dev box's Tailnet hostname.
 
   // the instant path: open the web app with the join context (key minted on-device, name pre-filled, church followed)
@@ -64,6 +68,19 @@
 
   var getApp = document.getElementById('getApp');
   var note = document.getElementById('note');
+  // The church code as text, under the note. `follow` comes from the URL, so it goes in by textContent only.
+  function showCode(lead) {
+    if (!follow) return;
+    var code = document.createElement('p');
+    code.className = 'joincode';
+    code.appendChild(document.createTextNode(lead));
+    code.appendChild(document.createElement('br'));
+    var val = document.createElement('code');
+    val.id = 'joincodeval';
+    val.textContent = follow;
+    code.appendChild(val);
+    note.parentNode.insertBefore(code, note.nextSibling);
+  }
   if (isAndroid) {
     getApp.classList.remove('hide');
     getApp.href = APK;
@@ -80,16 +97,25 @@
       + 'from your browser — that’s normal, and you only do it once. When it’s installed, tap this invite '
       + 'link again and it opens straight in the app, already joined.';
     // the fallback for someone who installs the app and then loses the invite message
-    if (follow) {
-      var code = document.createElement('p');
-      code.className = 'joincode';
-      code.innerHTML = 'Lost this link after installing? Open the app and paste this church code:<br>'
-        + '<code id="joincodeval"></code>';
-      note.parentNode.insertBefore(code, note.nextSibling);
-      try { document.getElementById('joincodeval').textContent = follow; } catch(e){}
-    }
+    showCode('Lost this link after installing? Open the app and paste this church code:');
   } else if (isIOS) {
-    note.innerHTML = 'Tap <b>Open now</b>, then Share <span aria-hidden="true">⬆️</span> → <b>Add to Home Screen</b> to keep TrinityOne like an app. (An App Store version is on the way.)';
+    // THE IPHONE APP COMES THROUGH TESTFLIGHT, and an invite link does not open it yet — so the church code
+    // shown below is how an iPhone member joins inside the app. Built with createElement/textContent: nothing
+    // from the URL goes near innerHTML.
+    getApp.classList.remove('hide');
+    getApp.href = TESTFLIGHT_APP;
+    document.getElementById('getAppLabel').textContent = 'Get the iPhone app';
+    note.textContent = '';
+    var b = function (t) { var e = document.createElement('b'); e.textContent = t; return e; };
+    var store = document.createElement('a');
+    store.href = TESTFLIGHT_STORE;
+    store.textContent = 'TestFlight from the App Store';
+    note.appendChild(document.createTextNode('For the iPhone app: get '));
+    note.appendChild(store);
+    note.appendChild(document.createTextNode(', tap '));
+    note.appendChild(b('Get the iPhone app'));
+    note.appendChild(document.createTextNode(' and install it. Then open TrinityOne and paste or scan your church code.'));
+    showCode('Your church code:');
   } else {
     note.innerHTML = 'Tap <b>Open now</b> to begin in your browser. On a phone you can add it to your Home Screen like an app.';
   }
