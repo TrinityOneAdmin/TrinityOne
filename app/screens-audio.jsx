@@ -35,6 +35,16 @@
   el.addEventListener('ended', () => { set({ playing: false }); api.next(); });
   el.addEventListener('error', () => set({ loading: false, playing: false }));
 
+  // AN AUDIO-BIBLE CHAPTER'S BLOB ADDRESS IS LET GO WHEN THE PLAYER LEAVES IT (plan P1). Only tracks the audio-Bible code
+  // made and marked {bibleLocal:true} — they always carry resolve(), so Previous or a replay simply resolves again and the
+  // phone holds one chapter in memory at a time. Every other track (sermons, podcast episodes) is left exactly as before:
+  // a queue's first sermon can hold a blob address with NOTHING to rebuild it from.
+  function release(old, now) {
+    if (!old || old === now || !old.bibleLocal || typeof old.resolve !== 'function' || !old.src) return;
+    const u = old.src; delete old.src;
+    try { if (/^blob:/.test(u)) URL.revokeObjectURL(u); } catch (e) {}
+  }
+
   function mediaSession(track) {
     if (!('mediaSession' in navigator)) return;
     try {
@@ -63,8 +73,10 @@
       else { queue = [track]; qi = 0; }
       const tok = ++playTok;
       pending = false;
+      const was = state.track;
       const start = () => {
         if (el.src !== track.src) el.src = track.src;
+        release(was, track);
         applyRate();
         set({ track, loading: true, failed: false, q: queue, qi });
         mediaSession(track);
@@ -75,11 +87,12 @@
       // PREVIOUS sermon's element under the NEW title. Play and seek are also no-ops until it lands.
       pending = true;
       try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
+      release(was, track);
       set({ track, loading: true, playing: false, failed: false, t: 0, d: 0, q: queue, qi });
       mediaSession(track);
       const fail = () => { if (tok === playTok) { pending = false; set({ loading: false, playing: false, failed: true }); } };
       Promise.resolve().then(() => track.resolve()).then(src => {
-        if (tok !== playTok) return;                  // the listener chose something else while this downloaded
+        if (tok !== playTok) { if (track.bibleLocal && src && /^blob:/.test(src)) { try { URL.revokeObjectURL(src); } catch (e) {} } return; }   // the listener chose something else while this downloaded
         if (!src) { fail(); return; }
         pending = false; track.src = src; start();
       }).catch(fail);
@@ -100,7 +113,7 @@
     prev() { if (el.currentTime > 3) { el.currentTime = 0; return; } if (qi > 0) api.play(queue[qi - 1], queue); },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; pending = false; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, t: 0, d: 0, q: queue, qi }); },
+    stop() { playTok++; pending = false; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, t: 0, d: 0, q: queue, qi }); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };
@@ -299,19 +312,38 @@ function MiniPlayer({ ctx, bottom, inline, heightVar }) {
 const USFM_ORDER = ('GEN EXO LEV NUM DEU JOS JDG RUT 1SA 2SA 1KI 2KI 1CH 2CH EZR NEH EST JOB PSA PRO ECC SNG ISA JER ' +
   'LAM EZK DAN HOS JOL AMO OBA JON MIC NAM HAB ZEP HAG ZEC MAL MAT MRK LUK JHN ACT ROM 1CO 2CO GAL EPH PHP COL ' +
   '1TH 2TH 1TI 2TI TIT PHM HEB JAS 1PE 2PE 1JN 2JN 3JN JUD REV').split(' ');
-// Audio sources: BSB streams per-chapter from the Free Use Bible API; WEB is the public-domain World
-// English Bible (matches the WEB text) downloaded as an offline module (see the store below).
+// Audio sources: BSB streams per-chapter from the Free Use Bible API; WEB is the public-domain World English Bible
+// (David Williams's reading, matches the WEB text) downloaded book by book; and any audio Bible the member added
+// themselves ("Add your own"). Where the chapters live is app/audio-store.jsx (window.TrinityAudioStore).
 const AUDIO_BIBLE_OPTIONS = {
   translations: [{ id: 'BSB', name: 'Berean Standard', stream: true }, { id: 'WEB', name: 'World English', local: true }],
   readers: [{ id: 'david', name: 'David' }, { id: 'hays', name: 'Hays' }, { id: 'souer', name: 'Souer' }],
 };
 const transName = (id) => (AUDIO_BIBLE_OPTIONS.translations.find(t => t.id === id) || {}).name || id;
+// the member's own audio Bibles that are finished (READY) — a pending import is never offered
+function audioOwnSets() {
+  const S = window.TrinityAudioStore;
+  try { return S ? S.readySets().filter(r => r.source === 'own') : []; } catch (e) { return []; }
+}
+// The saved choice is "<translation or set id>/<reader>". It is checked against the built-ins plus the registry's READY
+// sets; anything else (a removed set, a half-imported one, junk) falls back to Berean Standard / David.
 function getAudioChoice() {
   let v = 'BSB/david'; try { if (typeof lsGet === 'function') v = lsGet('trinityone.audioVoice', 'BSB/david') || 'BSB/david'; } catch (e) {}
   const [t, r] = String(v).split('/');
-  const translation = AUDIO_BIBLE_OPTIONS.translations.some(x => x.id === t) ? t : 'BSB';
+  const set = audioOwnSets().find(x => x.id === t) || null;
+  const translation = (AUDIO_BIBLE_OPTIONS.translations.some(x => x.id === t) || set) ? t : 'BSB';
   const reader = AUDIO_BIBLE_OPTIONS.readers.some(x => x.id === r) ? r : 'david';
-  return { translation, reader };
+  return { translation, reader, set };
+}
+const audioMB = (bytes) => { const mb = (bytes || 0) / 1048576; return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.max(1, Math.round(mb)) + ' MB'; };
+// every audio Bible the Reading settings sheet lists, each with its own caption
+function audioBibleChoices() {
+  return [
+    { id: 'BSB', name: 'Berean Standard', stream: true, caption: 'Streams from helloao.org · public-domain narration. They can see which chapter you listen to.' },
+    { id: 'WEB', name: 'World English', caption: 'Read by David Williams · public domain · matches the WEB text. Download books in Library → Audio Bibles; until then, Listen plays Berean Standard.' },
+    ...audioOwnSets().map(s => ({ id: s.id, name: s.name || 'My audio Bible', own: true,
+      caption: [s.reader ? 'Read by ' + s.reader : '', s.lang || '', (s.chapters || 0) + ' chapters', s.bytes ? audioMB(s.bytes) : '', 'on this phone'].filter(Boolean).join(' · ') + '. Chapters it doesn\u2019t have play in Berean Standard.' })),
+  ];
 }
 // BSB streaming track (per-chapter MP3 on the helloao CDN)
 function bsbChapterTrack(bookNum, chap, reader) {
@@ -320,35 +352,38 @@ function bsbChapterTrack(bookNum, chap, reader) {
   return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · Berean Standard',
     src: 'https://audio.bible.helloao.org/api/BSB/' + code + '/' + chap + '/audio/' + (reader || 'david') + '.mp3', album: 'Audio Bible' };
 }
-
-// ── WEB audio module: download + store per-chapter MP3s (extracted from the public-domain zips) ──
-const ADB_STORE = 'chapters';
-function _adb() {
-  return new Promise((res, rej) => { const r = indexedDB.open('trinityone-audio', 1);
-    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains(ADB_STORE)) db.createObjectStore(ADB_STORE); };
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+// A chapter stored on this device. No src: the engine calls resolve() when its turn comes (the chapter is read into memory
+// then, one at a time) and lets the blob address go when it moves on — `bibleLocal` is what allows that (engine P1).
+function bibleLocalTrack(setId, setName, bookNum, chap, label) {
+  return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · ' + setName, album: 'Audio Bible', bibleLocal: true, setId,
+    resolve: () => window.TrinityAudioStore.chapterUrl(setId, bookNum, chap) };
 }
-async function _adbGet(key) { const db = await _adb(); return new Promise(res => { const rq = db.transaction(ADB_STORE).objectStore(ADB_STORE).get(key); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null); }); }
-async function _adbPut(key, blob) { const db = await _adb(); return new Promise((res, rej) => { const tx = db.transaction(ADB_STORE, 'readwrite'); tx.objectStore(ADB_STORE).put(blob, key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); }
-async function _adbKeys() { const db = await _adb(); return new Promise(res => { const rq = db.transaction(ADB_STORE).objectStore(ADB_STORE).getAllKeys(); rq.onsuccess = () => res(rq.result || []); rq.onerror = () => res([]); }); }
-async function _adbDel(keys) { const db = await _adb(); return new Promise(res => { const tx = db.transaction(ADB_STORE, 'readwrite'); keys.forEach(k => tx.objectStore(ADB_STORE).delete(k)); tx.oncomplete = () => res(); tx.onerror = () => res(); }); }
 
+// ── World English: the manifest, and the existing download (still through /audiozip — unchanged in Build 1) ──
 let _webManifest = null;
 async function getWebManifest() {
   if (_webManifest) return _webManifest;
   try { const r = await fetch('web-audio-manifest.json'); _webManifest = await r.json(); } catch (e) { _webManifest = { chapters: {} }; }
   return _webManifest;
 }
-const _webKey = (book, chap) => 'WEB/' + book + '/' + chap;
-async function webChapterUrl(book, chap) { const b = await _adbGet(_webKey(book, chap)); return b ? URL.createObjectURL(b) : null; }
-// how much of a book is downloaded
+// how much of a book is on this device (both stores while World English is moving into file storage)
 async function webBookState(book) {
   const man = await getWebManifest(); const bk = man.chapters[String(book)]; if (!bk) return { total: 0, have: 0 };
-  const total = Object.keys(bk).length; const keys = await _adbKeys(); const pre = _webKey(book, '');
-  const have = keys.filter(k => String(k).indexOf(pre) === 0).length; return { total, have };
+  const want = Object.keys(bk).map(Number);
+  const got = new Set((await window.TrinityAudioStore.listBook('WEB', book)).map(x => x.chap));
+  return { total: want.length, have: want.filter(c => got.has(c)).length };
 }
-async function webDownloadedBooks() { const keys = await _adbKeys(); const s = new Set(); keys.forEach(k => { const m = /^WEB\/(\d+)\//.exec(String(k)); if (m) s.add(+m[1]); }); return s; }
-async function removeWebBook(book) { const keys = await _adbKeys(); await _adbDel(keys.filter(k => String(k).indexOf(_webKey(book, '')) === 0)); }
+// "Downloaded" = EVERY chapter the manifest lists for that book is here. One chapter used to be enough, so a book whose
+// download was stopped part-way said "Downloaded" and offered only the bin.
+async function webDownloadedBooks() {
+  const man = await getWebManifest(); const all = await window.TrinityAudioStore.listAll('WEB'); const s = new Set();
+  for (const b of Object.keys(man.chapters || {})) {
+    const want = Object.keys(man.chapters[b] || {}).map(Number); const have = all.get(+b);
+    if (want.length && have && want.every(c => have.has(c))) s.add(+b);
+  }
+  return s;
+}
+async function removeWebBook(book) { await window.TrinityAudioStore.removeWebBook(book); }
 // download one book: range-fetch each chapter slice via the gateway proxy, inflate (raw DEFLATE), store
 let _audioBase = null;   // a pool gateway that serves /audiozip (cached after the first probe)
 async function pickAudioBase() {
@@ -359,15 +394,17 @@ async function pickAudioBase() {
   return null;
 }
 async function downloadWebBook(book, onProgress, getAborted) {
+  const S = window.TrinityAudioStore;
   const man = await getWebManifest(); const bk = man.chapters[String(book)]; if (!bk) throw new Error('no such book');
+  try { if (S.ensureGate) await S.ensureGate(); } catch (e) {}   // iOS: a closed gate is tried once more before choosing the store
   const base = await pickAudioBase();
   if (!base) throw new Error('No download server reachable — your church relay needs updating');
   const t = book <= 39 ? 'ot' : 'nt';
   const chaps = Object.keys(bk).map(Number).sort((a, b) => a - b);
   for (let i = 0; i < chaps.length; i++) {
     if (getAborted && getAborted()) throw new Error('cancelled');
-    const c = chaps[i], key = _webKey(book, c);
-    if (!(await _adbGet(key))) {
+    const c = chaps[i];
+    if (!(await S.hasChapter('WEB', book, c))) {   // B4: "already have it?" reads BOTH stores, so a moved chapter is not fetched again
       const [off, csize] = bk[String(c)];
       const r = await fetch(base + '/audiozip?t=' + t + '&start=' + off + '&len=' + (csize + 96));
       if (!r.ok) throw new Error('download failed');
@@ -375,28 +412,33 @@ async function downloadWebBook(book, onProgress, getAborted) {
       if (buf[0] !== 0x50 || buf[1] !== 0x4b) throw new Error('bad chunk');   // 'PK'
       const nlen = buf[26] | (buf[27] << 8), elen = buf[28] | (buf[29] << 8), ds = 30 + nlen + elen;
       const mp3 = window.fflate.inflateSync(buf.subarray(ds, ds + csize));
-      await _adbPut(key, new Blob([mp3], { type: 'audio/mpeg' }));
+      await S.putWebChapter(book, c, mp3);   // M4: app file storage on Android, IndexedDB elsewhere
     }
     if (onProgress) onProgress(i + 1, chaps.length);
   }
   return true;
 }
 
-// play a chapter — local WEB if chosen + downloaded, else BSB stream; queues the book to auto-advance
+// play a chapter — World English or one of the member's own audio Bibles if chosen and that chapter is here, else the
+// BSB stream; queues the book (the chapters this device has) so it auto-advances
 async function playBibleChapter(bookNum, chap) {
   if (!window.TrinityAudio || !USFM_ORDER[bookNum - 1]) return false;
-  const { translation, reader } = getAudioChoice();
+  const { translation, reader, set } = getAudioChoice();
   const max = (window.Bible && window.Bible.maxChapter) ? (window.Bible.maxChapter(bookNum) || chap) : chap;
   const label = (window.Bible && window.Bible.bookName) ? window.Bible.bookName(bookNum) : ('Book ' + bookNum);
-  if (translation === 'WEB') {
-    const here = await webChapterUrl(bookNum, chap);
-    if (here) {
-      const queue = [];
-      for (let c = 1; c <= max; c++) { const u = (c === chap) ? here : await webChapterUrl(bookNum, c); if (u) queue.push({ id: 'bible:' + bookNum + ':' + c, title: label + ' ' + c, subtitle: 'Audio Bible · World English', src: u, album: 'Audio Bible' }); }
-      const track = queue.find(t => t.id === 'bible:' + bookNum + ':' + chap) || queue[0];
+  if (translation !== 'BSB') {
+    const S = window.TrinityAudioStore;
+    const name = set ? (set.name || 'My audio Bible') : transName(translation);
+    let have = [];
+    try { have = S ? await S.listBook(translation, bookNum) : []; } catch (e) { have = []; }
+    if (have.some(x => x.chap === chap)) {
+      const queue = have.map(x => bibleLocalTrack(translation, name, bookNum, x.chap, label));
+      const track = queue.find(t => t.id === 'bible:' + bookNum + ':' + chap);
       window.TrinityAudio.play(track, queue); return true;
     }
-    if (window.trinityToast) window.trinityToast('Download this book in Library to hear the World English audio — playing Berean Standard for now');
+    if (window.trinityToast) window.trinityToast(translation === 'WEB'
+      ? 'Download this book in Library to hear the World English audio — playing Berean Standard for now'
+      : name + ' has no recording of ' + label + ' ' + chap + ' — playing Berean Standard for now');
   }
   const queue = []; for (let c = 1; c <= max; c++) { const t = bsbChapterTrack(bookNum, c, reader); if (t) queue.push(t); }
   const track = bsbChapterTrack(bookNum, chap, reader);
@@ -405,15 +447,197 @@ async function playBibleChapter(bookNum, chap) {
   return true;
 }
 
-// ── Audio Bibles library: download public-domain WEB audio per book for offline listening ──
-function AudioBiblesScreen({ open, onClose, ctx }) {
+// ── "Add your own": the progress sheet, the check screen and the name screen (plan N4) ──
+const AUDIO_IMPORT_WORDS = {
+  'too-many': 'That zip has more than 5,000 files in it.',
+  'entry-too-big': 'One file in it is bigger than 64 MB.',
+  'too-big': 'It holds more than 3 GB of audio.',
+  'over-4gb': 'Zips over 4 GB can\u2019t be read yet.',
+  'stored-descriptor': 'That zip was made in a way TrinityOne can\u2019t read yet. Zip the files again and try once more.',
+  broken: 'That zip is damaged or incomplete.',
+  'no-space': 'There isn\u2019t enough room on this device.',
+  'no-registry': 'TrinityOne couldn\u2019t save its list of audio Bibles.',
+  none: 'No audio files were found in it.',
+  failed: 'Something went wrong reading it.',
+};
+// one picked file (or the open-with hand-over) as a source the store can stream: never arrayBuffer() on the whole file
+function audioPickedSource(f) {
+  return { name: (f && f.name) || '', head: [], reader: (f && typeof f.stream === 'function') ? f.stream().getReader() : null };
+}
+
+function AudioImportPanel({ imp, setImp, abortRef, onDone, ctx }) {
+  const S = window.TrinityAudioStore;
+  const books = (window.Bible && window.Bible.bookMeta) ? window.Bible.bookMeta().filter(b => b.num <= 66) : [];
+  const nameOf = (n) => { const b = books.find(x => x.num === n); return b ? b.name : (window.Bible && window.Bible.bookName ? window.Bible.bookName(n) : 'Book ' + n); };
+  const [where, setWhere] = React.useState({});            // n -> {book, chap}
+  const [ask, setAsk] = React.useState(null);              // n waiting for "replace?"
+  const [form, setForm] = React.useState({ name: '', lang: 'English', reader: '', licence: 'own' });
+  const [saving, setSaving] = React.useState(false);
+  // Cancel always frees the screen at once (round-5 R5-2): while reading, the import is told to stop and cleans up behind
+  // it; the panel does not wait for it
+  const cancel = async () => { if (imp.phase === 'reading') { abortRef.current = true; setImp(null); return; } if (imp.id) await S.cancelImport(imp.id); setImp(null); };
+  const btn = (primary) => ({ flex: 1, padding: '12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, border: primary ? 'none' : '1px solid var(--line)', background: primary ? 'var(--clay)' : 'var(--surface)', color: primary ? 'var(--on-clay)' : 'var(--ink-2)' });
+  const field = { width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5, marginBottom: 12 };
+  const lbl = { fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 6, display: 'block' };
+  const card = { border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: 16, marginBottom: 16 };
+  const place = async (u, replace) => {
+    const w = where[u.n] || {};
+    const r = await S.placeUnplaced(imp.id, u.n, w.book, w.chap, { replace: !!replace });
+    if (r.exists) { setAsk(u.n); return; }
+    setAsk(null);
+    if (!r.ok) { ctx && ctx.toast && ctx.toast('Pick a book and a chapter it has'); return; }
+    setImp({ ...imp, res: { ...imp.res, chapters: imp.res.chapters + (replace ? 0 : 1), unplaced: imp.res.unplaced.filter(x => x.n !== u.n) } });
+  };
+  const leave = async (u) => { await S.leaveOut(imp.id, u.n); setAsk(null); setImp({ ...imp, res: { ...imp.res, unplaced: imp.res.unplaced.filter(x => x.n !== u.n) } }); };
+  const save = async () => {
+    if (saving) return; setSaving(true);
+    const r = await S.finishImport(imp.id, form);
+    setSaving(false);
+    if (!r.ok) { setImp({ phase: 'error', reason: r.reason === 'empty' ? 'none' : (r.reason || 'failed') }); await S.cancelImport(imp.id); return; }
+    setImp(null);
+    if (ctx && ctx.toast) ctx.toast('Added \u201c' + (form.name.trim() || 'My audio Bible') + '\u201d · choose it in Read → Settings');
+    onDone && onDone();
+  };
+
+  if (imp.phase === 'reading') {
+    const p = imp.p || {};
+    return (
+      <div role="status" style={card}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Adding your audio Bible…</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 14 }}>{(p.chapters || 0) + ' chapters found so far' + (p.bytes ? ' · ' + audioMB(p.bytes) + ' read' : '')}. Keep TrinityOne open.</div>
+        <div style={{ display: 'flex', gap: 8 }}><button onClick={cancel} style={btn(false)}>Cancel</button></div>
+      </div>
+    );
+  }
+  if (imp.phase === 'error') {
+    return (
+      <div role="alert" style={card}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 6 }}>{'That couldn\u2019t be added'}</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 14 }}>{(AUDIO_IMPORT_WORDS[imp.reason] || AUDIO_IMPORT_WORDS.failed) + ' Nothing was added.'}</div>
+        <div style={{ display: 'flex', gap: 8 }}><button onClick={() => setImp(null)} style={btn(true)}>OK</button></div>
+      </div>
+    );
+  }
+  const res = imp.res || { chapters: 0, books: 0, unplaced: [] };
+  if (imp.phase === 'check') {
+    return (
+      <div style={card}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Check what was found</div>
+        <div data-audio-found="" style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 12 }}>{'Found ' + res.chapters.toLocaleString('en-GB') + ' chapters across ' + res.books + ' books' + (res.unplaced.length ? ' · ' + res.unplaced.length + ' not recognised' : '')}</div>
+        {res.unplaced.map(u => {
+          const w = where[u.n] || {};
+          const max = w.book ? (S.CHAPTERS[w.book - 1] || 1) : 1;
+          return (
+            <div key={u.n} data-unplaced={u.n} style={{ borderTop: '1px solid var(--line-2)', padding: '10px 0' }}>
+              <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--ink)', overflowWrap: 'anywhere', marginBottom: 8 }}>{u.name || 'Unnamed file'}</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                <select aria-label="Book" value={w.book || ''} onChange={(e) => setWhere({ ...where, [u.n]: { book: +e.target.value || null, chap: 1 } })} style={{ ...field, marginBottom: 0, flex: '2 1 140px', width: 'auto' }}>
+                  <option value="">Book…</option>
+                  {books.map(b => <option key={b.num} value={b.num}>{b.name}</option>)}
+                </select>
+                <input aria-label="Chapter" type="number" min={1} max={max} value={w.chap || ''} onChange={(e) => setWhere({ ...where, [u.n]: { ...w, chap: +e.target.value || null } })} style={{ ...field, marginBottom: 0, flex: '1 1 70px', width: 'auto' }} />
+              </div>
+              {ask === u.n ? (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: 'var(--ink-2)', flex: '1 1 100%' }}>{nameOf(w.book) + ' ' + w.chap + ' is already there. Replace it with this file?'}</span>
+                  <button onClick={() => place(u, true)} style={btn(true)}>Replace</button>
+                  <button onClick={() => setAsk(null)} style={btn(false)}>Keep the one there</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => place(u, false)} disabled={!w.book || !w.chap} style={{ ...btn(true), opacity: (w.book && w.chap) ? 1 : 0.5 }}>Place</button>
+                  <button onClick={() => leave(u)} style={btn(false)}>Leave out</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={cancel} style={btn(false)}>Cancel</button>
+          <button onClick={() => setImp({ ...imp, phase: 'name' })} style={btn(true)}>Next</button>
+        </div>
+      </div>
+    );
+  }
+  // name
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const lic = (v, words) => (
+    <button key={v} role="radio" aria-checked={form.licence === v} onClick={() => setForm({ ...form, licence: v })}
+      style={{ flex: 1, padding: '10px', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: form.licence === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: form.licence === v ? 'var(--clay-soft)' : 'var(--surface-2)', color: form.licence === v ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{words}</button>
+  );
+  return (
+    <div style={card}>
+      <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Name it</div>
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 12 }}>{res.chapters.toLocaleString('en-GB') + ' chapters across ' + res.books + ' books.'}</div>
+      <label style={lbl}>Name<input aria-label="Name" value={form.name} onChange={set('name')} placeholder="World English, read by…" style={{ ...field, marginTop: 6 }} /></label>
+      <label style={lbl}>Language<input aria-label="Language" value={form.lang} onChange={set('lang')} style={{ ...field, marginTop: 6 }} /></label>
+      <label style={lbl}>Reader<input aria-label="Reader" value={form.reader} onChange={set('reader')} style={{ ...field, marginTop: 6 }} /></label>
+      <div style={lbl}>Where it came from</div>
+      <div role="radiogroup" aria-label="Where it came from" style={{ display: 'flex', gap: 8, marginBottom: 14 }}>{lic('own', 'My own copy')}{lic('free', 'Free licence')}</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={cancel} style={btn(false)}>Cancel</button>
+        <button onClick={save} disabled={saving} style={btn(true)}>Save</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Audio Bibles library: your own audio Bibles, and World English per book for offline listening ──
+// `incoming` = a stream handed over by "Open with TrinityOne" (install-bible.jsx peeked and saw audio): {head, reader}.
+function AudioBiblesScreen({ open, onClose, ctx, incoming, onIncomingTaken }) {
   const [man, setMan] = React.useState(null);
   const [done, setDone] = React.useState(new Set());     // books fully downloaded
   const [prog, setProg] = React.useState({});            // book -> {have,total}
   const [busy, setBusy] = React.useState(null);          // 'book:N' | 'nt' | 'ot' | null
+  const [own, setOwn] = React.useState(() => audioOwnSets());
+  const [imp, setImp] = React.useState(null);            // the "Add your own" flow, or null
   const abort = React.useRef(false);
+  const impAbort = React.useRef(false);
+  const pickRef = React.useRef(null);
   const refresh = async () => { setDone(new Set(await window.TrinityAudioBible.webDownloadedBooks())); };
-  React.useEffect(() => { if (!open) return; window.TrinityAudioBible.getWebManifest().then(setMan); refresh(); }, [open]);
+  React.useEffect(() => { if (!open) return; window.TrinityAudioBible.getWebManifest().then(setMan); refresh(); setOwn(audioOwnSets()); }, [open]);
+  // ONE IMPORT AT A TIME, AND IT SHOWS AT ONCE (audit #2): the progress panel goes up (and "Add your own" is disabled)
+  // before anything is awaited; the store then waits only for the boot sweep, never for World English moving.
+  const importing = React.useRef(false);
+  const startImport = async (sources) => {
+    const S = window.TrinityAudioStore;
+    if (!S || importing.current) return false;
+    importing.current = true; impAbort.current = false;
+    setImp({ phase: 'reading', id: null, p: {} });
+    try {
+      let id = null;
+      try { id = await S.beginImport(); } catch (e) { setImp({ phase: 'error', reason: 'no-registry' }); return true; }
+      setImp(x => (x && x.phase === 'reading' ? { ...x, id } : x));
+      const res = await S.importSources(id, sources, { onProgress: (p) => setImp(x => (x && x.phase === 'reading' ? { ...x, p } : x)), getAborted: () => impAbort.current });
+      if (res.ok && impAbort.current) { await S.cancelImport(id); setImp(null); return true; }   // cancelled just as it finished
+      if (!res.ok) { setImp(res.reason === 'cancelled' ? null : { phase: 'error', reason: res.reason }); return true; }
+      if (!res.chapters && !res.unplaced.length) { await S.cancelImport(id); setImp({ phase: 'error', reason: 'none' }); return true; }
+      setImp({ phase: res.unplaced.length ? 'check' : 'name', id, res });
+      return true;
+    } finally { importing.current = false; }
+  };
+  React.useEffect(() => {
+    if (!open || !incoming) return;
+    if (onIncomingTaken) onIncomingTaken();
+    // one import at a time: a second file handed over mid-import is let go (its stream closed), not queued
+    if (imp || importing.current) { try { if (incoming.reader && incoming.reader.cancel) incoming.reader.cancel(); } catch (e) {} if (ctx && ctx.toast) ctx.toast('Finish adding the audio Bible you started first'); return; }
+    startImport([{ name: '', head: incoming.head || [], reader: incoming.reader }]);
+  }, [open, incoming]);
+  const onPicked = (e) => {
+    const files = [...((e && e.target && e.target.files) || [])];
+    try { e.target.value = ''; } catch (x) {}
+    if (files.length) startImport(files.map(audioPickedSource));
+  };
+  // Remove asks first (audit #10): the files can only come back from wherever the member got them
+  const [askRm, setAskRm] = React.useState(null);
+  const removeOwn = async (s) => {
+    setAskRm(null);
+    // the set being removed may be the one playing: stop it rather than leave Next pointing at deleted files
+    try { const cur = window.TrinityAudio && window.TrinityAudio.current; if (cur && cur.bibleLocal && cur.setId === s.id) window.TrinityAudio.stop(); } catch (e) {}
+    const r = await window.TrinityAudioStore.removeSet(s.id);
+    setOwn(audioOwnSets());
+    if (r && r.ok && ctx && ctx.toast) ctx.toast('Removed \u201c' + (s.name || 'My audio Bible') + '\u201d · ' + audioMB(r.bytes) + ' freed');
+  };
   const books = (window.Bible && window.Bible.bookMeta) ? window.Bible.bookMeta() : [];
   const bookMB = (n) => { if (!man || !man.chapters[String(n)]) return 0; let s = 0; for (const c in man.chapters[String(n)]) s += man.chapters[String(n)][c][1]; return Math.round(s / 1048576); };
   const doBook = async (n) => {
@@ -432,7 +656,7 @@ function AudioBiblesScreen({ open, onClose, ctx }) {
   const row = (b) => {
     const isDone = done.has(b.num); const p = prog[b.num]; const downloading = busy === 'book:' + b.num || (busy && busy.indexOf('book:') !== 0 && p);
     return (
-      <div key={b.num} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 4px', borderBottom: '1px solid var(--line-2)' }}>
+      <div key={b.num} data-book={b.num} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 4px', borderBottom: '1px solid var(--line-2)' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{b.name}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{p ? p.have + ' / ' + p.total + ' chapters' : (isDone ? 'Downloaded · ' + bookMB(b.num) + ' MB' : b.ch + ' chapters · ~' + bookMB(b.num) + ' MB')}</div>
@@ -447,6 +671,15 @@ function AudioBiblesScreen({ open, onClose, ctx }) {
       </div>
     );
   };
+  const ownRow = (s) => (
+    <div key={s.id} data-own-set={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 4px', borderBottom: '1px solid var(--line-2)' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', overflowWrap: 'anywhere' }}>{s.name || 'My audio Bible'}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[s.reader, s.lang, (s.chapters || 0) + ' chapters', audioMB(s.bytes), s.licence === 'free' ? 'free licence' : 'my own copy'].filter(Boolean).join(' · ')}</div>
+      </div>
+      <button onClick={() => setAskRm(s)} aria-label={'Remove ' + (s.name || 'My audio Bible')} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+    </div>
+  );
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
@@ -454,12 +687,31 @@ function AudioBiblesScreen({ open, onClose, ctx }) {
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 21, fontWeight: 700 }}>Audio Bibles</h1>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>World English Bible · public domain</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Your own recordings · World English (public domain)</div>
           </div>
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px 40px' }}>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Download books to listen offline — this matches the WEB text you read. Large files; Wi-Fi recommended. Set <b>World English</b> as your Audio Bible voice in Read → Settings.</p>
+        {askRm ? (
+          <div role="alertdialog" aria-label="Remove audio Bible" style={{ border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.5, marginBottom: 12, overflowWrap: 'anywhere' }}>{'Remove ' + (askRm.name || 'My audio Bible') + '? This frees ' + audioMB(askRm.bytes) + '; you\u2019d need the files again to re-add it.'}</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setAskRm(null)} style={{ flex: 1, padding: '12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)' }}>Cancel</button>
+              <button onClick={() => removeOwn(askRm)} style={{ flex: 1, padding: '12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)' }}>Remove</button>
+            </div>
+          </div>
+        ) : null}
+        {imp ? <AudioImportPanel imp={imp} setImp={setImp} abortRef={impAbort} onDone={() => setOwn(audioOwnSets())} ctx={ctx} /> : null}
+        <SectionLabel>Your audio Bibles</SectionLabel>
+        <div style={{ marginBottom: 12 }}>{own.map(ownRow)}</div>
+        <input ref={pickRef} type="file" multiple accept=".zip,audio/*" onChange={onPicked} style={{ display: 'none' }} data-audio-pick="" />
+        <button onClick={() => { if (!imp && pickRef.current && pickRef.current.click) pickRef.current.click(); }} disabled={!!imp}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '13px 14px', borderRadius: 14, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: imp ? 'default' : 'pointer', opacity: imp ? 0.5 : 1, color: 'var(--clay)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', marginBottom: 6 }}>
+          <Icon name="plus" size={18} /> Add your own
+        </button>
+        <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 20px' }}>A .zip of chapter recordings, or several audio files. Only add recordings you own or that have a free licence.</p>
+        <SectionLabel>World English</SectionLabel>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 16px' }}>Read by David Williams, public domain. Download books to listen offline — this matches the WEB text you read. Large files; Wi-Fi recommended. Set <b>World English</b> as your Audio Bible in Read → Settings.</p>
         <div style={seg}>{headBtn('nt', 'New Testament')}{headBtn('ot', 'Old Testament')}</div>
         <SectionLabel>New Testament</SectionLabel>
         <div style={{ marginBottom: 18 }}>{books.filter(b => b.num >= 40).map(row)}</div>
@@ -479,4 +731,5 @@ window.playBibleChapter = playBibleChapter;
 window.bibleChapterTrackId = (b, c) => 'bible:' + b + ':' + c;
 window.AUDIO_BIBLE_OPTIONS = AUDIO_BIBLE_OPTIONS;
 window.getAudioChoice = getAudioChoice;
+window.audioBibleChoices = audioBibleChoices;
 window.TrinityAudioBible = { getWebManifest, downloadWebBook, removeWebBook, webBookState, webDownloadedBooks };

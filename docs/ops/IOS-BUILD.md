@@ -175,8 +175,12 @@ It applies four fixes, the first three each a hard failure of the default scaffo
    exactly what Capacitor 7 generates. NOTE: a *storyboard-only* or empty scene
    manifest is not enough — it launches but the WKWebView never starts (black screen).
 
-3. **Info.plist usage strings** — `NSCameraUsageDescription` and
-   `NSPhotoLibraryAddUsageDescription` (see above).
+3. **Info.plist keys** — the two usage strings `NSCameraUsageDescription` and
+   `NSPhotoLibraryAddUsageDescription` (see above), plus `UIBackgroundModes = ["audio"]`
+   so audio Bibles / sermons keep playing with the screen locked. The web view drives its
+   own Now Playing / lock-screen controls, so background playback needs only this
+   permission — no native code. The `UIBackgroundModes` patch is merge-safe and idempotent:
+   it adds the `audio` entry only if absent, never duplicating it or dropping other modes.
 
 4. **`BackupExclude` local plugin.** TrinityOne's first custom iOS Capacitor plugin,
    appended to `AppDelegate.swift` (`exclude`/`check`, jsName `BackupExclude`). It sets
@@ -186,9 +190,12 @@ It applies four fixes, the first three each a hard failure of the default scaffo
    It is a **local (in-app) plugin**, not a pod: the script appends it to `AppDelegate.swift`
    (not a new file — the scaffold's `project.pbxproj` is the old `objectVersion 48` format,
    so an un-referenced `.swift` never compiles) and makes a `CAPBridgeViewController`
-   subclass the scene root VC, registering the instance in `capacitorDidLoad()`. No JS
-   wiring ships yet; the audio-Bibles branch will call
-   `Capacitor.Plugins.BackupExclude.exclude({ path: 'audio' })` on start.
+   subclass the scene root VC, registering the instance in `capacitorDidLoad()`. The
+   audio store (`app/audio-store.jsx`, `iosGate()`) calls
+   `Capacitor.Plugins.BackupExclude.exclude({ path: 'audio' })` on every start; iOS audio moves
+   into files only once it has confirmed, and that choice then sticks on the phone. The three AppDelegate pieces (SceneDelegate,
+   plugin, root VC) are patched as separate idempotent steps, so an `ios/` folder patched
+   by an older version of the script is completed rather than skipped.
 
 **When TrinityOne upgrades to Capacitor 7+:** fixes 1 and 2 are expected to be built
 into the scaffold. Re-check, and trim `scripts/ios-fixup.sh` down to just the usage
