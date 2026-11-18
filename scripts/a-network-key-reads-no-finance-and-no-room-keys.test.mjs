@@ -106,3 +106,13 @@ test('READ groupkey:<room>: the network key is NOT served the envelope; its auth
   assert.equal(await served(church, GK), true, 're-anchor: the church cannot read its own room-key envelope');
   assert.equal(await served(network, GK), false, 'THE NETWORK KEY READ A ROOM-KEY ENVELOPE');
 });
+
+// ── THE CAPABILITY MARKER ────────────────────────────────────────────────────────────────────────────────────
+test('the relay advertises network-wall-1 in /status and in its NIP-11 document', async () => {
+  const st = await (await fetch(`${relay.base}/status`)).json();
+  assert.ok(Array.isArray(st.capabilities) && st.capabilities.includes('network-wall-1'), '/status lacks capabilities:[network-wall-1]: ' + JSON.stringify(st.capabilities));
+  const n11 = await (await fetch(`${relay.base}/relay`, { headers: { accept: 'application/nostr+json' } })).json();
+  assert.ok(n11.trinityone && Array.isArray(n11.trinityone.capabilities) && n11.trinityone.capabilities.includes('network-wall-1'),
+    'NIP-11 trinityone.capabilities lacks network-wall-1: ' + JSON.stringify(n11.trinityone && n11.trinityone.capabilities));
+  assert.equal(st.relayPub, n11.trinityone.relayPub, 'unrelated fields moved: relayPub differs between /status and NIP-11');
+});

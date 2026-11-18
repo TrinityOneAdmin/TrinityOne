@@ -1438,6 +1438,12 @@ const NET = 'trinityone';
 const GROUP_D = D.GROUP, FUND_D = D.FUND, MEMBER_D = D.MEMBER, PLAN_D = D.PLAN, DEVO_D = D.DEVO, ROTA_D = D.ROTA;
 const CATEGORY_D = D.CATEGORY;   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
 const ROSTER_D = D.ROSTER, SERVICE_D = D.SERVICE, EVENT_D = D.EVENT, REQUEST_D = D.REQUEST;
+// CAPABILITIES THIS RELAY ADVERTISES (additive; /status and NIP-11 `trinityone.capabilities`). A client that wants to put a church
+// into a network later can refuse a relay that lacks the marker: 'network-wall-1' means a joined network key is refused a church's
+// children/guardians/check-in/child-care/care/finance/room-keys and has no write authority over church content (2026-11-18).
+// It is an UNAUTHENTICATED CLAIM like relayPub next to it: it can ask a client to be careful, never to trust. A missing marker must
+// BLOCK a join; its presence must never admit a relay (RELAY-ADMISSION rule 10 is unchanged).
+const RELAY_CAPABILITIES = ['network-wall-1'];
 const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
 // DONOR RECORD — d=finance/donor:<id>, a REPLACEABLE finance/ doc holding a donor's NAME + address + postcode +
 // giving (Phase 4b). WRITE is covered by the generic finance/ write prefix below (church key or a finance
@@ -7745,6 +7751,7 @@ function serveStatic(req, res) {
       // box SIGN with the key before it gets anything). It is not evidence of who is answering — that is
       // /relay-identity, which binds a caller-chosen nonce. Never treat this field as identification.
       relayPub: RELAY_PUB,
+      capabilities: RELAY_CAPABILITIES,   // additive; see RELAY_CAPABILITIES
       writePolicy: CHURCH_PUBS.size > 0,
       // church npubs/names are intentionally NOT exposed here (unauthenticated) — the dashboard reads
       // the list from the token-gated /config; the counts below are now ALSO token-gated (red-team 2026-08-18).
@@ -8243,6 +8250,7 @@ function serveStatic(req, res) {
         // member's capability gate (_verifyEnforcing) refuses to adopt it and never routes gated reads (roster,
         // care PII) to a box that would serve them to anyone. Was hardcoded true, which made the gate a no-op.
         enforces: CHURCH_PUBS.size > 0, multiChurch: true,
+        capabilities: RELAY_CAPABILITIES,     // additive; see RELAY_CAPABILITIES
         // R3: lets a client tell two URLs apart as the SAME box (dedup the self-sufficiency count by
         // failure-domain, not URL). AN UNPROVEN CLAIM, exactly like /status's copy: unauthenticated, and
         // trivially copied onto another host. Counting with it is safe; deciding with it is not. The
