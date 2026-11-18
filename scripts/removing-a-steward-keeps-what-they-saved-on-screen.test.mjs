@@ -428,3 +428,33 @@ test('nit — each "everything kept" line has its OWN 8 s: a later note does not
   assert.doesNotMatch(said, /Tom Ridley: Everything they set up/, 'the first all-kept line outlived its own 8 s');
   assert.match(said, /Ann Other: Everything they set up/, 'the second line was cleared by the first one’s deadline');
 });
+
+// ══ ROUND 6 (audit of round 5) ══════════════════════════════════════════════════════════════════════════════════════
+test('round 6 — Reconnect: an UNCHECKED group says "check whether they should be on it", never "add them"', async () => {
+  const said = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: [], swapFailed: [], swapOther: [], swapUnchecked: ['the group “Youth”'] });
+  assert.match(said, /Couldn’t check the group “Youth” — open Groups and check whether they should be on it\./);
+  assert.doesNotMatch(said, /Couldn’t put their new key on the group “Youth”/, 'an unchecked group was worded as one they were known to be on');
+  assert.doesNotMatch(said, /Ordinary groups need nothing/);
+  const failed = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: [], swapFailed: ['the group “Choir”'], swapOther: [], swapUnchecked: [] });
+  assert.match(failed, /Couldn’t put their new key on the group “Choir” — open Groups and add them\./, 'CONTROL: the known-needed wording changed');
+});
+
+test('round 6 — Block of a steward: the row says "Blocking… keeping what they set up" while it runs, and a second press is ignored', async () => {
+  const d = deferred();
+  const r = blockRig({ stewards: [BRAM], carry: () => d.p });
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }]);
+  await press(draw(C, {}), /Remove \/ block this member/, { which: 0 });
+  const confirm = find(draw(C, {}), n => n && n.type === 'button' && /Confirm — bans them/.test(String(n.props.title || '')))[0];
+  assert.ok(confirm, 're-anchor: no confirm');
+  confirm.props.onClick(); confirm.props.onClick();   // a double press on the same (stale) control
+  await flush();
+  assert.equal(r.order.filter(s => s.step === 'carry').length, 1, 'a second press started a second carry');
+  const said = reads(draw(C, {}));
+  assert.match(said, /Blocking… keeping what they set up/, 'no in-flight state while the carry runs');
+  assert.equal(find(draw(C, {}), n => n && n.type === 'button' && /Confirm — bans them/.test(String(n.props.title || ''))).length, 0, 'the confirm is still offered while the block runs');
+  d.res({ carried: [{ d: 'g', label: 'a group' }], notCarried: [], superseded: [] });
+  await flush(30);
+  assert.equal(r.order.filter(s => s.step === 'block').length, 1, 'the block was published more than once, or not at all');
+  assert.doesNotMatch(reads(draw(C, {})), /Blocking…/, 'the in-flight line stayed after the block finished');
+});
+

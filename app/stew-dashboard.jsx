@@ -7952,8 +7952,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
           {res && res.carry && (res.carry.swapped || []).length ? 'Groups they set up now name their new key. ' : ''}
           {res && res.carry && (res.carry.swapFailed || []).length ? <b>{'Couldn’t put their new key on ' + res.carry.swapFailed.join(', ') + ' — open Groups and add them. '}</b> : null}
           {res && res.carry && (res.carry.swapOther || []).length ? <b>{'Another steward has changed ' + res.carry.swapOther.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
+          {res && res.carry && (res.carry.swapUnchecked || []).length ? <b>{'Couldn’t check ' + res.carry.swapUnchecked.join(', ') + ' — open Groups and check whether they should be on ' + (res.carry.swapUnchecked.length > 1 ? 'them' : 'it') + '. '}</b> : null}
           One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.swapped || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
-          again.{res && res.carry && ((res.carry.swapFailed || []).length || (res.carry.swapOther || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
+          again.{res && res.carry && ((res.carry.swapFailed || []).length || (res.carry.swapOther || []).length || (res.carry.swapUnchecked || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
             thief reading the church for ever, and the screen said nothing either way. It can only be true
@@ -9215,6 +9216,21 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     }
     return blockNow();
   };
+  // ONE BLOCK AT A TIME PER PERSON, AND SAID (audit round 5, MED). Blocking someone who is or was a steward first carries
+  // what they set up, for up to ~20 s; without this the row went on offering Block, closing the console meant they were
+  // never blocked, and a second press started a second carry and a second setBlocked from a stale list. Every Block
+  // control calls this, not block() directly: the row reads "Blocking… keeping what they set up" until block() settles,
+  // and presses in between are ignored. block() itself is unchanged (its own lines say how it ended).
+  const blockingRef = React.useRef(new Set());
+  const [blocking, setBlocking] = React.useState(() => new Set());
+  const blockOnce = (pk) => {
+    if (blockingRef.current.has(pk)) return undefined;
+    blockingRef.current.add(pk); setBlocking(new Set(blockingRef.current));
+    const done = () => { blockingRef.current.delete(pk); setBlocking(new Set(blockingRef.current)); };
+    let r; try { r = block(pk); } catch (e) { done(); return undefined; }
+    return Promise.resolve(r).then(done, done);
+  };
+  const blockingLine = (pk) => (wasStewardHere(pk) ? 'Blocking… keeping what they set up' : 'Blocking…');
   // Letting someone back in is a decision too, and it is made from a list that until now would not even
   // say who they were. Two taps, and read the result — setBlocked goes through _publishToRelays and returns
   // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
@@ -9245,8 +9261,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     const minor = minorsSet.has(pk), cleared = approvedSet.has(pk), linked = !!(guardians[pk] && guardians[pk].length);
     const out = [];
     out.push({ key: 'copy', icon: copied === m.npub ? 'check' : 'link', label: copied === m.npub ? 'Copied ✓' : 'Copy npub', title: 'Copy npub', keep: true, onPick: () => doCopy(m.npub) });
-    if (confirmBlock === pk) {
-      out.push({ key: 'block', icon: 'shield', tone: 'clay', label: 'Block ' + who, sub: 'Bans them from posting and hides their messages' + (wasStewardHere(pk) ? '. What they set up stays as it is.' : ''), aria: 'Confirm: block ' + who, title: 'Confirm — bans them from posting & hides their messages', onPick: () => block(pk) });
+    if (blocking.has(pk)) {
+      out.push({ key: 'block', icon: 'shield', label: blockingLine(pk), title: blockingLine(pk), keep: true, onPick: () => {} });
+    } else if (confirmBlock === pk) {
+      out.push({ key: 'block', icon: 'shield', tone: 'clay', label: 'Block ' + who, sub: 'Bans them from posting and hides their messages' + (wasStewardHere(pk) ? '. What they set up stays as it is.' : ''), aria: 'Confirm: block ' + who, title: 'Confirm — bans them from posting & hides their messages', onPick: () => blockOnce(pk) });
       out.push({ key: 'block-cancel', icon: 'x', label: 'Cancel', title: 'Cancel', keep: true, onPick: () => setConfirmBlock(null) });
     } else {
       out.push({ key: 'block', icon: 'shield', label: 'Remove / block', aria: 'Remove / block ' + who + ' — asks you to confirm', title: 'Remove / block this member', keep: true, onPick: () => setConfirmBlock(pk) });
@@ -9366,9 +9384,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, order: 3 }}>
             <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
               <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
-            {confirmBlock === m.pubkey
+            {blocking.has(m.pubkey) ? <span role="status" style={{ fontSize: 12, color: 'var(--ink-2)', fontWeight: 600, alignSelf: 'center' }}>{blockingLine(m.pubkey)}</span>
+              : confirmBlock === m.pubkey
               ? <React.Fragment>
-                  <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                  <button onClick={() => blockOnce(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                   <button onClick={() => setConfirmBlock(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="x" size={15} color="currentColor" /></button>
                   {wasStewardHere(m.pubkey) ? <span style={{ fontSize: 12, color: 'var(--ink-2)', alignSelf: 'center' }}>What they set up stays as it is.</span> : null}
                 </React.Fragment>
@@ -9542,9 +9561,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
                       did. Audit 2026-09-02 #5.
                       `confirmBlock` is shared with the members list, so opening one closes the other —
                       two Confirms on screen at once is exactly the confusion this is meant to remove. */}
-                  {confirmBlock === m.pubkey
+                  {blocking.has(m.pubkey) ? <span role="status" style={{ fontSize: 12, color: 'var(--ink-2)', fontWeight: 600, alignSelf: 'center' }}>{blockingLine(m.pubkey)}</span>
+                    : confirmBlock === m.pubkey
                     ? <React.Fragment>
-                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => blockOnce(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                         <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
                       </React.Fragment>
                     : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
