@@ -45,7 +45,7 @@ function grab(src, sig) {
 
 // Drive the real function. `refuse` names the setters that every relay rejects — i.e. that return false,
 // which is exactly what publish() does when the church is offline or every relay refuses the write.
-function reseater(refuse = []) {
+function reseater(refuse = [], { steward = false } = {}) {
   const body = grab(STEWARD, 'async reseatMember(oldPub, newPub, o) {');
   const calls = [];
   const setter = (name) => async (...args) => {
@@ -65,7 +65,11 @@ function reseater(refuse = []) {
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : null),
     now: () => Math.floor(Date.now() / 1000),
     window: { Steward },
+    // an old key that is or was a steward's: the carry-over (_carryOverStewardDocs, the engine's own top-level function) is
+    // recorded in call order with the setters, so its place before the block is measured, not assumed (2026-11-18)
+    _carryOverStewardDocs: async (pk, o) => { calls.push({ name: 'carry', args: [pk, o] }); return { carried: [{ d: 'g', label: 'a group' }], notCarried: [], superseded: [], refused: '' }; },
   };
+  Steward.isOrWasSteward = (pk) => steward && String(pk).toLowerCase() === String(oldK).toLowerCase();
   const names = Object.keys(scope);
   const obj = new Function(...names, 'return ({ ' + body + ' });')(...names.map(n => scope[n]));
   return { run: (a, b, o) => obj.reseatMember(a, b, o), calls, called: (n) => calls.some(c => c.name === n) };
@@ -184,3 +188,23 @@ test('a write refused on a same-second tie is retried, not surfaced as a failure
   assert.equal(tries.setMinors, 2, 'the refused write was never retried — a clock collision becomes a hard failure');
   assert.equal(out.minorCarried, true, 'the retry landed but the re-seat still reported the marking as not carried');
 });
+
+// ── RE-SEATING A STEWARD'S KEY (2026-11-18, audit LOW 1) ─────────────────────────────────────────────────────────
+test('block-old on a STEWARD’s key: their settings are carried BEFORE the block, with the new key in the old one’s place', async () => {
+  const r = reseater([], { steward: true });
+  const out = await r.run(oldK, newK, { ...minorOpts(), blockOld: true });
+  const order = r.calls.map(c => c.name);
+  assert.ok(order.includes('carry'), 'THE CARRY DID NOT RUN on a steward’s old key: ' + order.join(' → '));
+  assert.ok(order.indexOf('carry') < order.indexOf('setBlocked'), 'the block was published before the carry: ' + order.join(' → '));
+  const c = r.calls.find(x => x.name === 'carry');
+  assert.equal(c.args[0], oldK);
+  assert.deepEqual(c.args[1], { blocked: true, replaceWith: newK }, 'a re-seat must put the NEW key in the old one’s place, not just drop it');
+  assert.ok(out.carry && out.carry.carried.length === 1, 'the result does not report what the carry kept, so the screen cannot say it');
+});
+test('CONTROL: block-old on an ordinary member’s key does not carry, and reports no carry', async () => {
+  const r = reseater([], { steward: false });
+  const out = await r.run(oldK, newK, { ...minorOpts(), blockOld: true });
+  assert.equal(r.called('carry'), false);
+  assert.equal(out.carry, null);
+});
+

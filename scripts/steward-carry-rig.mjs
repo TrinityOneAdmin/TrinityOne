@@ -100,7 +100,8 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     _monotonic: (t) => { const d = ((t.tags || []).find(x => x[0] === 'd') || [])[1] || ''; const k = signer.pub + '|' + d; const at = Math.max(t.created_at || 0, (_stamps.get(k) || 0) + 1); _stamps.set(k, at); return { ...t, created_at: at }; },
     _skewGate: (fn) => Promise.resolve(fn()), ensureSkew: () => null, SKEW_WAIT_MS: 6000,
     _stewardCaps: {}, _stewardNames: {}, _stewardSince: {}, _stewardNamesCt: null, _sealChurchDoc: () => null,
-    _careRoster: new Set(), _careRosterKnown: true, _rosterTurn: Promise.resolve(),
+    _careRoster: new Set(), _careRosterKnown: true, _rosterTurn: Promise.resolve(), _justRemoved: new Map(),
+    _reCheckCareKeyPending: () => {}, _webQueueSync: () => {},
     _exStewards: new Set(), _exStewardSet: () => scope._exStewards,
     _exRemembered: [], _rememberExStewards: (before, after, at) => { scope._exRemembered.push({ before: [...before], after: [...after], at }); },
     _hex: (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join(''),
@@ -135,12 +136,12 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   const ssSigner = (/publish\((finalizeEvent\w*)\(/.exec(ssBody) || [])[1];
   assert.ok(ssSigner, 'setStewards no longer publishes finalizeEvent(...) — re-anchor this rig');
   scope[ssSigner] = finalizeEvent;
-  const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who) {',
-    'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {'].map(a => fnBody(STEWARD, a, a));
+  const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who, replaceWith) {',
+    'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {', 'function _dropJustRemoved(list, rosterAt) {'].map(a => fnBody(STEWARD, a, a));
   const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = '].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
-  const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {'].map(a => fnBody(STEWARD, '    ' + a, a).trim());
+  const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {'].map(a => fnBody(STEWARD, '    ' + a, a).trim());
   const api = new Function('scope', `${vars.join('\n')}\nwith (scope) { ${feBody}\n${ingBody}\n${tops.join('\n')}\n`
     + ` return { feChurch, stewIngestKey, _carryTemplate, _carryOverStewardDocs, _removeStewardKeeping, methods: ({ ${methods.join(',\n')} }), pub: ({ ${pub3.join(',\n')} }) }; }`)(scope);
   Object.assign(scope, api.methods);

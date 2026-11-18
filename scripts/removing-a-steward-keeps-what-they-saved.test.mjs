@@ -298,6 +298,83 @@ test('T10 — a carried group definition: Remove keeps the removed steward on le
   assert.equal(cut.name, 'Leaders B', 'Block changed something other than the two lists');
 });
 
+// ══ ROUND 2 (owner answers h, i; audit LOWs) ═══════════════════════════════════════════════════════════════════════
+test('answer (h) is NOT applied: a steward cannot write a giving fund at all (owner-only at the relay), and fund: stays never-carried', async () => {
+  // SECURITY-AUDIT-2026-07-06 M4 (gateway.mjs, FUND_D): a fund carries the church's PAYMENT DESTINATION, so the relay takes
+  // it from the church key alone. Carrying a steward-authored fund would have the church re-sign a steward's Lightning
+  // address — the redirect M4 closed. Measured here: the write is refused, so there is never a steward fund to keep.
+  const eng = owner(); const dana = await newSteward();
+  await setRoster(eng, [dana.pub], { [dana.pub]: ['finance', 'content'] });
+  const [ok] = await put(raw(dana, 'trinityone/fund:' + cp.slice(0, 8) + '-roof', { name: 'Roof appeal', lnaddr: 'steward@example.invalid' }));
+  assert.equal(ok, false, 'the relay accepted a STEWARD’s giving fund — M4 is open, and answer (h) needs revisiting');
+  const C = new Function(stmt(STEWARD, 'var STEWARD_CARRY = ', 'STEWARD_CARRY') + '\nreturn STEWARD_CARRY;')();
+  assert.ok(C.never.includes('trinityone/fund:') && !C.carry.includes('trinityone/fund:'), 'fund: is carried: a steward fund served by a relay that does not enforce M4 would be re-signed by the church');
+});
+
+test('answer (i) — a steward copy in the same second or LATER than the removal: the church copy still comes out strictly newer', async () => {
+  const eng = owner(); const dana = await newSteward();
+  await setRoster(eng, [dana.pub], { [dana.pub]: ['content'] });
+  const d = GROUP_D + cp.slice(0, 16) + '-ahead';
+  const S = await mustPut(raw(dana, d, { name: 'stamped two seconds ahead' }, { at: Math.floor(Date.now() / 1000) + 2 }));
+  const r = await eng._removeStewardKeeping(dana.pub);
+  const c = churchSent(eng, d).at(-1);
+  assert.ok(c, 'not carried: ' + JSON.stringify(r.carry));
+  assert.ok(c.created_at > S.created_at, 'the church copy (' + c.created_at + ') is not strictly newer than the steward’s (' + S.created_at + ')');
+  assert.equal(r.carry.notCarried.length, 0);
+});
+
+test('nit — a document changed since by ANOTHER CURRENT steward is not listed as "may change back"', async () => {
+  const eng = owner(); const dana = await newSteward(), eve = await newSteward();
+  await setRoster(eng, [dana.pub, eve.pub], { [dana.pub]: ['content'], [eve.pub]: ['content'] });
+  const d = GROUP_D + cp.slice(0, 16) + '-eve';
+  await mustPut(raw(dana, d, { name: 'dana' }));
+  await mustPut(raw(eve, d, { name: 'eve, later' }));
+  const r = await eng._removeStewardKeeping(dana.pub);
+  assert.deepEqual(r.carry.notCarried.filter(x => x.d === d), [], 'over-reported as "may change back"');
+  assert.ok(r.carry.superseded.includes(d));
+  assert.equal(churchSent(eng, d).length, 0, 'dana’s older copy was carried over eve’s newer one');
+});
+
+test('R1 race — a stale roster re-emit (setCareRoster) between the write and its echo cannot put the removed steward back', async () => {
+  const eng = owner(); const a = await newSteward(), b = await newSteward(), c = await newSteward();
+  await setRoster(eng, [a.pub, b.pub, c.pub], { [a.pub]: ['content'], [b.pub]: ['content'], [c.pub]: ['content'] });
+  const ra = await eng._removeStewardKeeping(a.pub);
+  assert.ok(ra.wrote);
+  eng.window.Steward.setCareRoster([a.pub, b.pub, c.pub]);   // the screen's roster from before the echo, re-emitted by the React effect
+  assert.equal(eng._careRoster.has(a.pub), false, 'the stale re-emit put the removed steward back into the engine’s roster');
+  const rb = await eng._removeStewardKeeping(b.pub);
+  assert.ok(rb.wrote);
+  assert.deepEqual(JSON.parse(eng.sent.filter(e => dOf(e) === STEWARDS_D + cp).at(-1).content).pubkeys, [c.pub], 'the second removal wrote the first person back');
+  // CONTROL: anyone this console did not just remove is adopted as before
+  const d2 = H.key().pub;
+  eng.window.Steward.setCareRoster([c.pub, d2]);
+  assert.deepEqual([...eng._careRoster], [c.pub, d2], 'CONTROL: setCareRoster stopped adopting ordinary lists');
+});
+
+test('R1 — the "removed at" recorded is the roster event’s own created_at, not the clock', async () => {
+  const eng = owner(); const a = await newSteward(), b = await newSteward();
+  // three quick roster writes push this document's stamp ahead of the clock, so the two can be told apart
+  for (let i = 0; i < 3; i++) await eng.setStewards([a.pub, b.pub], { [a.pub]: ['content'], [b.pub]: ['content'] });
+  eng._careRoster = new Set([a.pub, b.pub]); eng._stewardCaps = { [a.pub]: ['content'], [b.pub]: ['content'] };
+  const r = await eng._removeStewardKeeping(a.pub);
+  const roster = eng.sent.filter(e => dOf(e) === STEWARDS_D + cp).at(-1);
+  assert.ok(roster.created_at > Math.floor(Date.now() / 1000), 'FIXTURE: the roster stamp is not ahead of the clock, so this proves nothing');
+  assert.equal(eng._exRemembered.at(-1).at, roster.created_at, 'the removal was recorded at the clock, not at the roster that made it');
+  assert.ok(r.wrote);
+});
+
+test('re-seat (audit LOW 1) — block-old on a steward key: the new key takes the old one’s place on leaders/members', async () => {
+  const eng = owner(); const oldK = await newSteward(); const newK = H.key(), other = H.key().pub;
+  await setRoster(eng, [oldK.pub], { [oldK.pub]: ['content'] });
+  const g = cp.slice(0, 16) + '-reseat';
+  await mustPut(raw(oldK, GROUP_D + g, { name: 'Re-seat', leaders: [oldK.pub, other], visibility: 'invite', members: [other, oldK.pub] }));
+  const r = await eng._carryOverStewardDocs(oldK.pub, { blocked: true, replaceWith: newK.pub });
+  assert.ok(r.carried.some(x => x.d === GROUP_D + g), JSON.stringify(r));
+  const kept = JSON.parse((await churchCopy(GROUP_D + g)).content);
+  assert.deepEqual(kept.leaders, [newK.pub, other], 'the old key was dropped from leaders instead of replaced by the new one');
+  assert.deepEqual(kept.members, [other, newK.pub], 'the old key was dropped from members instead of replaced by the new one');
+});
+
 // ══ CARE NEEDS (owner answer g): carried, the skip part re-made under the church ════════════════════════════════════
 // The steward's need is written by the SHIPPED publishNeed (vendor/steward-meals.js) on the steward's console; the
 // recipient's skip is the SHIPPED markCareSkip (vendor/fellowship.js) — both lifted, both against the real relay.
@@ -316,9 +393,11 @@ function careMethods(eng) {
   Object.assign(S, new Function('scope', `with (scope) { return ({ ${src.join(',\n')} }); }`)(scope));
   return S;
 }
-function liftPublishNeed(stewardEng) {
+// `ahead` stamps the steward's need that many seconds later than the clock — so a removal pressed at once is the SAME
+// second or earlier, the case answer (i) is about, every time rather than by luck
+function liftPublishNeed(stewardEng, ahead = 0) {
   const S = careMethods(stewardEng);
-  S.publishSigned = async (tmpl) => { const e = stewardEng.feChurch(tmpl, stewardEng.sk); return (await stewardEng.publish(e)) ? e : null; };
+  S.publishSigned = async (tmpl) => { const e = stewardEng.feChurch({ ...tmpl, created_at: tmpl.created_at + ahead }, stewardEng.sk); return (await stewardEng.publish(e)) ? e : null; };
   const need = fnBody(MEALS, 'async function publishNeed(need) {', 'publishNeed');
   const norm = fnBody(MEALS, 'function _normNeed(', '_normNeed');
   const shaB = fnBody(MEALS, 'async function _sha256hex(str) {', '_sha256hex (meals)');
@@ -349,28 +428,34 @@ test('care need — carried with the skip part re-made: the recipient’s skip i
   const dana = await newSteward(), rose = await newSteward();
   await setRoster(eng, [dana.pub], { [dana.pub]: ['care'] });
   const sEng = consoleEngine({ signer: dana, church: cp, actingChurch: cp, relayUrl: X.wsUrl, pool: authedPool(dana, STEWARDS_D + cp), publishTo: (e) => put(e, X) });
-  const publishNeed = liftPublishNeed(sEng);
-  const d0 = day(1), d1 = day(2), d2 = day(3);
-  const saved = await publishNeed({ type: 'meals', displayLabel: 'Rose', recipient: rose.pub, dates: [d0, d1, d2], startDate: d0, endDate: d2, meals: ['dinner'], notes: 'after 5' });
+  const publishNeed = liftPublishNeed(sEng, 1);   // the steward's copy is a second AHEAD: the removal below is the same second or earlier
+  const d0 = day(1), d1 = day(2), d2 = day(3), d3 = day(7);
+  const saved = await publishNeed({ type: 'meals', displayLabel: 'Rose', recipient: rose.pub, dates: [d0, d1, d2, d3], startDate: d0, endDate: d3, meals: ['dinner'], notes: 'after 5' });
   assert.ok(saved && saved.id, 'FIXTURE: the steward’s need was not saved: ' + sEng.refused);
   const stewardNeed = sEng.sent.filter(e => dOf(e) === NEED_D + saved.id).at(-1);
   assert.ok(JSON.parse(stewardNeed.content).skipEnc, 'FIXTURE: the need carries no skip part, so nothing here tests the re-mint');
   const markSkip = liftMarkCareSkip(rose, X);
   const ctl = await markSkip(saved.id, d0, 'control', JSON.parse(stewardNeed.content).skipEnc, dana.pub);
   assert.equal(ctl && ctl[0], true, 'CONTROL: before the removal the steward’s own token is accepted — without this the refusal below proves nothing: ' + JSON.stringify(ctl));
-  await sleep(1100);   // the carried copy must be strictly newer than the steward's, as it is when a removal comes later
-  const r = await eng._removeStewardKeeping(dana.pub);
+  const r = await eng._removeStewardKeeping(dana.pub);   // at once — no waiting for the clock to move on
   assert.ok(r.wrote);
   const carried = churchSent(eng, NEED_D + saved.id).at(-1);
   assert.ok(carried, 'the care need was not carried: ' + JSON.stringify(r.carry));
   const body = JSON.parse(carried.content);
   assert.notEqual(body.skipEnc, JSON.parse(stewardNeed.content).skipEnc, 'the skip part was copied, not re-made');
   assert.equal(carried.content.includes(rose.pub) || carried.tags.some(t => t.some(v => String(v).includes(rose.pub))), false, 'the recipient is in the clear');
-  assert.deepEqual(carried.tags.filter(t => t[0] === 'skiphash').map(t => t[1]).sort(), [d0, d1, d2]);
+  assert.deepEqual(carried.tags.filter(t => t[0] === 'skiphash').map(t => t[1]).sort(), [d0, d1, d2, d3]);
+  assert.ok(carried.created_at > stewardNeed.created_at, 'ANSWER (i): the carried need is not strictly newer than the steward’s (' + carried.created_at + ' vs ' + stewardNeed.created_at + ')');
   const okNew = await markSkip(saved.id, d1, 'family visiting', body.skipEnc, cp);   // what the phone passes: the need's author is now the church
   assert.equal(okNew && okNew[0], true, 'the recipient’s skip on a carried need was refused: ' + JSON.stringify(okNew));
   const okOld = await markSkip(saved.id, d2, 'old token', JSON.parse(stewardNeed.content).skipEnc, dana.pub);
   assert.equal(okOld && okOld[0], false, 'a skip with the OLD token was accepted');
+  // …and after the relay RESTARTS (it replays in created_at order, ties in arrival order) the church's copy still decides
+  X = await H.moveRelay(X);
+  const oldAfter = await liftMarkCareSkip(rose, X)(saved.id, d2, 'old token, after restart', JSON.parse(stewardNeed.content).skipEnc, dana.pub);
+  assert.equal(oldAfter && oldAfter[0], false, 'after a relay restart the steward’s OLD skip token works again — the carried need did not win');
+  const newAfter = await liftMarkCareSkip(rose, X)(saved.id, d3, 'new token, after restart', body.skipEnc, cp);
+  assert.equal(newAfter && newAfter[0], true, 'after a relay restart the re-made token is refused: ' + JSON.stringify(newAfter));
   CARE = { saved, stewardNeed, carried, rose, dana, d1, d2 };
 });
 
@@ -398,7 +483,6 @@ test('R3 (known gap) — a late OLDER steward need arriving by peer sync makes t
     const old = sEng.sent.filter(e => dOf(e) === NEED_D + saved.id).at(-1);
     // …and reaches Y before the removal, so the owner console on Y sees and carries it
     await mustPut(old, Y);
-    await sleep(1100);   // the removal comes later than the steward's write: a same-second carried copy would TIE it, and a restart replays ties in arrival order
     const r = await engY._removeStewardKeeping(dana.pub);
     assert.ok(r.wrote && churchSent(engY, NEED_D + saved.id).length === 1, 'FIXTURE: the need was not carried on Y');
     const fresh = JSON.parse(churchSent(engY, NEED_D + saved.id).at(-1).content).skipEnc;

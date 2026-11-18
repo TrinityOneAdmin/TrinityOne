@@ -7995,7 +7995,9 @@ const STEWARD_CARRY = Object.freeze({
     'trinityone/safetycheck:',  // owner answer (e): settings only
     'trinityone/groupkey:', 'trinityone/carekey:', 'trinityone/namekey:',   // rotated, never copied (Remove / Block)
     'trinityone/checkin:',      // safeguarding record, exempt on both sides
-    'trinityone/fund:',         // NOT IN THE PLAN'S TABLE (leader-writable); left alone until the owner says otherwise
+    'trinityone/fund:',         // OWNER-ONLY at the relay (a fund is the church's payment destination, SECURITY-AUDIT-2026-07-06 M4):
+                                //   a steward can never have written one, and re-signing one a lax relay served would hand the
+                                //   church's signature to a steward's Lightning address. Owner answer (h) held back — see report.
     'trinityone/blocked:',      // the church key's alone
     'finance/',                 // single-writer, sequence-pinned; the relay and console keep them anyway
   ]),
@@ -8014,7 +8016,7 @@ const _CARRY_WORDS = {
   'trinityone/pin:': 'a pinned message', 'trinityone/hidden:': 'a hidden message', 'trinityone/nophoto:': 'a photo setting',
   'trinityone/joinpolicy:': 'the joining setting', 'trinityone/reseat:': 'a reconnected member',
   'trinityone/careteam:': 'the care team', 'trinityone/meals-settings': 'the meals setting',
-  'trinityone/carereqstatus:': 'a help request', 'trinityone/care:': 'a care need',
+  'trinityone/carereqstatus:': 'a help request', 'trinityone/care:': 'a care need'
 };
 function _carryPrefix(d, list) { for (const p of list) if (d === p || d.startsWith(p)) return p; return ''; }
 function _carryLabel(d, content) {
@@ -8024,10 +8026,11 @@ function _carryLabel(d, content) {
 }
 // The copy the church will publish in place of theirs: same content and tags, a fresh created_at (it must beat the
 // church's own older copy), the `for` tag left to feChurch. Two exceptions, both owner answers:
-//   (f) on the BLOCK path a group definition loses the blocked person from `leaders` and `members` (cleartext JSON);
+//   (f) on the BLOCK path a group definition loses the blocked person from `leaders` and `members` (cleartext JSON) —
+//       except on a RE-SEAT (`replaceWith`), where the person is the same and their new key takes the old one's place;
 //   (g) a care need's skip part is re-made: a new secret sealed to the recipient BY THE CHURCH, new per-day hashes.
 // Answers { skip: reason } when it cannot make a faithful copy.
-async function _carryTemplate(S, blocked, who) {
+async function _carryTemplate(S, blocked, who, replaceWith) {
   let tags = (S.tags || []).filter(t => Array.isArray(t) && t[0] !== 'for');
   let content = typeof S.content === 'string' ? S.content : '';
   const d = (tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -8035,9 +8038,9 @@ async function _carryTemplate(S, blocked, who) {
   if (!dead && blocked && d.startsWith('trinityone/group:')) {
     let g; try { g = JSON.parse(content); } catch (e) { return { skip: 'unreadable' }; }
     if (g && typeof g === 'object') {
-      const keep = (x) => String(x || '').toLowerCase() !== who;
-      if (Array.isArray(g.leaders)) g.leaders = g.leaders.filter(keep);
-      if (Array.isArray(g.members)) g.members = g.members.filter(keep);
+      const swap = (a) => { const out = []; for (const x of a) { const v = String(x || '').toLowerCase() === who ? replaceWith : x; if (v && !out.some(y => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v); } return out; };
+      if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
+      if (Array.isArray(g.members)) g.members = swap(g.members);
       content = JSON.stringify(g);
     }
   }
@@ -8148,7 +8151,7 @@ async function _carryOverStewardDocs(pk, opts) {
       const ch = chOf(e);
       if (ch && ch !== pub) continue;                                                  // tagged for another church
       if (!ch && e.pubkey !== pub && _carryPrefix(d, _CARRY_BARE)) continue;           // another church's own bare document
-      const l = others.get(d) || []; l.push({ at: e.created_at || 0, church: e.pubkey === pub }); others.set(d, l);
+      const l = others.get(d) || []; l.push({ at: e.created_at || 0, church: e.pubkey === pub, steward: [..._careRoster].some(p => String(p).toLowerCase() === String(e.pubkey).toLowerCase()) }); others.set(d, l);
     }
     const jobs = [];
     for (const d of slice) {
@@ -8158,17 +8161,30 @@ async function _carryOverStewardDocs(pk, opts) {
       if (rivals.length) {
         // the church itself saved it AFTER them: nothing of theirs is showing, so nothing changes back
         if (rivals.every(x => x.church && x.at > (S.created_at || 0))) out.superseded.push(d);
+        // changed since by a steward who is still on the roster: honoured as it stands, so nothing of theirs changes back
+        else if (rivals.every(x => x.at > (S.created_at || 0) && (x.church || x.steward))) out.superseded.push(d);
         else notC(d, rivals.some(x => x.at === (S.created_at || 0)) ? 'tie' : 'newer', label);
         continue;
       }
       jobs.push((async () => {
         let tmpl = null;
-        try { tmpl = await _carryTemplate(S, !!o.blocked, who); } catch (e) { tmpl = { skip: 'error' }; }
+        const nk = (typeof o.replaceWith === 'string' && /^[0-9a-f]{64}$/i.test(o.replaceWith)) ? o.replaceWith.toLowerCase() : '';
+        try { tmpl = await _carryTemplate(S, !!o.blocked, who, nk); } catch (e) { tmpl = { skip: 'error' }; }
         if (!tmpl || tmpl.skip) { notC(d, (tmpl && tmpl.skip) || 'error', label); return; }
         if (left() <= 0) { notC(d, 'time', label); return; }   // at the limit nothing more is published
         let ok = false;
         try {
-          const signed = feChurch(tmpl, sk);
+          // STRICTLY NEWER THAN THEIRS, CHECKED ON THE SIGNED EVENT (owner, 2026-11-18, answer i). feChurch runs _monotonic,
+          // which shifts by the measured relay clock offset and can fall back at its ceiling, so what `created_at` will be
+          // is only known after signing. A copy that ties (or trails) theirs is a coin toss on phones and on a restarted
+          // relay (it replays ties in arrival order), so wait a second and sign again, a bounded number of times, inside the
+          // limit; still not newer: listed as a tie, never published.
+          let signed = feChurch(tmpl, sk);
+          for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
+            await new Promise(r => setTimeout(r, 1000));
+            signed = feChurch({ ...tmpl, created_at: now() }, sk);
+          }
+          if ((signed.created_at || 0) <= (S.created_at || 0)) { notC(d, 'tie', label); return; }
           let tm = null;
           ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
           if (tm) clearTimeout(tm);
@@ -8187,6 +8203,20 @@ async function _carryOverStewardDocs(pk, opts) {
 // not read the roster yet refuses (R2): a roster built from an unknown set could drop every other steward.
 // Answers { wrote, carry, next, refused }. `wrote` is what setStewards answered.
 let _rosterTurn = Promise.resolve();
+// WHO THIS CONSOLE HAS JUST TAKEN OFF THE ROSTER, and the created_at of the roster that did it. setCareRoster (the React
+// effect's re-emit of the screen's roster) and subscribeStewards (a re-delivered OLDER roster) can both arrive between the
+// write landing and its echo; neither may re-add them. Cleared per key once a roster at least as new is read.
+const _justRemoved = new Map();
+function _dropJustRemoved(list, rosterAt) {
+  if (!_justRemoved.size) return list;
+  const out = [];
+  for (const p of list) {
+    const k = String(p || '').toLowerCase(), at = _justRemoved.get(k);
+    if (at == null) { out.push(p); continue; }
+    if (rosterAt != null && rosterAt >= at) { _justRemoved.delete(k); out.push(p); continue; }   // as new as the removal: it decides
+  }
+  return out;
+}
 function _removeStewardKeeping(pk, opts) {
   _requireTrustedView('steward roster');   // a refusal is synchronous, exactly as setStewards' is
   const o = opts || {};
@@ -8203,13 +8233,16 @@ function _removeStewardKeeping(pk, opts) {
     let next;
     if (o.capsOnly) { next = before.slice(); caps[before.find(p => String(p).toLowerCase() === who) || who] = []; }
     else { next = before.filter(p => String(p).toLowerCase() !== who); for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k]; }
-    const wrote = await window.Steward.setStewards(next, caps);
+    const wrote = await window.Steward.setStewards(next, caps);   // answers the SIGNED roster event when it landed (publish -> _landed)
     if (wrote) {
+      const at = (wrote && typeof wrote === 'object' && Number(wrote.created_at)) || now();
       const kept = {};
       for (const p of next) if (Array.isArray(caps[p])) kept[p] = caps[p].filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
       _careRoster = new Set(next);
       _stewardCaps = kept;
-      if (before.length !== next.length) _rememberExStewards(before, next, now());
+      if (before.length !== next.length) _rememberExStewards(before, next, at);
+      // …and a stale copy of the old roster must not put them back before the relay's echo arrives (setCareRoster)
+      if (!o.capsOnly) _justRemoved.set(who, at);
     }
     return { wrote, carry, next, refused: '' };
   };
@@ -10147,7 +10180,7 @@ window.Steward = {
   // copy is one the member honours. A genuine removal arrives through the subscription, which does set it
   // empty. AUDIT-8.
   setCareRoster(list) {
-    const next = new Set((list || []).filter(Boolean));
+    const next = new Set(_dropJustRemoved((list || []).filter(Boolean), null));   // never re-adds who _removeStewardKeeping just removed
     if (next.size || !_careRosterKnown) _careRoster = next;
     _reCheckCareKeyPending();
     try { _webQueueSync(); } catch (e) {}   // the public verse-prompt copy is chosen by roster (_webVersePrompt; audit re-check)
@@ -12722,11 +12755,14 @@ window.Steward = {
     // success screen: the thief would keep reading the church, posting to it and holding the group keys, and
     // the one control that could stop them would already have gone. Nothing has been written yet, so throwing
     // here leaves the church exactly as it was and the steward able to try again.
+    let carryOld = null;
     if (o.blockOld) {
       // AN OLD KEY THAT IS OR WAS A STEWARD'S keeps the church settings it saved, exactly as Block does (owner answer d,
       // 2026-11-17): carried BEFORE the block is published, after which the relay hides everything it wrote. Bounded by
       // the carry's own limit; a carry that fails never stops the block.
-      try { if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) await _carryOverStewardDocs(oldH, { blocked: true }); } catch (e) {}
+      // On a RE-SEAT the person is the same, so their new key takes the old one's place on leaders/members (replaceWith).
+      try { if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, { blocked: true, replaceWith: newH }); }
+      catch (e) { carryOld = { carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }; }
       const blocked = await w(() => window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]));
       if (!blocked) throw new Error('Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.');
     }
@@ -12958,6 +12994,7 @@ window.Steward = {
     }
 
     return {
+      carry: carryOld,   // what the old key's church settings came to (null: not a steward's key, or no block)
       minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG,
       blockedOld: !!o.blockOld,   // only reachable if the block LANDED — a refusal threw above
       teamsMoved, rotasMoved: slotsMoved,
@@ -13045,6 +13082,8 @@ window.Steward = {
         // as unauthored-by-anyone and skipped the member. The engine's own subscription is the earliest honest
         // moment this is knowable. AUDIT-8.
         const _rosterBefore = _careRoster;
+        cur = _dropJustRemoved(cur, e.created_at);   // a roster OLDER than one this console just wrote cannot re-add who it removed
+        for (const [k, at] of [..._justRemoved]) if ((e.created_at || 0) >= at) _justRemoved.delete(k);
         _careRoster = new Set(cur.filter(Boolean));
         _careRosterKnown = true;
         _careRosterSeen = true;   // a real roster DOCUMENT, as opposed to the oneose below — see _consoleDisplay
