@@ -109,6 +109,7 @@ function harness({ pending = '', proven = [BOX, CANON], seedStewarded = [] } = {
     // per-church state setActiveIdentity resets — cells, nothing more
     lastProfile: { name: 'Helper' }, _profileLoaded: false, _clearanceSent: new Map(),
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
+    _justRemoved: new Map(),   // who this console just took off the roster (2026-11-18): setActiveIdentity clears it
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {},
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(), _localBlockedAt: 0, _blockedLastSet: () => new Set(),
     _applyNoPhotoList: () => {}, CAP_KEYS: {}, _capState: {}, _checkinMigrated: '',
