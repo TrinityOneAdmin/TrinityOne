@@ -54,6 +54,9 @@ export async function compiled(name, globals, extra = [], src0 = DASH) {
   if (src0 === DASH && /\buseHelperRequests\(/.test(src) && !/function useHelperRequests\(/.test(src)) {
     src += '\n' + ['pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n');
   }
+  // WHAT A REMOVAL OR BLOCK KEPT (2026-11-17): DashStewardsPanel and DashMembers both word it through stewCarryNote, so it
+  // is compiled in, real, whenever the screen uses it.
+  if (src0 === DASH && /\bstewCarryNote\(/.test(src) && !/function stewCarryNote\(/.test(src)) src += '\n' + fnBody(DASH, 'function stewCarryNote(', 'stewCarryNote');
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
