@@ -333,3 +333,105 @@ test('POINT OF USE — opening the video player pauses the audio player, and its
   assert.equal(w.el.paused, true);
   assert.equal(byLabel(w.player(), 'Play').length, 1);
 });
+
+// ── build audit 2026-11-18 (AUDIT-build-audio-playback-fixes-2026-11-18.md), findings 1-4 ──
+
+// A URL whose blob: addresses can be counted: which are still live, which were revoked.
+function blobSpy() {
+  let n = 0;
+  const live = new Set(), revoked = [];
+  class U extends URL {
+    static createObjectURL() { const u = 'blob:https://localhost/b' + (++n); live.add(u); return u; }
+    static revokeObjectURL(u) { revoked.push(u); live.delete(u); }
+  }
+  return { U, live, revoked };
+}
+
+test('finding 1 — Play on a failed sermon in a queue revokes the blob it drops; exactly one live blob for it; a caller\'s own blob is never revoked', async () => {
+  const spy = blobSpy();
+  const w = world({ urlImpl: spy.U });
+  const mk = (id) => ({ id, title: 'Sermon ' + id, resolve: async () => spy.U.createObjectURL(new Blob(['x'])) });
+  const q = [mk('s1'), mk('s2')];
+  w.A.play(q[0], q); await settle();
+  press(w.player(), 'Next track'); await settle();
+  const broken = w.el.src;
+  assert.ok(spy.live.has(broken), 're-anchor: the second sermon did not resolve to a live blob');
+  w.el.tick(30); w.el.failNow(3);
+  press(w.player(), 'Play'); await settle();
+  const fresh = w.el.src;
+  assert.notEqual(fresh, broken, 're-anchor: Play did not re-resolve');
+  assert.ok(spy.revoked.includes(broken), 'THE DROPPED BLOB WAS NOT REVOKED — a whole sermon leaks per Play');
+  assert.ok(spy.live.has(fresh), 'the new blob was revoked');
+  assert.deepEqual([broken, fresh].filter(u => spy.live.has(u)), [fresh], 'expected exactly one live blob for this sermon');
+  // a blob the caller supplied (no resolve) is reloaded as it is, never revoked
+  const mine = spy.U.createObjectURL(new Blob(['y']));
+  w.A.play({ id: 'first', title: 'First sermon', src: mine }); await settle();
+  w.el.failNow(3);
+  press(w.player(), 'Play'); await settle();
+  assert.equal(spy.revoked.includes(mine), false, 'a caller-supplied blob was revoked');
+  assert.equal(w.el.src, mine);
+});
+
+test('finding 2 — playing the SAME chapter again on a dead element reloads it at once (Reading settings re-picking the current voice)', async () => {
+  const w = world();
+  w.el.lengthOf = () => 300;
+  await w.win.playBibleChapter(43, 3); await settle();
+  assert.equal(w.el.src, 'https://audio.bible.helloao.org/api/BSB/JHN/3/audio/david.mp3');
+  w.el.net = () => 'fail';
+  w.el.failNow(2);
+  await w.clock.advance(2000 + 5000 + 15000 + 30000);   // given up: the element is dead
+  assert.ok(w.el.error, 're-anchor: the element is not errored');
+  w.el.net = () => 'ok';
+  const loads = w.el.loads.length;
+  await w.win.playBibleChapter(43, 3);                   // what pickAudio() calls for the chapter that is loaded
+  await settle();
+  assert.equal(w.el.loads.length, loads + 1, 'THE SAME SRC ON A DEAD ELEMENT WAS NOT RELOADED — a spinner until the 45 s guard');
+  assert.equal(w.el.paused, false);
+  assert.equal(w.el.error, null);
+});
+
+test('finding 3 — seeking an errored track the listener PAUSED moves the place and reloads there WITHOUT sound; Play resumes there', async () => {
+  const w = await playing(1);
+  w.el.tick(50);
+  w.el.net = () => 'fail';
+  w.el.failNow(2);
+  press(w.player(), 'Pause');
+  w.el.net = () => 'ok';
+  const loads = w.el.loads.length, plays = w.el.plays;
+  press(w.player(), 'Forward 10 seconds'); await settle();
+  assert.equal(w.el.paused, true, 'A SEEK ON A PAUSED, ERRORED TRACK STARTED SOUND');
+  assert.equal(w.el.plays, plays, 'play() was called');
+  assert.equal(w.el.loads.length, loads + 1, 'the errored element was not reloaded at the new place');
+  assert.equal(w.el.currentTime, 60);
+  assert.equal(byLabel(w.player(), 'Play').length, 1);
+  await w.clock.advance(10 * 60000);
+  assert.equal(w.el.paused, true, 'something started sound later');
+  press(w.player(), 'Play'); await settle();
+  assert.equal(w.el.paused, false);
+  assert.equal(w.el.currentTime, 60, 'Play did not resume at the place the seek chose');
+  // Previous on a paused, errored track: back to 0:00, still silent
+  w.el.net = () => 'fail'; w.el.failNow(2);
+  press(w.player(), 'Pause');
+  w.el.net = () => 'ok';
+  press(w.player(), 'Previous track'); await settle();
+  assert.equal(w.el.paused, true, 'Previous on a paused, errored track started sound');
+  assert.equal(w.el.currentTime, 0);
+});
+
+test('finding 4 — a SECOND outage in the same chapter gets the full 2/5/15/30 s again (the attempt count resets on reconnect)', async () => {
+  const w = await playing(1);
+  w.el.tick(20);
+  w.el.net = () => 'fail'; w.el.failNow(2);
+  await w.clock.advance(2000);                          // attempt 1 fails
+  w.el.net = () => 'ok';
+  await w.clock.advance(5000);                          // attempt 2 recovers
+  assert.equal(w.el.paused, false, 're-anchor: the first outage did not recover');
+  await playOn(w, 20000);
+  w.el.net = () => 'fail'; w.el.failNow(2);
+  const before = w.el.loads.length;
+  await w.clock.advance(2000 + 5000 + 15000);
+  assert.match(caption(w.player()), RECONNECTING, 'THE SECOND OUTAGE GAVE UP EARLY — the attempt count was not reset after reconnecting');
+  await w.clock.advance(30000);
+  assert.equal(w.el.loads.length, before + 4, 'the second outage did not get 4 retries');
+  assert.match(caption(w.player()), COULDNT);
+});
