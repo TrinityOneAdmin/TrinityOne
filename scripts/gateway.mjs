@@ -1592,6 +1592,7 @@ const STEWARDREVOKE_D = D.STEWARDREVOKE;
 // careslot: are member-signed offers to help; careskip: are RECIPIENT-only ("I don't need help that day"). See SPINE.md + src/steward-meals.src.js.
 // NOTE: 'trinityone/care:' is NOT a prefix of careslot:/careskip: — the colon makes them distinct, so startsWith() is unambiguous.
 const MEALS_SETTINGS_D = D.MEALS_SETTINGS; // church-signed config — {enabled, visibility, openedBy, adminGroupId} (single doc, no suffix)
+const VERSE_PROMPT_D = D.VERSE_PROMPT;    // the church's verse prompt {ref, note, schedule} — BARE d-tag, one per AUTHOR (kind 30078 is replaceable per pubkey+d), church named by the ['church'] tag on a steward's copy
 const ROTA_SETTINGS_D = D.ROTA_SETTINGS;  // church-signed config — {visibility} deciding who may FETCH rota:/runsheet: (single doc, no suffix)
 const NEED_D = D.NEED;        // a care need — d=care:<id> (church / steward / care-team admin; or any member when openedBy='member')
 const SLOT_D = D.SLOT;    // a member's fill for one (need,date) — d=careslot:<careId>:<iso> (member-signed, addressable per author)
@@ -5401,6 +5402,22 @@ function accept(e) {
       if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
       return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
+    // THE VERSE PROMPT, FROM A HELPER (RETEST-vp-other-2026-11-18). A delegated console signs with the helper's
+    // OWN key and names the church with feChurch()'s ['church', <cp>] tag, exactly as it does for a devotional.
+    // Until this line no rule named the d-tag, so a helper's prompt fell to the member catch-all below and was
+    // refused ("not a member or not permitted") — while every reader (the member app's
+    // subscribeChurchVersePrompt, the console's subscribeVersePrompt) already trusts a rostered steward's copy.
+    // Gated by 'content', the same capability as devotionals and plans, and the one that opens the console's
+    // Resources tab where the composer lives.
+    // THE D-TAG IS GLOBAL, NOT CHURCH-SCOPED, AND NEEDS NO idOwnerOk: kind 30078 is replaceable per AUTHOR, so
+    // nobody can overwrite anyone else's copy, and namedChurch(e) is the only thing deciding which church the
+    // steward claims — stewardCan(…, namedChurch(e), …) refuses a steward of church A who names church B, and
+    // refuses an event naming no hosted church at all (namedChurch → ''). There is no global id → church map to
+    // corrupt (unlike group:/roster:/care:, AUDIT-2026-07-24).
+    // DELIBERATELY ADDITIVE: it only ever says yes. The church key, a network key and a non-steward member all
+    // fall through to the catch-all exactly as before, so nothing that was accepted is refused and no member
+    // gains anything.
+    if (d === VERSE_PROMPT_D && stewardCan(e.pubkey, namedChurch(e), 'content')) return true;
     if (d.startsWith(NETWORK_D)) return CHURCH_PUBS.has(e.pubkey);   // only a church on this box may declare its network
     if (d.startsWith(MEMBER_D)) { const cp = d.slice(MEMBER_D.length); return CHURCH_PUBS.has(cp) || store.query({ kinds: [30078], authors: [e.pubkey], '#d': [d], limit: 1 }).length > 0; }
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
