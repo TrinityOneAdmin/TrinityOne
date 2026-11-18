@@ -21567,7 +21567,7 @@ zoo`.split("\n");
   }
   async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
-    const out = { swapped: [], failed: [] };
+    const out = { swapped: [], failed: [], other: [] };
     if (!from || !to || from === to || !carry || !sk || !pub) return out;
     const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
     const labelOf = /* @__PURE__ */ new Map();
@@ -21623,10 +21623,15 @@ zoo`.split("\n");
       const cur = newest.get(d);
       if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
     }
+    const namesOld = (g) => [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
     for (const d of ds) {
       const ev = newest.get(d);
       const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
-      if (!ev || ev.pubkey !== pub || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
+      if (!whole) {
+        out.failed.push(label);
+        continue;
+      }
+      if (!ev || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
       let g;
       try {
         g = JSON.parse(ev.content);
@@ -21634,6 +21639,10 @@ zoo`.split("\n");
         continue;
       }
       if (!g || typeof g !== "object") continue;
+      if (ev.pubkey !== pub) {
+        if (namesOld(g)) out.other.push(label);
+        continue;
+      }
       let changed = false;
       const swap = (arr) => {
         const o = [];
@@ -21648,13 +21657,15 @@ zoo`.split("\n");
       if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
       if (Array.isArray(g.members)) g.members = swap(g.members);
       if (!changed) continue;
-      if (!whole) {
-        out.failed.push(label);
-        continue;
-      }
       let ok = false;
       try {
-        ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(g) }, sk));
+        const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(g) };
+        let signed = feChurch(tmpl, sk);
+        for (let k = 0; (signed.created_at || 0) <= (ev.created_at || 0) && k < 4; k++) {
+          await new Promise((r) => setTimeout(r, 1e3));
+          signed = feChurch({ ...tmpl, created_at: now() }, sk);
+        }
+        ok = (signed.created_at || 0) > (ev.created_at || 0) ? await publish(signed) : false;
       } catch (e) {
         ok = false;
       }
@@ -26346,9 +26357,11 @@ zoo`.split("\n");
             const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH);
             carryOld.swapped = sw.swapped;
             carryOld.swapFailed = sw.failed;
+            carryOld.swapOther = sw.other;
           } catch (e) {
             carryOld.swapped = [];
             carryOld.swapFailed = ["some of the groups they were on"];
+            carryOld.swapOther = [];
           }
         }
       }

@@ -8212,10 +8212,11 @@ async function _carryOverStewardDocs(pk, opts) {
 // It changes a group only when the church's copy is the NEWEST copy anyone holds at that address (so it never re-saves
 // the church's older copy over another steward's later edit) and that copy names the old key (so it never touches a group
 // the old key was not on). Every relay in relays() must answer, or the group is left alone and listed as failed.
-// Answers { swapped: [labels], failed: [labels] } — failed lists only groups that needed the change and did not get it.
+// Answers { swapped, failed, other } (labels): failed = needed the change and did not get it, or not every relay answered;
+// other = another author's newer copy still names the old key (left alone, for the steward to check by hand).
 async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
   const from = String(oldPk || '').toLowerCase(), to = String(newPk || '').toLowerCase();
-  const out = { swapped: [], failed: [] };
+  const out = { swapped: [], failed: [], other: [] };
   if (!from || !to || from === to || !carry || !sk || !pub) return out;
   const isGroup = (d) => String(d || '').startsWith('trinityone/group:');
   const labelOf = new Map();
@@ -8242,20 +8243,31 @@ async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const cur = newest.get(d);
     if (!cur || (e.created_at || 0) > (cur.created_at || 0) || ((e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub)) newest.set(d, e);   // a tie with someone else is not the church's to settle
   }
+  const namesOld = (g) => [...(Array.isArray(g.leaders) ? g.leaders : []), ...(Array.isArray(g.members) ? g.members : [])].some(x => String(x || '').toLowerCase() === from);
   for (const d of ds) {
     const ev = newest.get(d);
     const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
-    if (!ev || ev.pubkey !== pub || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;   // not the church's newest live copy: leave it
+    // NOT EVERY RELAY ANSWERED (timed out, not logged in): what we hold may not be the newest copy, and silence is not
+    // "nothing to do" — listed, so the screen can say it (audit round 4, L1 b / L2)
+    if (!whole) { out.failed.push(label); continue; }
+    if (!ev || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;   // no live copy anywhere: nothing names anyone
     let g; try { g = JSON.parse(ev.content); } catch (e) { continue; }
     if (!g || typeof g !== 'object') continue;
+    // SOMEONE ELSE'S COPY IS NEWEST: never re-saved over — but if it still names the old key, say so (L1 a)
+    if (ev.pubkey !== pub) { if (namesOld(g)) out.other.push(label); continue; }
     let changed = false;
     const swap = (arr) => { const o = []; for (const x of arr) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !o.some(y => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v); } return o; };
     if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
     if (Array.isArray(g.members)) g.members = swap(g.members);
     if (!changed) continue;                                   // the old key is not on it: nothing to do, nothing to report
-    if (!whole) { out.failed.push(label); continue; }          // a relay did not answer: a newer copy may exist there
     let ok = false;
-    try { ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: (ev.tags || []).filter(t => t[0] !== 'for'), content: JSON.stringify(g) }, sk)); } catch (e) { ok = false; }
+    try {
+      // strictly newer than the copy it replaces, checked on the SIGNED event (owner answer i, as the carry does)
+      const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter(t => t[0] !== 'for'), content: JSON.stringify(g) };
+      let signed = feChurch(tmpl, sk);
+      for (let k = 0; (signed.created_at || 0) <= (ev.created_at || 0) && k < 4; k++) { await new Promise(r => setTimeout(r, 1000)); signed = feChurch({ ...tmpl, created_at: now() }, sk); }
+      ok = (signed.created_at || 0) > (ev.created_at || 0) ? await publish(signed) : false;
+    } catch (e) { ok = false; }
     (ok ? out.swapped : out.failed).push(label);
   }
   return out;
@@ -12831,8 +12843,8 @@ window.Steward = {
       const blocked = await w(() => window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]));
       if (!blocked) throw new Error('Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.');
       if (carryOld && !carryOld.refused) {
-        try { const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH); carryOld.swapped = sw.swapped; carryOld.swapFailed = sw.failed; }
-        catch (e) { carryOld.swapped = []; carryOld.swapFailed = ['some of the groups they were on']; }   // not known which: said as such, never a list of every group
+        try { const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH); carryOld.swapped = sw.swapped; carryOld.swapFailed = sw.failed; carryOld.swapOther = sw.other; }
+        catch (e) { carryOld.swapped = []; carryOld.swapFailed = ['some of the groups they were on']; carryOld.swapOther = []; }   // not known which: said as such, never a list of every group
       }
     }
 

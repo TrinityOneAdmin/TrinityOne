@@ -374,7 +374,7 @@ test('re-seat — the verbatim carry keeps the OLD key on leaders/members; the s
   assert.deepEqual([before.leaders, before.members], [[oldK.pub, other], [other, oldK.pub]], 'the pre-block carry was not verbatim — a refused block would leave changed groups');
   assert.equal(JSON.stringify(before).includes(newK.pub), false, 'a group names the new key before any block');
   const sw = await eng._swapKeyInChurchGroups(r, oldK.pub, newK.pub);
-  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [] });
+  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [], other: [] });
   const after = JSON.parse((await churchCopy(GROUP_D + g)).content);
   assert.deepEqual(after.leaders, [newK.pub, other], 'the new key did not take the old one’s place on leaders');
   assert.deepEqual(after.members, [other, newK.pub], 'the new key did not take the old one’s place on members');
@@ -412,7 +412,33 @@ test('N1 — the swap never re-saves the church’s copy over ANOTHER steward’
   const sentBefore = eng.sent.length;
   const sw = await eng._swapKeyInChurchGroups(r1, oldK.pub, newK.pub);
   assert.equal(eng.sent.slice(sentBefore).length, 0, 'the church’s older copy was re-saved over another steward’s newer edit');
-  assert.deepEqual(sw, { swapped: [], failed: [] });
+  // L1 (a): left alone, but SAID — that newer copy still names the old, blocked key
+  assert.deepEqual(sw, { swapped: [], failed: [], other: ['the group “old”'] }, 'a group another steward changed, still naming the old key, was skipped silently');
+});
+
+test('L1 (b) / L2 — a relay that does not answer: the group is listed as failed and nothing is re-saved', async () => {
+  const oldK = await newSteward(); const newK = H.key();
+  const eng0 = owner(); await setRoster(eng0, [oldK.pub], { [oldK.pub]: ['content'] });
+  const g = cp.slice(0, 16) + '-swapdead';
+  await mustPut(raw(church, GROUP_D + g, { name: 'Half answered', leaders: [oldK.pub] }, { tagChurch: false }));
+  for (const urls of [[X.wsUrl, 'ws://127.0.0.1:9/relay'], ['ws://127.0.0.1:9/relay']]) {
+    const eng = owner(X, { relays: () => urls });
+    const sw = await eng._swapKeyInChurchGroups({ carried: [], superseded: [GROUP_D + g] }, oldK.pub, newK.pub);
+    assert.equal(eng.sent.length, 0, 'a swap was published although not every relay answered (' + urls.length + ' relays)');
+    assert.equal(sw.failed.length, 1, 'a group was skipped SILENTLY when ' + (urls.length === 1 ? 'no relay' : 'one relay') + ' answered: ' + JSON.stringify(sw));
+    assert.deepEqual(sw.swapped, []);
+  }
+});
+
+test('nit (i) — the swap’s copy is strictly newer than a FUTURE-dated church copy it replaces', async () => {
+  const eng = owner(); const oldK = await newSteward(); const newK = H.key();
+  await setRoster(eng, [oldK.pub], { [oldK.pub]: ['content'] });
+  const g = cp.slice(0, 16) + '-swapahead';
+  const C = await mustPut(raw(church, GROUP_D + g, { name: 'Ahead', leaders: [oldK.pub] }, { tagChurch: false, at: Math.floor(Date.now() / 1000) + 2 }));
+  const sw = await eng._swapKeyInChurchGroups({ carried: [], superseded: [GROUP_D + g] }, oldK.pub, newK.pub);
+  const pub2 = churchSent(eng, GROUP_D + g).at(-1);
+  assert.ok(pub2 && pub2.created_at > C.created_at, 'the swapped copy is not strictly newer than the copy it replaces: ' + JSON.stringify(sw));
+  assert.deepEqual(JSON.parse((await churchCopy(GROUP_D + g)).content).leaders, [newK.pub]);
 });
 
 test('nit 5 — a steward copy far ahead of the clock (the re-sign cannot catch up) is listed as "newer", not "tie"', async () => {
