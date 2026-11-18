@@ -20,51 +20,16 @@
 // putting a control card back on any page fails that page's "no card" assertion.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { loadScreen, find, texts } from './render-jsx-screen.mjs';
+import { world } from './audio-engine-world.mjs';
 
 const settle = () => new Promise(r => setTimeout(r, 0));
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-// A fake <audio>. Like a real one, assigning `src` reloads it: the rate falls back to defaultPlaybackRate and
-// the position to zero. That is what makes "the chosen speed survives the next track" a real assertion.
-function fakeEl() {
-  const h = {}; let _src = '';
-  const el = {
-    paused: true, currentTime: 0, duration: 0, defaultPlaybackRate: 1, playbackRate: 1, preload: '',
-    addEventListener(t, f) { (h[t] = h[t] || []).push(f); }, setAttribute() {},
-    get src() { return _src; },
-    set src(v) { _src = v; el.playbackRate = el.defaultPlaybackRate; el.currentTime = 0; (h.loadstart || []).forEach(f => f()); },
-    removeAttribute() { _src = ''; }, load() {},
-    play() { el.paused = false; (h.play || []).forEach(f => f()); return Promise.resolve(); },
-    pause() { el.paused = true; (h.pause || []).forEach(f => f()); },
-    emit(t) { (h[t] || []).forEach(f => f()); },
-  };
-  return el;
-}
-
-// The audio module, loaded for real, plus the fake element and a fake localStorage. Shares ONE React with
-// every screen loaded through the same world, as the app does.
-function world({ stored = {} } = {}) {
-  const { React, draw } = miniReact();
-  const el = fakeEl();
-  const store = { ...stored };
-  const localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
-  const NAME = { 1: 'Genesis', 43: 'John', 66: 'Revelation' }, MAXCH = { 1: 50, 43: 21, 66: 22 };
-  const win = { Bible: { bookName: b => NAME[b], maxChapter: b => MAXCH[b] } };
-  const toasts = [];
-  win.trinityToast = m => toasts.push(m);
-  const base = {
-    React, window: win, localStorage, navigator: {}, MediaMetadata: class {},
-    document: { createElement: () => el, body: { appendChild() {} } },
-    Icon: Stub('Icon'), Overlay: Stub('Overlay'), IconBtn: Stub('IconBtn'), SectionLabel: Stub('SectionLabel'),
-    lsGet: (k, d) => d, lsSet() {}, URL, Blob, console, Promise, Math, Date, JSON, Set, Map, Object, Array, Number, String, Boolean, RegExp,
-  };
-  const audio = loadScreen('app/screens-audio.jsx', ['MiniPlayer', 'sermonAudioTrack', 'useTrinityAudio'], base);
-  // THE player as App docks it above the tab bar. Drawn twice so effects / state settle, like every screen here.
-  const player = (ctx = {}) => { draw(audio.MiniPlayer, { ctx }); return draw(audio.MiniPlayer, { ctx }); };
-  return { React, draw, el, store, win, base, audio, A: win.TrinityAudio, toasts, player };
-}
-
+// The fake <audio>, the fake clock and world() live in scripts/audio-engine-world.mjs (shared with the recovery
+// and OS-controls tests). Like a real element, assigning `src` reloads it: the rate falls back to
+// defaultPlaybackRate and the position to zero. That is what makes "the chosen speed survives the next track" a
+// real assertion.
 const trk = (id, extra) => ({ id, title: 'T-' + id, src: 'blob:' + id, ...(extra || {}) });
 const byLabel = (tree, label) => find(tree, n => n.type === 'button' && n.props && n.props['aria-label'] === label);
 const press = (tree, label) => { const b = byLabel(tree, label); assert.equal(b.length, 1, `expected exactly one control labelled "${label}" on the player, found ${b.length}`); b[0].props.onClick({ stopPropagation() {} }); };

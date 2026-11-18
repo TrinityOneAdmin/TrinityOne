@@ -325,6 +325,9 @@ function VideoPlayer({ video, open, onClose, ctx }) {
   const [retry, setRetry] = useW(0);          // bump to re-attempt after an error
   const abortRef = React.useRef(null);
   const watchdog = React.useRef(null);        // fires if <video> neither plays nor errors (silent codec stall)
+  // another media starts: the audio player pauses, so a pending audio retry can never start sound over the video.
+  // Here, not in ctx.openVideo, because playSermon and YouTube open this player without going through it.
+  React.useEffect(() => { if (open && window.TrinityAudio && window.TrinityAudio.pause) window.TrinityAudio.pause(); }, [open]);
   React.useEffect(() => { if (open) { if (_lastFeed) setData(_lastFeed); else window.Bible.getVideos().then(setData); } }, [open]);
   React.useEffect(() => { if (open) setLiveId(video && video.ytId ? video.ytId : null); }, [open, video]);
   React.useEffect(() => {

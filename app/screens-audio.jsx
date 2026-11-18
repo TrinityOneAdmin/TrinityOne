@@ -19,21 +19,119 @@
   const applyRate = () => { try { el.defaultPlaybackRate = rate; el.playbackRate = rate; } catch (e) {} };
   applyRate();
 
+  // RECOVERY (plan 2026-11-18, Fix 1). A network cut used to leave the element dead: `error`, then `pause`, and
+  // Play called el.play() on an element that never fetches again. Now a streamed (http/https) track retries by
+  // itself at these delays and then shows "Couldn't load"; Play, return-to-the-app and a seek reload it in place.
+  // TEST HOOK (documented): window.__TRINITY_AUDIO_TEST__ = { retryMs: [..], stallMs: n }, read ONCE when this
+  // engine starts, shortens the schedule for scripts/the-audio-player-recovers-in-a-browser.test.mjs. The
+  // shipped defaults are asserted by scripts/the-audio-player-recovers.test.mjs through api.retrySchedule.
+  const HOOK = (window.__TRINITY_AUDIO_TEST__ && typeof window.__TRINITY_AUDIO_TEST__ === 'object') ? window.__TRINITY_AUDIO_TEST__ : {};
+  const RETRY_MS = Array.isArray(HOOK.retryMs) && HOOK.retryMs.length ? HOOK.retryMs.slice() : [2000, 5000, 15000, 30000];
+  const STALL_MS = HOOK.stallMs > 0 ? HOOK.stallMs : 45000;   // no progress for this long while meant to be advancing = an error
+
   let queue = [], qi = -1, playTok = 0, pending = false;   // pending = a queued track is still being fetched: the element holds NO source
-  let state = { track: null, playing: false, loading: false, failed: false, t: 0, d: 0, rate, q: queue, qi };
+  // wantPlay: the listener wants sound. Set by play()/resume(); cleared by pause(), stop(), the end of the queue, a
+  // NotAllowedError from play(). NEVER by the element's own `pause` event: Chromium fires that before `ended`
+  // and after `error`, and clearing it there would turn off both auto-advance and recovery.
+  let wantPlay = false, resumeAt = 0, attempts = 0;
+  let retryTimer = null, stallTimer = null, seekOnLoad = null, firstLoad = false;
+  let state = { track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, rate, q: queue, qi };
   const subs = new Set();
   const emit = () => { state = { ...state }; subs.forEach(fn => { try { fn(state); } catch (e) {} }); };
   const set = (p) => { Object.assign(state, p); emit(); };
+  // which tracks retry by themselves: streamed ones (https:, and http: for the local dev gateway). A blob: that
+  // errors is bad data, not the network, so it goes straight to "Couldn't load".
+  const isNet = (src) => /^https?:/i.test(String(src || ''));
+  const errored = () => !!(el.error || state.retrying || state.failed);
 
-  el.addEventListener('timeupdate', () => set({ t: el.currentTime, d: el.duration || 0 }));
+  const clearSeek = () => { if (seekOnLoad) { try { el.removeEventListener('loadedmetadata', seekOnLoad); } catch (e) {} seekOnLoad = null; } };
+  const cancelRetry = () => { if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; } clearSeek(); };
+  const disarm = () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } };
+  // the no-progress guard: armed only while the element is meant to be advancing (or waiting for the first
+  // canplay of a load this engine started), never during a resolve() download, never for a blob.
+  const shouldArm = () => !!(wantPlay && !pending && !retryTimer && state.track && isNet(state.track.src) && (!el.paused || firstLoad));
+  const rearm = () => { disarm(); if (shouldArm()) stallTimer = setTimeout(onStall, STALL_MS); };
+  const arm = () => { if (!stallTimer) rearm(); else if (!shouldArm()) disarm(); };
+  function onStall() { stallTimer = null; if (shouldArm()) onFail(); }
+
+  // a pending play() promise rejects with AbortError on every reload and NotSupportedError when the load fails
+  // (the `error` event handles that one). Only NotAllowedError means "the browser will not play this": stop wanting.
+  const onPlayReject = (tok) => (e) => {
+    if (tok !== playTok) return;
+    if (e && e.name === 'NotAllowedError') { wantPlay = false; disarm(); set({ playing: false, loading: false, retrying: false }); }
+  };
+
+  // reload the CURRENT element in place. Assigning `src` runs the load algorithm even for the same value, and
+  // nothing else here does: start()'s same-src guard is exactly why Play was dead after an error. No el.load()
+  // after it: that would abort the load the assignment just began.
+  function reloadEl(track, at) {
+    const tok = playTok;
+    cancelRetry();
+    if (at > 0) {
+      seekOnLoad = () => { clearSeek(); if (tok !== playTok) return; try { el.currentTime = at; } catch (e) {} };
+      el.addEventListener('loadedmetadata', seekOnLoad);
+    }
+    el.src = track.src;
+    applyRate();
+    firstLoad = true; rearm();
+    el.play().then(() => { if (tok === playTok) set({ playing: true, loading: false }); }).catch(onPlayReject(tok));
+  }
+  // "retry now": Play on an errored/failed track, resume() from the OS, return-to-app, a seek while errored.
+  function retryNow() {
+    const track = state.track; if (!track) return;
+    cancelRetry(); disarm();
+    attempts = 0; wantPlay = true;
+    if (track.src && typeof track.resolve === 'function' && !isNet(track.src)) {
+      // a resolved blob (a sermon, a local chapter) that broke: drop it and resolve once more, at the position
+      delete track.src; begin(track, queue, resumeAt); return;
+    }
+    if (!track.src) { begin(track, queue, resumeAt); return; }   // its resolve() failed: try the download once more
+    set({ failed: false, retrying: true, loading: true, playing: true });
+    reloadEl(track, resumeAt);   // a stream, or a blob with nothing to rebuild it from (reused on purpose)
+  }
+  // the element failed (an `error`, or the no-progress guard)
+  function onFail() {
+    if (!state.track || pending) return;
+    cancelRetry(); disarm(); firstLoad = false;
+    if (!wantPlay) { set({ loading: false, playing: false, retrying: false }); return; }   // Play will reload it
+    if (isNet(state.track.src) && attempts < RETRY_MS.length) {
+      const tok = playTok, wait = RETRY_MS[attempts++];
+      set({ failed: false, retrying: true, loading: true, playing: true });
+      retryTimer = setTimeout(() => { retryTimer = null; if (tok !== playTok || !wantPlay || !state.track) return; reloadEl(state.track, resumeAt); }, wait);
+      return;
+    }
+    set({ failed: true, retrying: false, loading: false, playing: false });   // wantPlay stays: return-to-app may retry
+  }
+
+  el.addEventListener('timeupdate', () => { if (el.currentTime > 0) resumeAt = el.currentTime; set({ t: el.currentTime, d: el.duration || 0 }); rearm(); });
+  el.addEventListener('progress', rearm);
+  el.addEventListener('loadeddata', rearm);
+  el.addEventListener('canplay', () => { firstLoad = false; rearm(); });
   el.addEventListener('loadstart', applyRate);
   el.addEventListener('durationchange', () => set({ d: el.duration || 0 }));
-  el.addEventListener('play', () => set({ playing: true }));
-  el.addEventListener('pause', () => set({ playing: false }));
-  el.addEventListener('waiting', () => set({ loading: true }));
-  el.addEventListener('playing', () => set({ loading: false, playing: true }));
-  el.addEventListener('ended', () => { set({ playing: false }); api.next(); });
-  el.addEventListener('error', () => set({ loading: false, playing: false }));
+  el.addEventListener('play', () => { set({ playing: true }); arm(); });
+  el.addEventListener('pause', () => { if (!state.retrying) set({ playing: false }); arm(); });
+  el.addEventListener('waiting', () => { set({ loading: true }); arm(); });
+  el.addEventListener('playing', () => { if (state.retrying) { cancelRetry(); attempts = 0; } set({ loading: false, playing: true, retrying: false, failed: false }); firstLoad = false; rearm(); });
+  el.addEventListener('ended', () => {
+    set({ playing: false });
+    if (api.hasNext()) { api.next(); return; }
+    wantPlay = false; disarm();   // the end of the queue: nothing more is wanted
+  });
+  el.addEventListener('error', onFail);
+
+  // back in the app (the native signal, and visibilitychange for the web and the PWA): a stream that is waiting
+  // to retry, or has given up, retries now. Never navigator.onLine.
+  const onReturn = () => {
+    const t = state.track;
+    if (!wantPlay || !t || pending || !isNet(t.src)) return;
+    if (retryTimer || state.failed || el.error) retryNow();
+  };
+  try {
+    const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (AppP && AppP.addListener) Promise.resolve(AppP.addListener('appStateChange', (s) => { if (s && s.isActive) onReturn(); })).catch(() => {});
+  } catch (e) {}
+  try { if (document.addEventListener) document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') onReturn(); }); } catch (e) {}
 
   // AN AUDIO-BIBLE CHAPTER'S BLOB ADDRESS IS LET GO WHEN THE PLAYER LEAVES IT (plan P1). Only tracks the audio-Bible code
   // made and marked {bibleLocal:true} — they always carry resolve(), so Previous or a replay simply resolves again and the
@@ -53,7 +151,8 @@
         artwork: track.image ? [{ src: track.image, sizes: '512x512', type: 'image/png' }] : [],
       });
       const h = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) {} };
-      h('play', () => api.toggle()); h('pause', () => api.toggle());
+      // explicit, never toggle: a "pause" that arrives while paused (headphones out, a car) must not start sound
+      h('play', () => api.resume()); h('pause', () => api.pause());
       h('seekbackward', (d) => api.seek(-(d && d.seekOffset || 10)));
       h('seekforward', (d) => api.seek(d && d.seekOffset || 10));
       h('previoustrack', queue.length > 1 ? () => api.prev() : null);
@@ -62,58 +161,108 @@
     } catch (e) {}
   }
 
+  // start `track` at `at` seconds. play() is begin(track, list, 0); a re-resolve after a failure keeps its place.
+  function begin(track, list, at) {
+    if (!track || (!track.src && typeof track.resolve !== 'function')) return;
+    if (Array.isArray(list) && list.length) { queue = list; qi = Math.max(0, list.findIndex(t => t.id === track.id)); }
+    else { queue = [track]; qi = 0; }
+    const tok = ++playTok;
+    pending = false;
+    cancelRetry(); disarm();
+    wantPlay = true; resumeAt = at || 0; attempts = 0; firstLoad = false;
+    const was = state.track;
+    const start = () => {
+      if (resumeAt > 0) {
+        const want = resumeAt;
+        seekOnLoad = () => { clearSeek(); if (tok !== playTok) return; try { el.currentTime = want; } catch (e) {} };
+        el.addEventListener('loadedmetadata', seekOnLoad);
+      }
+      if (el.src !== track.src) el.src = track.src;
+      release(was, track);
+      applyRate();
+      set({ track, loading: true, failed: false, retrying: false, q: queue, qi });
+      mediaSession(track);
+      firstLoad = true; rearm();
+      el.play().then(() => { if (tok === playTok) set({ playing: true, loading: false }); }).catch(onPlayReject(tok));
+    };
+    if (track.src) { start(); return; }
+    // DETACH the old source while the new one downloads: otherwise Play / the scrubber would drive the
+    // PREVIOUS sermon's element under the NEW title. Play and seek are also no-ops until it lands.
+    pending = true;
+    try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
+    release(was, track);
+    set({ track, loading: true, playing: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi });
+    mediaSession(track);
+    // a resolve() that fails is not retried by itself: a sermon is a whole-file download, and small pipes come first
+    const fail = () => { if (tok === playTok) { pending = false; set({ loading: false, playing: false, failed: true }); } };
+    Promise.resolve().then(() => track.resolve()).then(src => {
+      if (tok !== playTok) { if (track.bibleLocal && src && /^blob:/.test(src)) { try { URL.revokeObjectURL(src); } catch (e) {} } return; }   // the listener chose something else while this downloaded
+      if (!src) { fail(); return; }
+      pending = false; track.src = src;
+      if (!wantPlay) { el.src = src; applyRate(); set({ loading: false, playing: false }); return; }   // paused (a video opened) while it downloaded
+      start();
+    }).catch(fail);
+  }
+
   const api = {
     // play a track now. `list` (optional) sets the queue so ended → next and the lock-screen skip work.
     // track = { id, title, subtitle, src, image, album }
     // A queued track may carry `resolve()` (async → src) instead of `src` — a sermon's audio is a gated
     // download, fetched only when its turn comes, so "next" works without downloading the whole list.
-    play(track, list) {
-      if (!track || (!track.src && typeof track.resolve !== 'function')) return;
-      if (Array.isArray(list) && list.length) { queue = list; qi = Math.max(0, list.findIndex(t => t.id === track.id)); }
-      else { queue = [track]; qi = 0; }
-      const tok = ++playTok;
-      pending = false;
-      const was = state.track;
-      const start = () => {
-        if (el.src !== track.src) el.src = track.src;
-        release(was, track);
-        applyRate();
-        set({ track, loading: true, failed: false, q: queue, qi });
-        mediaSession(track);
-        el.play().then(() => set({ playing: true, loading: false })).catch(() => set({ playing: false, loading: false }));
-      };
-      if (track.src) { start(); return; }
-      // DETACH the old source while the new one downloads: otherwise Play / the scrubber would drive the
-      // PREVIOUS sermon's element under the NEW title. Play and seek are also no-ops until it lands.
-      pending = true;
-      try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
-      release(was, track);
-      set({ track, loading: true, playing: false, failed: false, t: 0, d: 0, q: queue, qi });
-      mediaSession(track);
-      const fail = () => { if (tok === playTok) { pending = false; set({ loading: false, playing: false, failed: true }); } };
-      Promise.resolve().then(() => track.resolve()).then(src => {
-        if (tok !== playTok) { if (track.bibleLocal && src && /^blob:/.test(src)) { try { URL.revokeObjectURL(src); } catch (e) {} } return; }   // the listener chose something else while this downloaded
-        if (!src) { fail(); return; }
-        pending = false; track.src = src; start();
-      }).catch(fail);
-    },
+    play(track, list) { begin(track, list, 0); },
     rates: RATES.slice(),
     get rate() { return rate; },
+    get retrySchedule() { return { retryMs: RETRY_MS.slice(), stallMs: STALL_MS }; },
     setRate(r) {
       r = Number(r); if (RATES.indexOf(r) < 0) return;
       rate = r; applyRate();
       try { localStorage.setItem(RATE_KEY, String(r)); } catch (e) {}
       set({ rate });
     },
-    // a failed fetch is retried by Play (the track is still current, it just has no source); a fetch in flight ignores it
-    toggle() { if (!state.track || pending) return; if (state.failed) { api.play(state.track, queue); return; } if (el.paused) el.play().catch(() => {}); else el.pause(); },
-    seek(delta) { if (!pending && el.duration) el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); },
-    seekTo(frac) { if (!pending && el.duration) el.currentTime = Math.max(0, Math.min(1, frac)) * el.duration; },
+    // ONE RULE PER CONTROL. toggle (the player's one button): retrying → stop retrying; errored/failed → retry now
+    // (never el.play() on a dead element); otherwise play/pause. A fetch in flight ignores it.
+    toggle() {
+      if (!state.track || pending) return;
+      if (state.retrying) { api.pause(); return; }
+      if (el.error || state.failed) { retryNow(); return; }
+      if (el.paused) api.resume(); else api.pause();
+    },
+    // explicit play (the OS / headphone play action): errored, retrying or failed → retry now
+    resume() {
+      if (!state.track) return;
+      if (pending) { wantPlay = true; return; }
+      if (errored()) { retryNow(); return; }
+      wantPlay = true;
+      const tok = playTok;
+      el.play().then(() => {}).catch(onPlayReject(tok));
+    },
+    // explicit pause: also cancels a pending retry, and nothing restarts by itself
+    pause() {
+      if (!state.track) return;
+      wantPlay = false; cancelRetry(); disarm(); firstLoad = false;
+      try { el.pause(); } catch (e) {}
+      set({ playing: false, loading: pending ? state.loading : false, retrying: false });
+    },
+    // seeking while errored moves the place to resume from and reloads there, rather than doing nothing
+    seek(delta) {
+      if (pending) return;
+      if (errored()) { const d = state.d || el.duration || 0; resumeAt = Math.max(0, d ? Math.min(d, resumeAt + delta) : resumeAt + delta); set({ t: resumeAt }); retryNow(); return; }
+      if (el.duration) { el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); resumeAt = el.currentTime; }
+    },
+    seekTo(frac) {
+      if (pending) return;
+      const f = Math.max(0, Math.min(1, frac));
+      if (errored()) { const d = state.d || 0; if (!d) return; resumeAt = f * d; set({ t: resumeAt }); retryNow(); return; }
+      if (el.duration) { el.currentTime = f * el.duration; resumeAt = el.currentTime; }
+    },
     next() { if (qi >= 0 && qi + 1 < queue.length) api.play(queue[qi + 1], queue); },
-    prev() { if (el.currentTime > 3) { el.currentTime = 0; return; } if (qi > 0) api.play(queue[qi - 1], queue); },
+    prev() {
+      if (errored() && !pending) { if (resumeAt > 3 || qi <= 0) { resumeAt = 0; set({ t: 0 }); retryNow(); return; } api.play(queue[qi - 1], queue); return; }
+      if (el.currentTime > 3) { el.currentTime = 0; resumeAt = 0; return; } if (qi > 0) api.play(queue[qi - 1], queue);
+    },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; pending = false; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, t: 0, d: 0, q: queue, qi }); },
+    stop() { playTok++; pending = false; wantPlay = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };
@@ -122,7 +271,7 @@
 
 // React hook: subscribe a component to the audio engine's state
 function useTrinityAudio() {
-  const [s, setS] = React.useState(() => ({ track: window.TrinityAudio ? window.TrinityAudio.current : null, playing: false, loading: false, failed: false, t: 0, d: 0, rate: 1, q: [], qi: -1 }));
+  const [s, setS] = React.useState(() => ({ track: window.TrinityAudio ? window.TrinityAudio.current : null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, rate: 1, q: [], qi: -1 }));
   React.useEffect(() => (window.TrinityAudio ? window.TrinityAudio.subscribe(setS) : undefined), []);
   return s;
 }
@@ -273,7 +422,9 @@ function MiniPlayer({ ctx, bottom, inline, heightVar }) {
   const words = (
     <React.Fragment>
       <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.title}</div>
-      {a.failed
+      {a.retrying
+        ? <div role="status" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'Reconnecting\u2026'}</div>
+        : a.failed
         ? <div role="status" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'Couldn’t load · press Play to retry'}</div>
         : <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.subtitle || ''}</div>}
     </React.Fragment>
