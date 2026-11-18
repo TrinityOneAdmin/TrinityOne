@@ -246,8 +246,18 @@ public class MediaSessionPlugin extends Plugin {
                 call.reject("setActionHandler needs an action");
                 return;
             }
+            // TrinityOne (build audit #9): { action, remove: true } takes a handler away (Previous/Next on a one-item
+            // queue), and a replaced handler's kept-alive call is released rather than left saved for ever.
+            if (Boolean.TRUE.equals(call.getBoolean("remove", false))) {
+                PluginCall old = actionHandlers.remove(action);
+                if (old != null) old.release(getBridge());
+                call.resolve();
+                if (service != null) { service.updatePossibleActions(); }
+                return;
+            }
             call.setKeepAlive(true);
-            actionHandlers.put(action, call);
+            PluginCall old = actionHandlers.put(action, call);
+            if (old != null && old != call) old.release(getBridge());
 
             if (service != null) { service.updatePossibleActions(); }
         } catch (Exception e) {

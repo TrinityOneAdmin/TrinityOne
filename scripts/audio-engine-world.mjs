@@ -127,7 +127,8 @@ export function fakeClock() {
 // The audio module, loaded for real, plus the fake element, a fake clock, a fake document and a fake
 // localStorage. Shares ONE React with every screen loaded through the same world, as the app does.
 // `capacitor` (optional) becomes window.Capacitor BEFORE the engine starts, as the native bridge does.
-export function world({ stored = {}, capacitor, mediaSession, hook } = {}) {
+// `urlImpl` (optional) replaces URL for the engine, so a test can watch blob: addresses being created and revoked.
+export function world({ stored = {}, capacitor, mediaSession, hook, urlImpl } = {}) {
   const { React, draw } = miniReact();
   const el = fakeAudio();
   const clock = fakeClock();
@@ -144,7 +145,7 @@ export function world({ stored = {}, capacitor, mediaSession, hook } = {}) {
     React, window: win, localStorage, navigator: mediaSession ? { mediaSession } : {}, MediaMetadata: class { constructor(o) { Object.assign(this, o); } },
     document: { createElement: () => el, body: { appendChild() {} } },
     Icon: Stub('Icon'), Overlay: Stub('Overlay'), IconBtn: Stub('IconBtn'), SectionLabel: Stub('SectionLabel'),
-    lsGet: (k, d) => d, lsSet() {}, URL, Blob, console, Promise, Math, Date, JSON, Set, Map, Object, Array, Number, String, Boolean, RegExp,
+    lsGet: (k, d) => d, lsSet() {}, URL: urlImpl || URL, Blob, console, Promise, Math, Date, JSON, Set, Map, Object, Array, Number, String, Boolean, RegExp,
   };
   const docH = {};
   const doc = { createElement: () => el, body: { appendChild() {} }, visibilityState: 'visible',
