@@ -7106,7 +7106,7 @@ function DashVersePrompt() {
         {bibleVersions.length > 1 ? <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TRANSLATION</div>
           <select value={bibleVersion} onChange={function(e) { setBibleVersion(e.target.value); }} style={Object.assign({}, selStyle, { width: 'auto', minWidth: 140 })} title="Which Bible translation to show" aria-label="Translation">
-            {bibleVersions.map(function(v) { return <option key={v} value={v}>{v}</option>; })}
+            {bibleVersions.map(function(v) { return <option key={v.abbr} value={v.abbr}>{v.abbr}</option>; })}
           </select>
         </div> : null}
 
