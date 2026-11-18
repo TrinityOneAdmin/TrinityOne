@@ -127,7 +127,16 @@
       const st = await P.stat({ path: tmp, directory: DIR() });
       if (!st || Number(st.size) !== u8.length) throw new Error('write check failed');
       try { await P.rename({ from: tmp, to: path, directory: DIR(), toDirectory: DIR() }); }
-      catch (e) { await fDel(path); await P.rename({ from: tmp, to: path, directory: DIR(), toDirectory: DIR() }); }   // a platform that will not rename over a file
+      catch (e) {
+        // a platform that will not rename over a file (re-audit N3): set the old copy aside as <path>.old, put the new one
+        // in place, and only then delete the old one. The good copy is never deleted before its replacement is there; if
+        // the second rename fails the old copy is put back. A kill in between leaves a .old the boot sweep resolves.
+        const old = path + '.old';
+        await P.rename({ from: path, to: old, directory: DIR(), toDirectory: DIR() });
+        try { await P.rename({ from: tmp, to: path, directory: DIR(), toDirectory: DIR() }); }
+        catch (e2) { try { await P.rename({ from: old, to: path, directory: DIR(), toDirectory: DIR() }); } catch (e3) {} throw e2; }
+        await fDel(old);
+      }
     } catch (e) { await fDel(tmp); throw e; }
   }
   async function fList(path) {
@@ -300,6 +309,11 @@
     const idx = parseInt(m[2], 10), chap = parseInt(m[3], 10);
     const book = m[1] === 'A' ? (idx >= 1 && idx <= 39 ? idx : 0) : (idx >= 1 && idx <= 27 ? 39 + idx : 0);
     if (!book || !(chap >= 1 && chap <= CHAPTERS[book - 1])) return null;
+    // the name part must be THAT book (re-audit N2): "A05_2_track" is not Deuteronomy 2. A name cut short to fit the
+    // fixed width is accepted as a prefix of the book's own name (3+ letters).
+    const nm = squash(m[4]);
+    const full = squash(NAMES[book - 1]);
+    if (!(bookMap()[nm] === book || (nm.length >= 3 && full.indexOf(nm) === 0))) return null;
     return { book, chap, lead: null };
   }
   // → { book, chap, lead } or null. lead = the number just before the book token, if any (a cross-check, never decisive).
@@ -311,14 +325,20 @@
     const f = matchFcbh(base); if (f) return f;
     const own = matchTokens(tokenize(base));
     if (own !== undefined) return own;
-    for (let k = parts.length - 2; k >= 0; k--) {
-      const folder = matchTokens(tokenize(parts[k]), true);
-      if (!folder) continue;
-      const num = tokenize(base).find(t => /^\d+$/.test(t));
-      const w = num ? null : words(tokenize(base), 0);
-      const chap = num ? parseInt(num, 10) : (w ? w.n : (CHAPTERS[folder.book - 1] === 1 ? 1 : null));
-      if (!(chap >= 1 && chap <= CHAPTERS[folder.book - 1])) return null;
-      return { book: folder.book, chap, lead: null };
+    // ONLY the folder directly above the file, and only when its WHOLE name (after a leading number) is a book
+    // (re-audit N1): "01 Genesis/001.mp3" yes; "Read by John Doe/01.mp3" or ".../Disc 1/Track 07.mp3" no — those go to
+    // the check screen rather than being filed under John or Mark because of a reader's name.
+    if (parts.length >= 2) {
+      const folderName = parts[parts.length - 2].replace(/^[\d\s._-]+/, '');
+      const book = bookMap()[squash(folderName)];
+      if (book) {
+        const tb = tokenize(base);
+        const num = tb.find(t => /^\d+$/.test(t));
+        const w = num ? null : words(tb, 0);
+        const chap = num ? parseInt(num, 10) : (w ? w.n : (CHAPTERS[book - 1] === 1 ? 1 : null));
+        if (!(chap >= 1 && chap <= CHAPTERS[book - 1])) return null;
+        return { book, chap, lead: null };
+      }
     }
     return null;
   }
@@ -564,7 +584,14 @@
           if (id !== 'WEB') await fRmdir(ROOT + '/' + id + '/_unplaced');
           // a write killed part-way leaves <chap>.<ext>.part: delete those (and only those), World English included
           for (const sub of await fList(ROOT + '/' + id)) {
-            for (const f of await fList(ROOT + '/' + id + '/' + sub.name)) if (/\.part$/.test(f.name || '')) await fDel(ROOT + '/' + id + '/' + sub.name + '/' + f.name);
+            const files = await fList(ROOT + '/' + id + '/' + sub.name); const names = new Set(files.map(f => f.name));
+            for (const f of files) {
+              const at = ROOT + '/' + id + '/' + sub.name + '/' + f.name;
+              if (/\.part$/.test(f.name || '')) await fDel(at);
+              // <chap>.<ext>.old: the old copy set aside by a rename fallback. Its replacement in place → delete it;
+              // no replacement → it is the only copy, so put it back.
+              else if (/\.old$/.test(f.name || '')) { const fin = f.name.slice(0, -4); if (names.has(fin)) await fDel(at); else { try { await FSP().rename({ from: at, to: at.slice(0, -4), directory: DIR(), toDirectory: DIR() }); } catch (e) {} } }
+            }
           }
         }
       } else {

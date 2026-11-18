@@ -71,7 +71,7 @@ export function fakeIdb(data = new Map()) {
 }
 
 // ── fake Capacitor Filesystem (the shim) ──
-export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failWrite = null } = {}) {
+export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failWrite = null, noOverwrite = false, failRename = null } = {}) {
   const dec = (b64) => new Uint8Array(Buffer.from(b64, 'base64'));
   const calls = [];
   const gate = async (op, path) => { calls.push(op + ' ' + path); if (hang && hang(op, path)) await new Promise(() => {}); };
@@ -89,7 +89,7 @@ export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failW
     async readdir({ path }) { await gate('readdir', path); return { files: kids(path) }; },
     async rmdir({ path }) { await gate('rmdir', path); for (const p of [...files.keys()]) if (p === path || p.startsWith(path + '/')) files.delete(p); },
     async deleteFile({ path }) { await gate('deleteFile', path); if (!files.has(path)) throw new Error('File does not exist'); files.delete(path); },
-    async rename({ from, to }) { await gate('rename', from); if (!files.has(from)) throw new Error('File does not exist'); files.set(to, files.get(from)); files.delete(from); await after('rename', to); },
+    async rename({ from, to }) { await gate('rename', from); if (!files.has(from)) throw new Error('File does not exist'); if (noOverwrite && files.has(to)) throw new Error('Destination exists'); if (failRename && failRename(from, to)) throw new Error('rename failed'); files.set(to, files.get(from)); files.delete(from); await after('rename', to); },
     async mkdir() {},
     async getUri({ path }) { return { uri: 'file:///data/' + path }; },
   };

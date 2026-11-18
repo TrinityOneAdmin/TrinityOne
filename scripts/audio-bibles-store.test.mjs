@@ -394,3 +394,48 @@ test('AUDIT #7 — Save with unplaced files STILL LEFT deletes them (phone and w
     assert.equal(await bytesAt(w, id, 43, 3), 'j3');
   }
 });
+
+// ════════════════ re-audit 2026-11-18 (AUDIT-build-audio-bibles-own-fixes-2026-11-18.md) N1–N3 ════════════════
+test('RE-AUDIT N1 — only the folder DIRECTLY above the file, and only when its whole name is a book: a reader\'s name never picks the book', async () => {
+  const { S } = storeWorld();
+  for (const bad of ['Read by John Doe/01.mp3', 'Mark Smith reads the Bible/Disc 1/Track 07.mp3', 'John Doe/Genesis notes/01.mp3']) assert.equal(S.matchName(bad), null, bad + ' was filed without the check screen');
+  for (const [name, bc] of Object.entries({ 'Genesis/01.mp3': [1, 1], '01 Genesis/001.mp3': [1, 1], 'Psalms/150.mp3': [19, 150], 'Read by John Doe/02_Exodus/03.mp3': [2, 3], 'Mark Smith/Matthew/Track 07.mp3': [40, 7] })) {
+    const m = S.matchName(name); assert.ok(m, name); assert.deepEqual([m.book, m.chap], bc, name);
+  }
+  // at the point of use: such files go to the check screen
+  const w = storeWorld();
+  const { res } = await imp(w, [['Read by John Doe/01.mp3', mp3('a')], ['Mark Smith reads the Bible/Disc 1/Track 07.mp3', mp3('b')]]);
+  assert.deepEqual([res.chapters, res.unplaced.length], [0, 2]);
+});
+
+test('RE-AUDIT N2 — an FCBH-shaped name must name THAT book: "A05_2_track" is not Deuteronomy 2', () => {
+  const { S } = storeWorld();
+  assert.equal(S.matchName('A05_2_track.mp3'), null);
+  assert.equal(S.matchName('B01___01_Genesis_____ENGKJVN1DA.mp3'), null, 'B01 is Matthew, not Genesis');
+  const m = S.matchName('A05___02_Deuteronomy_ENGKJVO1DA.mp3'); assert.deepEqual([m.book, m.chap], [5, 2]);
+  const t = S.matchName('B13___02_1Thess_______ENGKJVN1DA.mp3'); assert.deepEqual([t && t.book, t && t.chap], [52, 2], 'a book name cut short to fit is refused');
+});
+
+test('RE-AUDIT N3 — where rename will not overwrite, the old copy is set aside, never deleted first: a rewrite lands, a failed rename keeps the old copy, a kill is repaired at boot', async () => {
+  // 1. rewrite over an existing chapter on a platform whose rename refuses an existing target
+  const a = storeWorld({ native: true, fsOpts: { noOverwrite: true } });
+  await a.S.putWebChapter(43, 1, mp3('old', 500));
+  await a.S.putWebChapter(43, 1, mp3('new', 700));
+  assert.deepEqual([...a.disk.keys()], ['audio/WEB/43/1.mp3']);
+  assert.equal(tagOf(a.disk.get('audio/WEB/43/1.mp3')), 'new');
+  // 2. the second rename fails: the good old copy is still in place, nothing extra left
+  const b = storeWorld({ native: true, fsOpts: { noOverwrite: true, failRename: (from, to) => from.endsWith('.part') && b.disk.has('audio/WEB/43/1.mp3.old') } });
+  await b.S.putWebChapter(43, 1, mp3('old', 500));
+  await assert.rejects(b.S.putWebChapter(43, 1, mp3('new', 700)));
+  assert.deepEqual([...b.disk.keys()], ['audio/WEB/43/1.mp3'], 'the only good copy was lost or a leftover stayed');
+  assert.equal(tagOf(b.disk.get('audio/WEB/43/1.mp3')), 'old');
+  // 3. killed right after the old copy was set aside: at boot the .old (now the only copy) goes back; the .part is swept
+  const disk = new Map(), ls = new Map();
+  const c = storeWorld({ native: true, disk, ls, fsOpts: { noOverwrite: true, hangAfter: (op, p) => op === 'rename' && p.endsWith('.old') } });
+  await c.S.putWebChapter(43, 1, mp3('old', 500));
+  c.S.putWebChapter(43, 1, mp3('new', 700)); await settle(40);
+  assert.deepEqual([...disk.keys()].sort(), ['audio/WEB/43/1.mp3.old', 'audio/WEB/43/1.mp3.part'], 're-anchor: the kill did not land between the two renames');
+  await storeWorld({ native: true, disk, ls }).S.boot();
+  assert.deepEqual([...disk.keys()], ['audio/WEB/43/1.mp3']);
+  assert.equal(tagOf(disk.get('audio/WEB/43/1.mp3')), 'old');
+});
