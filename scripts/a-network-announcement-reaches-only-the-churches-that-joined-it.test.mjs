@@ -296,3 +296,17 @@ test('LEGACY net-announce: refused on WRITE from the network key and from anyone
   for (const [who, name] of [[mA, 'a member of a joined church'], [mB, 'a member of another church'], [mC, 'a member of a third'], [stranger, 'a stranger'], [null, 'anon'], [NET1, 'the author']])
     assert.equal(await served(who, e.id, 1), false, `${name} was served the legacy cleartext net-announce`);
 });
+
+// ── RESTART (ported 2026-11-18, new) ────────────────────────────────────────────────────────────────────────────
+// The consent record (NETWORK_SCOPES_BY) lives in memory and is rebuilt from the stored join docs by the hydration pass at boot. A relay
+// restarts by itself (self-update), so a scope map that only filled on LIVE writes would serve every joined church nothing after the first
+// reboot -- and every test above, run on one long-lived relay, would still pass. Runs LAST: it replaces the relay the file shares.
+test('RESTART: after a reboot the relay still serves by join AND scope (the consent record is rebuilt at hydration)', { timeout: 60000 }, async () => {
+  await new Promise((res) => { relay.once('exit', res); relay.kill('SIGKILL'); });
+  relay = spawnRelay(); await waitUp();
+  assert.equal(await served(mA, stored.ann), true, 'after a restart a member of the announcements-scoped church is no longer served -- scopes were not rehydrated');
+  assert.equal(await served(mC, stored.evt), true, 'after a restart a member of the events-only church lost its events');
+  assert.equal(await served(mC, stored.ann), false, 'after a restart the events-only church is served announcements -- the scope was lost or widened');
+  assert.equal(await served(mD, stored.evt), false, 'after a restart the no-scopes church is served events');
+  assert.equal(await served(mB, stored.ann), false, 'after a restart a church that never joined is served the network');
+});
