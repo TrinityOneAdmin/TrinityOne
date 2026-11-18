@@ -1001,7 +1001,7 @@ function installAgeLine(ageDays) {
   if (ageDays === 1) return 'Added to this box yesterday.';
   return 'Added to this box ' + ageDays + ' days ago.';
 }
-function installPageHtml({ held, base, qr, ios = false }) {
+function installPageHtml({ held, base, qr, ios = false, android = false }) {
   const url = (base || '') + '/install';
   // ONE OBVIOUS DOWNLOAD. Members kept installing the steward build because the two cards looked equal, so
   // when the member app is here the steward card goes behind a closed <details> below the steps. A box
@@ -1055,13 +1055,17 @@ function installPageHtml({ held, base, qr, ios = false }) {
     ? '<section class="card"><h2>TrinityOne for iPhone</h2><p class="blurb">' + E(APK_BLURBS['trinityone.apk']) + '</p>' + iphoneSteps + '</section>'
       + leaders
       + (present.length ? fold('android', 'Android phones', present.map((h) => card(h, h.name === 'trinityone-steward.apk')).join('\n') + androidSteps) : '')
-    : (cards || empty) + androidSteps + leaders
-      + fold('iphone', 'iPhone or iPad', '<div class="inner">' + iphoneSteps + '</div>');
+    // An Android phone gets no iPhone section at all. Anyone else (a desktop, or an iPad reporting a Mac
+    // User-Agent) gets it closed, ABOVE the leaders chevron.
+    : (cards || empty) + androidSteps
+      + (android ? '' : fold('iphone', 'iPhone or iPad', '<div class="inner">' + iphoneSteps + '</div>'))
+      + leaders;
   const lede = ios
     ? 'During the pilot, the iPhone app comes through Apple’s TestFlight app. You will need an internet connection to install it.'
     // iPadOS Safari sends a Mac User-Agent, so an iPad gets THIS page: the wifi-only promise is scoped to
     // Android, and an iPad is pointed at the chevron that is for it.
-    : 'Android phones: these files come straight from your church’s own machine — no app store and no mobile data needed. On an iPhone or iPad? See “iPhone or iPad” below.';
+    : 'Android phones: these files come straight from your church’s own machine — no app store and no mobile data needed.'
+      + (android ? '' : ' On an iPhone or iPad? See “iPhone or iPad” below.');
   return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
     + '<title>Install TrinityOne</title><style>'
@@ -9488,8 +9492,10 @@ function serveStatic(req, res) {
       // An iPhone cannot install an .apk, so it gets the TestFlight steps instead. Decided here from the
       // User-Agent because the page carries no script (CSP). iPadOS Safari claims to be a Mac, which is why
       // every other visitor's page also carries the iPhone steps behind a closed chevron.
-      const ios = /iPhone|iPad|iPod/.test(String(req.headers['user-agent'] || ''));
-      const body = Buffer.from(installPageHtml({ held: heldApks(), base, qr, ios }), 'utf8');
+      const ua = String(req.headers['user-agent'] || '');
+      const ios = /iPhone|iPad|iPod/.test(ua);
+      const android = !ios && /Android/i.test(ua);   // an Android phone is not shown the iPhone section
+      const body = Buffer.from(installPageHtml({ held: heldApks(), base, qr, ios, android }), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length, 'Cache-Control': 'no-store', 'Vary': 'User-Agent', 'Content-Security-Policy': CSP, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS });
       res.end(body);
     })();

@@ -26,8 +26,9 @@
   :root{--paper:#FBF7F0;--surface:#fff;--ink:#1b1714;--ink-2:#5b5246;--ink-3:#8a8073;--line:#e9e1d4;--clay:#b4533f;--clay-deep:#8f3f2f;--sage:#5E8C6A;--gold:#C99A4B;--font-display:"Fraunces",Georgia,serif;--font-ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   *{box-sizing:border-box}
   body{margin:0;font-family:var(--font-ui);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100dvh;display:flex;flex-direction:column;align-items:center;padding:24px 18px 40px}
-  .mark{display:flex;align-items:center;gap:10px;margin:14px 0 28px;font-weight:800;font-size:19px;letter-spacing:-.3px}
-  .mark .o{color:var(--clay)}
+  .mark{display:flex;align-items:center;gap:10px;margin:14px 0 28px;font-family:'Sora',system-ui,sans-serif;font-weight:800;font-size:20px;letter-spacing:-.3px}
+  .mark .halo{flex:none;display:block;color:var(--ink)}
+  .mark .one{color:var(--clay)}
   .card{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:24px;box-shadow:0 18px 50px rgba(60,40,20,.10);padding:26px 22px 24px;text-align:center}
   .pill{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--clay-deep);background:color-mix(in oklab,var(--clay) 12%,var(--surface));border-radius:999px;padding:5px 12px;margin-bottom:14px}
   h1{font-family:var(--font-display);font-weight:800;font-size:clamp(24px,7vw,32px);letter-spacing:-.8px;line-height:1.08;margin:0 0 8px}
@@ -44,14 +45,16 @@
   .foot{font-size:12px;color:var(--ink-3);margin-top:26px;max-width:380px;text-align:center;line-height:1.5}
   .hide{display:none}
 </style>
+<link rel="stylesheet" href="vendor/fonts/fonts.css" />
 <link rel="icon" href="icons/halo.svg" type="image/svg+xml" />
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 </head>
 <body>
   <div class="mark">
-    <svg width="30" height="30" viewBox="0 0 512 512" aria-hidden="true"><circle cx="256" cy="170" r="46" fill="#b4533f"/><circle cx="170" cy="320" r="46" fill="#C99A4B"/><circle cx="342" cy="320" r="46" fill="#5E8C6A"/></svg>
-    <span>Trinity<span class="o">One</span></span>
+    <!-- The Halo: the same mark as welcome.html's #to-halo and help.html's header (open ring, gold spark). -->
+    <svg class="halo" width="32" height="32" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)"/><circle cx="50" cy="50" r="6.5" fill="var(--gold)"/></svg>
+    <span>Trinity<span class="one">One</span></span>
   </div>
 
   <div class="card">
