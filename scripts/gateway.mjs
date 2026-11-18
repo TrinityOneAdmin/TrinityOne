@@ -446,6 +446,14 @@ const APK_BLURBS = {
   'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, care and the church calendar.',
   'trinityone-steward.apk': 'For the people who run the church. It installs alongside the member app rather than replacing it.',
 };
+// THE IPHONE APP, DURING THE PILOT, COMES THROUGH APPLE'S TESTFLIGHT. An iPhone cannot install an .apk, so
+// /install shows these instead. Public TestFlight links, already handed to pilot churches. Read only by
+// installPageHtml.
+const IOS_TESTFLIGHT = {
+  member: 'https://testflight.apple.com/join/u5CZnMp9',
+  steward: 'https://testflight.apple.com/join/whHSMBEZ',
+  testflight: 'https://apps.apple.com/app/testflight/id899247664',
+};
 const APK_DIR = join(DATA_DIR, 'apks');
 const APK_HELD = join(APK_DIR, 'held.json');
 const APK_DAY = 86400000;
@@ -991,7 +999,7 @@ function installAgeLine(ageDays) {
   if (ageDays === 1) return 'Added to this box yesterday.';
   return 'Added to this box ' + ageDays + ' days ago.';
 }
-function installPageHtml({ held, base, qr }) {
+function installPageHtml({ held, base, qr, ios = false }) {
   const url = (base || '') + '/install';
   // ONE OBVIOUS DOWNLOAD. Members kept installing the steward build because the two cards looked equal, so
   // when the member app is here the steward card goes behind a closed <details> below the steps. A box
@@ -1020,10 +1028,36 @@ function installPageHtml({ held, base, qr }) {
   };
   const cards = present.filter((h) => !(tuckSteward && h.name === 'trinityone-steward.apk')).map((h) => card(h, false)).join('\n');
   const steward = tuckSteward ? present.find((h) => h.name === 'trinityone-steward.apk') : null;
-  const leaders = steward
-    ? '<details class="leaders"><summary>For church leaders</summary>' + card(steward, true) + '</details>'
-    : '';
   const empty = '<section class="card"><h2>Nothing to install yet</h2><p class="blurb">This machine is not holding a copy of the app right now. Whoever looks after it can add one from the relay control panel — “Let members install the app from this box”.</p></section>';
+  const E = INSTALL_ESC;
+  // The three iPhone steps. On an iPhone they ARE the page; everywhere else they sit behind a closed chevron.
+  const iphoneSteps = '<ol class="isteps">'
+    + '<li>Get <b>TestFlight</b> from the App Store.<br><a class="dl quiet" href="' + E(IOS_TESTFLIGHT.testflight) + '">Get TestFlight</a></li>'
+    + '<li>Tap <b>Get TrinityOne</b>, then tap <b>Install</b> in TestFlight.<br><a class="dl" href="' + E(IOS_TESTFLIGHT.member) + '">Get TrinityOne</a></li>'
+    + '<li>Open TrinityOne and scan your church’s joining code.</li>'
+    + '</ol>'
+    + '<p class="note">TestFlight builds can expire after 90 days. If the app stops opening, tap <b>Get TrinityOne</b> again.</p>';
+  const stewardIphone = '<div class="inner"><p class="blurb">' + (ios ? '' : 'On iPhone: ') + 'TrinityOne Steward comes through TestFlight too.</p>'
+    + '<a class="dl quiet" href="' + E(IOS_TESTFLIGHT.steward) + '">Get TrinityOne Steward' + (ios ? '' : ' for iPhone') + '</a></div>';
+  const androidSteps = '<ol class="steps">'
+    + '<li>Tap <b>Download and install</b> above.</li>'
+    + '<li>Android will ask whether to allow installing apps from your browser. Say yes — it only applies to this one file.</li>'
+    + '<li>Open the downloaded file and tap <b>Install</b>.</li>'
+    + '<li>Open TrinityOne, then scan your church’s join code or open its invite link.</li>'
+    + '</ol>';
+  const fold = (cls, title, inside) => '<details class="fold ' + cls + '"><summary>' + title + '</summary>' + inside + '</details>';
+  // On an iPhone every .apk is behind the "Android phones" chevron, so the leaders chevron holds only the
+  // steward's TestFlight link. Elsewhere it holds the tucked steward .apk (if any) and that link.
+  const leaders = fold('leaders', 'For church leaders', (!ios && steward ? card(steward, true) : '') + stewardIphone);
+  const main = ios
+    ? '<section class="card"><h2>TrinityOne for iPhone</h2><p class="blurb">' + E(APK_BLURBS['trinityone.apk']) + '</p>' + iphoneSteps + '</section>'
+      + leaders
+      + (present.length ? fold('android', 'Android phones', present.map((h) => card(h, h.name === 'trinityone-steward.apk')).join('\n') + androidSteps) : '')
+    : (cards || empty) + androidSteps + leaders
+      + fold('iphone', 'iPhone or iPad', '<div class="inner">' + iphoneSteps + '</div>');
+  const lede = ios
+    ? 'During the pilot, the iPhone app comes through Apple’s TestFlight app. You will need an internet connection to install it.'
+    : 'These files are served straight from your church’s own machine. You do not need an app store, and you do not need mobile data — the church wifi is enough.';
   return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
     + '<title>Install TrinityOne</title><style>'
@@ -1040,13 +1074,17 @@ function installPageHtml({ held, base, qr }) {
     + '.warn{margin:0 0 12px;font-size:13px;color:var(--clay-deep);background:rgba(194,90,56,.09);border:1px solid rgba(194,90,56,.22);border-radius:12px;padding:10px 12px}'
     + '.dl{display:inline-block;background:var(--clay);color:#fff;font-weight:700;font-size:15px;padding:11px 20px;border-radius:999px;text-decoration:none}'
     + '.dl.quiet{background:transparent;color:var(--clay-deep);border:1.5px solid var(--clay);padding:9.5px 18.5px}'
-    + '.leaders{background:var(--surface);border:1px solid var(--line);border-radius:18px;margin:0 0 14px}'
-    + '.leaders>summary{list-style:none;cursor:pointer;padding:14px 18px;font-size:14.5px;font-weight:600;color:var(--ink2);display:flex;align-items:center;justify-content:space-between;gap:12px}'
-    + '.leaders>summary::-webkit-details-marker{display:none}'
-    + '.leaders>summary::after{content:"";flex:none;width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);margin:-4px 4px 0 0;transition:transform .15s}'
-    + '.leaders[open]>summary::after{transform:rotate(-135deg);margin-top:4px}'
-    + '.leaders>.card{background:none;border:0;box-shadow:none;margin:0;padding:0 18px 18px}'
-    + '@media (prefers-reduced-motion:reduce){.leaders>summary::after{transition:none}}'
+    + '.fold{background:var(--surface);border:1px solid var(--line);border-radius:18px;margin:0 0 14px}'
+    + '.fold>summary{list-style:none;cursor:pointer;padding:14px 18px;font-size:14.5px;font-weight:600;color:var(--ink2);display:flex;align-items:center;justify-content:space-between;gap:12px}'
+    + '.fold>summary::-webkit-details-marker{display:none}'
+    + '.fold>summary::after{content:"";flex:none;width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);margin:-4px 4px 0 0;transition:transform .15s}'
+    + '.fold[open]>summary::after{transform:rotate(-135deg);margin-top:4px}'
+    + '.fold>.card{background:none;border:0;border-radius:0;box-shadow:none;margin:0;padding:0 18px 18px}'
+    + '.fold>.card+.card,.fold>.card+.inner{border-top:1px solid var(--line);padding-top:16px}'
+    + '.fold>.inner{padding:0 18px 18px}.fold>.steps{background:none;border:0;margin:0;padding:0 18px 18px 34px}'
+    + '.isteps{margin:6px 0 10px;padding-left:20px;font-size:14.5px}.isteps li{margin-bottom:14px}.isteps .dl{margin-top:8px}'
+    + '.note{margin:0;font-size:12.5px;color:var(--ink3)}'
+    + '@media (prefers-reduced-motion:reduce){.fold>summary::after{transition:none}}'
     + '.sha{margin-top:12px;font-size:12.5px;color:var(--ink2)}'
     + '.sha summary{cursor:pointer;color:var(--clay);font-weight:700}'
     + '.sha p{margin:8px 0 6px}'
@@ -1059,20 +1097,14 @@ function installPageHtml({ held, base, qr }) {
     + '.share .u{font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all;color:var(--ink2);margin-top:10px;user-select:all}'
     + 'footer{text-align:center;color:var(--ink3);font-size:12px;margin-top:22px}'
     + '@media (prefers-color-scheme:dark){body{background:#17130F;color:#F1EADD}'
-    + '.card,.steps,.share,.leaders{background:#221C16;border-color:rgba(255,255,255,.1)}'
-    + '.leaders>summary{color:#BDB2A2}.dl.quiet{color:#E7906F;border-color:#E7906F}'
+    + '.card,.steps,.share,.fold{background:#221C16;border-color:rgba(255,255,255,.1)}'
+    + '.fold>.card+.card,.fold>.card+.inner{border-color:rgba(255,255,255,.1)}.fold>.steps{background:none}.note{color:#8E8474}'
+    + '.fold>summary{color:#BDB2A2}.dl.quiet{color:#E7906F;border-color:#E7906F}'
     + '.blurb,.steps,.share .u{color:#BDB2A2}.facts{color:#8E8474}.hash{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.1)}}'
     + '</style></head><body><div class="wrap">'
     + '<h1>Install TrinityOne</h1>'
-    + '<p class="lede">These files are served straight from your church’s own machine. You do not need an app store, and you do not need mobile data — the church wifi is enough.</p>'
-    + (cards || empty)
-    + '<ol class="steps">'
-    + '<li>Tap <b>Download and install</b> above.</li>'
-    + '<li>Android will ask whether to allow installing apps from your browser. Say yes — it only applies to this one file.</li>'
-    + '<li>Open the downloaded file and tap <b>Install</b>.</li>'
-    + '<li>Open TrinityOne, then scan your church’s join code or open its invite link.</li>'
-    + '</ol>'
-    + leaders
+    + '<p class="lede">' + lede + '</p>'
+    + main
     + '<div class="share"><h2>Pass this on</h2>'
     + (qr ? '<div role="img" aria-label="QR code linking to this install page">' + qr + '</div>' : '')
     + '<div class="u">' + INSTALL_ESC(url) + '</div></div>'
@@ -9342,8 +9374,12 @@ function serveStatic(req, res) {
     (async () => {
       const base = installBase(req);
       const qr = await qrSvgTag((base || '') + '/install');
-      const body = Buffer.from(installPageHtml({ held: heldApks(), base, qr }), 'utf8');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length, 'Cache-Control': 'no-store', 'Content-Security-Policy': CSP, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS });
+      // An iPhone cannot install an .apk, so it gets the TestFlight steps instead. Decided here from the
+      // User-Agent because the page carries no script (CSP). iPadOS Safari claims to be a Mac, which is why
+      // every other visitor's page also carries the iPhone steps behind a closed chevron.
+      const ios = /iPhone|iPad|iPod/.test(String(req.headers['user-agent'] || ''));
+      const body = Buffer.from(installPageHtml({ held: heldApks(), base, qr, ios }), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length, 'Cache-Control': 'no-store', 'Vary': 'User-Agent', 'Content-Security-Policy': CSP, 'Access-Control-Allow-Origin': '*', ...SEC_HEADERS });
       res.end(body);
     })();
     return;
