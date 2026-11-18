@@ -461,3 +461,17 @@ test('ROUND-3 N5 — "1 John", "2 John", "3 John", "1 Kings" folders and file na
   assert.deepEqual(await w.S.listBook(id, 43), [], '1 John was filed under John');
   assert.equal(await bytesAt(w, id, 62, 2), '1j2');
 });
+
+// ════════════════ round-4 audit N6: Roman prefixes only on full book names ════════════════
+test('ROUND-4 N6 — "I Sa 3", "Ich 3", "Iki 2", "Ico 2" are never a wrong book; "Ich_Genesis_01" is Genesis 1; the digit forms still work', async () => {
+  const { S } = storeWorld();
+  for (const name of ['I Sa 3.mp3', 'Ich 3.mp3', 'Iki 2.mp3', 'Ico 2.mp3']) {
+    const m = S.matchName(name);
+    const right = { 'I Sa 3.mp3': [9, 3], 'Ich 3.mp3': [13, 3], 'Iki 2.mp3': [11, 2], 'Ico 2.mp3': [46, 2] }[name];
+    assert.ok(m === null || (m.book === right[0] && m.chap === right[1]), name + ' was filed as book ' + (m && m.book) + ' chapter ' + (m && m.chap));
+  }
+  const g = S.matchName('Ich_Genesis_01.mp3'); assert.deepEqual([g && g.book, g && g.chap], [1, 1]);
+  for (const [name, bc] of Object.entries({ '1Co_02.mp3': [46, 2], '1 Sa 3.mp3': [9, 3], '1Ch_03.mp3': [13, 3], 'IJohn_2.mp3': [62, 2], 'I Samuel 4.mp3': [9, 4], 'III John.mp3': [64, 1], 'Isa 53.mp3': [23, 53], 'I Kings/06.mp3': [11, 6] })) {
+    const m = S.matchName(name); assert.ok(m, name); assert.deepEqual([m.book, m.chap], bc, name);
+  }
+});

@@ -260,7 +260,14 @@
   const isZipHead = (u8) => !!(u8 && u8.length >= 4 && u8[0] === 0x50 && u8[1] === 0x4B && u8[2] === 0x03 && u8[3] === 0x04);
 
   // ─────────────── name matching: book code or name FIRST, then chapter; a leading number is only a cross-check ───────────────
-  let _bookMap = null;
+  let _bookMap = null, _romanKeys = new Set();
+  const ROMAN_TOKEN = /^(i|ii|iii|first|second|third)$/i;
+  // a book from a list of tokens: a leading separate I/II/III/First… may only make a full-name Roman form (round-4 N6)
+  function bookOf(tokens) {
+    const map = bookMap(); const k = squash(tokens.join(''));
+    if (tokens.length > 1 && ROMAN_TOKEN.test(tokens[0])) return _romanKeys.has(k) ? map[k] : 0;
+    return map[k] || 0;
+  }
   const squash = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   function bookMap() {
     if (_bookMap) return _bookMap;
@@ -275,8 +282,13 @@
     } catch (e) {}
     // numbered books in the other spellings people use: "I John", "II Kings", "First Samuel" (round-3 N5). Without these,
     // "I John 3" fell through to "John" 3.
+    // Only FULL book names get these forms (round-4 N6): on a 2-3 letter abbreviation they made false books ("Ich",
+    // "Iki", "Ico"). _romanKeys lists them, so a window that starts with a separate I/II/III/First… token may match ONLY
+    // one of them ("I Sa" would otherwise be read as "Isa", Isaiah).
     const ROMAN = { 1: ['i', 'first'], 2: ['ii', 'second'], 3: ['iii', 'third'] };
-    Object.keys(m).forEach(k => { const d = /^([123])([a-z]+)$/.exec(k); if (d) ROMAN[d[1]].forEach(r => { if (!(r + d[2] in m)) m[r + d[2]] = m[k]; }); });
+    const rk = new Set();
+    NAMES.forEach((n, i) => { const d = /^([123]) (.+)$/.exec(n); if (d) ROMAN[d[1]].forEach(r => { const k = r + squash(d[2]); rk.add(k); if (!(k in m)) m[k] = i + 1; }); });
+    _romanKeys = rk;
     _bookMap = m;
     return m;
   }
@@ -336,7 +348,7 @@
       // the WHOLE folder name first ("1 John", "1John", "I John", "1 Kings" are books in their own right — round-3 N5);
       // only if that is not a book, drop a SEPARATED leading track number ("01 ", "01_", "01-") and try once more
       const folderFull = parts[parts.length - 2];
-      const book = bookMap()[squash(folderFull)] || bookMap()[squash(folderFull.replace(/^\d+[\s._-]+/, ''))];
+      const book = bookOf(tokenize(folderFull)) || bookOf(tokenize(folderFull.replace(/^\d+[\s._-]+/, '')));
       if (book) {
         const tb = tokenize(base);
         const num = tb.find(t => /^\d+$/.test(t));
@@ -356,7 +368,7 @@
         const win = tk.slice(i, i + len);
         if (!win.some(t => /[A-Za-z]/.test(t)) || /^\d+$/.test(win[win.length - 1])) continue;
         if (/^\d/.test(win[0]) && !/^[123]$/.test(win[0])) continue;   // "1 John" yes, "01 John" / "40 Matthew" no
-        const book = map[squash(win.join(''))];
+        const book = bookOf(win);
         if (!book) continue;
         if (bookOnly) return { book };
         const lead = (i > 0 && /^\d+$/.test(tk[i - 1])) ? parseInt(tk[i - 1], 10) : null;
