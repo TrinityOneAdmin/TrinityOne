@@ -2808,10 +2808,16 @@ const _hubCursor = (hub, e) => { const t = e.created_at || 0; if (t > hub.since 
 //    on a device; it is one comparison and downloads nothing unless the value is impossible.)
 //  - B: the last full was answered BEFORE we authenticated (hub.fullPreAuth, see _hubEosed) and we have since signed
 //    an AUTH. The relay withheld the gated corpus from that answer, so it was not a full sync of what we may read.
+//    AT MOST ONCE PER HUB PER SESSION (build audit V2): fullPreAuth clears only once a relay's ACCEPTANCE is recorded,
+//    and when it never is (a refused AUTH; a nostr-tools quirk that can lose the accepted relay from pool.relays)
+//    every open was a full download. `refullDone` is set when such a full has actually been ANSWERED (see _hubEosed),
+//    not when it is sent, so a refull that gets cancelled is still retried. The cap limits data only: fullPreAuth is
+//    untouched, so an incremental answer still never stamps eosedAt (fail-closed for F12).
 const _hubSince = (hub) => {
   const nowS = Math.floor(Date.now() / 1000);
   if ((hub.fullAt || 0) > nowS + FUTURE_SKEW) hub.fullAt = 0;
-  hub.pendingFull = !hub.since || (nowS - (hub.fullAt || 0)) > FULL_SYNC_S || !!(hub.fullPreAuth && _relayAuthedAt);
+  hub.pendingRefull = !!(hub.fullPreAuth && _relayAuthedAt && !hub.refullDone);
+  hub.pendingFull = !hub.since || (nowS - (hub.fullAt || 0)) > FULL_SYNC_S || hub.pendingRefull;
   return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
 };
 // PERF (audit 2026-07-24): the member hub carries BOTH the church's docs and its kind-1 chatter, and the daily
@@ -2850,12 +2856,13 @@ const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
 //  - _hubSince asks for everything again once we have signed an AUTH (the post-auth refetch) — see there.
 //  - while fullPreAuth stands, an INCREMENTAL answer sets eosed but NOT eosedAt: it is not evidence of anything.
 // In memory only, deliberately: at most one extra full per hub per session, and only on this path.
-const _hubEosed = (hub, full, unanswered, save) => {
+const _hubEosed = (hub, full, unanswered, save, refull) => {
   hub.eosed = true;
   if (full || !hub.fullPreAuth) hub.eosedAt = Date.now();
   if (!full) return;
   Promise.resolve().then(() => {
     if (unanswered && unanswered()) return;
+    if (refull) hub.refullDone = true;   // B's one post-sign-in full has been answered — see _hubSince
     hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true;
     hub.fullPreAuth = !(_relayAuthOkAt && Date.now() >= _relayAuthOkAt);
     if (save) save(hub);
@@ -3322,6 +3329,7 @@ function _docsHubOpen(hub) {
   // its oneose fires, that we have since cancelled or replaced it. A cancelled sub's "EOSE" is nostr-tools reporting
   // our own close, not the relay answering, so it says nothing at hub level (see _hubEosed).
   const full = !!hub.pendingFull;
+  const refull = !!hub.pendingRefull;   // B's capped post-sign-in full (see _hubSince)
   const gen = hub.gen = (hub.gen || 0) + 1;
   let dead = false;
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
@@ -3397,7 +3405,7 @@ function _docsHubOpen(hub) {
     },
     oneose() {
       if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer (no eosed, no fullAt, no handlers)
-      _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon); _docsHubSaveSoon(hub);
+      _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon, refull); _docsHubSaveSoon(hub);
       // F11: rebuild the parent's children HERE. This fires on a socket that has just answered us, and only
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
@@ -3518,6 +3526,7 @@ function _memHubOpen(hub) {
   const since = _hubSince(hub);
   // completion belongs to this sub — the same rule, and the same reason, as _docsHubOpen
   const full = !!hub.pendingFull;
+  const refull = !!hub.pendingRefull;   // B's capped post-sign-in full (see _hubSince)
   const gen = hub.gen = (hub.gen || 0) + 1;
   let dead = false;
   const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
@@ -3548,7 +3557,7 @@ function _memHubOpen(hub) {
     },
     oneose() {
       if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer
-      _hubEosed(hub, full, () => allClosed, _memHubSaveSoon); _memHubSaveSoon(hub);
+      _hubEosed(hub, full, () => allClosed, _memHubSaveSoon, refull); _memHubSaveSoon(hub);
       for (const l of [...hub.listeners]) { try { l.oneose && l.oneose(); } catch (err) { console.error(err); } }
     },
   });

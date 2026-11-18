@@ -8894,16 +8894,18 @@
   var _hubSince = (hub) => {
     const nowS = Math.floor(Date.now() / 1e3);
     if ((hub.fullAt || 0) > nowS + FUTURE_SKEW) hub.fullAt = 0;
-    hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S || !!(hub.fullPreAuth && _relayAuthedAt);
+    hub.pendingRefull = !!(hub.fullPreAuth && _relayAuthedAt && !hub.refullDone);
+    hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S || hub.pendingRefull;
     return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
   };
   var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
-  var _hubEosed = (hub, full, unanswered, save) => {
+  var _hubEosed = (hub, full, unanswered, save, refull) => {
     hub.eosed = true;
     if (full || !hub.fullPreAuth) hub.eosedAt = Date.now();
     if (!full) return;
     Promise.resolve().then(() => {
       if (unanswered && unanswered()) return;
+      if (refull) hub.refullDone = true;
       hub.fullAt = Math.floor(Date.now() / 1e3);
       hub.dirty = true;
       hub.fullPreAuth = !(_relayAuthOkAt && Date.now() >= _relayAuthOkAt);
@@ -9358,6 +9360,7 @@
     const cp = hub.cp;
     const since = _hubSince(hub);
     const full = !!hub.pendingFull;
+    const refull = !!hub.pendingRefull;
     const gen = hub.gen = (hub.gen || 0) + 1;
     let dead = false;
     const filters = [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
@@ -9469,7 +9472,7 @@
       },
       oneose() {
         if (dead || hub.gen !== gen) return;
-        _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon);
+        _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon, refull);
         _docsHubSaveSoon(hub);
         _maybeRebuildFamily(hub);
         for (const h of [...hub.handlers]) {
@@ -9629,6 +9632,7 @@
     const cp = hub.cp;
     const since = _hubSince(hub);
     const full = !!hub.pendingFull;
+    const refull = !!hub.pendingRefull;
     const gen = hub.gen = (hub.gen || 0) + 1;
     let dead = false;
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
@@ -9682,7 +9686,7 @@
       },
       oneose() {
         if (dead || hub.gen !== gen) return;
-        _hubEosed(hub, full, () => allClosed, _memHubSaveSoon);
+        _hubEosed(hub, full, () => allClosed, _memHubSaveSoon, refull);
         _memHubSaveSoon(hub);
         for (const l of [...hub.listeners]) {
           try {
