@@ -67,6 +67,9 @@ Last updated: <strong>18 November 2026</strong></p>
   <li>Your optional PIN, which locks the app on your device <span class="tag t-dev">device only</span></li>
 </ul>
 <p>If you make a backup file, it is saved wherever you choose to put it.</p>
+<h3>The home-screen widget (Android)</h3>
+<p>The Android app has an optional home-screen widget. It is off unless you turn it on in Settings. Anyone who can see your home screen can see what it shows.</p>
+<p>When it is on, the app saves what the widget needs where the widget can read it, outside the app's lock: the verse of the day for the next 60 days and, if your church has switched on its public verse prompt, your church's public key, its relay addresses, the prompt and the passage texts in your translation. About once an hour, even when the app is closed, the widget asks your church's relays for that public verse prompt, and like any request this shows the relay your internet address. The church part is dropped after a week if you do not open the app (with a PIN, as soon as the app stops remembering you). Turning the widget off deletes everything it stored and stops the hourly check.</p>
 
 <h2>What goes to relays</h2>
 <p>To take part in your church's life, the app sends some information to relays. Here is what goes there and who can read it.</p>
@@ -84,7 +87,9 @@ Last updated: <strong>18 November 2026</strong></p>
   <dt>Your profile name and picture <span class="tag t-open">readable</span></dt>
   <dd>Treat these as visible to anyone who can reach the relay. Use whatever name you are comfortable with.</dd>
   <dt>Church content <span class="tag t-open">readable by the relay</span></dt>
-  <dd>Announcements, events, the calendar, rotas and run-sheets, room bookings, prayer requests and polls, and messages in groups that are not encrypted. The relay only shows these to the people your church allows, but the people running the relay could read them.</dd>
+  <dd>Announcements, events, the calendar, rotas and run-sheets, room bookings, prayer requests and polls, and messages in groups that are not encrypted. The relay only shows these to the people your church allows, but the people running the relay could read them. The exception is anything your church chooses to make public (next item).</dd>
+  <dt>Things your church makes public <span class="tag t-open">readable by anyone</span></dt>
+  <dd>A church can switch on public feeds, for its own website or for calendar and podcast apps. Each one is off until the church switches it on. They can carry its calendar of events, with their pictures (leaving out any event marked as not for the website), its sermon podcast with the recordings, its reading plans, its devotionals, and its verse prompt (which Bible passages, and when each one appears, never the steward's note). Anyone can read what is in them.</dd>
   <dt>Safeguarding records</dt>
   <dd>Whether your church has marked someone as a child, who their guardians are, and which adults are cleared to work with children. Your church records these. The relay uses them to enforce your church's rules, for example by stopping an adult who is not cleared from messaging a child.</dd>
   <dt>Care and practical help</dt>
@@ -187,7 +192,7 @@ Last updated: <strong>18 November 2026</strong></p>
 <p>No system is perfect. Keep your 12 words safe and private: they <em>are</em> your account, and nobody, including us, can recover them for you. To report a security problem, see our <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/SECURITY.md">security page</a>.</p>
 
 <h2>The website</h2>
-<p>trinityone.church is hosted on Cloudflare. It uses no analytics and no tracking cookies. If you email us, we use your email only to reply. We have no mailing list.</p>
+<p>trinityone.church is hosted on Cloudflare. It uses no analytics and no tracking cookies. If you email us, we use your email only to reply. We have no mailing list. The relay software does include an email sign-up feature, but nothing in the app or on this website asks for your email. If it were used, the relay would store only the email address, the time, and a short label for where the sign-up came from.</p>
 
 <h2>Changes to this policy</h2>
 <p>If we change this policy, we will update the date at the top. We will mention important changes on this website and in the app.</p>
