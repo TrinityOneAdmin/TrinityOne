@@ -36,7 +36,7 @@ async function compiled(name, globals) {
   const { React, draw } = miniReact();
   // + the shared approved-members filter the screens hand keys out with (round 3a) — compiled in, real
   // + the shared helper-requests filter (2026-11-12), real, alongside it
-  const src = fnBody(DASH, 'function ' + name + '(', name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients', 'pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
+  const src = fnBody(DASH, 'function ' + name + '(', name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients', 'pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0] + '\n' + (DASH.match(/^const _blockingInFlight = .*;$/m) || [''])[0]   /* DashMembers' module-scope Block in-flight set (2026-11-18) */;
   const tmp = join(tmpdir(), 'rw-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
