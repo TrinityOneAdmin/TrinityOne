@@ -358,6 +358,7 @@ test('care need — carried with the skip part re-made: the recipient’s skip i
   const markSkip = liftMarkCareSkip(rose, X);
   const ctl = await markSkip(saved.id, d0, 'control', JSON.parse(stewardNeed.content).skipEnc, dana.pub);
   assert.equal(ctl && ctl[0], true, 'CONTROL: before the removal the steward’s own token is accepted — without this the refusal below proves nothing: ' + JSON.stringify(ctl));
+  await sleep(1100);   // the carried copy must be strictly newer than the steward's, as it is when a removal comes later
   const r = await eng._removeStewardKeeping(dana.pub);
   assert.ok(r.wrote);
   const carried = churchSent(eng, NEED_D + saved.id).at(-1);
@@ -392,11 +393,12 @@ test('R3 (known gap) — a late OLDER steward need arriving by peer sync makes t
     await H.publishAll(Z, [engY.sent.filter(e => dOf(e) === STEWARDS_D + cp).at(-1)]);
     // the steward's need lands on Z only (Y was down when it was written)
     const sEng = consoleEngine({ signer: dana, church: cp, actingChurch: cp, relayUrl: Z.wsUrl, pool: authedPool(dana, STEWARDS_D + cp), publishTo: (e) => put(e, Z) });
-    const saved = await liftPublishNeed(sEng)({ type: 'meals', displayLabel: 'Rose', recipient: rose.pub, dates: [day(4)], startDate: day(4), endDate: day(4), meals: ['dinner'] });
+    const saved = await liftPublishNeed(sEng)({ type: 'meals', displayLabel: 'Rose', recipient: rose.pub, dates: [day(4), day(5), day(6)], startDate: day(4), endDate: day(6), meals: ['dinner'] });
     assert.ok(saved && saved.id, 'FIXTURE: need not saved on Z: ' + sEng.refused);
     const old = sEng.sent.filter(e => dOf(e) === NEED_D + saved.id).at(-1);
     // …and reaches Y before the removal, so the owner console on Y sees and carries it
     await mustPut(old, Y);
+    await sleep(1100);   // the removal comes later than the steward's write: a same-second carried copy would TIE it, and a restart replays ties in arrival order
     const r = await engY._removeStewardKeeping(dana.pub);
     assert.ok(r.wrote && churchSent(engY, NEED_D + saved.id).length === 1, 'FIXTURE: the need was not carried on Y');
     const fresh = JSON.parse(churchSent(engY, NEED_D + saved.id).at(-1).content).skipEnc;
@@ -404,18 +406,22 @@ test('R3 (known gap) — a late OLDER steward need arriving by peer sync makes t
     const Y2 = await H.startRelay({ name: 'carry-Y2', churches: [cp] });
     await H.publishAll(Y2, [H.relaysDoc(church, [Y2, Z]), engY.sent.filter(e => dOf(e) === STEWARDS_D + cp).at(-1), churchSent(engY, NEED_D + saved.id).at(-1)]);
     await H.publishAll(Z, [H.relaysDoc(church, [Y2, Z])]);
-    const skipOn = async (relay, dd) => (await liftMarkCareSkip(rose, relay)(saved.id, dd, 'x', fresh, cp))[0];
+    const why = {};
+    const skipOn = async (relay, dd) => { const r = await liftMarkCareSkip(rose, relay)(saved.id, dd, "x", fresh, cp); why[dd] = r && r[1]; return r && r[0]; };
     assert.equal(await skipOn(Y2, day(4)), true, 'CONTROL: before the late copy arrives, the re-made token is accepted');
     const ran = await H.syncNow(Y2);
     assert.ok(ran.ok !== false, 'sync pass failed: ' + JSON.stringify(ran));
     const lateArrived = (await H.corpus(Y2, church)).some(e => e.id === old.id);
-    const afterSync = await skipOn(Y2, day(4));
+    // each check on its OWN day: a skip is one document per day, and a second one in the same second is refused as a duplicate
+    const afterSync = await skipOn(Y2, day(5));
     const Y3 = await H.moveRelay(Y2);
-    const afterRestart = await skipOn(Y3, day(4));
-    console.log('# R3 ' + JSON.stringify({ lateArrived, afterSync, afterRestart }));
+    const afterRestart = await skipOn(Y3, day(6));
+    const oldR = await liftMarkCareSkip(rose, Y3)(saved.id, day(5), 'x', JSON.parse(old.content).skipEnc, dana.pub); why.oldAfterRestart = oldR && oldR[1]; const oldTokenAfterRestart = oldR && oldR[0];
+    console.log('# R3 ' + JSON.stringify({ lateArrived, afterSync, afterRestart, oldTokenAfterRestart, why }));
     assert.equal(lateArrived, true, 'FIXTURE: the steward’s older need never reached Y by sync, so R3 is untested');
     // THE GAP, AS MEASURED: refused after the late copy, accepted again after a restart
     assert.equal(afterSync, false, 'R3 measured differently: the late older need did NOT break the new token — update the plan note');
     assert.equal(afterRestart, true, 'after a restart the church’s newer need should win again');
+    assert.equal(oldTokenAfterRestart, false, 'after a restart the steward’s OLD token still works on this relay');
   } finally { Y.stop(); Z.stop(); }
 });
