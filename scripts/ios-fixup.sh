@@ -16,9 +16,17 @@
 #      exactly what Capacitor 7 generates out of the box.
 #   3. The two Info.plist usage strings the app needs (camera QR join, Photos
 #      backup export) — documented in docs/ops/IOS-BUILD.md; `cap add` won't create them.
+#   4. The BackupExclude local (in-app) Capacitor plugin + its bridge-VC registration.
+#      ios/ is gitignored and fully regenerated, and the Capacitor 6 scaffold's
+#      project.pbxproj is the old format (objectVersion = 48, explicit file refs — NOT
+#      a synchronized file group), so a standalone .swift dropped into App/App/ would
+#      never be compiled. We therefore append the plugin to AppDelegate.swift — the one
+#      file already in the Sources build phase — exactly as we append the SceneDelegate,
+#      and make the plugin's CAPBridgeViewController subclass the window root VC so the
+#      instance is registered. See docs/ops/IOS-BUILD.md.
 #
 # When TrinityOne moves to Capacitor 7+, revisit: 1 and 2 are likely built in, and
-# this script should be trimmed to just the usage strings (or removed).
+# this script should be trimmed to just the usage strings + the BackupExclude plugin.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
@@ -82,9 +90,14 @@ CFG="$SM:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0"
 plutil -lint "$PL" >/dev/null
 echo "  Info.plist: usage strings + UIScene manifest set"
 
-# ── 3. AppDelegate.swift: append the SceneDelegate (idempotent) ──────────────
+# ── 3. AppDelegate.swift: append SceneDelegate + BackupExclude plugin (idempotent) ──
+# Both are appended to AppDelegate.swift (already in the Sources build phase) rather
+# than dropped in as a new file: the Capacitor 6 scaffold's project.pbxproj is the old
+# format (objectVersion 48, explicit file refs), so an un-referenced .swift would never
+# compile. The SceneDelegate's root VC is the plugin's CAPBridgeViewController subclass,
+# which registers the BackupExclude instance in capacitorDidLoad().
 if grep -q "class SceneDelegate" "$APPDELEGATE"; then
-  echo "  AppDelegate.swift: SceneDelegate already present — skipped"
+  echo "  AppDelegate.swift: SceneDelegate + BackupExclude already present — skipped"
 else
   cat >> "$APPDELEGATE" <<'SWIFT'
 
@@ -92,7 +105,8 @@ else
 // Capacitor 6 ships no SceneDelegate, so the scene-based lifecycle the SDK now
 // enforces has nothing to host the WKWebView and the app crashes on launch (or
 // shows a black screen). This mirrors Capacitor 7's generated scene support:
-// the scene's root view controller is the Capacitor bridge.
+// the scene's root view controller is the Capacitor bridge — here the BackupExclude
+// subclass so the local plugin is registered (see below).
 extension AppDelegate {
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let config = UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
@@ -107,13 +121,104 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = CAPBridgeViewController()
+        window.rootViewController = BackupExcludeBridgeViewController()
         self.window = window
         window.makeKeyAndVisible()
     }
 }
+
+// ─── ios-fixup: BackupExclude — TrinityOne's first custom iOS Capacitor plugin ───
+// Marks a folder under the app's Library directory with
+// URLResourceValues.isExcludedFromBackup = true, so large re-downloadable data (whole
+// audio Bibles under Library/audio) stays out of iCloud/iTunes backup — App Review
+// guideline 2.23. Capacitor's Filesystem plugin cannot set this attribute.
+//
+// `path` is RELATIVE to the Library directory — the same base Filesystem maps
+// Directory.Library to on iOS (FileManager .libraryDirectory in .userDomainMask;
+// confirmed against @capacitor/filesystem's getFileUrl/getDirectory).
+@objc(BackupExcludePlugin)
+public class BackupExcludePlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "BackupExcludePlugin"
+    public let jsName = "BackupExclude"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "exclude", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "check", returnType: CAPPluginReturnPromise)
+    ]
+
+    /// Library/<relPath>. Mirrors @capacitor/filesystem's Directory.Library base.
+    private func libraryURL(for relPath: String) -> URL? {
+        guard let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return base.appendingPathComponent(relPath)
+    }
+
+    /// Reject empty, absolute, or `..`-containing paths. Returns true (and rejects the
+    /// call) when the path is invalid.
+    private func rejectIfInvalid(_ path: String, _ call: CAPPluginCall) -> Bool {
+        if path.isEmpty {
+            call.reject("path must not be empty")
+            return true
+        }
+        if path.hasPrefix("/") {
+            call.reject("path must be relative to the Library directory, not absolute")
+            return true
+        }
+        if path.split(separator: "/", omittingEmptySubsequences: false).contains("..") {
+            call.reject("path must not contain '..'")
+            return true
+        }
+        return false
+    }
+
+    @objc func exclude(_ call: CAPPluginCall) {
+        let path = call.getString("path") ?? ""
+        if rejectIfInvalid(path, call) { return }
+        guard var url = libraryURL(for: path) else {
+            call.reject("could not resolve the Library directory")
+            return
+        }
+        let fm = FileManager.default
+        do {
+            if !fm.fileExists(atPath: url.path) {
+                try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            }
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try url.setResourceValues(values)
+            call.resolve(["excluded": true, "path": path])
+        } catch {
+            call.reject("failed to exclude from backup: \(error.localizedDescription)")
+        }
+    }
+
+    @objc func check(_ call: CAPPluginCall) {
+        let path = call.getString("path") ?? ""
+        if rejectIfInvalid(path, call) { return }
+        guard let url = libraryURL(for: path) else {
+            call.reject("could not resolve the Library directory")
+            return
+        }
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        var excluded = false
+        if exists, let vals = try? url.resourceValues(forKeys: [.isExcludedFromBackupKey]) {
+            excluded = vals.isExcludedFromBackup ?? false
+        }
+        call.resolve(["exists": exists, "excluded": excluded])
+    }
+}
+
+// Local (in-app) plugin registration, the Capacitor 6 way: subclass the bridge view
+// controller and register the instance in capacitorDidLoad(). The SceneDelegate above
+// makes this subclass the window root VC. jsName "BackupExclude" ->
+// Capacitor.Plugins.BackupExclude in the webview.
+public class BackupExcludeBridgeViewController: CAPBridgeViewController {
+    override public func capacitorDidLoad() {
+        bridge?.registerPluginInstance(BackupExcludePlugin())
+    }
+}
 SWIFT
-  echo "  AppDelegate.swift: SceneDelegate appended"
+  echo "  AppDelegate.swift: SceneDelegate + BackupExclude plugin appended"
 fi
 
 # ── 4. App icon + splash: replace the default Capacitor icon ─────────────────
