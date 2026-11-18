@@ -107,7 +107,9 @@ test('an iPhone is told to write down the 12 words, marked, before pasting or sc
 test('Android is told to write down the 12 words, marked, before it joins', () => {
   const r = run('?follow=' + FOLLOW, UA_ANDROID);
   const t = r.text;
+  assert.ok(t.indexOf('you’re in') >= 0, 'the Android note no longer says how joining ends');
+  assert.ok(!/you’re joined/.test(t), 'the Android note claims the member is already joined — a church that checks new members must still let them in');
   assert.match(r.byId.note.textContent, /<span class="key">[\s\S]*12 words/, 'the Android note has no marked 12-words step');
-  assert.ok(t.indexOf('12 words') < t.indexOf('you’re joined'), 'on Android the 12-words step comes after joining');
+  assert.ok(t.indexOf('12 words') < t.indexOf('you’re in'), 'on Android the 12-words step comes after joining');
   assert.ok(t.indexOf('12 words') < t.indexOf('paste this church code'), 'on Android the 12-words step comes after the church code');
 });

@@ -100,7 +100,7 @@
       // church join completes, and they are easy to skip — so the page says it first, marked.
       + '<span class="key"><b>Write down your 12 words when the app shows them.</b> Keep them somewhere safe — '
       + 'they are the only way back into your account.</span>'
-      + 'Then you’re joined.';
+      + 'Then you’re in — or, if your church checks new members first, a steward will let you in.';
     // the fallback for someone who installs the app and then loses the invite message
     showCode('Lost this link after installing? Open the app and paste this church code:');
   } else if (isIOS) {
