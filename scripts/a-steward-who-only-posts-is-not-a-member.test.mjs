@@ -45,6 +45,7 @@ function harness() {
     setTimeout, clearTimeout,
     npubEncode: (x) => x,
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
+    _justRemoved: new Map(),   // who this console just took off the roster (2026-11-18) — subscribeStewards reads it via _dropJustRemoved
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {},
     _authFuture: () => false, _byChurch: () => true, _byChurchOrSteward: () => true,
     _isRelayAuthed: () => true,
@@ -58,7 +59,8 @@ function harness() {
   });
   const members = fnBody(STEWARD, 'subscribeMembers(onMembers', 'subscribeMembers');
   const stewards = fnBody(STEWARD, 'subscribeStewards(onList', 'subscribeStewards');
-  const api = new Function('scope', `with (scope) { ${liftKeyRead(STEWARD)}\n ${liftGhostHelpers()}\n return ({ ${members},\n ${stewards} }); }`)(proxy);
+  const dropJR = fnBody(STEWARD, 'function _dropJustRemoved(list, rosterAt) {', '_dropJustRemoved');
+  const api = new Function('scope', `with (scope) { ${liftKeyRead(STEWARD)}\n ${liftGhostHelpers()}\n ${dropJR}\n return ({ ${members},\n ${stewards} }); }`)(proxy);
   return { api, scope, storage, handlers };
 }
 
@@ -139,4 +141,23 @@ test('the cached first paint does not show a ghost either', async () => {
   const rows = [{ pubkey: GHOST, count: 3, joined: 0 }, { pubkey: REAL, count: 1, joined: 1690000000 }];
   const o = open(h, { cachedRows: rows });
   assert.deepEqual(pubs(o.lists[0] || []), [REAL], 'the Members list flashes the delegate as a member before the relay answers');
+});
+
+// REMOVING A STEWARD KEEPS WHAT THEY SAVED, round 3 (2026-11-18). _removeStewardKeeping records who it just took off the
+// roster (_justRemoved, key -> the created_at of the roster that did it). A roster OLDER than that, re-delivered before the
+// relay echoes the new one, must not put them back — here in the engine's own roster and in the list handed to the screen
+// — and a roster at least as new decides again, and clears the record.
+test('subscribeStewards: an OLDER roster cannot re-add someone this console just removed; one as new as the removal can', async () => {
+  const h = harness();
+  const X = 'removedx', Y = 'stayingy';
+  h.scope._justRemoved.set(X, 1700000100);
+  let got = null;
+  h.api.subscribeStewards((l) => { got = l.slice(); });
+  const handler = h.handlers[h.handlers.length - 1].h;
+  handler.onevent(rosterDoc([X, Y], 1700000050));   // the pre-removal roster, re-delivered late
+  assert.deepEqual(got, [Y], 'an older roster put the just-removed steward back on the screen’s list');
+  assert.equal(h.scope._careRoster.has(X), false, 'an older roster put the just-removed steward back into the engine’s roster');
+  handler.onevent(rosterDoc([X, Y], 1700000200));   // a NEWER roster that lists them: another console re-added them
+  assert.deepEqual(got.slice().sort(), [X, Y].sort(), 'a roster newer than the removal was not honoured');
+  assert.equal(h.scope._justRemoved.has(X), false, 'the record was not cleared by a roster as new as the removal');
 });

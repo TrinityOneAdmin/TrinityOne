@@ -411,6 +411,12 @@ let _careKeyFresh = false;
 let _careKeyAt = 0;
 let _careKeyMine = false;
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
+// WHO THIS CONSOLE HAS JUST TAKEN OFF THE ROSTER, and the created_at of the roster that did it (_removeStewardKeeping).
+// setCareRoster (the React effect's re-emit of the screen's roster) and subscribeStewards (a re-delivered OLDER roster) can
+// both arrive between the write landing and its echo; neither may re-add them (_dropJustRemoved). Cleared per key once a
+// roster at least as new is read, and wholesale with the rest of the church's state (_resetChurchScopedState, the
+// identity switch): it is THIS church's roster it speaks for.
+const _justRemoved = new Map();
 // A STEWARD WHO ONLY POSTS IS NOT A MEMBER (sim finding 29). The relay lets a steward write chat without a
 // `member:` document, and subscribeMembers turns any kind-1 addressed to the church into a member row — so a
 // delegate's own posts listed them as a "joiner", offered them in "waiting to be let in", and had the console
@@ -4009,7 +4015,7 @@ function _resetChurchScopedState() {
   lastProfile = {}; _profileLoaded = false;
   _clearedTrail = { cp: '', map: {}, list: [], expiry: {}, loaded: false };   // safeguarding: whose clearance record this is
   _clearanceSent.clear();
-  _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
+  _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false; _justRemoved.clear();
   // …AND WHAT THAT ROSTER GRANTED EACH OF THEM. `_stewardCaps` is the roster's other half and was left out
   // of both resets, so church A's capability map judged church B's authors: an owner who had scoped a
   // delegate to nothing in A lost, from their own console, every group, rota, service, run sheet, room,
@@ -7995,9 +8001,10 @@ const STEWARD_CARRY = Object.freeze({
     'trinityone/safetycheck:',  // owner answer (e): settings only
     'trinityone/groupkey:', 'trinityone/carekey:', 'trinityone/namekey:',   // rotated, never copied (Remove / Block)
     'trinityone/checkin:',      // safeguarding record, exempt on both sides
-    'trinityone/fund:',         // OWNER-ONLY at the relay (a fund is the church's payment destination, SECURITY-AUDIT-2026-07-06 M4):
-                                //   a steward can never have written one, and re-signing one a lax relay served would hand the
-                                //   church's signature to a steward's Lightning address. Owner answer (h) held back — see report.
+    'trinityone/fund:',         // the church key (or its network) only, at the relay — gateway.mjs leaderOf; a fund is the church's
+                                //   payment destination (SECURITY-AUDIT-2026-07-06 M4). A delegated steward can never have written
+                                //   one, and re-signing one a lax relay served would put the church's signature on a steward's
+                                //   Lightning address. Owner answer (h) held back pending the owner.
     'trinityone/blocked:',      // the church key's alone
     'finance/',                 // single-writer, sequence-pinned; the relay and console keep them anyway
   ]),
@@ -8026,11 +8033,11 @@ function _carryLabel(d, content) {
 }
 // The copy the church will publish in place of theirs: same content and tags, a fresh created_at (it must beat the
 // church's own older copy), the `for` tag left to feChurch. Two exceptions, both owner answers:
-//   (f) on the BLOCK path a group definition loses the blocked person from `leaders` and `members` (cleartext JSON) —
-//       except on a RE-SEAT (`replaceWith`), where the person is the same and their new key takes the old one's place;
+//   (f) on the BLOCK path a group definition loses the blocked person from `leaders` and `members` (cleartext JSON) — a
+//       RE-SEAT carries verbatim instead and swaps the key after its block lands (_swapKeyInCarriedGroups);
 //   (g) a care need's skip part is re-made: a new secret sealed to the recipient BY THE CHURCH, new per-day hashes.
 // Answers { skip: reason } when it cannot make a faithful copy.
-async function _carryTemplate(S, blocked, who, replaceWith) {
+async function _carryTemplate(S, blocked, who) {
   let tags = (S.tags || []).filter(t => Array.isArray(t) && t[0] !== 'for');
   let content = typeof S.content === 'string' ? S.content : '';
   const d = (tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -8038,9 +8045,9 @@ async function _carryTemplate(S, blocked, who, replaceWith) {
   if (!dead && blocked && d.startsWith('trinityone/group:')) {
     let g; try { g = JSON.parse(content); } catch (e) { return { skip: 'unreadable' }; }
     if (g && typeof g === 'object') {
-      const swap = (a) => { const out = []; for (const x of a) { const v = String(x || '').toLowerCase() === who ? replaceWith : x; if (v && !out.some(y => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v); } return out; };
-      if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
-      if (Array.isArray(g.members)) g.members = swap(g.members);
+      const keep = (x) => String(x || '').toLowerCase() !== who;
+      if (Array.isArray(g.leaders)) g.leaders = g.leaders.filter(keep);
+      if (Array.isArray(g.members)) g.members = g.members.filter(keep);
       content = JSON.stringify(g);
     }
   }
@@ -8168,11 +8175,10 @@ async function _carryOverStewardDocs(pk, opts) {
       }
       jobs.push((async () => {
         let tmpl = null;
-        const nk = (typeof o.replaceWith === 'string' && /^[0-9a-f]{64}$/i.test(o.replaceWith)) ? o.replaceWith.toLowerCase() : '';
-        try { tmpl = await _carryTemplate(S, !!o.blocked, who, nk); } catch (e) { tmpl = { skip: 'error' }; }
+        try { tmpl = await _carryTemplate(S, !!o.blocked, who); } catch (e) { tmpl = { skip: 'error' }; }
         if (!tmpl || tmpl.skip) { notC(d, (tmpl && tmpl.skip) || 'error', label); return; }
         if (left() <= 0) { notC(d, 'time', label); return; }   // at the limit nothing more is published
-        let ok = false;
+        let ok = false, signedEv = null;
         try {
           // STRICTLY NEWER THAN THEIRS, CHECKED ON THE SIGNED EVENT (owner, 2026-11-18, answer i). feChurch runs _monotonic,
           // which shifts by the measured relay clock offset and can fall back at its ceiling, so what `created_at` will be
@@ -8184,17 +8190,43 @@ async function _carryOverStewardDocs(pk, opts) {
             await new Promise(r => setTimeout(r, 1000));
             signed = feChurch({ ...tmpl, created_at: now() }, sk);
           }
-          if ((signed.created_at || 0) <= (S.created_at || 0)) { notC(d, 'tie', label); return; }
+          // could not catch up: a tie when the stamps are equal, 'newer' when theirs is still ahead of every re-sign
+          if ((signed.created_at || 0) <= (S.created_at || 0)) { notC(d, (signed.created_at || 0) === (S.created_at || 0) ? 'tie' : 'newer', label); return; }
+          signedEv = signed;
           let tm = null;
           ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
           if (tm) clearTimeout(tm);
         } catch (e) { ok = false; }
-        if (ok && ok !== 'time') out.carried.push({ d, label }); else notC(d, ok === 'time' ? 'time' : 'refused', label);
+        if (ok && ok !== 'time') out.carried.push({ d, label, ev: signedEv }); else notC(d, ok === 'time' ? 'time' : 'refused', label);
       })());
     }
     await Promise.all(jobs);
   }
   return out;
+}
+// A RE-SEAT'S SECOND HALF (reseatMember, after its block landed): in the group definitions the carry just re-saved under
+// the church, the person's NEW key takes the old one's place on `leaders` and `members` (deduped). Re-publishes the church's
+// own copy (from the carried, signed event), so it is readable after the old key is blocked. Answers the labels of groups
+// that could not be re-saved, for the screen to name.
+async function _swapKeyInCarriedGroups(carried, oldPk, newPk) {
+  const from = String(oldPk || '').toLowerCase(), to = String(newPk || '').toLowerCase();
+  const failed = [];
+  if (!from || !to || from === to) return failed;
+  for (const c of (carried || [])) {
+    const ev = c && c.ev;
+    if (!ev || !String(c.d).startsWith('trinityone/group:') || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;
+    let g; try { g = JSON.parse(ev.content); } catch (e) { continue; }
+    if (!g || typeof g !== 'object') continue;
+    let changed = false;
+    const swap = (a) => { const out = []; for (const x of a) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !out.some(y => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v); } return out; };
+    if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
+    if (Array.isArray(g.members)) g.members = swap(g.members);
+    if (!changed) continue;
+    let ok = false;
+    try { ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: (ev.tags || []).filter(t => t[0] !== 'for'), content: JSON.stringify(g) }, sk)); } catch (e) { ok = false; }
+    if (!ok) failed.push(c.label);
+  }
+  return failed;
 }
 // ONE ROSTER CHANGE AT A TIME ON THIS CONSOLE (plan §3.2, R1, R2). Remove (and unticking every capability, owner answer c)
 // runs the carry and then writes the roster, and with a 20 s carry a second removal built from the screen's roster would
@@ -8203,10 +8235,7 @@ async function _carryOverStewardDocs(pk, opts) {
 // not read the roster yet refuses (R2): a roster built from an unknown set could drop every other steward.
 // Answers { wrote, carry, next, refused }. `wrote` is what setStewards answered.
 let _rosterTurn = Promise.resolve();
-// WHO THIS CONSOLE HAS JUST TAKEN OFF THE ROSTER, and the created_at of the roster that did it. setCareRoster (the React
-// effect's re-emit of the screen's roster) and subscribeStewards (a re-delivered OLDER roster) can both arrive between the
-// write landing and its echo; neither may re-add them. Cleared per key once a roster at least as new is read.
-const _justRemoved = new Map();
+// _justRemoved (who this console has just taken off the roster) is declared beside _careRoster — see there.
 function _dropJustRemoved(list, rosterAt) {
   if (!_justRemoved.size) return list;
   const out = [];
@@ -12760,11 +12789,19 @@ window.Steward = {
       // AN OLD KEY THAT IS OR WAS A STEWARD'S keeps the church settings it saved, exactly as Block does (owner answer d,
       // 2026-11-17): carried BEFORE the block is published, after which the relay hides everything it wrote. Bounded by
       // the carry's own limit; a carry that fails never stops the block.
-      // On a RE-SEAT the person is the same, so their new key takes the old one's place on leaders/members (replaceWith).
-      try { if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, { blocked: true, replaceWith: newH }); }
+      // ORDER (audit round 2, MED): the carry is VERBATIM and runs BEFORE the block — once the block lands the relay hides
+      // every event the old key wrote, from the church too, so it could not be read afterwards. Verbatim means a refused
+      // block below changes nothing anyone sees: the church holds the same content the old key held, naming the old key.
+      // Only once the block has LANDED does the new key take the old one's place on group leaders/members (the person is
+      // the same — owner, 2026-11-18): those re-publish the church's OWN carried copies, which the block does not hide.
+      try { if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, {}); }
       catch (e) { carryOld = { carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }; }
       const blocked = await w(() => window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]));
       if (!blocked) throw new Error('Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.');
+      if (carryOld && carryOld.carried && carryOld.carried.length) {
+        try { carryOld.swapFailed = await _swapKeyInCarriedGroups(carryOld.carried, oldH, newH); }
+        catch (e) { carryOld.swapFailed = carryOld.carried.filter(x => x.ev && String(x.d).startsWith('trinityone/group:')).map(x => x.label); }
+      }
     }
 
     const mins = low(o.minors), appr = low(o.approved);
@@ -15817,7 +15854,7 @@ window.Steward = {
     // dismissing the ones it did. Cleared to UNKNOWN rather than empty, so the back-fill defaults to answering
     // a competing copy instead of silently skipping it until B's own roster arrives. AUDIT-8, same family as
     // the name-key note below.
-    _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
+    _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false; _justRemoved.clear();
     // The capability map, the owner's labels and the join dates are the SAME DOCUMENT as that roster, and
     // were the one part of it left behind. Carried across, church A's caps decide what church B's console
     // will paint (an A-delegate scoped to nothing hides everything they authored in B, and the filtered list

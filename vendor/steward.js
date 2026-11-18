@@ -15531,6 +15531,7 @@ zoo`.split("\n");
   var _careKeyAt = 0;
   var _careKeyMine = false;
   var _careRoster = /* @__PURE__ */ new Set();
+  var _justRemoved = /* @__PURE__ */ new Map();
   var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
   function _exStewardSet() {
     try {
@@ -18386,6 +18387,7 @@ zoo`.split("\n");
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
     _careRosterSeen = false;
+    _justRemoved.clear();
     _stewardCaps = {};
     _stewardNames = {};
     _stewardNamesCt = "";
@@ -21275,9 +21277,10 @@ zoo`.split("\n");
       "trinityone/checkin:",
       // safeguarding record, exempt on both sides
       "trinityone/fund:",
-      // OWNER-ONLY at the relay (a fund is the church's payment destination, SECURITY-AUDIT-2026-07-06 M4):
-      //   a steward can never have written one, and re-signing one a lax relay served would hand the
-      //   church's signature to a steward's Lightning address. Owner answer (h) held back — see report.
+      // the church key (or its network) only, at the relay — gateway.mjs leaderOf; a fund is the church's
+      //   payment destination (SECURITY-AUDIT-2026-07-06 M4). A delegated steward can never have written
+      //   one, and re-signing one a lax relay served would put the church's signature on a steward's
+      //   Lightning address. Owner answer (h) held back pending the owner.
       "trinityone/blocked:",
       // the church key's alone
       "finance/"
@@ -21329,7 +21332,7 @@ zoo`.split("\n");
     }
     return _CARRY_WORDS[p] || "a church setting";
   }
-  async function _carryTemplate(S, blocked, who, replaceWith) {
+  async function _carryTemplate(S, blocked, who) {
     let tags = (S.tags || []).filter((t) => Array.isArray(t) && t[0] !== "for");
     let content = typeof S.content === "string" ? S.content : "";
     const d = (tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -21342,16 +21345,9 @@ zoo`.split("\n");
         return { skip: "unreadable" };
       }
       if (g && typeof g === "object") {
-        const swap = (a) => {
-          const out = [];
-          for (const x of a) {
-            const v = String(x || "").toLowerCase() === who ? replaceWith : x;
-            if (v && !out.some((y) => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v);
-          }
-          return out;
-        };
-        if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
-        if (Array.isArray(g.members)) g.members = swap(g.members);
+        const keep = (x) => String(x || "").toLowerCase() !== who;
+        if (Array.isArray(g.leaders)) g.leaders = g.leaders.filter(keep);
+        if (Array.isArray(g.members)) g.members = g.members.filter(keep);
         content = JSON.stringify(g);
       }
     }
@@ -21528,9 +21524,8 @@ zoo`.split("\n");
         }
         jobs.push((async () => {
           let tmpl = null;
-          const nk = typeof o.replaceWith === "string" && /^[0-9a-f]{64}$/i.test(o.replaceWith) ? o.replaceWith.toLowerCase() : "";
           try {
-            tmpl = await _carryTemplate(S, !!o.blocked, who, nk);
+            tmpl = await _carryTemplate(S, !!o.blocked, who);
           } catch (e) {
             tmpl = { skip: "error" };
           }
@@ -21542,7 +21537,7 @@ zoo`.split("\n");
             notC(d, "time", label);
             return;
           }
-          let ok = false;
+          let ok = false, signedEv = null;
           try {
             let signed = feChurch(tmpl, sk);
             for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
@@ -21550,9 +21545,10 @@ zoo`.split("\n");
               signed = feChurch({ ...tmpl, created_at: now() }, sk);
             }
             if ((signed.created_at || 0) <= (S.created_at || 0)) {
-              notC(d, "tie", label);
+              notC(d, (signed.created_at || 0) === (S.created_at || 0) ? "tie" : "newer", label);
               return;
             }
+            signedEv = signed;
             let tm = null;
             ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
               tm = setTimeout(() => r("time"), Math.max(0, left()));
@@ -21561,7 +21557,7 @@ zoo`.split("\n");
           } catch (e) {
             ok = false;
           }
-          if (ok && ok !== "time") out.carried.push({ d, label });
+          if (ok && ok !== "time") out.carried.push({ d, label, ev: signedEv });
           else notC(d, ok === "time" ? "time" : "refused", label);
         })());
       }
@@ -21569,8 +21565,45 @@ zoo`.split("\n");
     }
     return out;
   }
+  async function _swapKeyInCarriedGroups(carried, oldPk, newPk) {
+    const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
+    const failed = [];
+    if (!from || !to || from === to) return failed;
+    for (const c of carried || []) {
+      const ev = c && c.ev;
+      if (!ev || !String(c.d).startsWith("trinityone/group:") || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
+      let g;
+      try {
+        g = JSON.parse(ev.content);
+      } catch (e) {
+        continue;
+      }
+      if (!g || typeof g !== "object") continue;
+      let changed = false;
+      const swap = (a) => {
+        const out = [];
+        for (const x of a) {
+          const hit = String(x || "").toLowerCase() === from;
+          if (hit) changed = true;
+          const v = hit ? to : x;
+          if (v && !out.some((y) => String(y).toLowerCase() === String(v).toLowerCase())) out.push(v);
+        }
+        return out;
+      };
+      if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
+      if (Array.isArray(g.members)) g.members = swap(g.members);
+      if (!changed) continue;
+      let ok = false;
+      try {
+        ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(g) }, sk));
+      } catch (e) {
+        ok = false;
+      }
+      if (!ok) failed.push(c.label);
+    }
+    return failed;
+  }
   var _rosterTurn = Promise.resolve();
-  var _justRemoved = /* @__PURE__ */ new Map();
   function _dropJustRemoved(list, rosterAt) {
     if (!_justRemoved.size) return list;
     const out = [];
@@ -26243,12 +26276,19 @@ zoo`.split("\n");
       let carryOld = null;
       if (o.blockOld) {
         try {
-          if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, { blocked: true, replaceWith: newH });
+          if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, {});
         } catch (e) {
           carryOld = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
         }
         const blocked = await w(() => window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]));
         if (!blocked) throw new Error("Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.");
+        if (carryOld && carryOld.carried && carryOld.carried.length) {
+          try {
+            carryOld.swapFailed = await _swapKeyInCarriedGroups(carryOld.carried, oldH, newH);
+          } catch (e) {
+            carryOld.swapFailed = carryOld.carried.filter((x) => x.ev && String(x.d).startsWith("trinityone/group:")).map((x) => x.label);
+          }
+        }
       }
       const mins = low(o.minors), appr = low(o.approved);
       const wasMinor = mins.indexOf(oldH) !== -1, wasCleared = appr.indexOf(oldH) !== -1;
@@ -29384,6 +29424,7 @@ zoo`.split("\n");
       _careRoster = /* @__PURE__ */ new Set();
       _careRosterKnown = false;
       _careRosterSeen = false;
+      _justRemoved.clear();
       _stewardCaps = {};
       _stewardNames = {};
       _stewardNamesCt = "";

@@ -101,6 +101,7 @@ function engine() {
     _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), _latestGuardNotice: new Map(), npubEncode: (p) => 'npub' + p, _minorsLastClear: () => {},
     _sgClearClear: () => {}, _finBookClear: () => {}, _seedSweep: () => {},   // the other sealed device caches _resetChurchScopedState clears beside the children list (2026-11-04); not what this file reads
     _clearedTrail: null, _authedRelays: new Map(), _authAccepted: new Map(),   // …and what _resetChurchScopedState touches
+    _justRemoved: new Map(),   // who this console just took off the roster (2026-11-18): read by subscribeStewards, cleared by both resets
     // …and setKey (a church unlocked, or the console reloaded): the seed words stand for a church here; the bundle's
     // own name for getPublicKey is read off the shipped body, not guessed
     privateKeyFromSeedWords: (m) => (m === 'B' ? B.sk : A.sk), [(BUNDLE.match(/pub = (getPublicKey\d*)\(sk\);/) || [])[1] || 'getPublicKey']: getPublicKey,
@@ -133,7 +134,7 @@ function engine() {
     fnBody(BUNDLE, 'function _nameKeyRingChanged() {'),
     fnBody(BUNDLE, 'function _nameKeyReady() {'),
     fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {'),
-    fnBody(BUNDLE, 'function _resetChurchScopedState() {'),
+    fnBody(BUNDLE, 'function _resetChurchScopedState() {'), fnBody(BUNDLE, 'function _dropJustRemoved(list, rosterAt) {'),
     // the per-church blocklist the console keeps (audit of 5276297, HIGH 2)
     fnBody(BUNDLE, 'function lsGet(k) {'), fnBody(BUNDLE, 'function lsSet(k, v) {'),
     stmt(BUNDLE, 'var BLOCKED_LAST_LS = '),
@@ -1856,4 +1857,24 @@ test('a Block made here is stamped, and setBlocked({ unblock }) carries the unbl
   assert.deepEqual(JSON.parse(sent.at(-1).content), { pubkeys: [] }, 'the list still names the unblocked');
   await e.S.setBlocked([M1.pub, M3.pub], { unblock: [M3.pub] });            // named in both: a person who stays blocked is never marked unblocked
   assert.deepEqual(sent.at(-1).tags.filter(t => t[0] === 'unblocked'), [], 'someone still on the list was marked unblocked as well');
+});
+
+// REMOVING A STEWARD KEEPS WHAT THEY SAVED, round 3 (2026-11-18, audit LOW 3). _justRemoved — who this console just took
+// off CHURCH A's roster — is church A's state. Switching to church B before A's echo arrives must not keep that person off
+// B's roster (they may well be a steward of B), and a key restore must forget it too.
+test('the REAL setActiveIdentity and _resetChurchScopedState forget who was just removed from the OTHER church', async () => {
+  const X = 'ab'.repeat(32);
+  { const e = engine();
+    e.t._justRemoved.set(X, 1700000100);   // removed from A, echo not yet arrived
+    assert.equal(e.S.setActiveIdentity(B.pub), true, 'CONTROL: switched to B');
+    assert.equal(e.t._justRemoved.size, 0, 'the switch kept church A’s just-removed record');
+    let got = null;
+    e.S.subscribeStewards((l) => { got = l; });
+    const sub = e.subs[e.subs.length - 1];
+    sub.handlers.onevent({ kind: 30078, id: 'rb', pubkey: B.pub, created_at: 1700000000, tags: [['d', 'trinityone/stewards:' + B.pub], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [X] }) });
+    assert.deepEqual(got, [X], 'church B’s roster lost a steward because they were just removed from church A'); }
+  { const e = engine();
+    e.t._justRemoved.set(X, 1700000100);
+    e.t.__resetChurchScopedState();
+    assert.equal(e.t._justRemoved.size, 0, 'a key restore kept the just-removed record'); }
 });

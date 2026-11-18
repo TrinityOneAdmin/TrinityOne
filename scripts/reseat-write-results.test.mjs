@@ -67,7 +67,9 @@ function reseater(refuse = [], { steward = false } = {}) {
     window: { Steward },
     // an old key that is or was a steward's: the carry-over (_carryOverStewardDocs, the engine's own top-level function) is
     // recorded in call order with the setters, so its place before the block is measured, not assumed (2026-11-18)
-    _carryOverStewardDocs: async (pk, o) => { calls.push({ name: 'carry', args: [pk, o] }); return { carried: [{ d: 'g', label: 'a group' }], notCarried: [], superseded: [], refused: '' }; },
+    _carryOverStewardDocs: async (pk, o) => { calls.push({ name: 'carry', args: [pk, o] }); return { carried: [{ d: 'trinityone/group:g', label: 'a group', ev: { content: '{}', tags: [] } }], notCarried: [], superseded: [], refused: '' }; },
+    // the re-seat's second half: the new key takes the old one's place in the carried group definitions — after the block
+    _swapKeyInCarriedGroups: async (carried, from, to) => { calls.push({ name: 'swap', args: [carried, from, to] }); return []; },
   };
   Steward.isOrWasSteward = (pk) => steward && String(pk).toLowerCase() === String(oldK).toLowerCase();
   const names = Object.keys(scope);
@@ -189,22 +191,37 @@ test('a write refused on a same-second tie is retried, not surfaced as a failure
   assert.equal(out.minorCarried, true, 'the retry landed but the re-seat still reported the marking as not carried');
 });
 
-// ── RE-SEATING A STEWARD'S KEY (2026-11-18, audit LOW 1) ─────────────────────────────────────────────────────────
-test('block-old on a STEWARD’s key: their settings are carried BEFORE the block, with the new key in the old one’s place', async () => {
+// ── RE-SEATING A STEWARD'S KEY (2026-11-18 audit LOW 1; ORDER per audit round 2, MED) ────────────────────────────────
+// The carry runs VERBATIM before the block (afterwards the relay hides what the old key wrote, from the church too); the
+// new key replaces the old one on group leaders/members only AFTER the block lands — so a refused block leaves no group
+// naming a key that was never re-seated.
+test('block-old on a STEWARD’s key: verbatim carry BEFORE the block, the key swap only AFTER it lands', async () => {
   const r = reseater([], { steward: true });
   const out = await r.run(oldK, newK, { ...minorOpts(), blockOld: true });
   const order = r.calls.map(c => c.name);
   assert.ok(order.includes('carry'), 'THE CARRY DID NOT RUN on a steward’s old key: ' + order.join(' → '));
   assert.ok(order.indexOf('carry') < order.indexOf('setBlocked'), 'the block was published before the carry: ' + order.join(' → '));
+  assert.ok(order.indexOf('swap') > order.indexOf('setBlocked'), 'the new key was swapped in BEFORE the block landed: ' + order.join(' → '));
   const c = r.calls.find(x => x.name === 'carry');
   assert.equal(c.args[0], oldK);
-  assert.deepEqual(c.args[1], { blocked: true, replaceWith: newK }, 'a re-seat must put the NEW key in the old one’s place, not just drop it');
+  assert.deepEqual(c.args[1], {}, 'the pre-block carry must be verbatim — no filter, no swap');
+  const sw = r.calls.find(x => x.name === 'swap');
+  assert.deepEqual([sw.args[1], sw.args[2]], [oldK, newK]);
   assert.ok(out.carry && out.carry.carried.length === 1, 'the result does not report what the carry kept, so the screen cannot say it');
+});
+test('a REFUSED block on a steward’s key: no key swap at all, and the error is the honest "nothing was changed"', async () => {
+  const r = reseater(['setBlocked'], { steward: true });
+  let threw = null;
+  try { await r.run(oldK, newK, { ...minorOpts(), blockOld: true }); } catch (e) { threw = e; }
+  assert.ok(threw, 'a refused block did not stop the re-seat');
+  assert.match(String(threw.message), /Couldn’t block the old phone, so nothing was changed/);
+  assert.equal(r.called('swap'), false, 'THE NEW KEY WAS PUT ON GROUPS although the re-seat never happened');
+  assert.equal(r.called('setReseats'), false, 'the seat moved although the block failed');
 });
 test('CONTROL: block-old on an ordinary member’s key does not carry, and reports no carry', async () => {
   const r = reseater([], { steward: false });
   const out = await r.run(oldK, newK, { ...minorOpts(), blockOld: true });
   assert.equal(r.called('carry'), false);
+  assert.equal(r.called('swap'), false);
   assert.equal(out.carry, null);
 });
-

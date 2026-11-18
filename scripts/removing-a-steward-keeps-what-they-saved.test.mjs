@@ -363,16 +363,31 @@ test('R1 — the "removed at" recorded is the roster event’s own created_at, n
   assert.ok(r.wrote);
 });
 
-test('re-seat (audit LOW 1) — block-old on a steward key: the new key takes the old one’s place on leaders/members', async () => {
+test('re-seat — the verbatim carry keeps the OLD key on leaders/members; the swap (after the block) puts the NEW key in its place', async () => {
   const eng = owner(); const oldK = await newSteward(); const newK = H.key(), other = H.key().pub;
   await setRoster(eng, [oldK.pub], { [oldK.pub]: ['content'] });
   const g = cp.slice(0, 16) + '-reseat';
   await mustPut(raw(oldK, GROUP_D + g, { name: 'Re-seat', leaders: [oldK.pub, other], visibility: 'invite', members: [other, oldK.pub] }));
-  const r = await eng._carryOverStewardDocs(oldK.pub, { blocked: true, replaceWith: newK.pub });
-  assert.ok(r.carried.some(x => x.d === GROUP_D + g), JSON.stringify(r));
-  const kept = JSON.parse((await churchCopy(GROUP_D + g)).content);
-  assert.deepEqual(kept.leaders, [newK.pub, other], 'the old key was dropped from leaders instead of replaced by the new one');
-  assert.deepEqual(kept.members, [other, newK.pub], 'the old key was dropped from members instead of replaced by the new one');
+  const r = await eng._carryOverStewardDocs(oldK.pub, {});
+  assert.ok(r.carried.some(x => x.d === GROUP_D + g && x.ev), JSON.stringify(r));
+  const before = JSON.parse((await churchCopy(GROUP_D + g)).content);
+  assert.deepEqual([before.leaders, before.members], [[oldK.pub, other], [other, oldK.pub]], 'the pre-block carry was not verbatim — a refused block would leave changed groups');
+  assert.equal(JSON.stringify(before).includes(newK.pub), false, 'a group names the new key before any block');
+  const failed = await eng._swapKeyInCarriedGroups(r.carried, oldK.pub, newK.pub);
+  assert.deepEqual(failed, []);
+  const after = JSON.parse((await churchCopy(GROUP_D + g)).content);
+  assert.deepEqual(after.leaders, [newK.pub, other], 'the new key did not take the old one’s place on leaders');
+  assert.deepEqual(after.members, [other, newK.pub], 'the new key did not take the old one’s place on members');
+});
+
+test('nit 5 — a steward copy far ahead of the clock (the re-sign cannot catch up) is listed as "newer", not "tie"', async () => {
+  const eng = owner(); const dana = await newSteward();
+  await setRoster(eng, [dana.pub], { [dana.pub]: ['content'] });
+  const d = GROUP_D + cp.slice(0, 16) + '-farahead';
+  await mustPut(raw(dana, d, { name: 'thirty seconds ahead' }, { at: Math.floor(Date.now() / 1000) + 30 }));
+  const r = await eng._carryOverStewardDocs(dana.pub);
+  assert.equal(churchSent(eng, d).length, 0, 'a copy that is not strictly newer was published');
+  assert.deepEqual(r.notCarried.filter(x => x.d === d).map(x => x.why), ['newer']);
 });
 
 // ══ CARE NEEDS (owner answer g): carried, the skip part re-made under the church ════════════════════════════════════
