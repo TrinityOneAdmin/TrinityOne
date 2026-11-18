@@ -175,8 +175,12 @@ It applies four fixes, the first three each a hard failure of the default scaffo
    exactly what Capacitor 7 generates. NOTE: a *storyboard-only* or empty scene
    manifest is not enough — it launches but the WKWebView never starts (black screen).
 
-3. **Info.plist usage strings** — `NSCameraUsageDescription` and
-   `NSPhotoLibraryAddUsageDescription` (see above).
+3. **Info.plist keys** — the two usage strings `NSCameraUsageDescription` and
+   `NSPhotoLibraryAddUsageDescription` (see above), plus `UIBackgroundModes = ["audio"]`
+   so audio Bibles / sermons keep playing with the screen locked. The web view drives its
+   own Now Playing / lock-screen controls, so background playback needs only this
+   permission — no native code. The `UIBackgroundModes` patch is merge-safe and idempotent:
+   it adds the `audio` entry only if absent, never duplicating it or dropping other modes.
 
 4. **`BackupExclude` local plugin.** TrinityOne's first custom iOS Capacitor plugin,
    appended to `AppDelegate.swift` (`exclude`/`check`, jsName `BackupExclude`). It sets

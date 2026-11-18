@@ -14,8 +14,11 @@
 #      _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption). Capacitor 6
 #      ships no SceneDelegate, so we add one that hosts the Capacitor bridge —
 #      exactly what Capacitor 7 generates out of the box.
-#   3. The two Info.plist usage strings the app needs (camera QR join, Photos
-#      backup export) — documented in docs/ops/IOS-BUILD.md; `cap add` won't create them.
+#   3. The Info.plist keys the app needs that `cap add` won't create — the two usage
+#      strings (camera QR join, Photos backup export) and UIBackgroundModes=["audio"] so
+#      audio Bibles / sermons keep playing when the screen is locked (the web view drives
+#      its own Now Playing / lock-screen controls, so no native code is needed). Documented
+#      in docs/ops/IOS-BUILD.md.
 #   4. ITSAppUsesNonExemptEncryption = NO in Info.plist. The app uses only standard,
 #      exempt encryption (HTTPS/TLS, AES-GCM, the NIP-44 chat crypto) — no non-exempt
 #      encryption — so declaring it here makes every build answer App Store Connect's
@@ -96,8 +99,21 @@ CFG="$SM:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0"
 "$PB" -c "Add $CFG dict" "$PL"
 "$PB" -c "Add $CFG:UISceneConfigurationName string 'Default Configuration'" "$PL"
 "$PB" -c "Add $CFG:UISceneDelegateClassName string '\$(PRODUCT_MODULE_NAME).SceneDelegate'" "$PL"
+# Background audio: UIBackgroundModes must contain "audio" so playback continues with the
+# screen locked. Merge-safe + idempotent (NOT in the delete-then-add loop above): create the
+# array only if absent, and append "audio" only if it is not already an entry — never
+# duplicating it and never dropping other background modes.
+if ! "$PB" -c "Print :UIBackgroundModes" "$PL" >/dev/null 2>&1; then
+  "$PB" -c "Add :UIBackgroundModes array" "$PL"
+fi
+if "$PB" -c "Print :UIBackgroundModes" "$PL" 2>/dev/null | grep -qE '^[[:space:]]*audio[[:space:]]*$'; then
+  echo "  Info.plist: UIBackgroundModes already has audio — skipped"
+else
+  "$PB" -c "Add :UIBackgroundModes: string audio" "$PL"
+  echo "  Info.plist: UIBackgroundModes += audio"
+fi
 plutil -lint "$PL" >/dev/null
-echo "  Info.plist: usage strings + export-compliance + UIScene manifest set"
+echo "  Info.plist: usage strings + export-compliance + UIScene manifest + background audio set"
 
 # ── 3. AppDelegate.swift: append SceneDelegate + BackupExclude plugin (idempotent) ──
 # Both are appended to AppDelegate.swift (already in the Sources build phase) rather
