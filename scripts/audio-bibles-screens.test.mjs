@@ -165,7 +165,17 @@ test('REMOVE (point of use) — the Audio Bibles screen\'s Remove deletes the se
   const screen = () => { const p = { open: true, onClose() {}, ctx: { toast: m => toasts.push(m) } }; w.draw(w.audio.AudioBiblesScreen, p); return w.draw(w.audio.AudioBiblesScreen, p); };
   w.win.fetchOverride = async (u) => { if (/web-audio-manifest/.test(u)) return { ok: true, json: async () => ({ chapters: {} }) }; return w.fs.fsFetch(u); };
   screen(); await settle();
+  // the bin ASKS first (audit #10); Cancel keeps everything
   press(screen(), 'Remove Going soon'); await settle();
+  let ask = find(screen(), n => n.props && n.props.role === 'alertdialog');
+  assert.equal(ask.length, 1, 'Remove did not ask first');
+  assert.match(texts(ask[0]).join(' '), /Remove Going soon\? This frees 3 MB; you.d need the files again to re-add it\./);
+  btnText(ask[0], 'Cancel')[0].props.onClick(); await settle();
+  assert.ok(w.S.row(id) && w.disk.size > 0, 'Cancel removed the set');
+  assert.equal(find(screen(), n => n.props && n.props.role === 'alertdialog').length, 0, 'the question stayed up after Cancel');
+  press(screen(), 'Remove Going soon'); await settle();
+  ask = find(screen(), n => n.props && n.props.role === 'alertdialog');
+  find(ask[0], n => n.type === 'button' && texts(n).join('') === 'Remove')[0].props.onClick(); await settle();
   assert.match(toasts.join(' | '), /Removed .Going soon. · 3 MB freed/);
   assert.equal(w.S.row(id), null);
   assert.equal(w.disk.size, 0, 'the files are still on the phone');
@@ -282,7 +292,7 @@ test('WORLD ENGLISH DOWNLOAD ON A PHONE (B4, M4) — chapters already in either 
 function installer({ fetchImpl } = {}) {
   const { React } = miniReact();
   const bibleCalls = [];
-  const win = { fflate, Bible: { installFromBytes: async (u8) => { bibleCalls.push(u8); return { ok: true, kind: 'bible', abbr: 'X', name: 'Got It' }; } },
+  const win = { fflate, TrinityAudioStore: storeWorld().S, Bible: { installFromBytes: async (u8) => { bibleCalls.push(u8); return { ok: true, kind: 'bible', abbr: 'X', name: 'Got It' }; } },
     Capacitor: { convertFileSrc: (u) => 'https://localhost/_capacitor_content_/' + encodeURIComponent(u), Plugins: { Filesystem: {} } } };
   const store = new Map();
   const mod = loadScreen('app/install-bible.jsx', ['ifsRunInstall', 'ifsReadContent'], { React, window: win, Icon: Stub('Icon'), BottomSheet: () => null, Spinner: () => null,
@@ -406,4 +416,53 @@ test('APP (point of use) — at start-up the real App runs the boot sweep: a hal
   await appSettle(m); await sleep(60);
   assert.deepEqual([...idb.data.keys()], ['WEB/43/1'], 'the boot sweep did not run (or touched World English)');
   assert.deepEqual(JSON.parse(m.window.localStorage.getItem('trinityone.audioSets')), []);
+});
+
+// ════════════════ build audit 2026-11-18 fixes ════════════════
+test('AUDIT #8 — Close (stop) lets the playing chapter\'s address go', async () => {
+  const w = audioWorld({ native: true });
+  const id = await imported(w, [['John_1.mp3', mp3('j1')], ['John_2.mp3', mp3('j2')]]);
+  w.lsSet('trinityone.audioVoice', id + '/david');
+  await w.audio.playBibleChapter(43, 1); await settle();
+  const u = w.el.src;
+  assert.equal(await blobTag(u), 'j1');
+  press(player(w), 'Close player'); await settle();
+  assert.equal(resolveObjectURL(u), undefined, 'the chapter is still held in memory after Close');
+});
+
+test('AUDIT #8 — a chapter that finishes loading AFTER the listener moved on is dropped, not kept', async () => {
+  const w = audioWorld();
+  let land = null; let made = null;
+  const slow = { id: 'bible:43:1', title: 'John 1', bibleLocal: true, resolve: () => new Promise(r => { land = () => { made = URL.createObjectURL(new Blob([mp3('late')])); r(made); }; }) };
+  const fast = { id: 'bible:43:2', title: 'John 2', bibleLocal: true, resolve: async () => URL.createObjectURL(new Blob([mp3('j2')])) };
+  w.A.play(slow, [slow, fast]); await settle();
+  w.A.play(fast, [slow, fast]); await settle();
+  land(); await settle();
+  assert.equal(await blobTag(w.el.src), 'j2', 're-anchor: the player is not on John 2');
+  assert.equal(resolveObjectURL(made), undefined, 'the late chapter\'s blob was kept although nothing will play it');
+  assert.equal(slow.src, undefined);
+});
+
+test('AUDIT #5 — Open with: a Bible zip whose first entry starts FF FE (UTF-16 text) stays on the Bible route', async () => {
+  const utf16 = new Uint8Array([0xFF, 0xFE, 0x5C, 0x00, 0x69, 0x00, 0x64, 0x00, 0x20, 0x00, 0x47, 0x00, 0x45, 0x00, 0x4E, 0x00]);
+  const r = await run(zipOf([['gen.usfm', utf16]]), { chunk: 64 });
+  assert.equal(r.handed.length, 0, 'UTF-16 text was taken for MP3 and sent to the audio route');
+  assert.equal(r.bibleCalls.length, 1);
+});
+
+test('AUDIT #2 (point of use) — picking a file shows the progress panel AT ONCE and disables "Add your own"; a second pick meanwhile starts nothing', async () => {
+  const idbData = new Map(); idbData.set('WEB/43/1', new Blob([mp3('w')], { type: 'audio/mpeg' }));
+  const w = audioWorld({ native: true, idbData, fsOpts: { hang: (op, p) => op === 'writeFile' && /^audio\/WEB\//.test(p) } });
+  w.S.boot();                                   // World English starts moving and never finishes
+  const L = libraryScreen(w);
+  let tree = L.draw(); await settle(); tree = L.draw();
+  const pick = (name) => find(L.draw(), n => n.type === 'input' && n.props.type === 'file')[0].props.onChange({ target: { files: [new File([zipOf([[name, mp3(name)]])], 'a.zip')] } });
+  pick('John_1.mp3');
+  tree = L.draw();                              // no await: what the member sees straight after picking
+  assert.match(texts(tree).join(' '), /Adding your audio Bible/, 'nothing on screen while the import waits');
+  assert.equal(btnText(tree, 'Add your own')[0].props.disabled, true, '"Add your own" can be pressed again mid-import');
+  pick('John_2.mp3');
+  await settle(60); tree = L.draw();
+  assert.match(texts(tree).join(' '), /Name it/, 'the import is held up by the World English move');
+  assert.equal(w.S.rows().filter(r => r.source === 'own').length, 1, 'a second import was started alongside the first');
 });

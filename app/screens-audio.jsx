@@ -355,7 +355,7 @@ function bsbChapterTrack(bookNum, chap, reader) {
 // A chapter stored on this device. No src: the engine calls resolve() when its turn comes (the chapter is read into memory
 // then, one at a time) and lets the blob address go when it moves on — `bibleLocal` is what allows that (engine P1).
 function bibleLocalTrack(setId, setName, bookNum, chap, label) {
-  return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · ' + setName, album: 'Audio Bible', bibleLocal: true,
+  return { id: 'bible:' + bookNum + ':' + chap, title: label + ' ' + chap, subtitle: 'Audio Bible · ' + setName, album: 'Audio Bible', bibleLocal: true, setId,
     resolve: () => window.TrinityAudioStore.chapterUrl(setId, bookNum, chap) };
 }
 
@@ -451,7 +451,7 @@ const AUDIO_IMPORT_WORDS = {
   'too-many': 'That zip has more than 5,000 files in it.',
   'entry-too-big': 'One file in it is bigger than 64 MB.',
   'too-big': 'It holds more than 3 GB of audio.',
-  zip64: 'Zips over 4 GB can\u2019t be read yet.',
+  'over-4gb': 'Zips over 4 GB can\u2019t be read yet.',
   'stored-descriptor': 'That zip was made in a way TrinityOne can\u2019t read yet. Zip the files again and try once more.',
   broken: 'That zip is damaged or incomplete.',
   'no-space': 'There isn\u2019t enough room on this device.',
@@ -593,23 +593,30 @@ function AudioBiblesScreen({ open, onClose, ctx, incoming, onIncomingTaken }) {
   const pickRef = React.useRef(null);
   const refresh = async () => { setDone(new Set(await window.TrinityAudioBible.webDownloadedBooks())); };
   React.useEffect(() => { if (!open) return; window.TrinityAudioBible.getWebManifest().then(setMan); refresh(); setOwn(audioOwnSets()); }, [open]);
+  // ONE IMPORT AT A TIME, AND IT SHOWS AT ONCE (audit #2): the progress panel goes up (and "Add your own" is disabled)
+  // before anything is awaited; the store then waits only for the boot sweep, never for World English moving.
+  const importing = React.useRef(false);
   const startImport = async (sources) => {
     const S = window.TrinityAudioStore;
-    if (!S || imp) return;
-    impAbort.current = false;
-    let id = null;
-    try { id = await S.beginImport(); } catch (e) { setImp({ phase: 'error', reason: 'no-registry' }); return; }
-    setImp({ phase: 'reading', id, p: {} });
-    const res = await S.importSources(id, sources, { onProgress: (p) => setImp(x => (x && x.phase === 'reading' ? { ...x, p } : x)), getAborted: () => impAbort.current });
-    if (!res.ok) { setImp(res.reason === 'cancelled' ? null : { phase: 'error', reason: res.reason }); return; }
-    if (!res.chapters && !res.unplaced.length) { await S.cancelImport(id); setImp({ phase: 'error', reason: 'none' }); return; }
-    setImp({ phase: res.unplaced.length ? 'check' : 'name', id, res });
+    if (!S || importing.current) return false;
+    importing.current = true; impAbort.current = false;
+    setImp({ phase: 'reading', id: null, p: {} });
+    try {
+      let id = null;
+      try { id = await S.beginImport(); } catch (e) { setImp({ phase: 'error', reason: 'no-registry' }); return true; }
+      setImp(x => (x && x.phase === 'reading' ? { ...x, id } : x));
+      const res = await S.importSources(id, sources, { onProgress: (p) => setImp(x => (x && x.phase === 'reading' ? { ...x, p } : x)), getAborted: () => impAbort.current });
+      if (!res.ok) { setImp(res.reason === 'cancelled' ? null : { phase: 'error', reason: res.reason }); return true; }
+      if (!res.chapters && !res.unplaced.length) { await S.cancelImport(id); setImp({ phase: 'error', reason: 'none' }); return true; }
+      setImp({ phase: res.unplaced.length ? 'check' : 'name', id, res });
+      return true;
+    } finally { importing.current = false; }
   };
   React.useEffect(() => {
     if (!open || !incoming) return;
     if (onIncomingTaken) onIncomingTaken();
     // one import at a time: a second file handed over mid-import is let go (its stream closed), not queued
-    if (imp) { try { if (incoming.reader && incoming.reader.cancel) incoming.reader.cancel(); } catch (e) {} if (ctx && ctx.toast) ctx.toast('Finish adding the audio Bible you started first'); return; }
+    if (imp || importing.current) { try { if (incoming.reader && incoming.reader.cancel) incoming.reader.cancel(); } catch (e) {} if (ctx && ctx.toast) ctx.toast('Finish adding the audio Bible you started first'); return; }
     startImport([{ name: '', head: incoming.head || [], reader: incoming.reader }]);
   }, [open, incoming]);
   const onPicked = (e) => {
@@ -617,7 +624,12 @@ function AudioBiblesScreen({ open, onClose, ctx, incoming, onIncomingTaken }) {
     try { e.target.value = ''; } catch (x) {}
     if (files.length) startImport(files.map(audioPickedSource));
   };
+  // Remove asks first (audit #10): the files can only come back from wherever the member got them
+  const [askRm, setAskRm] = React.useState(null);
   const removeOwn = async (s) => {
+    setAskRm(null);
+    // the set being removed may be the one playing: stop it rather than leave Next pointing at deleted files
+    try { const cur = window.TrinityAudio && window.TrinityAudio.current; if (cur && cur.bibleLocal && cur.setId === s.id) window.TrinityAudio.stop(); } catch (e) {}
     const r = await window.TrinityAudioStore.removeSet(s.id);
     setOwn(audioOwnSets());
     if (r && r.ok && ctx && ctx.toast) ctx.toast('Removed \u201c' + (s.name || 'My audio Bible') + '\u201d · ' + audioMB(r.bytes) + ' freed');
@@ -661,7 +673,7 @@ function AudioBiblesScreen({ open, onClose, ctx, incoming, onIncomingTaken }) {
         <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', overflowWrap: 'anywhere' }}>{s.name || 'My audio Bible'}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[s.reader, s.lang, (s.chapters || 0) + ' chapters', audioMB(s.bytes), s.licence === 'free' ? 'free licence' : 'my own copy'].filter(Boolean).join(' · ')}</div>
       </div>
-      <button onClick={() => removeOwn(s)} aria-label={'Remove ' + (s.name || 'My audio Bible')} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+      <button onClick={() => setAskRm(s)} aria-label={'Remove ' + (s.name || 'My audio Bible')} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
     </div>
   );
   return (
@@ -676,6 +688,15 @@ function AudioBiblesScreen({ open, onClose, ctx, incoming, onIncomingTaken }) {
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px 40px' }}>
+        {askRm ? (
+          <div role="alertdialog" aria-label="Remove audio Bible" style={{ border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.5, marginBottom: 12, overflowWrap: 'anywhere' }}>{'Remove ' + (askRm.name || 'My audio Bible') + '? This frees ' + audioMB(askRm.bytes) + '; you\u2019d need the files again to re-add it.'}</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setAskRm(null)} style={{ flex: 1, padding: '12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)' }}>Cancel</button>
+              <button onClick={() => removeOwn(askRm)} style={{ flex: 1, padding: '12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)' }}>Remove</button>
+            </div>
+          </div>
+        ) : null}
         {imp ? <AudioImportPanel imp={imp} setImp={setImp} abortRef={impAbort} onDone={() => setOwn(audioOwnSets())} ctx={ctx} /> : null}
         <SectionLabel>Your audio Bibles</SectionLabel>
         <div style={{ marginBottom: 12 }}>{own.map(ownRow)}</div>

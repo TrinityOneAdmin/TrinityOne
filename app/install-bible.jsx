@@ -74,8 +74,9 @@ const IFS_PEEK_BYTES = 256 * 1024;
 function ifsPeekAudio(chunks) {
   const F = window.fflate;
   if (!F || typeof F.Unzip !== 'function') return 'other';
-  const isAudio = (u) => !!u && u.length >= 4 && ((u[0] === 0x49 && u[1] === 0x44 && u[2] === 0x33) || (u[0] === 0xFF && (u[1] & 0xE0) === 0xE0) ||
-    (u.length >= 8 && u[4] === 0x66 && u[5] === 0x74 && u[6] === 0x79 && u[7] === 0x70) || (u[0] === 0x4F && u[1] === 0x67 && u[2] === 0x67 && u[3] === 0x53));
+  // the ONE audio check the store uses too (app/audio-store.jsx sniff: ID3, a real MPEG II/III frame, ftyp, OggS)
+  const S = window.TrinityAudioStore;
+  const isAudio = (u) => !!(S && typeof S.sniff === 'function' && S.sniff(u));
   let verdict = null;
   try {
     const unz = new F.Unzip((file) => {
