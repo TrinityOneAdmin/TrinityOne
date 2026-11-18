@@ -8893,18 +8893,24 @@
   };
   var _hubSince = (hub) => {
     const nowS = Math.floor(Date.now() / 1e3);
-    hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S;
+    if ((hub.fullAt || 0) > nowS + FUTURE_SKEW) hub.fullAt = 0;
+    hub.pendingRefull = !!(hub.fullPreAuth && _relayAuthedAt && !hub.refullDone);
+    hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S || hub.pendingRefull;
     return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
   };
   var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
-  var _hubEosed = (hub) => {
+  var _hubEosed = (hub, full, unanswered, save, refull) => {
     hub.eosed = true;
-    hub.eosedAt = Date.now();
-    if (hub.pendingFull) {
-      hub.pendingFull = false;
+    if (full || !hub.fullPreAuth) hub.eosedAt = Date.now();
+    if (!full) return;
+    Promise.resolve().then(() => {
+      if (unanswered && unanswered()) return;
+      if (refull) hub.refullDone = true;
       hub.fullAt = Math.floor(Date.now() / 1e3);
       hub.dirty = true;
-    }
+      hub.fullPreAuth = !(_relayAuthOkAt && Date.now() >= _relayAuthOkAt);
+      if (save) save(hub);
+    });
   };
   var RESEAT_D = "trinityone/reseat:";
   var _reseatOld = /* @__PURE__ */ new Map();
@@ -9284,7 +9290,7 @@
     hub.dirty = false;
     const key = DOCSHUB_KEY + hub.cp;
     try {
-      const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
+      const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
       if (s.length > HUB_SAVE_CAP) {
         localStorage.removeItem(key);
         return;
@@ -9312,7 +9318,7 @@
       const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || "null");
       if (raw && Array.isArray(raw.events)) {
         hub.since = raw.since || 0;
-        hub.fullAt = raw.fullAt || 0;
+        hub.fullAt = (raw.v || 0) >= 2 ? raw.fullAt || 0 : 0;
         for (const e of raw.events) {
           if (e && e.pubkey && Array.isArray(e.tags)) _hubBufSet(hub, e.pubkey + "|" + _dtag(e), e);
         }
@@ -9353,10 +9359,19 @@
     if (hub.closer) return;
     const cp = hub.cp;
     const since = _hubSince(hub);
+    const full = !!hub.pendingFull;
+    const refull = !!hub.pendingRefull;
+    const gen = hub.gen = (hub.gen || 0) + 1;
+    let dead = false;
     const filters = [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
     if (since) for (const f of filters) f.since = since;
-    const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
+    const urls = relaysForChurch(cp);
+    let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+    const sub = pool.subscribeMany(urls, filters, {
       // Phase 4: this church's relays (the shared pool is always included)
+      onclose() {
+        allClosed = true;
+      },
       onevent(e) {
         const d = _dtag(e);
         const key = e.pubkey + "|" + d;
@@ -9456,7 +9471,8 @@
         }
       },
       oneose() {
-        _hubEosed(hub);
+        if (dead || hub.gen !== gen) return;
+        _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon, refull);
         _docsHubSaveSoon(hub);
         _maybeRebuildFamily(hub);
         for (const h of [...hub.handlers]) {
@@ -9469,6 +9485,7 @@
       }
     });
     hub.closer = () => {
+      dead = true;
       try {
         sub.close();
       } catch {
@@ -9566,7 +9583,7 @@
     hub.dirty = false;
     const key = MEMHUB_KEY + hub.cp;
     try {
-      const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
+      const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
       if (s.length > HUB_SAVE_CAP) {
         localStorage.removeItem(key);
         return;
@@ -9595,7 +9612,7 @@
       const raw = JSON.parse(localStorage.getItem(MEMHUB_KEY + cp) || "null");
       if (raw && Array.isArray(raw.members)) {
         hub.since = raw.since || 0;
-        hub.fullAt = raw.fullAt || 0;
+        hub.fullAt = (raw.v || 0) >= 2 ? raw.fullAt || 0 : 0;
         for (const m of raw.members) {
           if (m && m.pubkey) hub.byPub.set(m.pubkey, m);
         }
@@ -9614,12 +9631,21 @@
     if (hub.closer) return;
     const cp = hub.cp;
     const since = _hubSince(hub);
+    const full = !!hub.pendingFull;
+    const refull = !!hub.pendingRefull;
+    const gen = hub.gen = (hub.gen || 0) + 1;
+    let dead = false;
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
     if (since) filters[1].since = since;
     const k1since = _hubSinceKind1(hub);
     if (k1since) filters[0].since = k1since;
-    const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
+    const urls = relaysForChurch(cp);
+    let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+    const sub = pool.subscribeMany(urls, filters, {
       // Phase 4: this church's relays (the shared pool is always included)
+      onclose() {
+        allClosed = true;
+      },
       onevent(e) {
         _hubCursor(hub, e);
         if (e.pubkey === cp) {
@@ -9659,7 +9685,8 @@
         }
       },
       oneose() {
-        _hubEosed(hub);
+        if (dead || hub.gen !== gen) return;
+        _hubEosed(hub, full, () => allClosed, _memHubSaveSoon, refull);
         _memHubSaveSoon(hub);
         for (const l of [...hub.listeners]) {
           try {
@@ -9671,6 +9698,7 @@
       }
     });
     hub.closer = () => {
+      dead = true;
       try {
         sub.close();
       } catch {

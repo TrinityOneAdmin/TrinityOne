@@ -2791,10 +2791,35 @@ const FULL_SYNC_S = 86400;         // at most one full (no-since) catch-all sync
 const HUB_SAVE_CAP = 3000000;      // don't persist a buffer bigger than ~3MB — drop the cursor instead
 const DOCSHUB_KEY = 'trinityone.docshub.';   // + churchPubHex -> { since, fullAt, events }
 const MEMHUB_KEY = 'trinityone.memhub.';     // + churchPubHex -> { since, fullAt, members }
+// SAVED-HUB VERSION 2 (`v: 2` in both saves, read in both loaders, _docsHub and _memHub). A hub saved WITHOUT it
+// (every phone before 2026-11-18) loads with fullAt = 0, so its next open is one full fetch: phones left with a
+// stamped-but-never-received daily full (the cancelled-fetch bug, see _hubEosed) get their older documents on first
+// launch instead of within 24 h. Written on every save, so it costs one full per church per phone, once (a downgrade
+// then re-upgrade costs one more). The old fields are unchanged.
+// A LITERAL, not a module constant, on purpose: tests lift _memHub/_docsHub out of the bundle by name, and a new
+// top-level name inside them throws inside the loader's try — the saved hub is silently dropped and those tests then
+// fail for a reason that has nothing to do with what they test (measured: three DM-routing files on 2026-11-18).
 const _dtag = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
 const _slimEvt = (e) => ({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content });   // drop sig — the relay already verified it
 const _hubCursor = (hub, e) => { const t = e.created_at || 0; if (t > hub.since && t <= Math.floor(Date.now() / 1000) + FUTURE_SKEW) { hub.since = t; hub.dirty = true; } };
-const _hubSince = (hub) => { const nowS = Math.floor(Date.now() / 1000); hub.pendingFull = !hub.since || (nowS - (hub.fullAt || 0)) > FULL_SYNC_S; return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP); };
+// Two more reasons to ask for everything, besides "no cursor" and "a day since the last full":
+//  - fullAt in the FUTURE is impossible: a clock once set ahead left it there, and now − fullAt stays negative, so
+//    the phone would never full-sync again until real time caught up. Treated as never. (Not shown to have happened
+//    on a device; it is one comparison and downloads nothing unless the value is impossible.)
+//  - B: the last full was answered BEFORE we authenticated (hub.fullPreAuth, see _hubEosed) and we have since signed
+//    an AUTH. The relay withheld the gated corpus from that answer, so it was not a full sync of what we may read.
+//    AT MOST ONCE PER HUB PER SESSION (build audit V2): fullPreAuth clears only once a relay's ACCEPTANCE is recorded,
+//    and when it never is (a refused AUTH; a nostr-tools quirk that can lose the accepted relay from pool.relays)
+//    every open was a full download. `refullDone` is set when such a full has actually been ANSWERED (see _hubEosed),
+//    not when it is sent, so a refull that gets cancelled is still retried. The cap limits data only: fullPreAuth is
+//    untouched, so an incremental answer still never stamps eosedAt (fail-closed for F12).
+const _hubSince = (hub) => {
+  const nowS = Math.floor(Date.now() / 1000);
+  if ((hub.fullAt || 0) > nowS + FUTURE_SKEW) hub.fullAt = 0;
+  hub.pendingRefull = !!(hub.fullPreAuth && _relayAuthedAt && !hub.refullDone);
+  hub.pendingFull = !hub.since || (nowS - (hub.fullAt || 0)) > FULL_SYNC_S || hub.pendingRefull;
+  return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
+};
 // PERF (audit 2026-07-24): the member hub carries BOTH the church's docs and its kind-1 chatter, and the daily
 // full re-sync therefore re-downloaded the entire chat history — the relay cap is 5,000 events, ~1.5 MB raw,
 // several minutes on 2G — every 24h, on every member's phone. Every one of those messages is then discarded
@@ -2804,7 +2829,45 @@ const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
 // F12: record WHEN the relay answered, not merely that it did — an EOSE from before we authenticated has to
 // be distinguishable from one after, and `eosed` is set once and never reset (including across the post-auth
 // refetch), so a boolean cannot tell them apart.
-const _hubEosed = (hub) => { hub.eosed = true; hub.eosedAt = Date.now(); if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
+//
+// `full` is whether THE SUB THAT ANSWERED was the full fetch, captured when that sub was opened. It used to read
+// hub.pendingFull here, which is the HUB's flag and belongs to whichever sub opened last. nostr-tools reports a
+// sub we cancel as answered (its close counts as EOSE) and runs that close only after the replacement has opened,
+// so the cancelled sub consumed the replacement's "this is the full fetch" and stamped fullAt before anything had
+// arrived; the next refetch was then incremental and the older documents never came for a day (Oppo, 2026-11-18;
+// reference/INVESTIGATION-oppo-devotional-missing-2026-11-18.md). Callers never reach here for a sub they cancelled.
+//
+// …AND "EVERY RELAY CLOSED" IS NOT A FULL SYNC (A2). nostr-tools fires oneose once every relay has settled, and a
+// relay settles by answering (EOSE), by its own EOSE timer, or by CLOSING — a refused connection, a CLOSED from the
+// relay, a dropped socket. One relay answering beside one that is down still counts (the relays are replicas). If
+// EVERY relay ended by closing, nobody answered, and stamping fullAt would put off the daily full sync for a day
+// over an offline boot. `unanswered()` tells; it can only be asked one microtask later, because nostr-tools calls
+// the sub's onclose synchronously AFTER the oneose that the last close triggered. Only the fullAt stamp waits;
+// eosed / eosedAt and the handlers stay synchronous. `save` persists the stamp (the caller's saveSoon).
+//
+// B: A FULL ANSWERED BEFORE SIGN-IN IS NOT THE FULL CORPUS. A gated relay holds its EOSE for 2.5 s waiting for our
+// AUTH, then answers with the public documents only. On a slow link — and on every PIN-locked boot, where the hubs
+// open keyless — that answer is a live EOSE of the full sub, so it stamped fullAt; every later open was incremental
+// and the older gated documents (the name key, the list of children) never came. Worse, the next incremental
+// answer AFTER auth stamped eosedAt past the auth, which syncSealedNames and minorsKnown read as "the relay answered
+// us knowing who we are" — over a buffer that lacks those documents. So:
+//  - when a full is stamped, remember whether a relay had ACCEPTED our auth by then (_relayAuthOkAt — the stronger
+//    signal; a refused AUTH still sets _relayAuthedAt). Only a full answered after that clears fullPreAuth.
+//  - _hubSince asks for everything again once we have signed an AUTH (the post-auth refetch) — see there.
+//  - while fullPreAuth stands, an INCREMENTAL answer sets eosed but NOT eosedAt: it is not evidence of anything.
+// In memory only, deliberately: at most one extra full per hub per session, and only on this path.
+const _hubEosed = (hub, full, unanswered, save, refull) => {
+  hub.eosed = true;
+  if (full || !hub.fullPreAuth) hub.eosedAt = Date.now();
+  if (!full) return;
+  Promise.resolve().then(() => {
+    if (unanswered && unanswered()) return;
+    if (refull) hub.refullDone = true;   // B's one post-sign-in full has been answered — see _hubSince
+    hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true;
+    hub.fullPreAuth = !(_relayAuthOkAt && Date.now() >= _relayAuthOkAt);
+    if (save) save(hub);
+  });
+};
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
 // APPROVAL RECOVERY. A church with approval on withholds its whole corpus from a member until a steward
@@ -3224,7 +3287,7 @@ function _docsHubSaveNow(hub) {
   hub.dirty = false;
   const key = DOCSHUB_KEY + hub.cp;
   try {
-    const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
+    const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
     if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }   // too big to trust a cursor over
     localStorage.setItem(key, s);
   } catch { try { localStorage.removeItem(key); } catch {} }
@@ -3238,7 +3301,7 @@ function _docsHub(cp) {
   try {
     const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || 'null');
     if (raw && Array.isArray(raw.events)) {
-      hub.since = raw.since || 0; hub.fullAt = raw.fullAt || 0;
+      hub.since = raw.since || 0; hub.fullAt = (raw.v || 0) >= 2 ? (raw.fullAt || 0) : 0;   // saved-hub version 2, see MEMHUB_KEY
       for (const e of raw.events) { if (e && e.pubkey && Array.isArray(e.tags)) _hubBufSet(hub, e.pubkey + '|' + _dtag(e), e); }
     }
   } catch {}
@@ -3262,9 +3325,21 @@ function _docsHubOpen(hub) {
   if (hub.closer) return;
   const cp = hub.cp;
   const since = _hubSince(hub);
+  // COMPLETION BELONGS TO THIS SUB. Captured here, per sub: whether it is the full fetch, and a way to tell, when
+  // its oneose fires, that we have since cancelled or replaced it. A cancelled sub's "EOSE" is nostr-tools reporting
+  // our own close, not the relay answering, so it says nothing at hub level (see _hubEosed).
+  const full = !!hub.pendingFull;
+  const refull = !!hub.pendingRefull;   // B's capped post-sign-in full (see _hubSince)
+  const gen = hub.gen = (hub.gen || 0) + 1;
+  let dead = false;
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
   if (since) for (const f of filters) f.since = since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
+  // A2: did every relay end by closing? An EMPTY list is "asked nobody" from the start: the pool wrapper answers it
+  // with a synthetic oneose and never calls onclose (audit F2). The wrapper itself is left alone — it has many callers.
+  const urls = relaysForChurch(cp);
+  let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+  const sub = pool.subscribeMany(urls, filters, {   // Phase 4: this church's relays (the shared pool is always included)
+    onclose() { allClosed = true; },
     onevent(e) {
       const d = _dtag(e);
       const key = e.pubkey + '|' + d;
@@ -3329,7 +3404,8 @@ function _docsHubOpen(hub) {
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { _featureFailed('live update', d, err); } }
     },
     oneose() {
-      _hubEosed(hub); _docsHubSaveSoon(hub);
+      if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer (no eosed, no fullAt, no handlers)
+      _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon, refull); _docsHubSaveSoon(hub);
       // F11: rebuild the parent's children HERE. This fires on a socket that has just answered us, and only
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
@@ -3338,7 +3414,7 @@ function _docsHubOpen(hub) {
       for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
     },
   });
-  hub.closer = () => { try { sub.close(); } catch {} };
+  hub.closer = () => { dead = true; try { sub.close(); } catch {} };   // `dead` FIRST: nostr-tools runs the close later
 }
 // ── THE MEMBER APP'S FAILURE CHANNEL. ARCHITECTURE-AUDIT-2026-07-30 A2 ───────────────────────────────────
 // The console has three ways to say "that did not work" (steward-write-blocked ×4, steward-publish-error,
@@ -3425,7 +3501,7 @@ function _memHubSaveNow(hub) {
   hub.dirty = false;
   const key = MEMHUB_KEY + hub.cp;
   try {
-    const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
+    const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
     if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }
     localStorage.setItem(key, s);
   } catch { try { localStorage.removeItem(key); } catch {} }
@@ -3439,7 +3515,7 @@ function _memHub(cp) {
   let seeded = false;
   try {
     const raw = JSON.parse(localStorage.getItem(MEMHUB_KEY + cp) || 'null');
-    if (raw && Array.isArray(raw.members)) { hub.since = raw.since || 0; hub.fullAt = raw.fullAt || 0; for (const m of raw.members) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } seeded = true; }
+    if (raw && Array.isArray(raw.members)) { hub.since = raw.since || 0; hub.fullAt = (raw.v || 0) >= 2 ? (raw.fullAt || 0) : 0; for (const m of raw.members) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } seeded = true; }
   } catch {}
   if (!seeded) { for (const m of loadMembersCache(cp)) { if (m && m.pubkey) hub.byPub.set(m.pubkey, m); } }   // legacy roster cache: instant paint, no cursor (first sync is full)
   return hub;
@@ -3448,6 +3524,11 @@ function _memHubOpen(hub) {
   if (hub.closer) return;
   const cp = hub.cp;
   const since = _hubSince(hub);
+  // completion belongs to this sub — the same rule, and the same reason, as _docsHubOpen
+  const full = !!hub.pendingFull;
+  const refull = !!hub.pendingRefull;   // B's capped post-sign-in full (see _hubSince)
+  const gen = hub.gen = (hub.gen || 0) + 1;
+  let dead = false;
   const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
   // The docs half takes the ordinary cursor (with its periodic full re-sync). The kind-1 half NEVER full-syncs:
   // re-pulling the church's whole chat history to recompute a member count is megabytes over 2G, daily, for a
@@ -3455,7 +3536,10 @@ function _memHubOpen(hub) {
   if (since) filters[1].since = since;
   const k1since = _hubSinceKind1(hub);
   if (k1since) filters[0].since = k1since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
+  const urls = relaysForChurch(cp);   // A2, as _docsHubOpen: an empty list is "asked nobody"
+  let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+  const sub = pool.subscribeMany(urls, filters, {   // Phase 4: this church's relays (the shared pool is always included)
+    onclose() { allClosed = true; },
     onevent(e) {
       _hubCursor(hub, e);
       if (e.pubkey === cp) { _memHubSaveSoon(hub); return; }
@@ -3472,11 +3556,12 @@ function _memHubOpen(hub) {
       for (const l of [...hub.listeners]) { try { l.onchange && l.onchange(e.pubkey); } catch (err) { console.error(err); } }
     },
     oneose() {
-      _hubEosed(hub); _memHubSaveSoon(hub);
+      if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer
+      _hubEosed(hub, full, () => allClosed, _memHubSaveSoon, refull); _memHubSaveSoon(hub);
       for (const l of [...hub.listeners]) { try { l.oneose && l.oneose(); } catch (err) { console.error(err); } }
     },
   });
-  hub.closer = () => { try { sub.close(); } catch {} };
+  hub.closer = () => { dead = true; try { sub.close(); } catch {} };   // `dead` FIRST: nostr-tools runs the close later
 }
 function _onChurchMembers(cp, l) {
   const hub = _memHub(cp);
