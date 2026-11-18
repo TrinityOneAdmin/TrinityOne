@@ -443,7 +443,7 @@ const BUILD = (() => {
 const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk'];
 const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward' };
 const APK_BLURBS = {
-  'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, giving and the church calendar.',
+  'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, care and the church calendar.',
   'trinityone-steward.apk': 'For the people who run the church. It installs alongside the member app rather than replacing it.',
 };
 const APK_DIR = join(DATA_DIR, 'apks');
@@ -995,7 +995,12 @@ function installAgeLine(ageDays) {
 }
 function installPageHtml({ held, base, qr }) {
   const url = (base || '') + '/install';
-  const cards = held.filter((h) => h.present).map((h) => {
+  // ONE OBVIOUS DOWNLOAD. Members kept installing the steward build because the two cards looked equal, so
+  // when the member app is here the steward card goes behind a closed <details> below the steps. A box
+  // holding ONLY the steward build shows it as a normal card — hiding it would leave nothing to download.
+  const present = held.filter((h) => h.present);
+  const tuckSteward = present.some((h) => h.name === 'trinityone.apk');
+  const card = (h, quiet) => {
     const ageDays = Math.max(0, Math.floor((Date.now() - h.at) / APK_DAY));
     // Describe the consequence, do not nag and do not prescribe. A member cannot fix this; the sentence
     // exists so they can ask the person who can, rather than installing something old without knowing.
@@ -1011,10 +1016,15 @@ function installPageHtml({ held, base, qr }) {
       + '<p class="blurb">' + INSTALL_ESC(APK_BLURBS[h.name] || '') + '</p>'
       + '<p class="facts">' + ver + ' · ' + INSTALL_MB(h.bytes) + (h.builtOn ? ' · built ' + INSTALL_ESC(h.builtOn) : '') + '<br>' + installAgeLine(ageDays) + '</p>'
       + old
-      + '<a class="dl" href="/' + INSTALL_ESC(h.name) + '">Download and install</a>'
+      + '<a class="dl' + (quiet ? ' quiet' : '') + '" href="/' + INSTALL_ESC(h.name) + '">Download and install</a>'
       + sha
       + '</section>';
-  }).join('\n');
+  };
+  const cards = present.filter((h) => !(tuckSteward && h.name === 'trinityone-steward.apk')).map((h) => card(h, false)).join('\n');
+  const steward = tuckSteward ? present.find((h) => h.name === 'trinityone-steward.apk') : null;
+  const leaders = steward
+    ? '<details class="leaders"><summary>For church leaders</summary>' + card(steward, true) + '</details>'
+    : '';
   const empty = '<section class="card"><h2>Nothing to install yet</h2><p class="blurb">This machine is not holding a copy of the app right now. Whoever looks after it can add one from the relay control panel — “Let members install the app from this box”.</p></section>';
   return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
@@ -1031,6 +1041,14 @@ function installPageHtml({ held, base, qr }) {
     + '.facts{margin:0 0 12px;font-size:12.5px;color:var(--ink3);font-weight:600}'
     + '.warn{margin:0 0 12px;font-size:13px;color:var(--clay-deep);background:rgba(194,90,56,.09);border:1px solid rgba(194,90,56,.22);border-radius:12px;padding:10px 12px}'
     + '.dl{display:inline-block;background:var(--clay);color:#fff;font-weight:700;font-size:15px;padding:11px 20px;border-radius:999px;text-decoration:none}'
+    + '.dl.quiet{background:transparent;color:var(--clay-deep);border:1.5px solid var(--clay);padding:9.5px 18.5px}'
+    + '.leaders{background:var(--surface);border:1px solid var(--line);border-radius:18px;margin:0 0 14px}'
+    + '.leaders>summary{list-style:none;cursor:pointer;padding:14px 18px;font-size:14.5px;font-weight:600;color:var(--ink2);display:flex;align-items:center;justify-content:space-between;gap:12px}'
+    + '.leaders>summary::-webkit-details-marker{display:none}'
+    + '.leaders>summary::after{content:"";flex:none;width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);margin:-4px 4px 0 0;transition:transform .15s}'
+    + '.leaders[open]>summary::after{transform:rotate(-135deg);margin-top:4px}'
+    + '.leaders>.card{background:none;border:0;box-shadow:none;margin:0;padding:0 18px 18px}'
+    + '@media (prefers-reduced-motion:reduce){.leaders>summary::after{transition:none}}'
     + '.sha{margin-top:12px;font-size:12.5px;color:var(--ink2)}'
     + '.sha summary{cursor:pointer;color:var(--clay);font-weight:700}'
     + '.sha p{margin:8px 0 6px}'
@@ -1043,7 +1061,8 @@ function installPageHtml({ held, base, qr }) {
     + '.share .u{font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all;color:var(--ink2);margin-top:10px;user-select:all}'
     + 'footer{text-align:center;color:var(--ink3);font-size:12px;margin-top:22px}'
     + '@media (prefers-color-scheme:dark){body{background:#17130F;color:#F1EADD}'
-    + '.card,.steps,.share{background:#221C16;border-color:rgba(255,255,255,.1)}'
+    + '.card,.steps,.share,.leaders{background:#221C16;border-color:rgba(255,255,255,.1)}'
+    + '.leaders>summary{color:#BDB2A2}.dl.quiet{color:#E7906F;border-color:#E7906F}'
     + '.blurb,.steps,.share .u{color:#BDB2A2}.facts{color:#8E8474}.hash{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.1)}}'
     + '</style></head><body><div class="wrap">'
     + '<h1>Install TrinityOne</h1>'
@@ -1055,6 +1074,7 @@ function installPageHtml({ held, base, qr }) {
     + '<li>Open the downloaded file and tap <b>Install</b>.</li>'
     + '<li>Open TrinityOne, then scan your church’s join code or open its invite link.</li>'
     + '</ol>'
+    + leaders
     + '<div class="share"><h2>Pass this on</h2>'
     + (qr ? '<div role="img" aria-label="QR code linking to this install page">' + qr + '</div>' : '')
     + '<div class="u">' + INSTALL_ESC(url) + '</div></div>'
