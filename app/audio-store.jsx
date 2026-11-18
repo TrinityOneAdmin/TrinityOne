@@ -30,7 +30,9 @@
   const CAP_ENTRY = 64 * 1024 * 1024;              // inflated bytes in one entry
   const CAP_TOTAL = 3 * 1024 * 1024 * 1024;        // inflated bytes in one import
   const CAP_ENTRIES = 5000;
-  const CAP_RAW = 4 * 1024 * 1024 * 1024 - 1;      // a zip over 4 GB needs ZIP64: refused with words for now
+  const CAP_RAW = 4 * 1024 * 1024 * 1024 - 1;      // a zip over 4 GB is refused with words for now (zip64 entries under the caps import)
+  // the limits the import checks; one object so a test can lower them and prove each one is enforced
+  const LIM = { entry: CAP_ENTRY, total: CAP_TOTAL, entries: CAP_ENTRIES, raw: CAP_RAW };
   const WRITE_CHUNK = 1024 * 1024;                 // ~1 MB per bridge call, never a 22 MB base64 string
   const MIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', ogg: 'audio/ogg' };
   const EXT_OF_MIME = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg' };
@@ -113,12 +115,20 @@
     return (W().btoa || btoa)(s);
   }
   const fpath = (id, sub, ext) => ROOT + '/' + id + '/' + sub + (ext ? '.' + ext : '');
+  // A CHAPTER FILE APPEARS WHOLE OR NOT AT ALL (audit #1). The bytes go to <path>.part; only when its size matches is it
+  // renamed to the final name, which is the only name listBook/listAll count. A failed write deletes the .part; a killed
+  // one leaves it for the boot sweep. A half-written chapter can therefore never count as present, hide an intact
+  // IndexedDB copy, or stop a download fetching it again.
   async function fWrite(path, u8) {
-    const P = FSP();
-    await P.writeFile({ path, data: b64(u8.subarray(0, WRITE_CHUNK)), directory: DIR(), recursive: true });
-    for (let at = WRITE_CHUNK; at < u8.length; at += WRITE_CHUNK) await P.appendFile({ path, data: b64(u8.subarray(at, at + WRITE_CHUNK)), directory: DIR() });
-    const st = await P.stat({ path, directory: DIR() });
-    if (!st || Number(st.size) !== u8.length) throw new Error('write check failed');
+    const P = FSP(); const tmp = path + '.part';
+    try {
+      await P.writeFile({ path: tmp, data: b64(u8.subarray(0, WRITE_CHUNK)), directory: DIR(), recursive: true });
+      for (let at = WRITE_CHUNK; at < u8.length; at += WRITE_CHUNK) await P.appendFile({ path: tmp, data: b64(u8.subarray(at, at + WRITE_CHUNK)), directory: DIR() });
+      const st = await P.stat({ path: tmp, directory: DIR() });
+      if (!st || Number(st.size) !== u8.length) throw new Error('write check failed');
+      try { await P.rename({ from: tmp, to: path, directory: DIR(), toDirectory: DIR() }); }
+      catch (e) { await fDel(path); await P.rename({ from: tmp, to: path, directory: DIR(), toDirectory: DIR() }); }   // a platform that will not rename over a file
+    } catch (e) { await fDel(tmp); throw e; }
   }
   async function fList(path) {
     try { const r = await FSP().readdir({ path, directory: DIR() }); return (r && r.files || []).map(f => (typeof f === 'string' ? { name: f, type: 'file', size: 0 } : f)); } catch (e) { return []; }
@@ -140,6 +150,7 @@
   // list a set's chapters in one book → [{chap, ext, size, where:'file'|'idb'}]; World English on a phone reads BOTH stores
   async function listBook(id, book) {
     const out = new Map();
+    if (!validId(id)) return [];
     const useFiles = filesOn();
     if (useFiles) {
       for (const f of await fList(ROOT + '/' + id + '/' + book)) {
@@ -190,10 +201,6 @@
     if (filesOn()) { if (ext) await fDel(fpath(id, sub, ext)); else for (const e of Object.keys(MIME)) await fDel(fpath(id, sub, e)); }
     if (!filesOn() || id === 'WEB') await idbDel([id + '/' + sub]);
   }
-  async function getEntry(id, sub, ext) {
-    if (filesOn()) { try { const b = await fBlob(fpath(id, sub, ext), ext); if (b) return new Uint8Array(await b.arrayBuffer()); } catch (e) {} return null; }
-    const b = await idbGet(id + '/' + sub); return b ? new Uint8Array(await b.arrayBuffer()) : null;
-  }
   async function move(id, fromSub, ext, toSub) {
     if (filesOn()) {
       const P = FSP();
@@ -226,10 +233,17 @@
   function serial(fn) { const p = _chain.then(fn, fn); _chain = p.catch(() => {}); return p; }
 
   // ─────────────── magic bytes → ext (nothing else decides what a file is) ───────────────
+  // A REAL MPEG layer II/III frame header, not just 0xFF (audit #5): sync (11 bits), version not "reserved", layer II or III
+  // (FF FE, the UTF-16 byte-order mark, and FF FF are layer I and are refused), bitrate index not 15, sample rate not 3.
+  function mpegFrame(u8) {
+    if (!u8 || u8.length < 3 || u8[0] !== 0xFF || (u8[1] & 0xE0) !== 0xE0) return false;
+    const ver = (u8[1] >> 3) & 3, layer = (u8[1] >> 1) & 3, br = u8[2] >> 4, sr = (u8[2] >> 2) & 3;
+    return ver !== 1 && (layer === 1 || layer === 2) && br !== 15 && sr !== 3;
+  }
   function sniff(u8) {
     if (!u8 || u8.length < 4) return null;
     if (u8[0] === 0x49 && u8[1] === 0x44 && u8[2] === 0x33) return 'mp3';                       // 'ID3'
-    if (u8[0] === 0xFF && (u8[1] & 0xE0) === 0xE0) return 'mp3';                                 // MPEG frame sync
+    if (mpegFrame(u8)) return 'mp3';
     if (u8.length >= 8 && u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70) return 'm4a';   // ....ftyp
     if (u8[0] === 0x4F && u8[1] === 0x67 && u8[2] === 0x67 && u8[3] === 0x53) return 'ogg';     // 'OggS'
     return null;
@@ -277,9 +291,40 @@
     }
     return out;
   }
+  // Faith Comes By Hearing / Bible.is download names: <A|B><book in testament, 2 digits>_+<chapter>_<Name>_+<fileset id>,
+  // e.g. "B01___01_Matthew_____ENGKJVN1DA" (Matthew 1; the shape is confirmed from an SIL Scripture App Builder thread
+  // using FCBH files). A = Old Testament (A01 Genesis … A39 Malachi), B = New (B01 Matthew … B27 Revelation).
+  function matchFcbh(base) {
+    const m = /^([AB])(\d{2})_+(\d{1,3})_+([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*?)_*([A-Z0-9]{6,}(?:-opus\d+)?)?$/.exec(base);
+    if (!m) return null;
+    const idx = parseInt(m[2], 10), chap = parseInt(m[3], 10);
+    const book = m[1] === 'A' ? (idx >= 1 && idx <= 39 ? idx : 0) : (idx >= 1 && idx <= 27 ? 39 + idx : 0);
+    if (!book || !(chap >= 1 && chap <= CHAPTERS[book - 1])) return null;
+    return { book, chap, lead: null };
+  }
   // → { book, chap, lead } or null. lead = the number just before the book token, if any (a cross-check, never decisive).
+  // When the file's own name has no book ("Genesis/01.mp3", "01 Genesis/001.mp3"), the folder it is in names the book
+  // and the file name's first number is the chapter.
   function matchName(name) {
-    const tk = tokenize(name); const map = bookMap();
+    const parts = String(name || '').split(/[\\/]/).filter(Boolean);
+    const base = (parts[parts.length - 1] || '').replace(/\.[A-Za-z0-9]{1,5}$/, '');
+    const f = matchFcbh(base); if (f) return f;
+    const own = matchTokens(tokenize(base));
+    if (own !== undefined) return own;
+    for (let k = parts.length - 2; k >= 0; k--) {
+      const folder = matchTokens(tokenize(parts[k]), true);
+      if (!folder) continue;
+      const num = tokenize(base).find(t => /^\d+$/.test(t));
+      const w = num ? null : words(tokenize(base), 0);
+      const chap = num ? parseInt(num, 10) : (w ? w.n : (CHAPTERS[folder.book - 1] === 1 ? 1 : null));
+      if (!(chap >= 1 && chap <= CHAPTERS[folder.book - 1])) return null;
+      return { book: folder.book, chap, lead: null };
+    }
+    return null;
+  }
+  // undefined = no book in these tokens at all; null = a book but no usable chapter. bookOnly: just the book.
+  function matchTokens(tk, bookOnly) {
+    const map = bookMap();
     for (let i = 0; i < tk.length; i++) {
       for (let len = Math.min(3, tk.length - i); len >= 1; len--) {
         const win = tk.slice(i, i + len);
@@ -287,6 +332,7 @@
         if (/^\d/.test(win[0]) && !/^[123]$/.test(win[0])) continue;   // "1 John" yes, "01 John" / "40 Matthew" no
         const book = map[squash(win.join(''))];
         if (!book) continue;
+        if (bookOnly) return { book };
         const lead = (i > 0 && /^\d+$/.test(tk[i - 1])) ? parseInt(tk[i - 1], 10) : null;
         let j = i + len, chap = null;
         while (j < tk.length && /^(chapter|chap|ch|c|part|pt)$/i.test(tk[j])) j++;
@@ -297,7 +343,7 @@
         return { book, chap, lead };
       }
     }
-    return null;
+    return bookOnly ? null : undefined;
   }
   // keep a name only as short plain text (it is shown as a React text child, never as markup)
   const cleanName = (s) => String(s || '').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120);
@@ -326,18 +372,17 @@
     const done = [];
     const unz = new F.Unzip((file) => {
       st.entries++;
-      if (st.entries > CAP_ENTRIES) throw capErr('too-many');
+      if (st.entries > LIM.entries) throw capErr('too-many');
       if (file.compression === 0 && file.size === undefined && !JUNK(file.name)) throw capErr('stored-descriptor');
-      if ((file.size || 0) >= 0xFFFFFFFF || (file.originalSize || 0) >= 0xFFFFFFFF) throw capErr('zip64');
-      if (file.originalSize > CAP_ENTRY) throw capErr('entry-too-big');
+      if (file.originalSize > LIM.entry) throw capErr('entry-too-big');
       const name = file.name; const junk = JUNK(name);
       let parts = [], n = 0, keep = !junk, decided = junk;
       file.ondata = (err, dat, final) => {
         if (err) { if (!st.broken) st.broken = err; return; }   // fflate hands a throw from here back as `err`: keep the first
         if (dat && dat.length) {
           n += dat.length; st.inflated += dat.length;
-          if (n > CAP_ENTRY) throw capErr('entry-too-big');
-          if (st.inflated > CAP_TOTAL) throw capErr('too-big');
+          if (n > LIM.entry) throw capErr('entry-too-big');
+          if (st.inflated > LIM.total) throw capErr('too-big');
           if (keep) parts.push(dat);
           if (!decided && n >= 12) { decided = true; if (!sniff(concat(parts, n))) { keep = false; parts = []; } }
         }
@@ -349,7 +394,7 @@
     for (;;) {
       if (getAborted && getAborted()) throw capErr('cancelled');
       const chunk = await next();
-      if (chunk) { st.raw += chunk.length; if (st.raw > CAP_RAW) throw capErr('zip64'); }
+      if (chunk) { st.raw += chunk.length; if (st.raw > LIM.raw) throw capErr('over-4gb'); }
       // pushed in 16 KB slices: fflate's Unzip recurses once per entry inside one push, so a big chunk of tiny entries
       // would overflow the stack before the entry cap could answer
       try {
@@ -406,27 +451,40 @@
           for (;;) {
             if (hooks.getAborted && hooks.getAborted()) throw capErr('cancelled');
             const c = await next(); if (!c) break;
-            n += c.length; if (n > CAP_ENTRY) throw capErr('entry-too-big');
-            st.inflated += c.length; if (st.inflated > CAP_TOTAL) throw capErr('too-big');
+            n += c.length; if (n > LIM.entry) throw capErr('entry-too-big');
+            st.inflated += c.length; if (st.inflated > LIM.total) throw capErr('too-big');
             parts.push(c);
           }
-          st.entries++; if (st.entries > CAP_ENTRIES) throw capErr('too-many');
+          st.entries++; if (st.entries > LIM.entries) throw capErr('too-many');
           await onEntry(src.name || '', concat(parts, n));
         }
       }
-      // a leading number that DISAGREES with the name goes to the check screen. "Disagrees" = its offset from the book
-      // number is not the offset most of this set's files use in that testament (eBible numbers MRK 71, others 41: both
+      // a leading number that DISAGREES with the name goes to the check screen. First, a number that changes from file to
+      // file WITHIN ONE BOOK is a running track number ("001 Genesis 1", "002 Genesis 2" …), not a book number, and is
+      // ignored (audit #3): a book's lead counts only if one value covers more than half its files. If most books in a
+      // testament have track numbers, every lead there is ignored. What is left is the old check: a file whose offset
+      // from its book number is not the offset most files in that testament use (eBible numbers MRK 71, others 41: both
       // are consistent within their own set, so neither is misfiled).
+      const outliers = [];
       for (const half of [[1, 39], [40, 66]]) {
-        const inHalf = [...placed.values()].filter(p => p.book >= half[0] && p.book <= half[1] && p.lead != null);
-        if (inHalf.length < 2) continue;
-        const count = new Map(); inHalf.forEach(p => count.set(p.lead - p.book, (count.get(p.lead - p.book) || 0) + 1));
+        const byBook = new Map();
+        for (const p of placed.values()) if (p.book >= half[0] && p.book <= half[1] && p.lead != null) { if (!byBook.has(p.book)) byBook.set(p.book, []); byBook.get(p.book).push(p); }
+        let trackBooks = 0; const kept = [];
+        byBook.forEach((list) => {
+          const c = new Map(); list.forEach(p => c.set(p.lead, (c.get(p.lead) || 0) + 1));
+          let mode = null, modeN = 0; c.forEach((k, v) => { if (k > modeN) { mode = v; modeN = k; } });
+          if (modeN * 2 <= list.length) { trackBooks++; return; }
+          list.forEach(p => { if (p.lead === mode) kept.push(p); else outliers.push(p); });
+        });
+        if (byBook.size && trackBooks * 2 >= byBook.size) { outliers.splice(0, outliers.length, ...outliers.filter(p => !(p.book >= half[0] && p.book <= half[1]))); continue; }
+        if (kept.length < 2) continue;
+        const count = new Map(); kept.forEach(p => count.set(p.lead - p.book, (count.get(p.lead - p.book) || 0) + 1));
         let best = null, bestN = -1; count.forEach((c, off) => { if (c > bestN || (c === bestN && off === 0)) { best = off; bestN = c; } });
-        for (const p of inHalf) {
-          if (p.lead - p.book === best) continue;
-          const n = ++un; await move(id, p.book + '/' + p.chap, p.ext, '_unplaced/' + n);
-          placed.delete(p.book + '/' + p.chap); unplaced.push({ n, name: p.name, ext: p.ext });
-        }
+        for (const p of kept) if (p.lead - p.book !== best) outliers.push(p);
+      }
+      for (const p of outliers) {
+        const n = ++un; await move(id, p.book + '/' + p.chap, p.ext, '_unplaced/' + n);
+        placed.delete(p.book + '/' + p.chap); unplaced.push({ n, name: p.name, ext: p.ext });
       }
       if (!patchRow(id, { unplaced: unplaced.map(u => ({ n: u.n, name: u.name, ext: u.ext })), chapters: placed.size })) throw capErr('no-registry');
       progress();
@@ -483,7 +541,7 @@
   // Remove (B2): mark the row pending → delete the files → delete the row. A crash in the middle leaves a pending row the
   // sweep finishes, never a READY row with missing files. If it was the voice in use, the choice falls back to Berean Standard.
   async function removeSet(id) {
-    const r = row(id); if (!r || id === 'WEB') return { ok: false };
+    const r = row(id); if (!r || id === 'WEB' || !validId(id)) return { ok: false };
     const bytes = r.bytes || 0;
     patchRow(id, { state: 'pending' });
     await wipe(id);
@@ -501,9 +559,13 @@
       const doomed = (id) => id !== 'WEB' && (!by.has(id) || by.get(id).state !== 'ready');
       if (filesOn()) {
         for (const d of await fList(ROOT)) {
-          const id = d.name; if (!id || id === 'WEB') continue;
-          if (doomed(id)) await fRmdir(ROOT + '/' + id);
-          else await fRmdir(ROOT + '/' + id + '/_unplaced');
+          const id = d.name; if (!id) continue;
+          if (id !== 'WEB' && doomed(id)) { await fRmdir(ROOT + '/' + id); continue; }
+          if (id !== 'WEB') await fRmdir(ROOT + '/' + id + '/_unplaced');
+          // a write killed part-way leaves <chap>.<ext>.part: delete those (and only those), World English included
+          for (const sub of await fList(ROOT + '/' + id)) {
+            for (const f of await fList(ROOT + '/' + id + '/' + sub.name)) if (/\.part$/.test(f.name || '')) await fDel(ROOT + '/' + id + '/' + sub.name + '/' + f.name);
+          }
         }
       } else {
         const del = [];
@@ -562,13 +624,17 @@
     });
   }
 
-  let _boot = null;
+  let _boot = null, _swept = null;
   function boot() {
-    if (!_boot) _boot = (async () => { try { await sweep(); } catch (e) {} try { await migrateWeb(); } catch (e) {} })();
+    if (!_boot) {
+      _swept = (async () => { try { await sweep(); } catch (e) {} })();
+      _boot = _swept.then(async () => { try { await migrateWeb(); } catch (e) {} });
+    }
     return _boot;
   }
-  // an import waits for the sweep, so the sweep can never see an import's fresh pending row as a leftover
-  function booted() { return _boot ? _boot.catch(() => {}) : Promise.resolve(); }
+  // an import waits for the SWEEP ONLY (audit #2), so the sweep can never see an import's fresh pending row as a
+  // leftover — but "Add your own" is not held up by World English moving, which can be over a gigabyte
+  function booted() { return _swept || Promise.resolve(); }
 
   window.TrinityAudioStore = {
     filesOn, rows, row, readySets, newId,
@@ -577,6 +643,6 @@
     beginImport, importSources, placeUnplaced, leaveOut, cancelImport, finishImport, removeSet,
     sweep, migrateWeb, putWebChapter, removeWebBook, boot,
     CHAPTERS: CHAPTERS.slice(), USFM: USFM.slice(),
-    caps: { CAP_ENTRY, CAP_TOTAL, CAP_ENTRIES, CAP_RAW },
+    caps: LIM,
   };
 })();

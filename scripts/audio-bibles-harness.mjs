@@ -71,23 +71,25 @@ export function fakeIdb(data = new Map()) {
 }
 
 // ── fake Capacitor Filesystem (the shim) ──
-export function fakeFs(files = new Map(), { hang = null, failWrite = null } = {}) {
+export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failWrite = null } = {}) {
   const dec = (b64) => new Uint8Array(Buffer.from(b64, 'base64'));
   const calls = [];
   const gate = async (op, path) => { calls.push(op + ' ' + path); if (hang && hang(op, path)) await new Promise(() => {}); };
+  // hangAfter: the operation HAPPENS, then the process "dies" before the caller hears back
+  const after = async (op, path) => { if (hangAfter && hangAfter(op, path)) await new Promise(() => {}); };
   const kids = (path) => {
     const pre = path ? path + '/' : ''; const out = new Map();
     for (const [p, b] of files) { if (!p.startsWith(pre)) continue; const rest = p.slice(pre.length); const i = rest.indexOf('/'); if (i < 0) out.set(rest, { name: rest, type: 'file', size: b.length }); else if (!out.has(rest.slice(0, i))) out.set(rest.slice(0, i), { name: rest.slice(0, i), type: 'directory', size: 0 }); }
     return [...out.values()];
   };
   const Filesystem = {
-    async writeFile({ path, data }) { await gate('writeFile', path); if (failWrite && failWrite(path)) throw new Error('ENOSPC: no space left on device'); files.set(path, dec(data)); return { uri: 'file:///data/' + path }; },
-    async appendFile({ path, data }) { await gate('appendFile', path); if (failWrite && failWrite(path)) throw new Error('ENOSPC: no space left on device'); const a = files.get(path) || new Uint8Array(0); const b = dec(data); const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); files.set(path, c); },
+    async writeFile({ path, data }) { await gate('writeFile', path); if (failWrite && failWrite(path, 'writeFile')) throw new Error('ENOSPC: no space left on device'); files.set(path, dec(data)); return { uri: 'file:///data/' + path }; },
+    async appendFile({ path, data }) { await gate('appendFile', path); if (failWrite && failWrite(path, 'appendFile')) throw new Error('ENOSPC: no space left on device'); const a = files.get(path) || new Uint8Array(0); const b = dec(data); const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); files.set(path, c); },
     async stat({ path }) { await gate('stat', path); if (!files.has(path)) throw new Error('File does not exist'); return { size: files.get(path).length, type: 'file', uri: 'file:///data/' + path }; },
     async readdir({ path }) { await gate('readdir', path); return { files: kids(path) }; },
     async rmdir({ path }) { await gate('rmdir', path); for (const p of [...files.keys()]) if (p === path || p.startsWith(path + '/')) files.delete(p); },
     async deleteFile({ path }) { await gate('deleteFile', path); if (!files.has(path)) throw new Error('File does not exist'); files.delete(path); },
-    async rename({ from, to }) { await gate('rename', from); if (!files.has(from)) throw new Error('File does not exist'); files.set(to, files.get(from)); files.delete(from); },
+    async rename({ from, to }) { await gate('rename', from); if (!files.has(from)) throw new Error('File does not exist'); files.set(to, files.get(from)); files.delete(from); await after('rename', to); },
     async mkdir() {},
     async getUri({ path }) { return { uri: 'file:///data/' + path }; },
   };

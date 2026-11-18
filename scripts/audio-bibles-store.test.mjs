@@ -58,7 +58,8 @@ test('IMPORT — big chapters are written ~1 MB per bridge call, never as one ba
   const { id, res } = await imp(w, [['40_Matthew_005.mp3', mp3('big', Math.floor(2.5 * 1024 * 1024))]], { chunk: 64 * 1024 });
   assert.equal(res.ok, true);
   const p = 'audio/' + id + '/40/5.mp3';
-  assert.deepEqual(w.fs.calls.filter(c => c.endsWith(' ' + p)).map(c => c.split(' ')[0]), ['writeFile', 'appendFile', 'appendFile', 'stat']);
+  assert.deepEqual(w.fs.calls.filter(c => c.endsWith(' ' + p + '.part')).map(c => c.split(' ')[0]), ['writeFile', 'appendFile', 'appendFile', 'stat', 'rename'],
+    'not written in ~1 MB pieces to a .part file that is checked and then renamed');
   assert.equal(w.disk.get(p).length, Math.floor(2.5 * 1024 * 1024));
 });
 
@@ -213,8 +214,8 @@ test('MIGRATION — each chapter is written, checked, then its IndexedDB copy de
 test('MIGRATION KILLED between write and delete → sweep → relaunch: every chapter is still there, in one store or the other, and none twice', async () => {
   const idbData = new Map(); seedWeb(idbData, [[43, 1], [43, 2], [43, 3], [43, 4]]);
   const ls = new Map(); const disk = new Map();
-  // the process dies the moment chapter 3's file is written (its size check never returns): not an exception, a stop
-  const w = storeWorld({ native: true, idbData, ls, disk, fsOpts: { hang: (op, p) => op === 'stat' && p === 'audio/WEB/43/3.mp3' } });
+  // the process dies the moment chapter 3's file is in place (the rename happens, nothing after it): not an exception, a stop
+  const w = storeWorld({ native: true, idbData, ls, disk, fsOpts: { hangAfter: (op, p) => op === 'rename' && p === 'audio/WEB/43/3.mp3' } });
   w.S.migrateWeb();
   await settle(60);
   assert.ok(disk.has('audio/WEB/43/3.mp3') && idbData.has('WEB/43/3'), 'the kill did not land between the write and the delete — re-anchor');
@@ -269,4 +270,127 @@ test('REMOVE (B2) — the row goes pending, then the files, then the row; the sp
   assert.deepEqual([w.S.row(id), w.disk.size], [null, 0]);
   assert.equal(JSON.parse(w.ls.get('trinityone.audioVoice')), 'BSB/david');
   assert.equal((await w.S.removeSet('WEB')).ok, false, 'Remove can delete World English through the own-set path');
+});
+
+// ════════════════ build audit 2026-11-18 fixes (AUDIT-build-audio-bibles-own-2026-11-18.md) ════════════════
+const BIG = 3 * 1024 * 1024;
+
+test('AUDIT #1 — a chapter write that fails part-way (phone full) leaves NO file: not counted, not "Downloaded", fetched again next time', async () => {
+  let full = true;
+  const w = storeWorld({ native: true, fsOpts: { failWrite: (p, op) => full && op === 'appendFile' } });
+  await assert.rejects(w.S.putWebChapter(40, 3, mp3('w403', BIG)), /ENOSPC/);
+  assert.deepEqual([...w.disk.keys()], [], 'a part-written file (or its .part) was left behind');
+  assert.equal(await w.S.hasChapter('WEB', 40, 3), false, 'a half-written chapter counts as present');
+  full = false;
+  await w.S.putWebChapter(40, 3, mp3('w403', BIG));
+  assert.equal(w.disk.get('audio/WEB/40/3.mp3').length, BIG);
+});
+
+test('AUDIT #1 — a write KILLED part-way leaves only a .part: it never counts, and the boot sweep deletes it without touching finished files', async () => {
+  const disk = new Map(), ls = new Map();
+  const w = storeWorld({ native: true, disk, ls, fsOpts: { hang: (op, p) => op === 'appendFile' && /\/40\/4\.mp3(\.part)?$/.test(p) } });
+  await w.S.putWebChapter(40, 3, mp3('done', 1000));
+  w.S.putWebChapter(40, 4, mp3('dies', BIG));
+  await settle(40);
+  assert.ok(disk.has('audio/WEB/40/4.mp3.part') || disk.has('audio/WEB/40/4.mp3'), 're-anchor: the kill did not land mid-write');
+  assert.equal(disk.has('audio/WEB/40/4.mp3'), false, 'the half-written chapter sits under its final name');
+  assert.deepEqual((await w.S.listBook('WEB', 40)).map(x => x.chap), [3], 'a .part file counts as a chapter');
+  const w2 = storeWorld({ native: true, disk, ls });
+  await w2.S.boot();
+  assert.deepEqual([...disk.keys()], ['audio/WEB/40/3.mp3'], 'the sweep did not clear the .part, or deleted a finished chapter');
+  assert.equal(tagOf(disk.get('audio/WEB/40/3.mp3')), 'done');
+});
+
+test('AUDIT #1 — migration: a chapter whose file write fails keeps its IndexedDB copy, and nothing on disk hides it', async () => {
+  const idbData = new Map();
+  idbData.set('WEB/43/1', new Blob([mp3('web43.1', BIG)], { type: 'audio/mpeg' }));
+  const w = storeWorld({ native: true, idbData, fsOpts: { failWrite: (p, op) => op === 'appendFile' } });
+  const r = await w.S.migrateWeb();
+  assert.equal(r.stopped, true);
+  assert.ok(idbData.has('WEB/43/1'), 'the IndexedDB copy was deleted although the file never landed');
+  assert.deepEqual([...w.disk.keys()], []);
+  const b = await w.S.chapterBlob('WEB', 43, 1);
+  assert.equal(b.size, BIG, 'playback does not get the whole chapter');
+});
+
+test('AUDIT #2 — an import waits only for the boot SWEEP, not for World English moving', async () => {
+  const idbData = new Map(); seedWeb(idbData, [[43, 1], [43, 2]]);
+  const w = storeWorld({ native: true, idbData, fsOpts: { hang: (op, p) => op === 'writeFile' && /^audio\/WEB\//.test(p) } });
+  w.S.boot();                                    // the move starts and never finishes
+  const id = await Promise.race([w.S.beginImport(), settle(80).then(() => 'STILL WAITING')]);
+  assert.match(String(id), /^[0-9a-f]{16}$/, 'Add your own is held up by the World English move');
+  const res = await w.S.importSources(id, [{ name: 'x.zip', head: [], reader: readerOf(zipOf([['John_5.mp3', mp3('j5')]])) }]);
+  assert.equal(res.chapters, 1);
+});
+
+test('AUDIT #3 — a set numbered as one running track count (001 Genesis 1 … 090 Exodus 40) is placed, not sent to the check screen', async () => {
+  const w = storeWorld();
+  const files = [];
+  for (let c = 1; c <= 50; c++) files.push([String(c).padStart(3, '0') + ' Genesis ' + c + '.mp3', mp3('g' + c)]);
+  for (let c = 1; c <= 40; c++) files.push([String(50 + c).padStart(3, '0') + ' Exodus ' + c + '.mp3', mp3('e' + c)]);
+  const { id, res } = await imp(w, files);
+  assert.deepEqual([res.chapters, res.books, res.unplaced.length], [90, 2, 0]);
+  assert.equal(await bytesAt(w, id, 2, 40), 'e40');
+});
+
+test('AUDIT #4 — book-folder layouts and Faith Comes By Hearing / Bible.is names', () => {
+  const { S } = storeWorld();
+  const want = {
+    'Genesis/01.mp3': [1, 1], '01 Genesis/001.mp3': [1, 1], 'Psalms/150.mp3': [19, 150], 'My Bible/43 John/John 03.mp3': [43, 3],
+    'B01___01_Matthew_____ENGKJVN1DA.mp3': [40, 1],         // confirmed shape (SIL Scripture App Builder forum, FCBH files)
+    'A01___01_Genesis_____ENGKJVO1DA.mp3': [1, 1], 'B27___22_Revelation__ENGKJVN1DA.mp3': [66, 22], 'B07___16_1Corinthians_ENGESVN2DA.mp3': [46, 16],
+    'A19__150_Psalms______ENGKJVO1DA.mp3': [19, 150],        // 3-digit chapter: assumed from the fixed-width pattern, not seen
+  };
+  for (const [name, [book, chap]] of Object.entries(want)) {
+    const m = S.matchName(name);
+    assert.ok(m, name + ' was not recognised');
+    assert.deepEqual([m.book, m.chap], [book, chap], name);
+  }
+  for (const bad of ['B28___01_Nothing_____ENGKJVN1DA.mp3', 'A01___51_Genesis_____ENGKJVO1DA.mp3', 'Genesis/notes.mp3', 'disc1/track01.mp3']) assert.equal(S.matchName(bad), null, bad);
+});
+
+test('AUDIT #5 — the MP3 check wants ID3 or a real MPEG layer II/III frame: FF FE (UTF-16 BOM), FF FF and other near-misses are not audio', () => {
+  const { S } = storeWorld();
+  const b = (...x) => new Uint8Array([...x, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  for (const ok of [b(0xFF, 0xFB, 0x90), b(0xFF, 0xFA, 0x90), b(0xFF, 0xF3, 0x64), b(0xFF, 0xE3, 0x18), b(0xFF, 0xFD, 0x90) /* layer II */, b(0x49, 0x44, 0x33, 4)]) assert.equal(S.sniff(ok), 'mp3', [...ok.slice(0, 3)].map(x => x.toString(16)).join(' '));
+  for (const no of [b(0xFF, 0xFE, 0x52, 0x00), b(0xFF, 0xFF, 0xFF, 0xFF), b(0xFF, 0xFB, 0xF0) /* bitrate 15 */, b(0xFF, 0xFB, 0x9C) /* sample rate 3 */, b(0xFF, 0xEB, 0x90) /* version reserved */, b(0xFF, 0xD8, 0xFF, 0xE0) /* JPEG */])
+    assert.equal(S.sniff(no), null, [...no.slice(0, 3)].map(x => x.toString(16)).join(' ') + ' was taken for MP3');
+});
+
+test('AUDIT #6 — the 3 GB total and the 4 GB raw limits abort and leave nothing (limits lowered through the store\'s caps object); a zip64 entry under the caps imports', async () => {
+  for (const [cap, value, reason] of [['total', 150, 'too-big'], ['raw', 400, 'over-4gb']]) {
+    for (const native of [true, false]) {
+      const w = storeWorld({ native });
+      w.S.caps[cap] = value;
+      const { id, res } = await imp(w, [['John_1.mp3', mp3('a', 100)], ['John_2.mp3', mp3('b', 100)], ['John_3.mp3', mp3('c', 100)]], { zip: { stored: true }, chunk: 64 });
+      assert.deepEqual(res, { ok: false, reason }, cap);
+      assert.deepEqual([w.S.row(id), w.disk.size + w.idbData.size], [null, 0], cap + ': something was left');
+    }
+  }
+  // a hand-built zip64 local header: sizes 0xFFFFFFFF in the header, the real ones in a zip64 extra field
+  const data = mp3('z64', 200), name = text('John_9.mp3');
+  const h = new Uint8Array(30 + name.length + 20); const dv = new DataView(h.buffer);
+  dv.setUint32(0, 0x04034b50, true); dv.setUint16(4, 45, true); dv.setUint32(18, 0xFFFFFFFF, true); dv.setUint32(22, 0xFFFFFFFF, true);
+  dv.setUint16(26, name.length, true); dv.setUint16(28, 20, true); h.set(name, 30);
+  const x = 30 + name.length; dv.setUint16(x, 1, true); dv.setUint16(x + 2, 16, true); dv.setBigUint64(x + 4, BigInt(data.length), true); dv.setBigUint64(x + 12, BigInt(data.length), true);
+  const z = new Uint8Array(h.length + data.length); z.set(h); z.set(data, h.length);
+  const w = storeWorld({ native: true });
+  const id = await w.S.beginImport();
+  const res = await w.S.importSources(id, [{ name: 'z.zip', head: [], reader: readerOf(z, 50) }]);
+  assert.deepEqual([res.ok, res.chapters], [true, 1], 'a zip64 entry under the caps did not import');
+  assert.equal(await bytesAt(w, id, 43, 9), 'z64');
+});
+
+test('AUDIT #7 — Save with unplaced files STILL LEFT deletes them (phone and web)', async () => {
+  for (const native of [true, false]) {
+    const w = storeWorld({ native });
+    const { id, res } = await imp(w, [['John_3.mp3', mp3('j3')], ['mystery.mp3', mp3('q')], ['other.mp3', mp3('o')]]);
+    assert.equal(res.unplaced.length, 2);
+    const before = native ? [...w.disk.keys()] : [...w.idbData.keys()];
+    assert.equal(before.filter(k => k.includes('_unplaced')).length, 2, 're-anchor: no unplaced files before Save');
+    assert.equal((await w.S.finishImport(id, { name: 'X' })).ok, true);
+    const left = (native ? [...w.disk.keys()] : [...w.idbData.keys()]).filter(k => k.includes('_unplaced'));
+    assert.deepEqual(left, [], (native ? 'phone' : 'web') + ': unplaced files survived Save');
+    assert.equal(await bytesAt(w, id, 43, 3), 'j3');
+  }
 });
