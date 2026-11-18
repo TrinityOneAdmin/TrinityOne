@@ -38,7 +38,7 @@ before(async () => {
   r2 = await scriptedRelay(P2);
 });
 after(async () => { try { await r1.close(); } catch {} try { await r2.close(); } catch {} });
-const reset = (r, mode = 'gate') => { r.mode = mode; r.docs = []; r.log = []; r.graceMs = 2500; r.challengeEveryReq = false; r.replayDelayMs = 0; for (const s of r.socks) { try { s.ws.terminate(); } catch {} } };
+const reset = (r, mode = 'gate') => { r.mode = mode; r.docs = []; r.log = []; r.graceMs = 2500; r.challengeEveryReq = false; r.replayDelayMs = 0; r.refuseAuth = false; for (const s of r.socks) { try { s.ws.terminate(); } catch {} } };
 const warm = (fullAgoS) => { const s = memStorage(); s.setItem('trinityone.docshub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: nowS() - fullAgoS, events: [] })); return s; };
 const noAnonSeal = (app) => app.published.filter(p => p.ring === 0);
 
@@ -199,5 +199,31 @@ test('T-B 6 (locked boot): until the full post-auth answer lands, minorsKnown st
   assert.deepEqual(noAnonSeal(app), [], 'never sealed to the church key only');
   assert.equal(lists.at(-1).minorsKnown, true);
   off(); await sleep(100);
+  app.clean(); app.close();
+});
+
+// ── T-B 7 (audit F1): the relay's ACCEPTANCE decides, not our signature ──────────────────────────────────────────
+test('T-B 7: a full answered after we SIGNED an auth the relay REFUSED is still a pre-auth full — the next open asks again', async (t) => {
+  reset(r1, 'hold'); r1.challengeEveryReq = true; r1.refuseAuth = true;
+  r1.add(doc(church, 'trinityone/joinpolicy:' + cp, { approval: true }, nowS() - 60), false);
+  // nostr-tools rethrows a refused AUTH out of its own message handler (an unhandled rejection, logged and harmless
+  // in the app). Swallow exactly that one for this test; anything else still reaches the runner.
+  const prior = process.listeners('unhandledRejection');
+  process.removeAllListeners('unhandledRejection');
+  const swallow = (err, p) => { if (/auth refused/.test(String(err && err.message))) return; for (const l of prior) l(err, p); };
+  process.on('unhandledRejection', swallow);
+  t.after(() => { process.removeListener('unhandledRejection', swallow); for (const l of prior) process.on('unhandledRejection', l); });
+  const app = memberApp({ me: ruth, relays: [r1.url] });
+  app.api._onChurchDocs(cp, { onevent() {}, oneose() {} });
+  assert.ok(await until(() => app.t._relayAuthedAt > 0), 'we signed an AUTH');
+  assert.ok(await until(() => r1.log.some(l => l.dir === 'out' && l.msg[0] === 'OK' && l.msg[2] === false)), 'the relay refused it');
+  await sleep(100);
+  assert.equal(app.t._relayAuthOkAt, 0, 'no relay accepted');
+  r1.eose();                                           // the full answers, after the signature, without acceptance
+  assert.ok(await until(() => app.docsHub(cp).eosed && app.docsHub(cp).fullAt > 0));
+  await sleep(50);
+  app.api.refetchChurchDocs();
+  assert.ok(isFull(app.hubReqs(cp).at(-1)), 'a full answered without an ACCEPTED auth must not stop the next full');
+  await sleep(100);
   app.clean(); app.close();
 });

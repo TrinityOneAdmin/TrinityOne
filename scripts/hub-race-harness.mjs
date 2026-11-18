@@ -171,7 +171,7 @@ export async function scriptedRelay(port) {
   const wss = new WebSocketServer({ port, host: '127.0.0.1' });
   await new Promise((res, rej) => { wss.once('listening', res); wss.once('error', rej); });
   const r = {
-    url: `ws://127.0.0.1:${port}/`, mode: 'gate', graceMs: 2500, challengeEveryReq: false, replayDelayMs: 0,
+    url: `ws://127.0.0.1:${port}/`, mode: 'gate', graceMs: 2500, challengeEveryReq: false, replayDelayMs: 0, refuseAuth: false,
     docs: [],            // { evt, gated }
     log: [],             // { t, dir, msg }
     socks: new Set(),
@@ -222,8 +222,8 @@ export async function scriptedRelay(port) {
         s.subs.delete(m[1]);
       } else if (m[0] === 'AUTH') {
         const ev = m[1];
-        const ok = ev && ev.kind === 22242 && verifyEvent(ev) && ev.tags.some(tg => tg[0] === 'challenge' && tg[1] === s.challenge);
-        s.send(['OK', ev && ev.id, !!ok, ok ? '' : 'auth-required: bad auth']);
+        const ok = !r.refuseAuth && ev && ev.kind === 22242 && verifyEvent(ev) && ev.tags.some(tg => tg[0] === 'challenge' && tg[1] === s.challenge);
+        s.send(['OK', ev && ev.id, !!ok, ok ? '' : (r.refuseAuth ? 'restricted: auth refused (clock outside the window)' : 'auth-required: bad auth')]);
         if (!ok) return;
         s.authed = ev.pubkey;
         // replay the withheld docs to every sub still open on this socket, then flush the held EOSEs. `replayDelayMs`
