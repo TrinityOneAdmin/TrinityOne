@@ -499,6 +499,10 @@ function App() {
   const [currencyOpen, setCurrencyOpen] = useA(extraParam === 'currency'); // currency picker overlay
   const [listen, setListen] = useA(extraParam === 'listen'); // audio Listen overlay
   const [audioBibles, setAudioBibles] = useA(false);   // Audio Bibles download library
+  const [audioIncoming, setAudioIncoming] = useA(null); // an audio Bible handed over by "Open with" ({head, reader}); app/install-bible.jsx
+  // AUDIO BIBLES AT START-UP (app/audio-store.jsx): the sweep removes what a killed import or remove left behind, then on
+  // Android World English moves into app file storage a chapter at a time. Never throws, never blocks the first paint.
+  useAE(() => { try { const S = window.TrinityAudioStore; if (S && typeof S.boot === 'function') Promise.resolve(S.boot()).catch(() => {}); } catch (e) {} }, []);
   const concordParam = new URLSearchParams(location.search).get('concord');  // '1' = index, or a Strong's id (e.g. G5457)
   const [concord, setConcord] = useA(concordParam === '1');   // concordance index overlay
   const [allUses, setAllUses] = useA(/^[GH]\d/.test(concordParam || '') ? concordParam : null);  // per-lemma "all uses" (Strong's id)
@@ -2329,6 +2333,7 @@ function App() {
     openCurrency: () => setCurrencyOpen(true),
     openListen: () => setListen(true),
     openAudioBibles: () => setAudioBibles(true),
+    openAudioBiblesWith: (stream) => { setAudioIncoming(stream); setAudioBibles(true); },   // "Open with" handed us an audio Bible
     // identity surfaces
     openProfile: () => setProfile(true),
     openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
@@ -2875,7 +2880,7 @@ function App() {
             <NotifSettingsScreen open={notifSettings} onClose={() => setNotifSettings(false)} ctx={ctx} />
             <CurrencyScreen open={currencyOpen} onClose={() => setCurrencyOpen(false)} ctx={ctx} />
             <ListenScreen open={listen} onClose={() => setListen(false)} ctx={ctx} />
-            <AudioBiblesScreen open={audioBibles} onClose={() => setAudioBibles(false)} ctx={ctx} />
+            <AudioBiblesScreen open={audioBibles} onClose={() => setAudioBibles(false)} ctx={ctx} incoming={audioIncoming} onIncomingTaken={() => setAudioIncoming(null)} />
             <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />
             {/* identity: hub + focused sheets (designer layout, real backend) */}
             <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />
@@ -2909,7 +2914,7 @@ function App() {
           initialView={storeView || (storeParam === 'language' ? 'language' : 'featured')} />
 
         {/* install-a-Bible-from-a-file sheet: mounted here so it answers in the loaded AND first-run states, over the store */}
-        <InstallFromFileSheet state={ifs} onInstall={() => { if (ifs && ifs.url) ifsRunInstall(ifs.url, setIfs); }} onClose={() => setIfs(null)} ctx={ctx} />
+        <InstallFromFileSheet state={ifs} onInstall={() => { if (ifs && ifs.url) ifsRunInstall(ifs.url, setIfs, { onAudio: (stream) => ctx.openAudioBiblesWith(stream) }); }} onClose={() => setIfs(null)} ctx={ctx} />
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 

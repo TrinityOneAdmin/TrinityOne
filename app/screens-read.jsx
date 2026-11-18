@@ -793,7 +793,11 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
 function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showStrongs, setShowStrongs, ctx }) {
   const aOpts = window.AUDIO_BIBLE_OPTIONS || { translations: [], readers: [] };
   const [voice, setVoice] = React.useState(() => { const c = window.getAudioChoice ? window.getAudioChoice() : { translation: 'BSB', reader: 'david' }; return c.translation + '/' + c.reader; });
+  // re-read the saved choice each time the sheet opens: an audio Bible removed in Library since then falls back to Berean Standard
+  React.useEffect(() => { if (open && window.getAudioChoice) { const c = window.getAudioChoice(); setVoice(c.translation + '/' + c.reader); } }, [open]);
   const [vt, vr] = voice.split('/');
+  // the audio Bibles to choose from: Berean Standard, World English, and the member's own (screens-audio.jsx)
+  const aChoices = window.audioBibleChoices ? window.audioBibleChoices() : aOpts.translations.map(t => ({ id: t.id, name: t.name }));
   const pickAudio = (t, r) => {
     const v = t + '/' + r; lsSet('trinityone.audioVoice', v); setVoice(v);
     // if a chapter is loaded, reload it in the newly-chosen voice/translation so the change is audible now
@@ -838,25 +842,27 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
 
       {aOpts.readers.length ? (
         <div style={{ marginBottom: 18 }}>
-          {aOpts.translations.length > 1 ? (
-            <React.Fragment>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Audio Bible — translation</div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 13 }}>
-                {aOpts.translations.map(t => <button key={t.id} onClick={() => pickAudio(t.id, vr)} style={aBtn(vt === t.id)}>{t.name}</button>)}
-              </div>
-            </React.Fragment>
-          ) : null}
-          {(aOpts.translations.find(t => t.id === vt) || {}).local ? (
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Offline, matches the WEB text. Download books from the Library; until then, Listen plays Berean Standard.</div>
-          ) : (
+          {/* A LIST, one full-width row per audio Bible (built-ins + the member's own READY sets), so five or more fit a
+              360 px phone: the old single row of buttons could hold two. Each row carries its own caption. */}
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Audio Bible</div>
+          <div role="radiogroup" aria-label="Audio Bible" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 13 }}>
+            {aChoices.map(c => (
+              <button key={c.id} role="radio" aria-checked={vt === c.id} onClick={() => pickAudio(c.id, vr)}
+                style={{ ...aBtn(vt === c.id), width: '100%', boxSizing: 'border-box', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 14px' }}>
+                <span style={{ overflowWrap: 'anywhere' }}>{c.name}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--ink-3)', lineHeight: 1.45 }}>{c.caption || ''}</span>
+              </button>
+            ))}
+          </div>
+          {vt === 'BSB' ? (
             <React.Fragment>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9 }}>Voice</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 {aOpts.readers.map(r => <button key={r.id} onClick={() => pickAudio(vt, r.id)} style={{ ...aBtn(vr === r.id), padding: '10px' }}>{r.name}</button>)}
               </div>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Streams from helloao.org · public-domain narration. They can see which chapter you listen to. Applies the next time you tap Listen.</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Applies the next time you tap Listen.</div>
             </React.Fragment>
-          )}
+          ) : null}
         </div>
       ) : null}
 

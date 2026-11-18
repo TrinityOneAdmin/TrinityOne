@@ -23,8 +23,8 @@
 // from inside a stranger's file, and index.html has no CSP, so sanitizeHtml is the only barrier anywhere.
 //
 // Globals this file adds (app/*.jsx share ONE scope — a repeat of any of these in another file blanks the APK):
-// IFS_MAX_BYTES, IFS_HANDLED_TTL_MS, ifsIsContentUrl, ifsHash, ifsWasHandled, ifsMarkHandled, ifsReadContent, ifsRunInstall,
-// handleIncomingFile, ifsKindWord, InstallFromFileSheet.
+// IFS_MAX_BYTES, IFS_HANDLED_TTL_MS, IFS_PEEK_BYTES, ifsIsContentUrl, ifsHash, ifsWasHandled, ifsMarkHandled, ifsPeekAudio,
+// ifsReadContent, ifsRunInstall, handleIncomingFile, ifsKindWord, InstallFromFileSheet.
 
 const IFS_MAX_BYTES = 50 * 1024 * 1024;               // the same 50 MB the engine refuses above
 const IFS_HANDLED_KEY = 'trinityone.handledFiles';   // localStorage, NOT sessionStorage: see ifsMarkHandled
@@ -64,16 +64,58 @@ function ifsMarkHandled(h) {
   try { localStorage.setItem(IFS_HANDLED_KEY, JSON.stringify([...ifsHandled().filter(r => r && r.h !== h), { h, t: Date.now() }].slice(-8))); } catch (e) {}
 }
 
+// AN AUDIO BIBLE ARRIVES THE SAME WAY (plan N3/P2/B1). While the first IFS_PEEK_BYTES are read, a zip (the stream starts
+// PK\x03\x04) is looked into: directories, __MACOSX/ and readme / licence / .txt / .pdf / .jpg / .png entries are passed
+// over, and if the FIRST OTHER entry is audio — by its name (.mp3 .m4a .ogg) or by its first inflated bytes — the
+// verdict is 'audio'. Anything else, or no verdict within IFS_PEEK_BYTES, is 'other' and the Bible route carries on
+// exactly as before. Re-run over everything read so far on each chunk (≤ 256 KB), so a header split across chunks is
+// simply 'more'. A passed-over entry stored with a data descriptor has no length to skip by: that ends the peek ('other').
+const IFS_PEEK_BYTES = 256 * 1024;
+function ifsPeekAudio(chunks) {
+  const F = window.fflate;
+  if (!F || typeof F.Unzip !== 'function') return 'other';
+  const isAudio = (u) => !!u && u.length >= 4 && ((u[0] === 0x49 && u[1] === 0x44 && u[2] === 0x33) || (u[0] === 0xFF && (u[1] & 0xE0) === 0xE0) ||
+    (u.length >= 8 && u[4] === 0x66 && u[5] === 0x74 && u[6] === 0x79 && u[7] === 0x70) || (u[0] === 0x4F && u[1] === 0x67 && u[2] === 0x67 && u[3] === 0x53));
+  let verdict = null;
+  try {
+    const unz = new F.Unzip((file) => {
+      if (verdict) return;
+      const name = String(file.name || ''); const base = name.split('/').pop().toLowerCase();
+      if (/\/$/.test(name) || /(^|\/)__MACOSX\//.test(name) || /^(readme|licen[cs]e)/.test(base) || /\.(txt|pdf|jpe?g|png)$/.test(base)) {
+        if (file.compression === 0 && file.size === undefined) { verdict = 'other'; return; }
+        file.ondata = () => {}; file.start(); return;
+      }
+      if (/\.(mp3|m4a|ogg)$/.test(base)) { verdict = 'audio'; return; }
+      const got = []; let n = 0;
+      file.ondata = (err, dat, fin) => {
+        if (verdict) return;
+        if (err) { verdict = 'other'; return; }
+        if (dat && dat.length) { got.push(dat); n += dat.length; }
+        if (n >= 12 || fin) { const u = new Uint8Array(n); let at = 0; for (const g of got) { u.set(g, at); at += g.length; } verdict = isAudio(u) ? 'audio' : 'other'; }
+      };
+      file.start();
+    });
+    unz.register(F.UnzipInflate);
+    for (const c of chunks) { unz.push(c, false); if (verdict) break; }
+  } catch (e) { return verdict || 'other'; }
+  return verdict || 'more';
+}
+
 // Read a content:// file as a stream, stopping at the cap. Resolves a Uint8Array, or the string 'too-big'.
 // Rejects when it cannot be read at all — the caller says "couldn't read that file" and does NOTHING else.
-async function ifsReadContent(url) {
+// opts.onAudio (optional): when the peek above says audio, it is called with { head: Uint8Array[] already read, reader }
+// — the SAME live reader, so the file is never opened twice — and this returns 'audio'. With no onAudio nothing peeks.
+// A declared length over the cap is still refused at once when nothing peeks; when something does, the first
+// IFS_PEEK_BYTES are read first, because a large audio zip declares a large length too.
+async function ifsReadContent(url, opts) {
   const cap = window.Capacitor;
   if (!cap || typeof cap.convertFileSrc !== 'function') throw new Error('no native bridge');
   const res = await fetch(cap.convertFileSrc(url));
   if (!res || !res.ok || !res.body || typeof res.body.getReader !== 'function') throw new Error('unreadable');
   const declared = Number((res.headers && res.headers.get && res.headers.get('content-length')) || 0);
   const reader = res.body.getReader();
-  if (declared > IFS_MAX_BYTES) { try { await reader.cancel(); } catch (e) {} return 'too-big'; }
+  let peek = (opts && typeof opts.onAudio === 'function') ? 'more' : 'off';
+  if (declared > IFS_MAX_BYTES && peek === 'off') { try { await reader.cancel(); } catch (e) {} return 'too-big'; }
   const chunks = []; let total = 0;
   for (;;) {
     const { done, value } = await reader.read();
@@ -81,18 +123,28 @@ async function ifsReadContent(url) {
     total += value.length;
     if (total > IFS_MAX_BYTES) { try { await reader.cancel(); } catch (e) {} return 'too-big'; }
     chunks.push(value);
+    if (peek === 'more') {
+      const h = chunks[0].length >= 4 ? chunks[0] : (() => { const u = new Uint8Array(Math.min(4, total)); let at = 0; for (const c of chunks) { const k = Math.min(c.length, u.length - at); u.set(c.subarray(0, k), at); at += k; if (at >= u.length) break; } return u; })();
+      const v = h.length < 4 ? 'more' : (h[0] === 0x50 && h[1] === 0x4B && h[2] === 0x03 && h[3] === 0x04) ? ifsPeekAudio(chunks) : 'other';
+      if (v === 'audio') { opts.onAudio({ head: chunks.slice(), reader }); return 'audio'; }
+      if (v === 'other' || total >= IFS_PEEK_BYTES) peek = 'off';
+      if (peek === 'off' && declared > IFS_MAX_BYTES) { try { await reader.cancel(); } catch (e) {} return 'too-big'; }
+    }
   }
   const out = new Uint8Array(total); let at = 0;
   for (const c of chunks) { out.set(c, at); at += c.length; }
   return out;
 }
 
-// The tap on Install for a file another app sent.
-async function ifsRunInstall(url, show) {
+// The tap on Install for a file another app sent. opts.onAudio (app.jsx) takes an audio Bible to the Audio Bibles
+// screen; the Install sheet is then closed by hand — it ignores its own close while busy, and this is the one path that
+// may close it then.
+async function ifsRunInstall(url, show, opts) {
   show({ phase: 'installing' });
   let result;
   try {
-    const bytes = await ifsReadContent(url);
+    const bytes = await ifsReadContent(url, opts && typeof opts.onAudio === 'function' ? { onAudio: opts.onAudio } : undefined);
+    if (bytes === 'audio') { show(null); return; }
     result = bytes === 'too-big' ? { ok: false, reason: 'too-big' } : await window.Bible.installFromBytes(bytes, '');
   } catch (e) {
     result = { ok: false, reason: 'unreadable' };
@@ -142,7 +194,7 @@ function InstallFromFileSheet({ state, onInstall, onClose, ctx }) {
   if (s.phase === 'confirm') {
     tone = 'var(--clay)'; icon = 'plus';
     title = 'Install this file?';
-    body = 'Another app sent TrinityOne a file. If it is a Bible, commentary or dictionary it will be saved on this phone and work with no internet. Only install files from people you trust.';
+    body = 'Another app sent TrinityOne a file. If it is a Bible, commentary, dictionary or audio Bible it will be saved on this phone and work with no internet. Only install files from people you trust.';
     buttons = [{ label: 'Install', primary: true, onClick: () => onInstall && onInstall() }, { label: 'Not now', onClick: close }];
   } else if (busy) {
     tone = 'var(--clay)'; icon = 'download';
