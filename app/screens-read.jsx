@@ -1760,6 +1760,7 @@ function ReadScreen({ ctx }) {
     try { synth.cancel(); } catch (e) {}
     const list = verses || [];
     if (!list.length) return;
+    if (window.TrinityAudio && window.TrinityAudio.pause) window.TrinityAudio.pause();   // narration and the audio player never talk over each other
     setNarrateState('playing');
     list.forEach((row, i) => {
       const u = new SpeechSynthesisUtterance(String(row.text || '').replace(/\s+/g, ' ').trim());
@@ -1777,7 +1778,7 @@ function ReadScreen({ ctx }) {
     if (!synth) { ctx.toast('Your device can’t read aloud here'); return; }
     if (narrateState === 'idle') startNarration();
     else if (narrateState === 'playing') { try { synth.pause(); } catch (e) {} setNarrateState('paused'); }
-    else { try { synth.resume(); } catch (e) {} setNarrateState('playing'); }
+    else { if (window.TrinityAudio && window.TrinityAudio.pause) window.TrinityAudio.pause(); try { synth.resume(); } catch (e) {} setNarrateState('playing'); }
   };
   // a fresh passage cancels any in-progress narration
   useE(() => { stopNarration(); }, [loc.book, loc.chap, version]);
