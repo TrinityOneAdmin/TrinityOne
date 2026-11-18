@@ -227,3 +227,58 @@ test('T-B 7: a full answered after we SIGNED an auth the relay REFUSED is still 
   await sleep(100);
   app.clean(); app.close();
 });
+
+// ── T-B 8 / T-B 9 (build audit V1): a sub torn down to 0 refs, with NOTHING reopened, is not an answer ──────────
+// Here no replacement bumps the generation, so the `dead` flag alone stops the cancelled sub's deferred close from
+// stamping the hub. A2 hides this from the fullAt tests (our own close makes every relay close), so these assert
+// what the guard uniquely prevents: eosedAt/eosed over no answer, a sticky "loaded" handed to the next screen, and
+// minorsKnown / People "done" read off it.
+test('T-B 8: docs hub torn down to 0 refs after sign-in, nothing reopened — no eosedAt, no "loaded", minorsKnown stays false', async () => {
+  reset(r1, 'hold'); r1.challengeEveryReq = true;
+  const app = memberApp({ me: ruth, relays: [r1.url] });
+  let loaded = 0;
+  const off = app.api._onChurchDocs(cp, { onevent() {}, oneose() { loaded++; } });
+  assert.ok(await until(() => app.t._relayAuthOkAt > 0), 'signed in (a real OK)');
+  const aId = r1.subIds()[0];
+  off();                                               // 0 refs: cancelled, and nothing replaces it
+  assert.ok(await until(() => r1.closes().includes(aId)), 'the sub was CLOSEd');
+  r1.rawEose(aId);                                     // …and the relay answers it after the CLOSE anyway
+  await sleep(200);
+  const h = app.docsHub(cp);
+  assert.ok(!h.eosedAt, `eosedAt was stamped (${h.eosedAt}) by a sub nobody answered`);
+  assert.equal(h.eosed, false, 'the hub says "answered" after a cancel');
+  assert.equal(loaded, 0, 'a handler was told "loaded" by a cancelled sub');
+  // the next screen to register must not inherit a "loaded" — or read minorsKnown off it
+  const lists = [];
+  app.api.subscribeChurchSafeguard(cp, l => lists.push(l));
+  await sleep(200);
+  assert.ok(lists.every(l => !l.minorsKnown), 'minorsKnown:true on re-register, read off a cancelled sub');
+  r1.eose();                                           // control: the reopen's own answer counts
+  assert.ok(await until(() => lists.some(l => l.minorsKnown)), 'control: the live answer is an answer');
+  app.clean(); app.close();
+});
+
+test('T-B 9: members hub torn down to 0 refs after sign-in, nothing reopened — People is not told "loaded"', async () => {
+  reset(r1, 'hold'); r1.challengeEveryReq = true;
+  const app = memberApp({ me: ruth, relays: [r1.url] });
+  let done1 = 0;
+  const off = app.api.subscribeChurchMembers(cp, (_m, isDone) => { if (isDone) done1++; });
+  assert.ok(await until(() => app.t._relayAuthOkAt > 0), 'signed in (a real OK)');
+  const aId = r1.subIds()[0];
+  off();
+  assert.ok(await until(() => r1.closes().includes(aId)), 'the sub was CLOSEd');
+  r1.rawEose(aId);
+  await sleep(200);
+  const h = app.memHub(cp);
+  assert.equal(h.eosed, false, 'the members hub says "answered" after a cancel');
+  assert.ok(!h.eosedAt, 'eosedAt stamped by a cancelled members sub');
+  assert.equal(done1, 0, 'People was told "loaded" by a cancelled sub');
+  let done2 = 0;
+  const off2 = app.api.subscribeChurchMembers(cp, (_m, isDone) => { if (isDone) done2++; });
+  await sleep(200);
+  assert.equal(done2, 0, 'a re-registered People screen was told "loaded" before its fetch was answered');
+  r1.eose();
+  assert.ok(await until(() => done2 > 0), 'control: the live answer reaches People');
+  off2(); await sleep(100);
+  app.clean(); app.close();
+});
