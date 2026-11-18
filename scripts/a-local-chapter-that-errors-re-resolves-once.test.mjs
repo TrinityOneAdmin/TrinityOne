@@ -8,10 +8,9 @@
 //  · the player recovers (fix/audio-player-recovers): a blob with resolve() that errors is NOT retried by itself, it
 //    shows "Couldn't load", and Play drops track.src and re-resolves ONCE at its place.
 // Combined, release() cannot revoke the old address on that re-resolve (the old and the new track are the same
-// object, and release() skips old === new), and retryNow() does not revoke it either: the playback build audit's
-// FINDING 1 (TrinityOne-internal/AUDIT-build-audio-playback-fixes-2026-11-18.md). Fixing it is the owner's decision,
-// so the second test below is marked `todo` with that finding's name: it RUNS and reports "not ok # TODO" until the
-// fix lands, and does not fail the suite. When finding 1 is fixed, delete the `todo` option; it must then pass.
+// object, and release() skips old === new). retryNow() revokes it itself: the playback build audit's FINDING 1
+// (TrinityOne-internal/AUDIT-build-audio-playback-fixes-2026-11-18.md), fixed by 0e4ef5d3. The second test below
+// proves it (it was a `todo` on the candidate until that fix arrived).
 //
 // HOW (CLAUDE.md rules 1 and 3): the REAL app/screens-audio.jsx, the REAL playBibleChapter() (what Listen calls), the
 // REAL MiniPlayer's Play button, against the faithful fake <audio> of scripts/audio-engine-world.mjs on a fake clock.
@@ -96,7 +95,7 @@ test('POINT OF USE — a local chapter that errors: "Couldn\'t load", no retry b
   assert.ok(w.revoked.includes(second), 'moving to the next chapter did not revoke the re-resolved address');
 });
 
-test('after that re-resolve the OLD blob address is revoked and exactly ONE live address remains', { todo: 'audit finding 1 (AUDIT-build-audio-playback-fixes-2026-11-18.md): retryNow drops a failed blob src without revoking it; owner to decide the fix' }, async () => {
+test('after that re-resolve the OLD blob address is revoked and exactly ONE live address remains', async () => {
   const w = localWorld();
   await failThenPlay(w);
   assert.equal(w.resolves.length, 2, 're-anchor: Play did not re-resolve');
