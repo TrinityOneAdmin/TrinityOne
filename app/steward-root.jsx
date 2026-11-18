@@ -57,7 +57,7 @@ let _connWired = false, _connLast = 0, _connBusy = false;
 // mint without the church's name) never ran, so the console held no name key, no care key and could seal nothing.
 // Opening a tab cured it (a fresh hook, opened over the by-then proved set).
 //
-// So the ticker remembers the set the streams were opened over — taken when the first hook mounts (_wireStewardConn),
+// So the ticker remembers the set the streams were opened over — taken when the first REAL stream opens (_connNoteOpen),
 // and again at every re-subscribe — and a relay in the set now that was not in it then is a reason to re-subscribe,
 // through the same path a dropped socket takes. A relay LEAVING the set is not (that is the ticker's own business).
 // An established church boots with its relays already proved, so the set at mount is the set now: nothing happens.
@@ -69,6 +69,17 @@ function _connRelayGrew() {
   if (_connSeen === null) return false;
   return _connRelayUrls().some(u => !_connSeen.has(u));
 }
+// TAKEN ONCE, WHEN THE FIRST REAL STREAM OPENS — not when the first useStewardConn() hook mounts (2026-11-18, round-2
+// "a new church's console shows 'Your Church' until a reload"). Since b8aae006 that first hook is
+// useStewardStewardedChurches, mounted in StewardRoot on the WELCOME screen, before any church exists. On a console used
+// before on this box the welcome screen's relays() already holds the box (a cached same-origin proof), so the snapshot
+// was {box}; the new church's streams then opened over [] (the box's /config does not host a seconds-old church), the
+// wizard's registration put the box back, and the ticker compared with {box}, saw nothing new and re-opened nothing.
+// Measured: scripts/a-new-church-on-a-used-console-shows-its-name.test.mjs. Called by makeSub when it opens a new shared
+// stream and by useStewardChurch before the church-name stream. ONCE, deliberately not an intersection: a stream opened
+// on every tab change would otherwise shrink the snapshot and turn a relay's brief absence into a full re-query of the
+// church (audit B-F3). The re-subscribe paths still reset it to the whole current set.
+function _connNoteOpen() { if (_connSeen === null) _connNoteRelays(); }
 const _CONN_FLOOR_MS = 20000;    // don't hammer the probe on rapid foreground/visibility churn
 const _CONN_FLOOR_BACK_MS = 3000;   // …but a socket already back is re-subscribed sooner (see _maybeBumpConn)
 function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
@@ -176,7 +187,7 @@ async function _maybeBumpConn() {
 }
 function _wireStewardConn() {
   if (_connWired || typeof document === 'undefined') return; _connWired = true;
-  _connNoteRelays();   // the first hook has mounted: this is the set its stream opens over
+  // NO snapshot here: the first hook to mount can be the welcome screen's (see _connNoteOpen).
   const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _connKick(); };
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('online', _connKick);
@@ -255,6 +266,7 @@ function makeSub(getObj, method, makeInit) {
       if (!entry) {
         entry = { listeners: new Set(), unsub: null, last: undefined };
         _subShared[skey] = entry;
+        _connNoteOpen();   // the first real stream: the set it opens over is what the ticker compares with
         entry.unsub = o[method]((val) => { _subCache[key] = val; entry.last = val; for (const fn of [...entry.listeners]) { try { fn(val); } catch (e) {} } });
       }
       entry.listeners.add(setV);
@@ -531,7 +543,7 @@ function useStewardChurch() {
   const conn = useStewardConn();
   const [p, setP] = useSt({});
   useStE(() => { setP({}); }, [idv]);   // clear on identity switch ONLY (not on a reconnect — avoids a blank church-name flash)
-  useStE(() => window.Steward.subscribeProfile(setP), [idv, conn]);   // (re)subscribe on identity change OR relay drop/restart
+  useStE(() => { _connNoteOpen(); return window.Steward.subscribeProfile(setP); }, [idv, conn]);   // (re)subscribe on identity change OR relay drop/restart
   // any instance that receives the kind-0 broadcasts it, so every view stays in sync even if this
   // instance's own relay sub mounted before the church's relays were ready.
   useStE(() => { const f = (e) => { if (e.detail) setP(e.detail); }; window.addEventListener('steward-profile', f); return () => window.removeEventListener('steward-profile', f); }, [idv]);

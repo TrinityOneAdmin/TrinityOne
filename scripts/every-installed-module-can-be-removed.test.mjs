@@ -195,6 +195,9 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
     'const _sub = { ' + fnBody(ENGINE, 'subscribe(fn){') + ' };',
     'const src = () => null;',   // getCommentary's footnote half: no active Bible in this harness
     stmt(ENGINE, 'const INSTALLED_KEY = '),
+    // restoreInstalled loads the member's picked translation first (2026-11-18): its lookup is lifted, not stubbed
+    stmt(ENGINE, 'const TRANSLATION_KEY = '),
+    fnBody(ENGINE, 'function _savedTranslationUrl(m){'),
     stmt(ENGINE, 'const installing = new Set();'),
     fnBody(ENGINE, 'function addDict(entries, abbr){'),
     fnBody(ENGINE, 'function _ensureDicts(){'),
