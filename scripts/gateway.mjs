@@ -6148,11 +6148,17 @@ function canRead(e, authed) {
     // as every other key envelope is: a recipient can only ever unwrap their own slot.
     // ══ A DONOR RECORD IS NOT THE CONGREGATION'S, AND IT IS NOT THE NETWORK'S EITHER ═════════════════════
     //
+    // ⚠ OWNER DECISION 2026-11-18: A JOINED NETWORK KEY READS NO FINANCE AT ALL. Until then the generic finance/
+    // read below also served aggregate finance (journal/accounts/funds) to a network peer, "deliberately" (owner
+    // 2026-10-30 / 2026-11-07). That is REVERSED: the generic read is now `authed === cp || stewardCan(authed, cp,
+    // 'finance')`, so donor/contact/invoice/bill/billapproval below and the aggregate docs share one audience. The
+    // per-kind branches are kept, not folded in, so a later change to the generic rule cannot silently re-open the PII
+    // kinds. Wherever a comment below says a network peer "is served aggregate finance", read it as HISTORY.
+    //
     // finance/donor:<id> (Phase 4b) holds a donor's NAME, address, postcode and — via the opaque donorId tagged
-    // on giving postings — who gave what. It is the single most sensitive finance doc in the app. The generic
-    // finance/ read below serves aggregate finance (journal/accounts/funds) to a NETWORK PEER church as well as
-    // to the church and its finance stewards: `authed === cp || networkOf(authed, cp) || stewardCan(...)`. For a
-    // chart of accounts that is a deliberate choice; for donor PII it is a disclosure the church never made. So
+    // on giving postings — who gave what. It is the single most sensitive finance doc in the app. Before
+    // 2026-11-18 the generic finance/ read below served aggregate finance (journal/accounts/funds) to a NETWORK PEER
+    // church; for donor PII that was a disclosure the church never made. So
     // this branch sits ABOVE the generic one and DROPS networkOf: a donor record is served to the CHURCH KEY or
     // a FINANCE STEWARD, and to NOBODY ELSE — never a network peer, and (because this returns, like the finance
     // branch, before the any-steward short-circuit far below) never a members/safeguarding/care steward either.

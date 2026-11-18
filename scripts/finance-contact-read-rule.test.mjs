@@ -1,4 +1,6 @@
 // A CONTACT RECORD IS SERVED TO THE CHURCH AND ITS FINANCE STEWARD — NEVER A NETWORK PEER, NEVER A MEMBER.
+// 2026-11-18 (OWNER DECISION): a joined network key now reads NO finance, aggregate included. Wherever this header says a network peer is
+// "STILL served aggregate finance", that is HISTORY; the test below that used to assert it now asserts the REFUSAL.
 //   Run: node --test scripts/finance-contact-read-rule.test.mjs
 //
 // Phase 5 adds finance/contact:<id> — a customer's NAME + email + address (hall-hirer PII). By the owner's
@@ -63,12 +65,14 @@ test('a NETWORK PEER is REFUSED the contact record', async () => {
     'rule did not drop networkOf, or it falls BELOW the generic finance/ rule and never runs.');
 });
 
-test('…but the SAME network peer is STILL served aggregate finance (the rule narrowed contact ONLY)', async () => {
-  // Proves networkOf still works for the aggregate docs — the fix did not break the network read the chart of
-  // accounts relies on, it carved contact out of it.
-  assert.equal(await servedJournal(network), true,
-    'the network peer was refused aggregate finance too — the contact rule is over-broad (it should match ' +
-    'finance/contact ONLY, leaving the generic finance/ network read intact)');
+test('…and the SAME network peer is ALSO REFUSED aggregate finance (owner decision 2026-11-18: a network key reads NO finance)', async () => {
+  // REVERSED 2026-11-18. This test used to assert the opposite (a network peer IS served the journal, per the owner's 2026-10-30 /
+  // 2026-11-07 choice). The owner withdrew it: a joined network key gets none of a church's finance. The two re-anchors prove the
+  // journal is a LIVE doc that its rightful readers are served, so the refusal below is not vacuous.
+  assert.equal(await servedJournal(church), true, 're-anchor: the church cannot read its own journal — the doc is not live');
+  assert.equal(await servedJournal(treasurer), true, 're-anchor: a finance steward cannot read the journal');
+  assert.equal(await servedJournal(network), false,
+    'the network peer was served aggregate finance (journal) — the generic finance/ read still admits networkOf (owner decision 2026-11-18 removed it)');
 });
 
 test('an ordinary MEMBER is served neither the contact nor aggregate finance', async () => {
