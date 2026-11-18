@@ -182,3 +182,24 @@ for (const [label, ua] of [['Android', UA_ANDROID], ['desktop', UA_DESKTOP]]) {
     }
   });
 }
+
+// ── THE 12 WORDS COME BEFORE THE CHURCH. The app's first-run setup asks the member to "Back up your 12 words"
+// (app/identity.jsx) and the words are the only way back into the account, so every list of steps that ends
+// in scanning the church's code has a marked 12-words step BEFORE that scan.
+function stepLists(html) {
+  return [...html.matchAll(/<ol class="([^"]*)">([\s\S]*?)<\/ol>/g)].map((m) => ({ cls: m[1], body: m[2] }))
+    .filter((l) => /scan your church/i.test(l.body));
+}
+for (const [label, ua, want] of [['iPhone', UA_IPHONE, ['isteps']], ['Android', UA_ANDROID, ['steps']], ['desktop', UA_DESKTOP, ['steps', 'isteps']]]) {
+  test('on the ' + label + ' page, writing down the 12 words is a marked step before scanning the church code', async () => {
+    const { html } = await pageAs(ua);
+    const lists = stepLists(html);
+    for (const c of want) assert.ok(lists.some((l) => l.cls === c), 'the ' + label + ' page has no "' + c + '" steps ending in a scan');
+    for (const l of lists) {
+      const key = l.body.search(/<li class="key">[^<]*<b>[^<]*12 words/);
+      const scan = l.body.search(/scan your church/i);
+      assert.ok(key >= 0, 'the ' + l.cls + ' steps on the ' + label + ' page have no marked "write down your 12 words" step');
+      assert.ok(key < scan, 'on the ' + label + ' page the 12-words step comes AFTER scanning the church code');
+    }
+  });
+}

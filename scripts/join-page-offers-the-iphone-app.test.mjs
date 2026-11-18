@@ -93,3 +93,21 @@ test('Android is unchanged: the .apk button and the lost-link code', () => {
   const code = r.byId.note.parentNode.children.find((n) => n.className === 'joincode');
   assert.ok(code && code.textContent.includes('Lost this link') && code.textContent.includes(FOLLOW), 'the Android lost-link code is gone');
 });
+
+// THE 12 WORDS COME BEFORE THE CHURCH. The app's first-run setup asks for them ("Back up your 12 words",
+// app/identity.jsx); the invite page says so, marked, before the church code is scanned or pasted.
+test('an iPhone is told to write down the 12 words, marked, before pasting or scanning the church code', () => {
+  const r = run('?follow=' + FOLLOW, UA_IPHONE);
+  const key = [...r.byId.note.walk()].find((n) => n.className === 'key');
+  assert.ok(key && /write down your 12 words/i.test(key.textContent), 'the iPhone note has no marked 12-words step');
+  const t = r.text;
+  assert.ok(t.indexOf('12 words') < t.search(/paste or scan your church code/i) && t.search(/paste or scan/i) >= 0,
+    'on an iPhone the 12-words step does not come before pasting or scanning the church code');
+});
+test('Android is told to write down the 12 words, marked, before it joins', () => {
+  const r = run('?follow=' + FOLLOW, UA_ANDROID);
+  const t = r.text;
+  assert.match(r.byId.note.textContent, /<span class="key">[\s\S]*12 words/, 'the Android note has no marked 12-words step');
+  assert.ok(t.indexOf('12 words') < t.indexOf('you’re joined'), 'on Android the 12-words step comes after joining');
+  assert.ok(t.indexOf('12 words') < t.indexOf('paste this church code'), 'on Android the 12-words step comes after the church code');
+});

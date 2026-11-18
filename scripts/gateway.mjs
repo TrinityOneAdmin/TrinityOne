@@ -1031,10 +1031,15 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
   const empty = '<section class="card"><h2>Nothing to install yet</h2><p class="blurb">This machine is not holding a copy of the app right now. Whoever looks after it can add one from the relay control panel — “Let members install the app from this box”.</p></section>';
   const E = INSTALL_ESC;
   // The three iPhone steps. On an iPhone they ARE the page; everywhere else they sit behind a closed chevron.
+  // THE 12 WORDS COME BEFORE THE CHURCH. On first open the app's setup asks the member to "Back up your 12
+  // words" (app/identity.jsx), and a skip there is easy; the words are the only way back into the account,
+  // so the page says so first and marks the step. Afterwards they live under Recovery phrase in the app.
+  const backupStep = '<li class="key"><b>Open TrinityOne and write down your 12 words.</b> Keep them somewhere safe — they are the only way back into your account.</li>';
   const iphoneSteps = '<ol class="isteps">'
     + '<li>Get <b>TestFlight</b> from the App Store.<br><a class="dl quiet" href="' + E(IOS_TESTFLIGHT.testflight) + '">Get TestFlight</a></li>'
     + '<li>Tap <b>Get TrinityOne</b>, then tap <b>Install</b> in TestFlight.<br><a class="dl" href="' + E(IOS_TESTFLIGHT.member) + '">Get TrinityOne</a></li>'
-    + '<li>Open TrinityOne and scan your church’s joining code.</li>'
+    + backupStep
+    + '<li>Then scan your church’s joining code.</li>'
     + '</ol>'
     + '<p class="note">TestFlight copies stop working after 90 days. When a newer version is ready, TestFlight offers it as an update.</p>';
   const stewardIphone = '<div class="inner"><p class="blurb">' + (ios ? '' : 'On iPhone: ') + 'TrinityOne Steward comes through TestFlight too.</p>'
@@ -1043,7 +1048,8 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
     + '<li>Tap <b>Download and install</b> above.</li>'
     + '<li>Android will ask whether to allow installing apps from your browser. Say yes — it only applies to this one file.</li>'
     + '<li>Open the downloaded file and tap <b>Install</b>.</li>'
-    + '<li>Open TrinityOne, then scan your church’s join code or open its invite link.</li>'
+    + backupStep
+    + '<li>Then scan your church’s join code or open its invite link.</li>'
     + '</ol>';
   const fold = (cls, title, inside) => '<details class="fold ' + cls + '"><summary>' + title + '</summary>' + inside + '</details>';
   // On an iPhone every .apk is behind the "Android phones" chevron, so the leaders chevron holds only the
@@ -1090,6 +1096,7 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
     + '.fold>.inner{padding:0 18px 18px}.fold>.steps{background:none;border:0;margin:0;padding:0 18px 18px 34px}'
     + '.isteps{margin:6px 0 10px;padding-left:20px;font-size:14.5px}.isteps li{margin-bottom:14px}.isteps .dl{margin-top:8px}'
     + '.note{margin:0;font-size:12.5px;color:var(--ink3)}'
+    + 'li.key{background:rgba(200,150,46,.14);border:1px solid rgba(200,150,46,.45);border-radius:10px;padding:8px 10px;color:var(--ink)}'
     + '@media (prefers-reduced-motion:reduce){.fold>summary::after{transition:none}}'
     + '.sha{margin-top:12px;font-size:12.5px;color:var(--ink2)}'
     + '.sha summary{cursor:pointer;color:var(--clay);font-weight:700}'
@@ -1105,6 +1112,7 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
     + '@media (prefers-color-scheme:dark){body{background:#17130F;color:#F1EADD}'
     + '.card,.steps,.share,.fold{background:#221C16;border-color:rgba(255,255,255,.1)}'
     + '.fold>.card+.card,.fold>.card+.inner{border-color:rgba(255,255,255,.1)}.fold>.steps{background:none}.note{color:#8E8474}'
+    + 'li.key{color:#F1EADD;background:rgba(200,150,46,.16)}'
     + '.fold>summary{color:#BDB2A2}.dl.quiet{color:#E7906F;border-color:#E7906F}'
     + '.blurb,.steps,.share .u{color:#BDB2A2}.facts{color:#8E8474}.hash{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.1)}}'
     + '</style></head><body><div class="wrap">'

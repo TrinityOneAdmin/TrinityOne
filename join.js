@@ -95,7 +95,12 @@
     note.innerHTML = 'Tapping <b>Open now</b> joins you instantly in your browser — nothing to install.'
       + '<br><br>Prefer an app icon? Tap <b>Get the Android app</b>. Android will ask you to allow installing '
       + 'from your browser — that’s normal, and you only do it once. When it’s installed, tap this invite '
-      + 'link again and it opens straight in the app, already joined.';
+      + 'link again and it opens in the app.'
+      // The app's first-run setup asks for the 12 words ("Back up your 12 words", app/identity.jsx) BEFORE the
+      // church join completes, and they are easy to skip — so the page says it first, marked.
+      + '<span class="key"><b>Write down your 12 words when the app shows them.</b> Keep them somewhere safe — '
+      + 'they are the only way back into your account.</span>'
+      + 'Then you’re joined.';
     // the fallback for someone who installs the app and then loses the invite message
     showCode('Lost this link after installing? Open the app and paste this church code:');
   } else if (isIOS) {
@@ -114,7 +119,14 @@
     note.appendChild(store);
     note.appendChild(document.createTextNode(', tap '));
     note.appendChild(b('Get the iPhone app'));
-    note.appendChild(document.createTextNode(' and install it. Then open TrinityOne and paste or scan your church code.'));
+    note.appendChild(document.createTextNode(' and install it.'));
+    // The 12 words come before the church: the app's first-run setup asks for them ("Back up your 12 words").
+    var key = document.createElement('span');
+    key.className = 'key';
+    key.appendChild(b('Open TrinityOne and write down your 12 words.'));
+    key.appendChild(document.createTextNode(' Keep them somewhere safe — they are the only way back into your account.'));
+    note.appendChild(key);
+    note.appendChild(document.createTextNode('Then paste or scan your church code.'));
     showCode('Your church code:');
   } else {
     note.innerHTML = 'Tap <b>Open now</b> to begin in your browser. On a phone you can add it to your Home Screen like an app.';
