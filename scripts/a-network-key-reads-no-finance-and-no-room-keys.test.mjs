@@ -9,7 +9,7 @@
 // REAL GATEWAY on a throwaway data dir (relay-network-harness: own port, own dir, torn down in after()). The church publishes
 // the join doc `trinityone/network:<networkpub>` from its OWN key -- the only way networkOf() becomes true.
 //
-// NON-VACUITY. (a) CONTROL: the network key IS a live network -- a kind-1 line a stranger is refused is ACCEPTED from it.
+// NON-VACUITY. (a) CONTROL: the church's join declaration is stored (no observable differential remains; see the control).
 // (b) every refusal is paired with the church AND the right steward being SERVED/ACCEPTED the same document.
 // (c) sabotage record: re-adding `networkOf(authed, cp) ||` to the generic finance/ read, or `networkOf(e.pubkey, owner) ||` to the
 // GROUPKEY_D write, fails the matching tests below (scoped to the enclosing branch; see the commit message).
@@ -51,7 +51,6 @@ async function writes(who, evt) {   // the relay's own OK frame
   try { return (await H.publish(w, evt))[0]; } finally { try { w.close(); } catch {} }
 }
 const served = async (who, d) => (await H.readAs(relay, who, { kinds: [30078], '#d': [d] })).length > 0;
-const line = (k) => finalizeEvent({ kind: 1, created_at: H.now(), tags: [['church', cp]], content: 'hi ' + Math.random() }, k.sk);
 
 before(async () => {
   relay = await H.startRelay({ name: 'netwall', churches: [cp] }); spawnedAt = Date.now();
@@ -69,9 +68,10 @@ test('FRESHNESS (rule 10): the relay under test was spawned AFTER scripts/gatewa
   assert.ok(spawnedAt > statSync(new URL('./gateway.mjs', import.meta.url).pathname).mtimeMs, 'a stale relay enforces old gates');
 });
 
-test('CONTROL: the network key IS a live network -- a chat line a stranger is refused is ACCEPTED from it', async () => {
-  assert.equal(await writes(stranger, line(stranger)), false, 'a stranger was accepted -- the control does not discriminate');
-  assert.equal(await writes(network, line(network)), true, 'the declared network key was refused -- the link never formed, so every refusal below proves nothing');
+test('CONTROL: the join really took -- the church\'s own network:<key> declaration is stored and served back to the church', async () => {
+  // A declared network key can do nothing a stranger cannot, so there is no write/read differential to anchor on; this shows the
+  // declaration is stored. Non-vacuity of each refusal is proved by SABOTAGE (re-add networkOf at the door; see the commit message).
+  assert.equal(await served(church, D.NETWORK + network.pub), true, 'the church\'s join declaration was not stored -- the link never formed');
 });
 
 for (const [label, d] of FIN) {

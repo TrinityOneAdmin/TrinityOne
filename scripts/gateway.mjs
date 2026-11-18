@@ -3164,6 +3164,7 @@ const grantorOk = (src) => !!(src && (src.by === src.cp || stewardCan(src.by, sr
 // key is refused outright (|| networkOf(pub,cp)), AND a roster authored by a network key confers care-admin to
 // nobody (the grantor must be the church itself or an 'any'-steward, never the network key). A church- or
 // steward-authored roster is unchanged, so every legitimate care admin still passes.
+// DEFENCE IN DEPTH, currently SHADOWED: a roster authored by a network key is already impossible because the N1 ROSTER_D gate in note() refuses it; this grantor clause (church or 'any' steward only) is the second lock.
 const careAdmin = (pub, cp) => { if (minorOf(pub, cp) || networkOf(pub, cp)) return false; const g = cp && MEALS_ADMIN_GROUP.get(cp); const src = g && ROSTER_BY.get(g); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && src && src.cp === cp && (src.by === src.cp || stewardCan(src.by, src.cp, 'any'))); };
 // FIRST-WRITER OWNERSHIP for relay-global id namespaces (group:<id>, roster:<id>). Nothing in the d-tag binds
 // an id to the church that created it, so any configured church key could republish another church's id and
@@ -4401,6 +4402,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // church's care-team roster in ROSTER_BY/ROSTER_PEOPLE and knocks every real care admin OFF it (a denial of
     // service, not a read — careAdmin() resolves the care team from these maps). Church/steward authors are
     // unchanged (newest-wins); only a network-key author is barred from overwriting or deleting their entry.
+    // DEFENCE IN DEPTH, currently SHADOWED by the N1 ROSTER_D gate above (a network key cannot reach this branch at all); kept as a second lock.
     { const prev = ROSTER_BY.get(id);
       if (prev && (prev.by === prev.cp || stewardCan(prev.by, prev.cp, 'any'))
           && e.pubkey !== prev.cp && !stewardCan(e.pubkey, prev.cp, 'any')) return; }
@@ -4822,8 +4824,13 @@ function accept(e) {
   // the member-shaped gates below need (a church posting its own chat message is not an authority question).
   // It must never be used to decide whether someone may write another church's documents — that is exactly
   // the mistake above. Use leaderOf(cp).
-  const isAnyChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = _netCp ? networkOf(e.pubkey, _netCp) : NETWORKS.has(e.pubkey);
-  const isMember = isAnyChurch || isNetwork || MEMBERS.has(e.pubkey);
+  const isAnyChurch = CHURCH_PUBS.has(e.pubkey);
+  // WALL (owner decision 2026-11-18, N1 -- "a joined network key has no write authority over a church's own content"): a key that is
+  // ONLY a declared network is NOT a member here. `|| isNetwork` used to sit in this line (and in the ban exemption below), which
+  // let a declared network key post church-tagged kind-1 lines / kind-7 reactions a stranger is refused. It reaches the two
+  // human-admission doors (member: join, stewardreq:) through their own branches, which never asked isMember; a key that is
+  // ALSO a real member (MEMBERS) keeps the ordinary member path. Same intent as October's _pureNet guard, without its netann half.
+  const isMember = isAnyChurch || MEMBERS.has(e.pubkey);
   // ⚠ THE BAN BELONGS TO THE BANNING CHURCH, NOT TO THE BOX. This was `BLOCKED.has(e.pubkey)` — the merged
   // list — so one church's ban stopped its subject writing to EVERY church on this relay, including
   // congregations that had never heard of the dispute. Measured on a clean two-church relay, 2026-09-15:
@@ -4846,7 +4853,7 @@ function accept(e) {
   // refused, so the shape was "can write into a room they cannot read".
   const _gid = gidOf(e);
   const _banCp = owningChurch(e, dtag(e)) || (_gid ? (GROUP_CHURCH.get(_gid) || '') : '');
-  if (_banCp && blockedBy(e.pubkey, _banCp) && !(isAnyChurch || isNetwork)) return false;
+  if (_banCp && blockedBy(e.pubkey, _banCp) && !isAnyChurch) return false;
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
@@ -4930,7 +4937,7 @@ function accept(e) {
       // pin/hide content in church B's group by naming A. GROUP_CHURCH is the group's true owner.
       const g = eventGroup(e); const owner = g && GROUP_CHURCH.get(g);
       if (owner) {
-        // `isNetwork` was the relay-wide union — for an event carrying no church tag it asked "is this key a
+        // (`isNetwork`, since removed from accept(), was the relay-wide union — for an event carrying no church tag it asked "is this key a
         // network of ANY church here?", never "of THIS group's church". So a key that self-registered on a
         // community relay held event, pin and hide authority over every group on the box, and this line
         // returns BEFORE the safeguarding checks below it. Sibling of the leader check fixed on 2026-08-20;
@@ -5644,7 +5651,7 @@ function accept(e) {
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     if (!isMember) return false;
-    // N1 (a3f3c096's narrowing hunk only): `isNetwork` is gone from this pair. A joined network key no longer writes
+    // N1 (a3f3c096's narrowing hunk only): `isNetwork` is gone from this pair (and from isMember). A joined network key no longer writes
     // ANY d-tag uncapped into this catch-all; it takes the ordinary member path -- doc-type list, then the per-author cap.
     if (!isAnyChurch && !memberDocTypeOk(d)) return false;
     if (isAnyChurch) return true;

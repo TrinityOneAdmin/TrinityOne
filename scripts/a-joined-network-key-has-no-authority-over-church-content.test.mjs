@@ -99,12 +99,15 @@ test('FRESHNESS (rule 10): the relay under test was spawned AFTER scripts/gatewa
   assert.ok(spawnedAt > gw, 'a relay older than gateway.mjs would enforce old gates against the new bundle');
 });
 
-test('CONTROL: the network key IS a live network — a chat line a stranger is refused is ACCEPTED from it', async () => {
-  // WALL (2026-11-18): the 30078 catch-all no longer admits a network key, so the liveness anchor is the member-shaped breadth
-  // it keeps (isMember): a kind-1 line with the church tag and no group. Sabotage: make networkOf() false and it is refused.
-  const stranger = K(), line = (k) => finalizeEvent({ kind: 1, created_at: now() + (seq++), tags: [['church', church.pub]], content: 'hi' }, k.sk);
-  assert.equal(await writes(stranger, line(stranger)), false, 'a stranger was accepted — the control does not discriminate');
-  assert.equal(await writes(networkKey, line(networkKey)), true, 'the joined network key was refused — the link never formed, so every refusal below proves nothing');
+test('CONTROL: the join really took -- the church\'s own network:<key> declaration is stored and served back to the church', async () => {
+  // WALL (2026-11-18): after the isMember narrowing a declared network key can do NOTHING a stranger cannot (that is the point), so
+  // there is no longer an observable write/read DIFFERENCE to anchor liveness on. What can still be shown is that the declaration the
+  // church published is stored and readable, so the fixture is a real joined network. That the refusals below are not vacuous is
+  // proved by SABOTAGE, one per door (re-add networkOf at the door and the matching test below fails) -- see the commit message.
+  const d = P + 'network:' + networkKey.pub;
+  const w = await connect(church); await sleep(200);
+  const got = await read(w, [{ kinds: [30078], authors: [church.pub], '#d': [d] }]); w.close();
+  assert.equal(got.length, 1, 'the church\'s join declaration was not stored -- the network link never formed, so every refusal below proves nothing');
 });
 
 for (const [label, d, body, cap] of DOCS) {
@@ -231,6 +234,19 @@ test('WRITE an EVENT, a PIN and a HIDE into a church group (owner tier): the net
     assert.equal(await writes(church, doc(church, d, body, tags)), true, `re-anchor: the church cannot write a ${label} into its own group`);
     assert.equal(await writes(steward, doc(steward, d, body, tags)), true, `re-anchor: a content steward cannot write a ${label} into the group`);
   }
+});
+
+// POINT OF USE (2026-11-18): a declared network key is not a member for church-tagged chat. Before the isMember narrowing it was
+// ACCEPTED a kind-1 line carrying the church tag and no group, and a kind-7 reaction; a stranger was refused both.
+test('a declared network key is REFUSED a church-tagged kind-1 line (no group) and a kind-7 reaction; a real member is ACCEPTED both', async () => {
+  const line = (k) => kindEvt(k, 1, [['church', church.pub]], 'hi ' + Math.random());
+  const react = (k) => kindEvt(k, 7, [['church', church.pub], ['e', 'a'.repeat(64)]], '+');
+  const stranger = K();
+  assert.equal(await writes(member, line(member)), true, 're-anchor: a real member cannot post a church-tagged line -- the door is broken');
+  assert.equal(await writes(member, react(member)), true, 're-anchor: a real member cannot react -- the door is broken');
+  assert.equal(await writes(networkKey, line(networkKey)), false, 'THE DECLARED NETWORK KEY POSTED A CHURCH-TAGGED CHAT LINE');
+  assert.equal(await writes(networkKey, react(networkKey)), false, 'THE DECLARED NETWORK KEY SENT A REACTION');
+  assert.equal(await writes(stranger, line(stranger)), false, 'a stranger posted a church-tagged line');
 });
 
 // LAST ON PURPOSE: it makes the network key a MEMBER of the church, which would change every read above it.

@@ -138,17 +138,12 @@ after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(data
 // treats a joined network key as a known writer for a catch-all document that a stranger is refused. So the
 // control is: the same undeclared document is REFUSED to a stranger and ACCEPTED from the joined network key.
 // Sabotage proof: make networkOf() return false and the second assertion fails.
-test('CONTROL: the network key IS a live network — a chat line a stranger is refused is ACCEPTED from it', async () => {
-  // WALL (2026-11-18): the 30078 catch-all no longer admits a network key, so it cannot anchor liveness any more. What a
-  // declared network key still has is member-shaped breadth (isMember): a kind-1 line carrying the church tag but no group.
-  // The stranger is refused it, the declared key is accepted it, so the link is live. Sabotage: make networkOf() false.
-  const line = (k) => finalizeEvent({ kind: 1, created_at: now(), tags: [['church', church.pub]], content: 'hi ' + Math.random() }, k.sk);
-  const nw = await connect(networkKey); await sleep(200);
-  const stranger = K(); const sw2 = await connect(stranger); await sleep(200);
-  assert.equal((await publish(sw2, line(stranger)))[0], false, 'a stranger was accepted — the control is not discriminating');
-  assert.equal((await publish(nw, line(networkKey)))[0], true,
-    'the network key was refused the chat line — the network relationship never formed, so every refusal below proves nothing');
-  sw2.close(); nw.close();
+test('CONTROL: the join really took -- the church\'s own network:<key> declaration is stored and served back to the church', async () => {
+  // WALL (2026-11-18): a declared network key can do nothing a stranger cannot, so liveness cannot be anchored on a differential any
+  // more; this shows the declaration is stored. Non-vacuity of each refusal below is proved by per-door SABOTAGE (re-add networkOf).
+  const cw0 = await connect(church); await sleep(200);
+  const got = await read(cw0, [{ kinds: [30078], authors: [church.pub], '#d': ['trinityone/network:' + networkKey.pub] }]); cw0.close();
+  assert.equal(got.length, 1, 'the church\'s join declaration was not stored -- the network link never formed, so every refusal below proves nothing');
 });
 
 // ── THE READ DOORS ───────────────────────────────────────────────────────────────────────────────────────

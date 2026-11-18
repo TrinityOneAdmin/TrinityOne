@@ -633,12 +633,11 @@ test('FIXTURE CONTROL: the roster, the care team, the network and the parent map
   assert.equal(one(await asks(careBoss, { kinds: [30078], '#d': [minorsDoc] }), minorsDoc), 1,
     'careBoss is not a care-team admin on this relay — careAdmin() needs meals-settings AND the named ' +
     'group\'s roster, and one of the two did not take');
-  // WALL (2026-11-18, owner decision): the network key no longer reads `minors:`, so that read cannot prove it was recorded. What a
-  // declared network key still has is member-shaped breadth: a kind-1 line carrying the church tag and no group is ACCEPTED from it
-  // and REFUSED to a stranger. That is the liveness anchor for "the network key is refused the register" below.
-  { const line = (k) => finalizeEvent({ kind: 1, created_at: now(), tags: [['church', church.pub]], content: 'hi ' + Math.random() }, k.sk);
-    assert.equal((await send(w, line(K())))[0], false, 'a stranger was accepted a chat line — the network liveness control does not discriminate');
-    assert.equal((await send(w, line(netKey)))[0], true, 'the network key was not recorded — networkOf() is false, so "the network is refused" below would be measuring nothing'); }
+  // WALL (2026-11-18, owner decision): the network key no longer reads `minors:`, and (isMember narrowing) no longer writes anything a
+  // stranger cannot, so neither can prove it was recorded. What is left to show is that the church's declaration is stored and served
+  // back to the church; non-vacuity of the refusals is proved by per-door sabotage (re-add networkOf at the door), see the commit.
+  assert.equal(one(await asks(church, { kinds: [30078], authors: [church.pub], '#d': [D.NETWORK + netKey.pub] }), D.NETWORK + netKey.pub), 1,
+    'the church\'s network declaration was not stored -- the network link never formed, so "the network is refused" below would be measuring nothing');
   assert.deepEqual(await asks(netKey, { kinds: [30078], '#d': [minorsDoc] }), [], 'the network key READ `minors:` (the wall is gone)');
   assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [minorsDoc] }), [],
     're-anchor: an ordinary member reads `minors:`, so the two controls above prove nothing');
