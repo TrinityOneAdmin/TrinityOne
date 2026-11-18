@@ -7921,6 +7921,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
           Done. {memberName} is back in their place on the new phone, and the old entry is folded into it.
           {realName ? ' Their name goes with them — it will appear on the new phone shortly.' : ''}
         </p>
+        {/* WHAT THE OLD KEY'S CHURCH SETTINGS CAME TO, when it was a steward's (owner answer d): kept under the church,
+            with the new key in the old one's place on group leaders/members — or which could not be kept. */}
+        {res && res.carry && stewCarryNote(res.carry) ? <p role={stewCarryNote(res.carry).tone === 'fail' ? 'alert' : 'status'} style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 14px' }}>{stewCarryNote(res.carry).text}</p> : null}
         {/* Say the part the product does NOT do, here, where it can still be acted on. Invite-only group
             membership is a list of pubkeys on each group document; a re-seat does not rewrite those, so the
             new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
@@ -7992,7 +7995,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} className="sk-btn" style={{ flex: 1, padding: '10px 14px' }}>Cancel</button>
           <button onClick={confirm} disabled={!newPub || same || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: '10px 14px', opacity: (!newPub || same || busy) ? .5 : 1 }}>
-            {busy ? 'Reconnecting…' : 'Yes — this is ' + memberName}</button>
+            {busy ? (taken && window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(member) ? 'Reconnecting… keeping what they set up' : 'Reconnecting…') : 'Yes — this is ' + memberName}</button>
         </div>
       </React.Fragment>)}
     </CkModal>
@@ -9053,6 +9056,11 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const [showBlocked, setShowBlocked] = React.useState(false);
   const [confirmBlock, setConfirmBlock] = React.useState(null);
   const [blockCarryNote, setBlockCarryNote] = React.useState(null);   // what Blocking a (former) steward kept of what they saved — see block()
+  React.useEffect(() => {   // "everything kept" is a moment, as on the Stewards panel; a list of what was not kept stays
+    if (!blockCarryNote || blockCarryNote.tone !== 'ok') return undefined;
+    const t = setTimeout(() => setBlockCarryNote(cur => (cur === blockCarryNote ? null : cur)), 8000);
+    return () => clearTimeout(t);
+  }, [blockCarryNote]);
   const wasStewardHere = (pk) => { const l = String(pk || '').toLowerCase(); return !!((window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(pk)) || (stewardRoster || []).some(p => String(p || '').toLowerCase() === l)); };
   const [blockWarn, setBlockWarn] = React.useState('');   // a rotation that did not land — the member may still hold the key
   // THE BANNER SAYS WHAT THE ENGINE'S RECORDS SAY (round 3g). A Block or a removal whose keys did not all change at once
@@ -9125,7 +9133,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     // of the rosters and rotas win. A carry that fails never stops the Block. Anyone never on the roster: unchanged.
     const lowPk = String(pk || '').toLowerCase();
     const stewardish = !!((window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(pk)) || (stewardRoster || []).some(p => String(p || '').toLowerCase() === lowPk));
-    const blockNow = () => {
+    const blockNow = (carry) => {
       // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
       // out of the click, and not a key rotation for a block that was never written.
       let wrote;
@@ -9136,6 +9144,8 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       // on one relay and this console holds them as blocked either way, so keys are STILL rotated away from them — that is
       // the safe direction — and the steward is told it may be only partly saved, not that it worked.
       return wrote.then((ok) => {
+        // WHAT WAS KEPT IS SAID ONLY FOR A BLOCK THAT SAVED (audit, 2026-11-18): a refused or partial block is not "kept"
+        if (carry && ok) setBlockCarryNote(stewCarryNote(carry));
         if (ok == null) { setBlockWarn('Couldn’t block ' + who + ' — this console isn’t signed in to your church, so nothing was changed. Try again.'); return; }
         const saveNote = ok === false
           ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
@@ -9198,7 +9208,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       setBlockCarryNote(null);
       return Promise.resolve().then(() => window.Steward.carryOverStewardDocs(pk, { blocked: true }))
         .catch(() => ({ carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }))
-        .then((carry) => { setBlockCarryNote(stewCarryNote(carry)); return blockNow(); });
+        .then((carry) => blockNow(carry));
     }
     return blockNow();
   };
@@ -9567,7 +9577,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
           is out, and this is the one thing that says otherwise. */}
       {blockCarryNote ? (
-        <div role={blockCarryNote.tone === 'fail' ? 'alert' : 'status'} style={{ padding: '11px 13px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: blockCarryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (blockCarryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>{blockCarryNote.text}</div>
+        <div role={blockCarryNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: blockCarryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (blockCarryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0 }}>{blockCarryNote.text}</div>
+          <button onClick={() => setBlockCarryNote(null)} title="Dismiss" aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+        </div>
       ) : null}
       {blockWarnView ? (
         <div role={(blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'status' : 'alert'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: (blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--surface-2)' : 'var(--clay-soft)', border: '1px solid ' + ((blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--line)' : 'var(--clay)') }}>
@@ -11381,6 +11394,7 @@ function DashStewardsPanel({ church }) {
   // WHAT THE CARRY-OVER KEPT (plan §3.7). Its own line beside the removal note, so a list of what could NOT be kept is
   // never cleared with a confirmation that times out.
   const [carryNote, setCarryNote] = React.useState(null);
+  const [capsClearing, setCapsClearing] = React.useState(null);   // the pk whose permissions are being cleared (untick-all) — see setCaps
   React.useEffect(() => {   // "everything kept" is a confirmation, so a moment; a list of what was not kept stays
     if (!carryNote || carryNote.tone !== 'ok') return undefined;
     const t = setTimeout(() => setCarryNote(cur => (cur === carryNote ? null : cur)), 8000);
@@ -11443,15 +11457,22 @@ function DashStewardsPanel({ church }) {
     // UNTICKING EVERY CAPABILITY IS A REMOVAL (owner answer c, 2026-11-17): the relay retracts nothing for a narrowing
     // (it reads 'any'), but an empty list takes everything they saved off every phone — so it runs the same carry-over
     // first, in the engine's one-at-a-time queue, which writes caps[pk] = [] from its own current roster.
-    if (Array.isArray(list) && list.length === 0 && window.Steward.removeStewardKeeping) {
+    if (Array.isArray(list) && list.length === 0) {
+      if (capsClearing) return;   // one at a time; the editor says it is working
       const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
+      const failed = (why) => setCarryNote({ tone: 'fail', text: why === 'roster-unknown'
+        ? 'Couldn’t change what ' + who + ' may do yet — this console hasn’t finished reading who your stewards are. Nothing was changed. Try again in a moment.'
+        : 'Couldn’t remove ' + who + '’s permissions — the change didn’t save. Nothing was changed. Try again.' });
       setCarryNote(null);
-      try {
-        Promise.resolve(window.Steward.removeStewardKeeping(pk, { capsOnly: true })).then((r) => {
-          if (r && r.refused === 'roster-unknown') { setCarryNote({ tone: 'fail', text: 'Couldn’t change what ' + who + ' may do yet — this console hasn’t finished reading who your stewards are. Try again in a moment.' }); return; }
-          if (r && r.wrote) setCarryNote(stewCarryNote(r.carry));
-        }, () => {});
-      } catch (e) {}   // a refusal is on the banner (_requireTrustedView)
+      let p;
+      try { p = Promise.resolve(window.Steward.removeStewardKeeping(pk, { capsOnly: true })); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
+      setCapsClearing(pk);
+      p.then((r) => {
+        setCapsClearing(null);
+        if (!r || r.refused) { failed(r && r.refused); return; }
+        if (!r.wrote) { failed(''); return; }
+        setCarryNote(stewCarryNote(r.carry));
+      }, () => { setCapsClearing(null); failed(''); });
       return;
     }
     const next = { ...caps };
@@ -11532,9 +11553,7 @@ function DashStewardsPanel({ church }) {
     // carry would still hold the first person in. A carry that fails or runs out of time never stops the removal.
     let wrote, carried = null, refusedWhy = '';
     try {
-      // (an engine without it — only a test's stand-in now — writes the screen's roster as before, keeping nothing)
-      const keeping = window.Steward.removeStewardKeeping ? window.Steward.removeStewardKeeping(pk) : Promise.resolve(window.Steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next }));
-      wrote = Promise.resolve(keeping).then((r) => {
+      wrote = Promise.resolve(window.Steward.removeStewardKeeping(pk)).then((r) => {
         if (!r || r.refused) { refusedWhy = (r && r.refused) || 'unknown'; return null; }
         carried = r.carry || null;
         if (Array.isArray(r.next)) next = r.next;
@@ -11634,7 +11653,8 @@ function DashStewardsPanel({ church }) {
             </span>
           </label>
         ))}
-        {cur !== null && cur.length <= 1 ? <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8 }}>Unticking everything takes them off as a helper. What they set up stays as it is.</div> : null}
+        {capsClearing === pk ? <div role="status" style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8, fontWeight: 600 }}>Removing their permissions… keeping what they set up</div>
+          : cur !== null && cur.length <= 1 ? <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8 }}>Unticking everything removes all their permissions. What they set up stays as it is.</div> : null}
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 10 }}>
           Your relay enforces this. A relay running an older version does not know about it yet and will keep
           giving this steward everything — so check your relay is up to date before relying on it.
@@ -11743,7 +11763,10 @@ function DashStewardsPanel({ church }) {
         </div>
       ) : null}
       {carryNote ? (
-        <div role={carryNote.tone === 'fail' ? 'alert' : 'status'} style={{ padding: '10px 12px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: carryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (carryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>{carryNote.text}</div>
+        <div role={carryNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: carryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (carryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0 }}>{carryNote.text}</div>
+          <button onClick={() => setCarryNote(null)} title="Dismiss" aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+        </div>
       ) : null}
       {visibleStewards.length === 0
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No helpers yet.</div>

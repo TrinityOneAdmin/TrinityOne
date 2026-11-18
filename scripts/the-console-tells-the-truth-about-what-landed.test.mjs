@@ -80,6 +80,8 @@ async function revokeWhenOkIsLost(w, urls, { roster: rosterNow = [STEW, OTHER], 
     pubkey: CHURCH, actingChurch: '', joinPolicyFresh: () => false, listIsFresh: () => true,
     // what publish() really answers when no relay acknowledged: false. The relay may or may not have applied it.
     setStewards: (l) => { calls.setStewards.push(l); return Promise.resolve(false); },
+    // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
+    removeStewardKeeping: (pk) => { const next = rosterNow.filter(p => p !== pk); return Promise.resolve(steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next })); },
     stewardRemovalOutcome: outcome,
     rotateCareKey: (m, s) => { calls.care.push({ m, s }); return Promise.resolve(true); },
     rotateMediaKey: () => Promise.resolve(true), ensureNameKeyForMembers: () => Promise.resolve({ rotated: true }),

@@ -238,3 +238,83 @@ test('T10 — CONTROL: Block of someone who was never a steward does not carry, 
   assert.equal(r.order[0] && r.order[0].step, 'block');
   assert.doesNotMatch(out.asked, /What they set up stays as it is/);
 });
+
+// ══ ROUND 2 (audit of 2026-11-18) ═══════════════════════════════════════════════════════════════════════════════════
+test('LOW 4 — a Block that did NOT save never says their settings were kept', async () => {
+  for (const answer of [false, null]) {
+    const r = blockRig({ stewards: [BRAM] });
+    r.g.window.Steward.setBlocked = (list) => { r.order.push({ step: 'block', list }); return Promise.resolve(answer); };
+    const out = await blockBram(r);
+    assert.equal(r.order[0].step, 'carry', 'CONTROL: the carry ran');
+    assert.doesNotMatch(out.said, /stays as they left it/, 'a block answered ' + answer + ' still claimed their settings were kept');
+  }
+});
+test('LOW 4 — the Block result line can be dismissed', async () => {
+  const r = blockRig({ stewards: [BRAM] });
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }]);
+  let tree = draw(C, {});
+  await press(tree, /Remove \/ block this member/, { which: 0 });
+  await press(draw(C, {}), /Confirm — bans them/);
+  await flush(20);
+  tree = draw(C, {});
+  assert.match(reads(tree), /Everything they set up stays as they left it/);
+  await press(tree, /Dismiss/);
+  assert.doesNotMatch(reads(draw(C, {})), /Everything they set up stays as they left it/, 'Dismiss did not clear the result line');
+});
+
+test('LOW 5 — unticking everything: the editor says it is working, then a failed write says so', async () => {
+  const d = deferred();
+  const r = panelRig({ keep: () => d.p });
+  const p = await untick(r, 0);
+  assert.match(reads(p.view()), /Removing their permissions… keeping what they set up/, 'no in-flight indicator while the carry and roster write run');
+  d.res({ wrote: false, carry: { carried: [], notCarried: [], superseded: [] }, next: [DELEGATE, OTHER_STEW] });
+  await flush();
+  const said = reads(p.view());
+  assert.doesNotMatch(said, /Removing their permissions…/);
+  assert.match(said, /Couldn’t remove Tom Ridley’s permissions — the change didn’t save/, 'a write that did not land said nothing');
+});
+test('LOW 5 — the untick-all line says what is true: they keep their place, with no permissions', async () => {
+  const r = panelRig();
+  const p = await openPanel(r);
+  let tree = p.view();
+  await press(tree, /What this helper may do/, { which: 0 });
+  const said = reads(p.view());
+  assert.match(said, /Unticking everything removes all their permissions\. What they set up stays as it is\./);
+  assert.doesNotMatch(said, /takes them off as a helper/);
+});
+
+test('deviation (d) — no silent fallback: a stand-in without removeStewardKeeping writes no roster at all', async () => {
+  const r = panelRig();
+  delete r.globals.window.Steward.removeStewardKeeping;
+  await revokeDelegate(r);
+  await flush();
+  assert.equal(r.calls.setStewards.length, 0, 'Remove fell back to writing the screen’s roster, keeping nothing');
+});
+
+// ══ RE-SEAT (audit LOW 1): the modal says it is keeping what they set up, and then what it kept ═════════════════════
+test('LOW 1 — Reconnect with "taken" on a steward’s old key shows progress, then what was kept', async () => {
+  const OLD = '3'.repeat(64), NEW = '4'.repeat(64);
+  const d = deferred();
+  const asked = [];
+  const steward = {
+    actingChurch: '', isOrWasSteward: (pk) => pk === OLD, parseMemberKey: (t) => (t === 'new-code' ? NEW : null),
+    reseatMember: (o, n, opts) => { asked.push({ o, n, opts }); return d.p; },
+  };
+  const g = { ...common(), CkModal: (p) => (p && p.children) || null, StewQRScanner: () => null, stewOnPhoneApp: () => false,
+    window: { Steward: steward, useStewardSafeguard: () => ({ minors: [], approved: [], expiry: {}, minorsKnown: true }), useStewardGuardians: () => ({ links: {}, closed: {} }),
+      useStewardBlocked: () => [], useStewardRosters: () => [], useStewardRotas: () => [], useMealsSettings: () => ({}), useStewardReseats: () => [] } };
+  const { C, draw } = await compiled('ReseatModal', g);
+  const props = { member: OLD, memberName: 'Ruth', realName: '', isMinor: false, admittedList: [], onClose() {} };
+  let tree = draw(C, props);
+  find(tree, n => n && n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: true } });
+  tree = draw(C, props);
+  find(tree, n => n && n.type === 'input' && n.props.type !== 'checkbox')[0].props.onChange({ target: { value: 'new-code' } });
+  tree = draw(C, props);
+  await press(tree, /Yes — this is Ruth/);
+  assert.equal(asked.length, 1, 'the re-seat was not asked for');
+  assert.equal(asked[0].opts.blockOld, true);
+  assert.match(reads(draw(C, props)), /Reconnecting… keeping what they set up/, 'no progress shown while the carry runs (up to ~20 s)');
+  d.res({ carry: { carried: [{ d: 'g', label: 'a group' }], notCarried: [{ d: 'n', why: 'time', label: 'a photo setting' }], superseded: [] }, blockedOld: true, failed: [] });
+  await flush();
+  assert.match(reads(draw(C, props)), /These couldn’t be kept and may change back: a photo setting\./, 'the result of the carry is not said');
+});
