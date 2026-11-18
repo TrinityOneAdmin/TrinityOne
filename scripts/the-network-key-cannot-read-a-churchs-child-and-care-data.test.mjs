@@ -133,10 +133,22 @@ before(async () => {
 after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
 // ── THE LIVE-RELATIONSHIP CONTROL (without this, every "refused" below could be a dead network link) ──────
-test('CONTROL: the network key IS a live network — it reads a church plan: (a non-care hosted doc)', async () => {
-  assert.equal(await served(networkKey, stored.plan), true,
-    'the network key cannot read even a plan: — the network relationship never formed, so every refusal below proves nothing');
-  assert.equal(await served(member, stored.plan), true, 're-anchor: an ordinary member cannot read the plan either');
+// N1 (2026-10-21) removed the network key's authority over church CONTENT, so a church plan: can no longer be the
+// proof that the link is live (it used to be). What still rides the link is only member-shaped BREADTH: accept()
+// treats a joined network key as a known writer for a catch-all document that a stranger is refused. So the
+// control is: the same undeclared document is REFUSED to a stranger and ACCEPTED from the joined network key.
+// Sabotage proof: make networkOf() return false and the second assertion fails.
+test('CONTROL: the network key IS a live network — a chat line a stranger is refused is ACCEPTED from it', async () => {
+  // WALL (2026-11-18): the 30078 catch-all no longer admits a network key, so it cannot anchor liveness any more. What a
+  // declared network key still has is member-shaped breadth (isMember): a kind-1 line carrying the church tag but no group.
+  // The stranger is refused it, the declared key is accepted it, so the link is live. Sabotage: make networkOf() false.
+  const line = (k) => finalizeEvent({ kind: 1, created_at: now(), tags: [['church', church.pub]], content: 'hi ' + Math.random() }, k.sk);
+  const nw = await connect(networkKey); await sleep(200);
+  const stranger = K(); const sw2 = await connect(stranger); await sleep(200);
+  assert.equal((await publish(sw2, line(stranger)))[0], false, 'a stranger was accepted — the control is not discriminating');
+  assert.equal((await publish(nw, line(networkKey)))[0], true,
+    'the network key was refused the chat line — the network relationship never formed, so every refusal below proves nothing');
+  sw2.close(); nw.close();
 });
 
 // ── THE READ DOORS ───────────────────────────────────────────────────────────────────────────────────────
@@ -219,8 +231,11 @@ test('THE INDIRECT DOOR + ITS DoS: a network roster write neither reads child da
   // the network key tries to OVERWRITE the church's care-team roster (hosting lets it author roster:<TEAM>),
   // listing itself AND a fresh proxy key it controls. The write is ACCEPTED at the socket — so a refusal below
   // is a relay RULE at work, not a bounced write (non-vacuous).
+  // N1 (2026-10-21): the roster write is now REFUSED AT THE SOCKET (leaderOf/idOwnerOk carry no networkOf), so the
+  // Phase-2 ingest guard below is defence in depth and this test's job is that NOTHING of it lands. The church's own
+  // roster write (before()) proves the same door is open to its owner.
   const [ok] = await publish(nw, doc(networkKey, D.ROSTER + TEAM, { pubs: [networkKey.pub, key2.pub] }, CH));
-  assert.equal(ok, true, 'the relay refused the network key\'s roster write — then this test proves nothing; re-check the door');
+  assert.equal(ok, false, 'the network key WROTE a roster document — N1 (leaderOf/idOwnerOk) did not take');
   nw.close(); await sleep(300);
   // TWO rules close this and the test exercises BOTH:
   //  1. the INGEST GUARD (Phase-2 residual) refuses a network-key roster that would DISPLACE the church's own,
@@ -259,7 +274,8 @@ test('careAdmin confers nothing from a NETWORK-FIRST care-team roster (a proxy k
   const TEAM2 = church.pub + '-careteam2';
   const nw = await connect(networkKey); await sleep(200);
   // network is the FIRST writer of this roster id (no church version to displace), listing a proxy key it controls
-  assert.equal((await publish(nw, doc(networkKey, D.ROSTER + TEAM2, { pubs: [key2.pub] }, CH)))[0], true, 'the relay refused the network-first roster write — test would prove nothing');
+  // N1 (2026-10-21): the network key can no longer author a roster at all (it used to be the first writer here).
+  assert.equal((await publish(nw, doc(networkKey, D.ROSTER + TEAM2, { pubs: [key2.pub] }, CH)))[0], false, 'the network key authored a roster — N1 did not take');
   const cw = await connect(church); await sleep(200);
   // the church points its care team at that network-authored group
   assert.equal((await publish(cw, doc(church, D.MEALS, { adminGroupId: TEAM2 })))[0], true, 'meals-settings write refused');

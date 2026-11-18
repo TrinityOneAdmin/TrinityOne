@@ -3137,7 +3137,7 @@ const checkinPermGrantor = (e) => {
 // REVIEW-2026-07-20 B3: `CHURCH_PUBS.has(src.by)` / `NETWORKS.has(src.by)` were unscoped, so a grant authored
 // by ANY church or ANY network key counted as a valid grantor for ANY church — which feeds careAdmin() below
 // and thus cross-tenant care-PII reads. Scoped to the church the grant is actually for.
-const grantorOk = (src) => !!(src && (src.by === src.cp || networkOf(src.by, src.cp) || stewardCan(src.by, src.cp, 'any')));
+const grantorOk = (src) => !!(src && (src.by === src.cp || stewardCan(src.by, src.cp, 'any')));
 // is `pub` on the care-team of church `cp`? (a member of the roster of cp's configured care-team group)
 // AUDIT-2026-07-24 CRITICAL-2: team ids are a relay-GLOBAL namespace, and this never checked that the roster
 // it resolved actually BELONGS to cp. A co-tenant church published roster:<cp's team id> listing itself,
@@ -3291,9 +3291,9 @@ function idOwnerOk(owner, e, id) {
     const named = idNamesOwner(id);
     if (!named) return true;                     // unknown id, no embedded owner → first writer takes it
     // the id says whose it is; only that church, its network or its stewards may claim it
-    return cp === named || networkOf(e.pubkey, named) || stewardCan(e.pubkey, named, 'any');
+    return cp === named || stewardCan(e.pubkey, named, 'any');
   }
-  return cp === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'any');
+  return cp === owner || stewardCan(e.pubkey, owner, 'any');
 }
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
@@ -3892,7 +3892,7 @@ function maybePushCancel(evt, was) {
     // entry beside it, and "anyone may make the congregation's phones buzz" is not a feature. The author of
     // the original may retract it; otherwise it takes the church, its network, or a steward it trusts with
     // content, which is who the console publishes as.
-    if (!(evt.pubkey === was.by || evt.pubkey === cp || networkOf(evt.pubkey, cp) || stewardCan(evt.pubkey, cp, 'content'))) return;
+    if (!(evt.pubkey === was.by || evt.pubkey === cp || stewardCan(evt.pubkey, cp, 'content'))) return;
     const key = cp + ':' + id;
     if (CANCEL_PUSHED.has(key)) return; CANCEL_PUSHED.add(key);    // in-session belt; EVENT_AUDIENCE is the braces, and survives a restart
     if (CANCEL_PUSHED.size > 5000) CANCEL_PUSHED.clear();          // bounded, like SAFETY_PUSHED — dedup only needs the recent ones
@@ -4215,7 +4215,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // load-bearing defence on the peer-resync path, where accept() never runs. Do not narrow these back
   // without reading that test; and do not "fix" this by making replay differ from live ingest, because a
   // gate that disagrees with itself across paths is the whole defect.
-  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {
+  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (!idOwnerOk(GROUP_CHURCH.get(id), e, id)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
     // R-7: keep GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS so canRead()/accept() still know the ownership and
@@ -4387,7 +4387,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     }
     STEWARDS_BY.set(e.pubkey, set); STEWARD_CAPS.set(e.pubkey, caps);
   }
-  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
+  else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
     { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
     // Phase-2 residual (owner-approved 2026-10-21): a network key may HOST a team roster but must not DISPLACE
@@ -4808,7 +4808,7 @@ function accept(e) {
   // CHURCH_PUBS.has(cp) is not decoration: the old relay-wide check refused a church this relay has never
   // been told about, because such a key was never in CHURCH_PUBS at all. Scoping without it would have let an
   // unknown church write its own join policy — caught by the existing tests, which is what they are for.
-  const leaderOf = (cp) => !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || networkOf(e.pubkey, cp));
+  const leaderOf = (cp) => !!cp && CHURCH_PUBS.has(cp) && e.pubkey === cp;   // N1: a joined network key has NO church authority
   // The church this event is FOR, when it does not carry the church in its own d-tag: the tag if it names a
   // configured church, else the author when the author is itself a church writing its own documents.
   const ownCp = () => _netCp || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
@@ -4929,7 +4929,7 @@ function accept(e) {
         // community relay held event, pin and hide authority over every group on the box, and this line
         // returns BEFORE the safeguarding checks below it. Sibling of the leader check fixed on 2026-08-20;
         // the same mistake, one clause along. networkOf() is already scoped — use it.
-        if (e.pubkey === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, ITS network, or a steward of the owner
+        if (e.pubkey === owner || stewardCan(e.pubkey, owner, 'content')) return true;   // owner church, ITS network, or a steward of the owner
 
         // ── SAFEGUARDING. Everything past this line is a MEMBER acting under delegated authority, and until
         // now this path asked only "do you have authority over the group?" — never "are you a child?" or "is
@@ -5197,7 +5197,7 @@ function accept(e) {
       if (!gid) return false;                                  // an envelope for no room is an envelope for nobody
       const owner = GROUP_CHURCH.get(gid) || idNamesOwner(gid) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
       if (!owner || !CHURCH_PUBS.has(owner)) return false;     // not attributable to a church we carry
-      return e.pubkey === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'sealedrooms');
+      return e.pubkey === owner || stewardCan(e.pubkey, owner, 'sealedrooms');
     }
     // the per-church NAME key envelope — same authority as the care key.
     if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
@@ -5638,8 +5638,10 @@ function accept(e) {
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     if (!isMember) return false;
-    if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
-    if (isAnyChurch || isNetwork) return true;
+    // N1 (a3f3c096's narrowing hunk only): `isNetwork` is gone from this pair. A joined network key no longer writes
+    // ANY d-tag uncapped into this catch-all; it takes the ordinary member path -- doc-type list, then the per-author cap.
+    if (!isAnyChurch && !memberDocTypeOk(d)) return false;
+    if (isAnyChurch) return true;
     if (store.hasDoc(e.pubkey, d)) return true;
     if (store.countDocsByAuthor(e.pubkey, MEMBER_DOC_CAP_STEMS) >= MEMBER_DOC_CAP) { _lastRefusalDocCap = true; return false; }
     return true;
@@ -5657,18 +5659,18 @@ function accept(e) {
     // congregation, under an attacker-controlled display name. Scope to the group's actual owner.
     if (g && BROADCAST.has(g)) {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e);
-      return !!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'));
+      return !!gcp && (e.pubkey === gcp || stewardCan(e.pubkey, gcp, 'content'));
     }
     // invite-only group. AUDIT-2026-07-24: `isLeader` was unscoped here too (sibling of the BROADCAST fix
     // just above) — any co-tenant church key could post into another congregation's private group.
     if (g && GROUP_VIS.get(g) === 'invite') {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const mem = GROUP_MEMBERS.get(g);
-      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(mem && mem.has(e.pubkey));
+      return (!!gcp && (e.pubkey === gcp || stewardCan(e.pubkey, gcp, 'content'))) || !!(mem && mem.has(e.pubkey));
     }
     // ...and the same for a serving team, whose allowlist is the roster rather than the group doc.
     if (g && GROUP_VIS.get(g) === 'team') {
       const gcp = GROUP_CHURCH.get(g) || namedChurch(e); const ppl = ROSTER_PEOPLE.get(g);
-      return (!!gcp && (e.pubkey === gcp || networkOf(e.pubkey, gcp) || stewardCan(e.pubkey, gcp, 'content'))) || !!(ppl && ppl.has(e.pubkey));
+      return (!!gcp && (e.pubkey === gcp || stewardCan(e.pubkey, gcp, 'content'))) || !!(ppl && ppl.has(e.pubkey));
     }
     // SAFEGUARDING (relay-enforced): a child may only post in a group their church marked child-safe. Was a
     // client-side list filter only, so a modified/old build could post into adult-only rooms.
@@ -5745,7 +5747,7 @@ function approvedMemberCount() {
 // May `authed` read content belonging to church cp at all? The church itself, a network it belongs to, one of
 // its current stewards, or an effective member.
 function churchReader(authed, cp) {
-  return !!authed && !!cp && (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || effMemberOf(authed, cp));
+  return !!authed && !!cp && (authed === cp || stewardCan(authed, cp, 'any') || effMemberOf(authed, cp));   // N1: no networkOf
 }
 // AUDIT-2026-07-30 S3: is `pub` a child ACCORDING TO CHURCH cp? Whether someone is a child is a judgement only
 // their own church makes — the relay-wide MINORS union is every church's list merged, so consulting it lets any
@@ -6180,7 +6182,7 @@ function canRead(e, authed) {
     if (d.startsWith(FIN_INVOICE_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith(FIN_BILL_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith(FIN_BILLAPPROVAL_D)) return authed === cp || stewardCan(authed, cp, 'finance');
-    if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
+    if (d.startsWith('finance/')) return authed === cp || stewardCan(authed, cp, 'finance');
     // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //
     // MOVED ABOVE THE GENERAL STEWARD SHORT-CIRCUIT, 2026-09-11, and the move IS the fix. These four branches
@@ -6399,12 +6401,11 @@ function canRead(e, authed) {
     // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
     // Phase 2 (2026-10-20, owner-approved): the network key is walled off from CARE documents that fall
     // through to this catch-all (care needs, slot sign-ups, skips, availability, the care-team roster).
-    // It KEEPS the network key for every other doc served here (rota, runsheet, plan, group, member:,
-    // verse-prompt, ...) — the legitimate "churches host one another" path. Care content/PII is not that.
-    // The church (authed === cp), its stewards and its care admins still read care through the clauses
-    // beside it; only the shared cross-church key loses care here.
-    const careReadDoc = d.startsWith(NEED_D) || d.startsWith(SLOT_D) || d.startsWith(SKIP_D) || d.startsWith(AVAIL_D) || d.startsWith(CARETEAM_D);
-    if (authed === cp || (!careReadDoc && networkOf(authed, cp)) || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;
+    // N1 (Networks MVP, 2026-10-21): the network key now loses EVERY doc served here -- rota, runsheet, plan,
+    // group, devotional, ... -- not just care. A joined network key has NO authority over a church's own content;
+    // the network-safe kinds (announcements / events / feed) get their own gate later, never this one.
+    // The church (authed === cp), its stewards and its care admins read through the clause below.
+    if (authed === cp || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;   // N1: no networkOf
     // R-6: DRAFTS ARE NOT SERVED TO ORDINARY MEMBERS. A plan or devotional whose content says draft:true
     // is withheld from anyone who is not the church, its network, or a steward (all returned true above).
     // The console says "Hidden from members" and "members won't see it until you publish" — that was true
@@ -6474,7 +6475,7 @@ function canRead(e, authed) {
       // itself (which carries the room's name and members) should not be served back.
       if (GROUP_GONE.has(gid)) {
         const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid);
-        if (!!gcp && !!authed && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'))) return true;
+        if (!!gcp && !!authed && (authed === gcp || stewardCan(authed, gcp, 'content'))) return true;
         // THE TOMBSTONE ITSELF IS HOW A PHONE LEARNS THE ROOM IS GONE (sim 2026-10-02, item 38). This branch
         // refused EVERYTHING at this id to everyone but the church and its content stewards — including the
         // empty, content-less tombstone the church wrote to delete it — so the retraction was withheld from the
@@ -6677,7 +6678,7 @@ function canRead(e, authed) {
     // keeps serving every message to any subscriber (the member hub's `#p` filter pulls them in).
     if (GROUP_GONE.has(g)) {
       const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);
-      return !!gcp && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'));
+      return !!gcp && (authed === gcp || stewardCan(authed, gcp, 'content'));
     }
     const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);   // …and the same fallback here: see the note in accept()
     if (gcp) {
@@ -6706,7 +6707,7 @@ function canRead(e, authed) {
   if (GROUP_VIS.get(g) === 'team') {
     if (!authed) return false;
     const tcp = GROUP_CHURCH.get(g);
-    if (tcp && (authed === tcp || networkOf(authed, tcp) || stewardCan(authed, tcp, 'content'))) return true;
+    if (tcp && (authed === tcp || stewardCan(authed, tcp, 'content'))) return true;
     const ppl = ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(authed));
   }
   if (GROUP_VIS.get(g) !== 'invite') return true;
@@ -6716,7 +6717,7 @@ function canRead(e, authed) {
   // invite-only group messages, which is the most sensitive content in the product. Scope both to the church
   // that actually owns this group (GROUP_CHURCH is set from the group def's ['church'] tag or its author).
   const gcp = GROUP_CHURCH.get(g);
-  if (gcp && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'))) return true;
+  if (gcp && (authed === gcp || stewardCan(authed, gcp, 'content'))) return true;
   const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(authed));
 }
 

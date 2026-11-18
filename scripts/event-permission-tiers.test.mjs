@@ -63,7 +63,8 @@ test('a child-safe group takes events only from cleared adults', () => {
 test('the church key and its stewards are unaffected', () => {
   const b = eventBranch();
   // stewardCan(…, 'content') since capabilities landed — the assertion is about ORDER, not the call's name.
-  const churchAt = b.indexOf("e.pubkey === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'content')");
+  // N1 (2026-10-21): no networkOf in this clause any more -- a joined network key has no church authority.
+  const churchAt = b.indexOf("e.pubkey === owner || stewardCan(e.pubkey, owner, 'content')");
   const minorAt = b.indexOf('minorOf(e.pubkey, owner)');
   assert.ok(churchAt !== -1 && churchAt < minorAt,
     'the church acting as itself passes first — these rules constrain DELEGATION, and a church that cannot ' +

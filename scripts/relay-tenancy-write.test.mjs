@@ -339,14 +339,16 @@ test('CONTROL: …and can answer the safety roll-call of BOTH', async () => {
     'a dual member cannot mark themselves safe to B');
 });
 
-test('CONTROL: a church can still post in its own group, and so can a network it declared', async () => {
+test('CONTROL: a church can still post in its own group; the network it declared can no longer (N1)', async () => {
   // Scoping to "effective member" ALONE would refuse the church key itself and its network — neither appears in
   // any member roster. The write side must mirror churchReader(): the church, its network, its stewards, or an
   // effective member.
   assert.equal((await publish(pub, chat(A, OPEN_GID, 'the church itself posts')))[0], true,
     'church A can no longer post in its own group');
-  assert.equal((await publish(pub, chat(netA, OPEN_GID, 'the network posts')))[0], true,
-    'a network A declared can no longer post in A’s group');
+  // N1 (2026-10-21): this used to assert the network key CAN post in A's group. A joined network key now has no
+  // authority over the church's content, so the CONTROL for the network half is that it is refused.
+  assert.equal((await publish(pub, chat(netA, OPEN_GID, 'the network posts')))[0], false,
+    'a network A declared posted into A’s group -- churchWriter must carry no networkOf (N1)');
 });
 
 // S1b — FOUND BY THE CONTROL ABOVE, 2026-07-30, and it was not in the audit.
