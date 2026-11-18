@@ -171,6 +171,9 @@ export function audioWorld(opts = {}) {
     Icon: Stub('Icon'), Overlay: ({ open, children }) => (open ? React.createElement('div', { 'data-overlay': true }, children) : null),
     IconBtn: Stub('IconBtn'), SectionLabel: ({ children }) => React.createElement('h3', {}, children),
     lsGet, lsSet, URL, Blob, console, fetch: w.fetchImpl,
+    // the engine's own timers (the 45 s no-progress guard, the retry schedule, the 10-minute "paused -> none" of the
+    // OS controls) run on real time here and must not keep node alive once the tests are done: unref'd, they still fire
+    setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); if (t && t.unref) t.unref(); return t; }, clearTimeout,
   };
   const audio = loadScreen('app/screens-audio.jsx', ['MiniPlayer', 'useTrinityAudio', 'AudioBiblesScreen', 'playBibleChapter', 'getAudioChoice', 'sermonAudioTrack'], base);
   return { ...w, React, draw, el, base, audio, A: w.win.TrinityAudio, toasts, lsGet, lsSet };
