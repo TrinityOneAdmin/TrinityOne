@@ -2811,7 +2811,19 @@ const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
 // so the cancelled sub consumed the replacement's "this is the full fetch" and stamped fullAt before anything had
 // arrived; the next refetch was then incremental and the older documents never came for a day (Oppo, 2026-11-18;
 // reference/INVESTIGATION-oppo-devotional-missing-2026-11-18.md). Callers never reach here for a sub they cancelled.
-const _hubEosed = (hub, full) => { hub.eosed = true; hub.eosedAt = Date.now(); if (full) { hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
+//
+// …AND "EVERY RELAY CLOSED" IS NOT A FULL SYNC (A2). nostr-tools fires oneose once every relay has settled, and a
+// relay settles by answering (EOSE), by its own EOSE timer, or by CLOSING — a refused connection, a CLOSED from the
+// relay, a dropped socket. One relay answering beside one that is down still counts (the relays are replicas). If
+// EVERY relay ended by closing, nobody answered, and stamping fullAt would put off the daily full sync for a day
+// over an offline boot. `unanswered()` tells; it can only be asked one microtask later, because nostr-tools calls
+// the sub's onclose synchronously AFTER the oneose that the last close triggered. Only the fullAt stamp waits;
+// eosed / eosedAt and the handlers stay synchronous. `save` persists the stamp (the caller's saveSoon).
+const _hubEosed = (hub, full, unanswered, save) => {
+  hub.eosed = true; hub.eosedAt = Date.now();
+  if (!full) return;
+  Promise.resolve().then(() => { if (unanswered && unanswered()) return; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; if (save) save(hub); });
+};
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
 // APPROVAL RECOVERY. A church with approval on withholds its whole corpus from a member until a steward
@@ -3277,7 +3289,12 @@ function _docsHubOpen(hub) {
   let dead = false;
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
   if (since) for (const f of filters) f.since = since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
+  // A2: did every relay end by closing? An EMPTY list is "asked nobody" from the start: the pool wrapper answers it
+  // with a synthetic oneose and never calls onclose (audit F2). The wrapper itself is left alone — it has many callers.
+  const urls = relaysForChurch(cp);
+  let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+  const sub = pool.subscribeMany(urls, filters, {   // Phase 4: this church's relays (the shared pool is always included)
+    onclose() { allClosed = true; },
     onevent(e) {
       const d = _dtag(e);
       const key = e.pubkey + '|' + d;
@@ -3343,7 +3360,7 @@ function _docsHubOpen(hub) {
     },
     oneose() {
       if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer (no eosed, no fullAt, no handlers)
-      _hubEosed(hub, full); _docsHubSaveSoon(hub);
+      _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon); _docsHubSaveSoon(hub);
       // F11: rebuild the parent's children HERE. This fires on a socket that has just answered us, and only
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
@@ -3473,7 +3490,10 @@ function _memHubOpen(hub) {
   if (since) filters[1].since = since;
   const k1since = _hubSinceKind1(hub);
   if (k1since) filters[0].since = k1since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
+  const urls = relaysForChurch(cp);   // A2, as _docsHubOpen: an empty list is "asked nobody"
+  let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+  const sub = pool.subscribeMany(urls, filters, {   // Phase 4: this church's relays (the shared pool is always included)
+    onclose() { allClosed = true; },
     onevent(e) {
       _hubCursor(hub, e);
       if (e.pubkey === cp) { _memHubSaveSoon(hub); return; }
@@ -3491,7 +3511,7 @@ function _memHubOpen(hub) {
     },
     oneose() {
       if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer
-      _hubEosed(hub, full); _memHubSaveSoon(hub);
+      _hubEosed(hub, full, () => allClosed, _memHubSaveSoon); _memHubSaveSoon(hub);
       for (const l of [...hub.listeners]) { try { l.oneose && l.oneose(); } catch (err) { console.error(err); } }
     },
   });

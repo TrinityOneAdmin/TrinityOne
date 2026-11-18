@@ -91,6 +91,24 @@ test('T-B 2c (audit F2): an empty relay list — asked nobody — is not a full 
   await nobodyAnswered([], 'empty list');
 });
 
+test('T-B 2d: the members hub — every relay refuses the connection — not a full sync either', async () => {
+  const storage = memStorage();
+  const fullAt0 = nowS() - 2 * 86400;
+  storage.setItem('trinityone.memhub.' + cp, JSON.stringify({ since: nowS() - 60, fullAt: fullAt0, members: [] }));
+  const app = memberApp({ me: ruth, relays: [deadUrl(DEAD1), deadUrl(DEAD2)], storage });
+  let done = 0;
+  const off = app.api.subscribeChurchMembers(cp, (_m, isDone) => { if (isDone) done++; });
+  assert.ok(isFull(app.memReqs(cp)[0]), 'the daily full is due, so the open is full');
+  assert.ok(await until(() => done > 0, 6000), 'the members hub settled');
+  await sleep(50);
+  assert.equal(app.memHub(cp).fullAt, fullAt0, 'members hub: fullAt was stamped although no relay answered');
+  off(); await sleep(50);
+  const off2 = app.api.subscribeChurchMembers(cp, () => {});
+  assert.ok(isFull(app.memReqs(cp).at(-1)), 'members hub: the next open must still be full');
+  off2(); await sleep(100);
+  app.clean(); app.close();
+});
+
 // ── T-B 3: documents the multi-relay rule ───────────────────────────────────────────────────────────────────────
 test('T-B 3 (documents the rule): one relay answers and one is unreachable — that IS the full sync (replicas)', async () => {
   reset(r1, 'gate');

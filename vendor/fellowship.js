@@ -8897,13 +8897,16 @@
     return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
   };
   var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
-  var _hubEosed = (hub, full) => {
+  var _hubEosed = (hub, full, unanswered, save) => {
     hub.eosed = true;
     hub.eosedAt = Date.now();
-    if (full) {
+    if (!full) return;
+    Promise.resolve().then(() => {
+      if (unanswered && unanswered()) return;
       hub.fullAt = Math.floor(Date.now() / 1e3);
       hub.dirty = true;
-    }
+      if (save) save(hub);
+    });
   };
   var RESEAT_D = "trinityone/reseat:";
   var _reseatOld = /* @__PURE__ */ new Map();
@@ -9357,8 +9360,13 @@
     let dead = false;
     const filters = [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
     if (since) for (const f of filters) f.since = since;
-    const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
+    const urls = relaysForChurch(cp);
+    let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+    const sub = pool.subscribeMany(urls, filters, {
       // Phase 4: this church's relays (the shared pool is always included)
+      onclose() {
+        allClosed = true;
+      },
       onevent(e) {
         const d = _dtag(e);
         const key = e.pubkey + "|" + d;
@@ -9459,7 +9467,7 @@
       },
       oneose() {
         if (dead || hub.gen !== gen) return;
-        _hubEosed(hub, full);
+        _hubEosed(hub, full, () => allClosed, _docsHubSaveSoon);
         _docsHubSaveSoon(hub);
         _maybeRebuildFamily(hub);
         for (const h of [...hub.handlers]) {
@@ -9625,8 +9633,13 @@
     if (since) filters[1].since = since;
     const k1since = _hubSinceKind1(hub);
     if (k1since) filters[0].since = k1since;
-    const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
+    const urls = relaysForChurch(cp);
+    let allClosed = !(Array.isArray(urls) ? urls : []).filter(Boolean).length;
+    const sub = pool.subscribeMany(urls, filters, {
       // Phase 4: this church's relays (the shared pool is always included)
+      onclose() {
+        allClosed = true;
+      },
       onevent(e) {
         _hubCursor(hub, e);
         if (e.pubkey === cp) {
@@ -9667,7 +9680,7 @@
       },
       oneose() {
         if (dead || hub.gen !== gen) return;
-        _hubEosed(hub, full);
+        _hubEosed(hub, full, () => allClosed, _memHubSaveSoon);
         _memHubSaveSoon(hub);
         for (const l of [...hub.listeners]) {
           try {
