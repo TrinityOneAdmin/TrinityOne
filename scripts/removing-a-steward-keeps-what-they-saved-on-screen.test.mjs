@@ -314,7 +314,33 @@ test('LOW 1 — Reconnect with "taken" on a steward’s old key shows progress, 
   assert.equal(asked.length, 1, 'the re-seat was not asked for');
   assert.equal(asked[0].opts.blockOld, true);
   assert.match(reads(draw(C, props)), /Reconnecting… keeping what they set up/, 'no progress shown while the carry runs (up to ~20 s)');
-  d.res({ carry: { carried: [{ d: 'g', label: 'a group' }], notCarried: [{ d: 'n', why: 'time', label: 'a photo setting' }], superseded: [] }, blockedOld: true, failed: [] });
+  d.res({ carry: { carried: [{ d: 'trinityone/group:g', label: 'the group “Youth”' }], notCarried: [{ d: 'n', why: 'time', label: 'a photo setting' }], superseded: [], swapFailed: ['the group “Choir”'] }, blockedOld: true, failed: [] });
   await flush();
-  assert.match(reads(draw(C, props)), /These couldn’t be kept and may change back: a photo setting\./, 'the result of the carry is not said');
+  const said = reads(draw(C, props));
+  assert.match(said, /These couldn’t be kept and may change back: a photo setting\./, 'the result of the carry is not said');
+  // round 3 (nit 6): groups they set up were moved to the new key automatically, so the hand step is only for the OTHERS
+  assert.match(said, /Groups they set up now name their new key\./, 'the screen does not say the groups they set up were moved');
+  assert.match(said, /Couldn’t put their new key on the group “Choir” — open Groups and add them\./, 'a group the swap could not re-save is not named');
+  assert.match(said, /if they were in any other invite-only groups/, 'the hand step still reads as if no group was moved');
 });
+
+test('nit 7 — unticking a SECOND steward’s last box while the first is still clearing is queued, not dropped', async () => {
+  const d1 = deferred(), d2 = deferred();
+  const r = panelRig({ keep: (pk) => (pk === DELEGATE ? d1.p : d2.p), caps: { [DELEGATE]: ['care'], [OTHER_STEW]: ['content'] } });
+  const p = await openPanel(r);
+  let tree = p.view();
+  await press(tree, /What this helper may do/, { which: 0 });
+  find(p.view(), n => n && n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: false } });
+  await flush();
+  tree = p.view();
+  await press(tree, /What this helper may do/, { which: 1 });   // open the second steward's editor while the first is in flight
+  const boxes = find(p.view(), n => n && n.type === 'input' && n.props.type === 'checkbox');
+  boxes[boxes.length - 1].props.onChange({ target: { checked: false } });   // their only capability
+  await flush();
+  assert.deepEqual(r.calls.keep.map(c => c.pk), [DELEGATE, OTHER_STEW], 'the second untick-all was dropped while the first was in flight');
+  d1.res({ wrote: true, carry: { carried: [], notCarried: [], superseded: [] }, next: [DELEGATE, OTHER_STEW] });
+  d2.res({ wrote: true, carry: { carried: [], notCarried: [], superseded: [] }, next: [DELEGATE, OTHER_STEW] });
+  await flush();
+  assert.doesNotMatch(reads(p.view()), /Removing their permissions…/, 'an indicator stayed after both finished');
+});
+

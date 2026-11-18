@@ -7949,7 +7949,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             : 'The phones of ' + res.childrenNotTold + ' of their children have not been told about the new key yet, so they can’t message each other until they have — open Members to send it again. '}</b> : null}
           {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
-          One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
+          {res && res.carry && (res.carry.carried || []).some(c => String(c.d || '').startsWith('trinityone/group:')) ? 'Groups they set up now name their new key. ' : ''}
+          {res && res.carry && (res.carry.swapFailed || []).length ? <b>{'Couldn’t put their new key on ' + res.carry.swapFailed.join(', ') + ' — open Groups and add them. '}</b> : null}
+          One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.carried || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
           again. Ordinary groups need nothing — they are already back in those.
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
@@ -11394,7 +11396,10 @@ function DashStewardsPanel({ church }) {
   // WHAT THE CARRY-OVER KEPT (plan §3.7). Its own line beside the removal note, so a list of what could NOT be kept is
   // never cleared with a confirmation that times out.
   const [carryNote, setCarryNote] = React.useState(null);
-  const [capsClearing, setCapsClearing] = React.useState(null);   // the pk whose permissions are being cleared (untick-all) — see setCaps
+  // whose permissions are being cleared (untick-all) — see setCaps. A SET: the engine runs them one at a time anyway, so a
+  // second steward's untick queues behind the first instead of silently doing nothing (audit round 2, nit).
+  const [capsClearing, setCapsClearing] = React.useState(() => new Set());
+  const capsClearOn = (pk, on) => setCapsClearing(s => { const n = new Set(s); if (on) n.add(pk); else n.delete(pk); return n; });
   React.useEffect(() => {   // "everything kept" is a confirmation, so a moment; a list of what was not kept stays
     if (!carryNote || carryNote.tone !== 'ok') return undefined;
     const t = setTimeout(() => setCarryNote(cur => (cur === carryNote ? null : cur)), 8000);
@@ -11458,7 +11463,7 @@ function DashStewardsPanel({ church }) {
     // (it reads 'any'), but an empty list takes everything they saved off every phone — so it runs the same carry-over
     // first, in the engine's one-at-a-time queue, which writes caps[pk] = [] from its own current roster.
     if (Array.isArray(list) && list.length === 0) {
-      if (capsClearing) return;   // one at a time; the editor says it is working
+      if (capsClearing.has(pk)) return;   // already clearing this one; the editor says so
       const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
       const failed = (why) => setCarryNote({ tone: 'fail', text: why === 'roster-unknown'
         ? 'Couldn’t change what ' + who + ' may do yet — this console hasn’t finished reading who your stewards are. Nothing was changed. Try again in a moment.'
@@ -11466,13 +11471,13 @@ function DashStewardsPanel({ church }) {
       setCarryNote(null);
       let p;
       try { p = Promise.resolve(window.Steward.removeStewardKeeping(pk, { capsOnly: true })); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
-      setCapsClearing(pk);
+      capsClearOn(pk, true);
       p.then((r) => {
-        setCapsClearing(null);
+        capsClearOn(pk, false);
         if (!r || r.refused) { failed(r && r.refused); return; }
         if (!r.wrote) { failed(''); return; }
         setCarryNote(stewCarryNote(r.carry));
-      }, () => { setCapsClearing(null); failed(''); });
+      }, () => { capsClearOn(pk, false); failed(''); });
       return;
     }
     const next = { ...caps };
@@ -11653,7 +11658,7 @@ function DashStewardsPanel({ church }) {
             </span>
           </label>
         ))}
-        {capsClearing === pk ? <div role="status" style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8, fontWeight: 600 }}>Removing their permissions… keeping what they set up</div>
+        {capsClearing.has(pk) ? <div role="status" style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8, fontWeight: 600 }}>Removing their permissions… keeping what they set up</div>
           : cur !== null && cur.length <= 1 ? <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8 }}>Unticking everything removes all their permissions. What they set up stays as it is.</div> : null}
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 10 }}>
           Your relay enforces this. A relay running an older version does not know about it yet and will keep
