@@ -245,3 +245,17 @@ test('T9 — a Search result from a << >> verse shows the quotation as text, not
   assert.match(html, /<mark[^>]*>said<\/mark>/, 'the search did not find Genesis 1:7 — re-anchor this test. Drew: ' + html);
   assert.match(html, /&lt;&lt;Come\.&gt;&gt;/, 'the quotation was put in the page as markup: ' + html);
 });
+
+// ── T2b: a `\v` written inside a cross-reference or an endnote does not move the verse a footnote is filed under ──
+// The footnote scan steps over \x…\x* and \fe…\fe* whole (commit 29a14d56). Without that, the `\v 8` inside the
+// cross-reference and the `\v 9` inside the endnote moved the current verse, and each footnote landed on 8 / 9.
+test('T2b — a \\v inside \\x…\\x* or \\fe…\\fe* does not move the following footnote off its own verse', async () => {
+  const usfm = '\\id GEN Notes Test Bible\n\\c 1\n' +
+    '\\p \\v 1 One\\x - \\xt see \\v 8 x\\x* tail\\f + \\ft note on one\\f* \\v 2 Two\\fe + \\ft end \\v 9 y\\fe* more\\f + \\ft note on two\\f*\n';
+  const { r, Bible } = await installed(zipOf({ '02-GEN.usfm': usfm }), 'notes.zip');
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const fn = Bible.getCommentary(GEN, 1, r.abbr).find(x => x.kind === 'footnotes');
+  assert.ok(fn, 'no footnotes block for Genesis 1');
+  assert.deepEqual(Array.from(fn.rows, x => [x.v, x.html]), [[1, '<p>note on one</p>'], [2, '<p>note on two</p>']],
+    'a footnote was filed under a verse number written inside a note: ' + JSON.stringify(Array.from(fn.rows, x => [x.v, x.html])));
+});
