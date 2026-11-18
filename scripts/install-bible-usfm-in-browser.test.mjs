@@ -54,6 +54,7 @@ async function ev(expression) {
 async function waitEngine() { for (let i = 0; i < 150; i++) { try { if (await ev('!!(window.Bible && window.Bible.installFromBytes && window.Bible.loaded)')) return; } catch {} await sleep(300); } assert.fail('the engine never came up'); }
 
 // install `bytes` as `name` through the Library screen's own button; returns what the sheet and the reader showed
+let ABBR1 = '', ABBR2 = '';   // the two Bibles the first two tests install (read by the translation-kept test)
 async function installViaLibrary(name, bytes, readerNeedle) {
   const b64 = Buffer.from(bytes).toString('base64');
   return JSON.parse(await ev(`(async () => {
@@ -104,6 +105,7 @@ test('a USFM ZIP installed from the Library reads in the reader at once, and aga
   await waitEngine(); await sleep(3000);
   const s = (await buildSamples()).find(x => x.file.startsWith('01-'));
   const r = await installViaLibrary(s.file, s.bytes, 'In the beginning was the Word');
+  ABBR1 = r.result && r.result.abbr;
   assert.deepEqual([r.tab, r.store, r.btn], [true, true, true], 'the Library screen did not offer the button: ' + JSON.stringify(r));
   assert.equal(r.result && r.result.ok, true, JSON.stringify(r));
   assert.equal(r.sheet, true, 'the result sheet was not shown');
@@ -121,6 +123,7 @@ test('a single-book USFM file installed from the Library reads, and reads again 
   await waitEngine(); await sleep(3000);
   const s = (await buildSamples()).find(x => x.file.startsWith('02-'));
   const r = await installViaLibrary(s.file, s.bytes, 'The elder to Gaius');
+  ABBR2 = r.result && r.result.abbr;
   assert.equal(r.result && r.result.ok, true, JSON.stringify(r));
   assert.equal(r.readerHasText, true, 'after "Read it now" the READER SCREEN shows no text of the single-book Bible (it should open 3 John 1)');
   const txt = await textAfterReload(r.result.abbr, 64, 1, 1);
@@ -128,4 +131,78 @@ test('a single-book USFM file installed from the Library reads, and reads again 
   const after = await readerAfterReload(r.result.abbr);
   assert.equal(after.tab, true, 'the Read tab was not found');
   assert.match(after.body, /The elder to Gaius/, 'after a relaunch the READER SCREEN shows no text of the single-book Bible (pressed the Go to button: ' + after.pressed + '): ' + after.body.slice(0, 400));
+});
+
+// ── THE TRANSLATION A MEMBER PICKS IS THE ONE THAT OPENS AFTER A RELAUNCH (2026-11-18) ───────────────────────────────
+// Round-2 device testing: "the reader returns to BSB after every restart". Everything below goes through the READER'S OWN
+// controls — the translation pill in its header, the Translations sheet's row, the footer's next-chapter button — and
+// reads back what the reader header and page show after a REAL reload. Nothing here calls Bible.setActive.
+const HEADER = `[...document.querySelectorAll('div')].map(d => [...d.children].filter(c => c.tagName === 'BUTTON' && c.style.borderRadius === '12px')).find(bs => bs.length >= 3 && /^[A-Za-z0-9+]{2,8}$/.test(bs[2].innerText.trim()) && /^\\d+$/.test(bs[1].innerText.trim()))`;
+async function openRead() {
+  await ev(`(async () => { const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < 40; i++) { const el = [...document.querySelectorAll('button, [role=button], div')].reverse().find(x => /^Read$/.test((x.textContent || '').trim())); if (el) { el.click(); break; } await wait(250); }
+    for (let i = 0; i < 60 && !(${HEADER}); i++) await wait(250); return 1; })()`);
+}
+const header = () => ev(`(() => { const bs = ${HEADER}; return bs ? { book: bs[0].innerText.trim(), chap: bs[1].innerText.trim(), version: bs[2].innerText.trim() } : null; })()`);
+// tap the header's translation pill, then the sheet row whose abbreviation line is `abbr`
+async function pickInSheet(abbr) {
+  const ok = await ev(`(async () => { const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const bs = ${HEADER}; if (!bs) return 'no header'; bs[2].click(); await wait(700);
+    let row = null;
+    // a row of the sheet's "In your reader" list: a tappable card whose lines include the abbreviation (alone, or "ABBR · kind")
+    const isRow = (d) => d.style.cursor === 'pointer' && d.style.borderRadius === '15px' && d.innerText.split('\\n').some(l => l.trim() === ${JSON.stringify(abbr)} || l.trim().startsWith(${JSON.stringify(abbr)} + ' ·'));
+    for (let i = 0; i < 40 && !row; i++) { row = [...document.querySelectorAll('div')].find(isRow) || null; if (!row) await wait(250); }
+    if (!row || row.style.cursor !== 'pointer') return 'no sheet row for ${abbr}; pill was ' + JSON.stringify(bs[2].innerText) + '; page: ' + document.body.innerText.slice(-900).replace(/\\s+/g, ' ');
+    row.click(); await wait(1200); return 'ok'; })()`);
+  assert.equal(ok, 'ok', ok);
+}
+async function relaunch() {
+  await ev('window.__marker = 1');
+  await send('Page.reload');
+  for (let i = 0; i < 160; i++) { try { if (await ev('typeof window.__marker === "undefined"')) break; } catch {} await sleep(250); }
+  await waitEngine();
+  for (let i = 0; i < 200; i++) { try { if (await ev('window.Bible.loading === false')) break; } catch {} await sleep(250); }
+  await openRead(); await sleep(1000);
+}
+
+test('the translation picked in the reader\'s own sheet is the one the reader opens after a relaunch — at its own saved place', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  assert.ok(ABBR1 && ABBR2, 'the install tests above did not run: ' + JSON.stringify([ABBR1, ABBR2]));
+  await openRead();
+  await pickInSheet(ABBR1);
+  let h = await header();
+  assert.equal(h && h.version, ABBR1, 'the sheet pick did not switch the reader: ' + JSON.stringify(h));
+  // the reader was on 3 John (the single-book Bible); this one may not hold it — the reader then offers its own "Go to" button
+  await ev(`(async () => { const wait = (ms) => new Promise(r => setTimeout(r, ms)); if (/isn.t in/.test(document.body.innerText)) { const el = [...document.querySelectorAll('button')].find(x => /^Go to /.test((x.textContent || '').trim())); if (el) { el.click(); await wait(1500); } } return 1; })()`);
+  h = await header();
+  // turn one page with the footer, so the place saved under this translation is not where it opened
+  const before = h.book + ' ' + h.chap;
+  const pressed = await ev(`(() => { const bs = [...document.querySelectorAll('button')].filter(b => b.style.borderRadius === '15px'); if (bs.length !== 2) return null; const b = /^End$/.test(bs[1].innerText.trim()) ? bs[0] : bs[1]; b.click(); return b.innerText.trim(); })()`);   // 3 John is the last book: then the previous one
+  assert.ok(pressed, 'no footer prev/next pair'); await sleep(800);
+  h = await header(); const place = h.book + ' ' + h.chap;
+  assert.notEqual(place, before, 'the footer button did not turn the page: before ' + before + ', pressed ' + JSON.stringify(pressed) + ', after ' + place + ' / ' + (await ev('document.body.innerText')).slice(0, 300).replace(/\s+/g, ' '));
+  await relaunch();
+  h = await header();
+  assert.equal(h && h.version, ABBR1, 'THE FINDING: after a relaunch the reader opened in ' + JSON.stringify(h) + ', not the translation picked');
+  assert.equal(h.book + ' ' + h.chap, place, 'the reader did not reopen at the place saved in the picked translation');
+  assert.equal(await ev('window.Bible.activeVersion'), ABBR1);
+  // the screens that follow the active Bible: Today's verse is read in it (votdInTranslation is the shipped function, run here)
+  assert.equal(await ev(`votdInTranslation({ ref: 'John 1:1', text: 'pool text' }, window.Bible).version`), ABBR1, 'Today\'s verse is not read in the picked translation');
+});
+
+test('picking BSB back is followed too, and a picked Bible whose bytes are gone opens BSB with no error', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  assert.ok(ABBR1, 'the install tests above did not run');
+  await pickInSheet('BSB');
+  await relaunch();
+  let h = await header();
+  assert.equal(h && h.version, 'BSB', 'picking BSB back was not kept: ' + JSON.stringify(h));
+  // pick the file Bible again, then take its bytes away (an evicted store) and relaunch
+  await pickInSheet(ABBR1);
+  const url = await ev('window.Bible.activeUrl');
+  assert.ok(url, 'the picked Bible has no url');
+  assert.equal(await ev(`new Promise((res) => { const o = indexedDB.open('bible-modules'); o.onsuccess = () => { const tx = o.result.transaction('modules', 'readwrite'); tx.objectStore('modules').delete(${JSON.stringify(url)}); tx.oncomplete = () => res('ok'); tx.onerror = () => res('err'); }; o.onerror = () => res('open-err'); })`), 'ok');
+  await relaunch();
+  h = await header();
+  assert.equal(h && h.version, 'BSB', 'with the picked Bible gone the reader did not fall back to BSB: ' + JSON.stringify(h));
+  assert.equal(await ev('window.Bible._error'), null, 'the fallback set an error');
+  assert.ok(!/Couldn.t/.test(await ev('document.body.innerText')), 'the fallback put an error on the screen');
 });
