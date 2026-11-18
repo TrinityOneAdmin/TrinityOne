@@ -37,8 +37,8 @@ export const said = (n) => {
 // `extra` names top-level functions the component calls: a string is read from the same file, `{ src, name }` from another
 // (e.g. publishCareTeamFor from stew-schedule.jsx, which the dashboard reaches as a global).
 export const SCH = readFileSync(join(ROOT, 'app/stew-schedule.jsx'), 'utf8');
-export async function compiled(name, globals, extra = [], src0 = DASH) {
-  const { React, draw } = miniReact();
+export async function compiled(name, globals, extra = [], src0 = DASH, reactOpts) {
+  const { React, draw } = miniReact(reactOpts);   // reactOpts { unmounts: true }: a component not drawn is unmounted (its hooks forgotten)
   // `{ src, const: 'NAME' }` reads a single-line top-level `const NAME = …;` table (STEW_CAP_LABEL) from the shipped file
   const constLine = (e) => { const m = e.src.match(new RegExp('^const ' + e.const + ' = .*;$', 'gm')); if (!m || m.length !== 1) throw new Error('expected exactly one single-line top-level const ' + e.const + ', found ' + (m ? m.length : 0)); return m[0]; };
   const pick = (e) => (e && e.const ? constLine(e) : typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
@@ -54,6 +54,11 @@ export async function compiled(name, globals, extra = [], src0 = DASH) {
   if (src0 === DASH && /\buseHelperRequests\(/.test(src) && !/function useHelperRequests\(/.test(src)) {
     src += '\n' + ['pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n');
   }
+  // WHAT A REMOVAL OR BLOCK KEPT (2026-11-17): DashStewardsPanel and DashMembers both word it through stewCarryNote, so it
+  // is compiled in, real, whenever the screen uses it.
+  if (src0 === DASH && /\bstewCarryNote\(/.test(src) && !/function stewCarryNote\(/.test(src)) src += '\n' + fnBody(DASH, 'function stewCarryNote(', 'stewCarryNote');
+  // …and DashMembers' module-scope Block in-flight set (2026-11-18), the shipped declaration, whenever the screen reads it
+  if (src0 === DASH && /\b_blockingInFlight\b/.test(src) && !/const _blockingInFlight = /.test(src)) src += '\n' + constLine({ src: DASH, const: '_blockingInFlight' });
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

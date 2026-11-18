@@ -42,6 +42,8 @@ function world({ approval = true, fresh = true } = {}) {
     createEncryptedGroup: rec('createEncryptedGroup', (g) => ({ ok: true, group: { ...g, id: 'new' }, skipped: [] })),
     sealGroup: rec('sealGroup', { sealed: true, skipped: [] }),
     setBlocked: rec('setBlocked', true), setStewards: rec('setStewards', true),
+    // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
+    removeStewardKeeping: (pk) => { const next = (lists.stewards || []).filter(p => p !== pk); return Promise.resolve(Steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next })); },
     rotateCareKey: rec('rotateCareKey', true), rotateMediaKey: rec('rotateMediaKey', true),
     ensureNameKeyForMembers: rec('ensureNameKeyForMembers', { rotated: true }), publishGroupKey: rec('publishGroupKey', true),
     publishGroup: rec('publishGroup', (g) => ({ ...g, ts: 1 })), publishProfile: rec('publishProfile', true),

@@ -15531,6 +15531,7 @@ zoo`.split("\n");
   var _careKeyAt = 0;
   var _careKeyMine = false;
   var _careRoster = /* @__PURE__ */ new Set();
+  var _justRemoved = /* @__PURE__ */ new Map();
   var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
   function _exStewardSet() {
     try {
@@ -18386,6 +18387,7 @@ zoo`.split("\n");
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
     _careRosterSeen = false;
+    _justRemoved.clear();
     _stewardCaps = {};
     _stewardNames = {};
     _stewardNamesCt = "";
@@ -21228,6 +21230,533 @@ zoo`.split("\n");
     }
     return String(r || "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
   }
+  var STEWARD_CARRY = Object.freeze({
+    // church SETTINGS, carried verbatim (tombstones included)
+    carry: Object.freeze([
+      "trinityone/group:",
+      "trinityone/category:",
+      "trinityone/plan:",
+      "trinityone/devotional:",
+      "trinityone/service:",
+      "trinityone/request:",
+      "trinityone/room:",
+      "trinityone/booking:",
+      "trinityone/runsheet:",
+      "trinityone/rota:",
+      "trinityone/roster:",
+      "trinityone/msgtags",
+      "trinityone/rota-settings",
+      "trinityone/verse-prompt",
+      "trinityone/pinsermon:",
+      "trinityone/sermon:",
+      "trinityone/event:",
+      "trinityone/pin:",
+      "trinityone/hidden:",
+      "trinityone/nophoto:",
+      "trinityone/joinpolicy:",
+      "trinityone/reseat:",
+      "trinityone/careteam:",
+      "trinityone/meals-settings",
+      "trinityone/carereqstatus:"
+    ]),
+    // carried with the skip part RE-MADE under the church (owner answer g): a need's skip secret is sealed to its AUTHOR,
+    // so a verbatim church copy would break the recipient's "I don't need help that day". Days already marked are forgotten.
+    remint: Object.freeze(["trinityone/care:"]),
+    // never carried, and why
+    never: Object.freeze([
+      "trinityone/admitted:",
+      // one list per author; a church re-sign would REPLACE the church's own list
+      "trinityone/clearance:",
+      // sealed per member; the owner's back-fill rewrites it from minors/approved
+      "trinityone/safetycheck:",
+      // owner answer (e): settings only
+      "trinityone/groupkey:",
+      "trinityone/carekey:",
+      "trinityone/namekey:",
+      // rotated, never copied (Remove / Block)
+      "trinityone/checkin:",
+      // safeguarding record, exempt on both sides
+      "trinityone/fund:",
+      // the church key (or its network) only, at the relay — gateway.mjs leaderOf; a fund is the church's
+      //   payment destination (SECURITY-AUDIT-2026-07-06 M4). A delegated steward can never have written
+      //   one, and re-signing one a lax relay served would put the church's signature on a steward's
+      //   Lightning address. Owner answer (h) held back pending the owner.
+      "trinityone/blocked:",
+      // the church key's alone
+      "finance/"
+      // single-writer, sequence-pinned; the relay and console keep them anyway
+    ])
+  });
+  var _CARRY_BARE = ["trinityone/rota-settings", "trinityone/verse-prompt", "trinityone/meals-settings", "trinityone/msgtags"];
+  var STEWARD_CARRY_LIMIT_MS = 2e4;
+  var _CARRY_WORDS = {
+    "trinityone/group:": "a group",
+    "trinityone/category:": "a group category",
+    "trinityone/plan:": "a reading plan",
+    "trinityone/devotional:": "a devotional",
+    "trinityone/service:": "a service",
+    "trinityone/request:": "a request",
+    "trinityone/room:": "a room",
+    "trinityone/booking:": "a booking",
+    "trinityone/runsheet:": "a running order",
+    "trinityone/rota:": "a rota",
+    "trinityone/roster:": "a team list",
+    "trinityone/msgtags": "the chat labels",
+    "trinityone/rota-settings": "who can see the rota",
+    "trinityone/verse-prompt": "the verse prompt",
+    "trinityone/pinsermon:": "the featured sermon",
+    "trinityone/sermon:": "a sermon",
+    "trinityone/event:": "an event",
+    "trinityone/pin:": "a pinned message",
+    "trinityone/hidden:": "a hidden message",
+    "trinityone/nophoto:": "a photo setting",
+    "trinityone/joinpolicy:": "the joining setting",
+    "trinityone/reseat:": "a reconnected member",
+    "trinityone/careteam:": "the care team",
+    "trinityone/meals-settings": "the meals setting",
+    "trinityone/carereqstatus:": "a help request",
+    "trinityone/care:": "a care need"
+  };
+  function _carryPrefix(d, list) {
+    for (const p of list) if (d === p || d.startsWith(p)) return p;
+    return "";
+  }
+  function _carryLabel(d, content) {
+    const p = _carryPrefix(d, [...STEWARD_CARRY.carry, ...STEWARD_CARRY.remint]);
+    if (p === "trinityone/group:") {
+      try {
+        const g = JSON.parse(content || "");
+        if (g && typeof g.name === "string" && g.name.trim()) return "the group \u201C" + g.name.trim().slice(0, 60) + "\u201D";
+      } catch (e) {
+      }
+    }
+    return _CARRY_WORDS[p] || "a church setting";
+  }
+  async function _carryTemplate(S, blocked, who) {
+    let tags = (S.tags || []).filter((t) => Array.isArray(t) && t[0] !== "for");
+    let content = typeof S.content === "string" ? S.content : "";
+    const d = (tags.find((t) => t[0] === "d") || [])[1] || "";
+    const dead = tags.some((t) => t[0] === "deleted") || !content;
+    if (!dead && blocked && d.startsWith("trinityone/group:")) {
+      let g;
+      try {
+        g = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (g && typeof g === "object") {
+        const keep = (x) => String(x || "").toLowerCase() !== who;
+        if (Array.isArray(g.leaders)) g.leaders = g.leaders.filter(keep);
+        if (Array.isArray(g.members)) g.members = g.members.filter(keep);
+        content = JSON.stringify(g);
+      }
+    }
+    if (!dead && d.startsWith("trinityone/careteam:")) {
+      let body;
+      try {
+        body = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (!body || typeof body !== "object" || !Array.isArray(body.pubs)) return { skip: "unreadable" };
+      const m = window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
+      if (!m || !m.known) return { skip: "children-unread" };
+      const minors = new Set((m.list || []).map((p) => String(p || "").toLowerCase()));
+      content = JSON.stringify({ ...body, pubs: body.pubs.filter((p) => !minors.has(String(p || "").toLowerCase())) });
+    }
+    if (!dead && d.startsWith("trinityone/care:")) {
+      let body;
+      try {
+        body = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (!body || typeof body !== "object") return { skip: "unreadable" };
+      if (body.recipient) return { skip: "cleartext" };
+      if (body.skipEnc || tags.some((t) => t[0] === "skiphash")) {
+        const S_ = window.Steward;
+        const opened = body.enc && S_ && S_.careOpen ? S_.careOpen(body.enc) : null;
+        const recipient = opened && typeof opened.recipient === "string" && /^[0-9a-f]{64}$/i.test(opened.recipient) ? opened.recipient.toLowerCase() : "";
+        if (!recipient) return { skip: "care-key" };
+        const sb = new Uint8Array(32);
+        crypto.getRandomValues(sb);
+        const secret = Array.from(sb).map((x) => x.toString(16).padStart(2, "0")).join("");
+        const to = S_.careSealTo ? S_.careSealTo(recipient, { s: secret }) : null;
+        if (!to) return { skip: "care-key" };
+        let days = tags.filter((t) => t[0] === "skiphash" && t.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(t[1] || "")).map((t) => t[1]);
+        if (!days.length && Array.isArray(body.dates)) days = body.dates.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(String(x || "")));
+        const te2 = new TextEncoder();
+        tags = tags.filter((t) => t[0] !== "skiphash");
+        for (const day of [...new Set(days)]) {
+          const tokDay = await _sha256hex(te2.encode(secret + ":" + day));
+          tags.push(["skiphash", day, await _sha256hex(te2.encode(tokDay))]);
+        }
+        content = JSON.stringify({ ...body, skipEnc: to });
+      }
+    }
+    return { kind: 30078, created_at: now(), tags, content };
+  }
+  async function _carryOverStewardDocs(pk, opts) {
+    const o = opts || {};
+    const who = String(pk || "").toLowerCase();
+    const out = { carried: [], notCarried: [], superseded: [], refused: "" };
+    if (actingChurch) {
+      out.refused = "delegated";
+      return out;
+    }
+    if (!sk || !pub || !/^[0-9a-f]{64}$/.test(who) || who === pub) {
+      out.refused = "no-key";
+      return out;
+    }
+    const deadline = Date.now() + (typeof o.limitMs === "number" && o.limitMs > 0 ? o.limitMs : STEWARD_CARRY_LIMIT_MS);
+    const left = () => deadline - Date.now();
+    const dOf = (e) => ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+    const chOf = (e) => ((e && e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+    const notC = (d, why, label) => out.notCarried.push({ d, why, label: label || _carryLabel(d, null) });
+    const urls = relays();
+    if (!urls.length) {
+      notC("", "no-relay", "anything they set up (no relay could be reached)");
+      return out;
+    }
+    const ask = (url, filter) => new Promise((resolve) => {
+      const evs = [];
+      let done = false, sub = null;
+      const ms = left();
+      const finish = (complete) => {
+        if (done) return;
+        done = true;
+        try {
+          if (sub) sub.close();
+        } catch (e) {
+        }
+        let authed = false;
+        try {
+          authed = _keyReadAuthedOn(url);
+        } catch (e) {
+          authed = false;
+        }
+        resolve({ evs, complete: !!complete && authed });
+      };
+      if (ms <= 0) {
+        finish(false);
+        return;
+      }
+      try {
+        sub = pool.subscribeMany([url], [filter], { onevent(e) {
+          evs.push(e);
+        }, oneose() {
+          finish(true);
+        }, maxWait: ms + 5e3 });
+      } catch (e) {
+        finish(false);
+        return;
+      }
+      if (done) {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+      }
+      setTimeout(() => finish(false), ms);
+    });
+    const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
+    const onRoster = [..._careRoster].some((p) => String(p).toLowerCase() === who);
+    const capEntry = Object.keys(_stewardCaps || {}).find((k) => k.toLowerCase() === who);
+    const heldCare = onRoster && (capEntry == null || !Array.isArray(_stewardCaps[capEntry]) || _stewardCaps[capEntry].some((c) => String(c).toLowerCase() === "care"));
+    const mine = /* @__PURE__ */ new Map();
+    const keepMine = (e) => {
+      if (!e || e.kind !== 30078 || String(e.pubkey).toLowerCase() !== who) return;
+      const d = dOf(e);
+      if (!d || !carryable(d) || chOf(e) !== pub) return;
+      const cur = mine.get(d);
+      if (!cur || (e.created_at || 0) > (cur.created_at || 0)) mine.set(d, e);
+    };
+    let readAll = true;
+    await Promise.all(urls.map(async (url) => {
+      const ids = /* @__PURE__ */ new Set();
+      let until = null;
+      for (let page = 0; ; page++) {
+        if (page >= 40) {
+          readAll = false;
+          return;
+        }
+        const f = { kinds: [30078], authors: [who], "#t": [NET], limit: 500 };
+        if (until != null) f.until = until;
+        const r = await ask(url, f);
+        let fresh = 0, oldest = until;
+        for (const e of r.evs) {
+          if (!e || ids.has(e.id)) continue;
+          ids.add(e.id);
+          fresh++;
+          keepMine(e);
+          if (oldest == null || (e.created_at || 0) < oldest) oldest = e.created_at || 0;
+        }
+        if (!r.complete) {
+          readAll = false;
+          return;
+        }
+        if (!fresh) return;
+        until = oldest;
+      }
+    }));
+    if (!readAll) notC("", "incomplete", "anything else they set up that a relay did not show in time");
+    const ds = [...mine.keys()];
+    for (let i3 = 0; i3 < ds.length; i3 += 60) {
+      const slice = ds.slice(i3, i3 + 60);
+      if (left() <= 0) {
+        for (const d of slice) notC(d, "time", _carryLabel(d, mine.get(d).content));
+        continue;
+      }
+      const answers = await Promise.all(urls.map((u) => ask(u, { kinds: [30078], "#d": slice, limit: slice.length * 50 })));
+      const whole = answers.every((a) => a.complete);
+      const others = /* @__PURE__ */ new Map();
+      for (const a of answers) for (const e of a.evs) {
+        const d = dOf(e);
+        if (!e || e.kind !== 30078 || slice.indexOf(d) === -1) continue;
+        if (String(e.pubkey).toLowerCase() === who) {
+          keepMine(e);
+          continue;
+        }
+        const ch = chOf(e);
+        if (ch && ch !== pub) continue;
+        if (!ch && e.pubkey !== pub && _carryPrefix(d, _CARRY_BARE)) continue;
+        const l = others.get(d) || [];
+        l.push({ at: e.created_at || 0, church: e.pubkey === pub, steward: [..._careRoster].some((p) => String(p).toLowerCase() === String(e.pubkey).toLowerCase()) });
+        others.set(d, l);
+      }
+      const jobs = [];
+      for (const d of slice) {
+        const S = mine.get(d), label = _carryLabel(d, S.content);
+        if (!whole) {
+          notC(d, "incomplete", label);
+          continue;
+        }
+        const rivals = (others.get(d) || []).filter((x) => x.at >= (S.created_at || 0));
+        if (rivals.length) {
+          if (rivals.every((x) => x.church && x.at > (S.created_at || 0))) out.superseded.push(d);
+          else if (rivals.every((x) => x.at > (S.created_at || 0) && (x.church || x.steward))) out.superseded.push(d);
+          else notC(d, rivals.some((x) => x.at === (S.created_at || 0)) ? "tie" : "newer", label);
+          continue;
+        }
+        if (d.startsWith("trinityone/careteam:") && !heldCare) {
+          notC(d, "no-care", "the care team list (they no longer had the Care permission)");
+          continue;
+        }
+        jobs.push((async () => {
+          let tmpl = null;
+          try {
+            tmpl = await _carryTemplate(S, !!o.blocked, who);
+          } catch (e) {
+            tmpl = { skip: "error" };
+          }
+          if (!tmpl || tmpl.skip) {
+            notC(d, tmpl && tmpl.skip || "error", label);
+            return;
+          }
+          if (left() <= 0) {
+            notC(d, "time", label);
+            return;
+          }
+          let ok = false, signedEv = null;
+          try {
+            let signed = feChurch(tmpl, sk);
+            for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
+              await new Promise((r) => setTimeout(r, 1e3));
+              signed = feChurch({ ...tmpl, created_at: now() }, sk);
+            }
+            if ((signed.created_at || 0) <= (S.created_at || 0)) {
+              notC(d, (signed.created_at || 0) === (S.created_at || 0) ? "tie" : "newer", label);
+              return;
+            }
+            signedEv = signed;
+            let tm = null;
+            ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+              tm = setTimeout(() => r("time"), Math.max(0, left()));
+            })]);
+            if (tm) clearTimeout(tm);
+          } catch (e) {
+            ok = false;
+          }
+          if (ok && ok !== "time") out.carried.push({ d, label, ev: signedEv });
+          else notC(d, ok === "time" ? "time" : "refused", label);
+        })());
+      }
+      await Promise.all(jobs);
+    }
+    return out;
+  }
+  var SWAP_PUBLISH_MS = 8e3;
+  async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
+    const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
+    const out = { swapped: [], failed: [], other: [], unchecked: [] };
+    if (!from || !to || from === to || !carry || !sk || !pub) return out;
+    const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
+    const labelOf = /* @__PURE__ */ new Map();
+    for (const c of carry.carried || []) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
+    for (const d of carry.superseded || []) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, "");
+    const ds = [...labelOf.keys()];
+    if (!ds.length) return out;
+    const urls = relays();
+    const ask = (url) => new Promise((resolve) => {
+      const evs = [];
+      let done = false, sub = null;
+      const finish = (complete) => {
+        if (done) return;
+        done = true;
+        try {
+          if (sub) sub.close();
+        } catch (e) {
+        }
+        let a = false;
+        try {
+          a = _keyReadAuthedOn(url);
+        } catch (e) {
+          a = false;
+        }
+        resolve({ evs, complete: !!complete && a });
+      };
+      try {
+        sub = pool.subscribeMany([url], [{ kinds: [30078], "#d": ds, limit: ds.length * 50 }], { onevent(e) {
+          evs.push(e);
+        }, oneose() {
+          finish(true);
+        }, maxWait: 11e3 });
+      } catch (e) {
+        finish(false);
+        return;
+      }
+      if (done) {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+      }
+      setTimeout(() => finish(false), 6e3);
+    });
+    const answers = urls.length ? await Promise.all(urls.map(ask)) : [];
+    const whole = answers.length > 0 && answers.every((a) => a.complete);
+    const newest = /* @__PURE__ */ new Map();
+    for (const a of answers) for (const e of a.evs) {
+      const d = ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      if (!labelOf.has(d)) continue;
+      const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+      if (ch && ch !== pub) continue;
+      const cur = newest.get(d);
+      if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
+    }
+    const namesOld = (g) => [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
+    for (const d of ds) {
+      const ev = newest.get(d);
+      const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
+      if (!whole) {
+        out.unchecked.push(label);
+        continue;
+      }
+      if (!ev || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
+      let g;
+      try {
+        g = JSON.parse(ev.content);
+      } catch (e) {
+        continue;
+      }
+      if (!g || typeof g !== "object") continue;
+      if (ev.pubkey !== pub) {
+        if (namesOld(g)) out.other.push(label);
+        continue;
+      }
+      let changed = false;
+      const swap = (arr) => {
+        const o = [];
+        for (const x of arr) {
+          const hit = String(x || "").toLowerCase() === from;
+          if (hit) changed = true;
+          const v = hit ? to : x;
+          if (v && !o.some((y) => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v);
+        }
+        return o;
+      };
+      if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
+      if (Array.isArray(g.members)) g.members = swap(g.members);
+      if (!changed) continue;
+      let ok = false;
+      try {
+        const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(g) };
+        let signed = feChurch(tmpl, sk);
+        for (let k = 0; (signed.created_at || 0) <= (ev.created_at || 0) && k < 4; k++) {
+          await new Promise((r) => setTimeout(r, 1e3));
+          signed = feChurch({ ...tmpl, created_at: now() }, sk);
+        }
+        let tm = null;
+        ok = (signed.created_at || 0) > (ev.created_at || 0) ? await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+          tm = setTimeout(() => r(false), SWAP_PUBLISH_MS);
+        })]) : false;
+        if (tm) clearTimeout(tm);
+      } catch (e) {
+        ok = false;
+      }
+      (ok ? out.swapped : out.failed).push(label);
+    }
+    return out;
+  }
+  var _rosterTurn = Promise.resolve();
+  function _dropJustRemoved(list, rosterAt) {
+    if (!_justRemoved.size) return list;
+    const out = [];
+    for (const p of list) {
+      const k = String(p || "").toLowerCase(), at = _justRemoved.get(k);
+      if (at == null) {
+        out.push(p);
+        continue;
+      }
+      if (rosterAt != null && rosterAt >= at) {
+        _justRemoved.delete(k);
+        out.push(p);
+        continue;
+      }
+    }
+    return out;
+  }
+  function _removeStewardKeeping(pk, opts) {
+    _requireTrustedView("steward roster");
+    const o = opts || {};
+    const who = String(pk || "").toLowerCase();
+    const turn = async () => {
+      if (actingChurch) return { wrote: null, carry: null, next: null, refused: "delegated" };
+      if (!_careRosterKnown) return { wrote: null, carry: null, next: null, refused: "roster-unknown" };
+      let carry;
+      try {
+        carry = await _carryOverStewardDocs(who, { limitMs: o.limitMs });
+      } catch (e) {
+        carry = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
+      }
+      if (!_careRosterKnown) return { wrote: null, carry, next: null, refused: "roster-unknown" };
+      const before = [..._careRoster];
+      const caps = { ..._stewardCaps };
+      let next;
+      if (o.capsOnly) {
+        next = before.slice();
+        caps[before.find((p2) => String(p2).toLowerCase() === who) || who] = [];
+      } else {
+        next = before.filter((p2) => String(p2).toLowerCase() !== who);
+        for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k];
+      }
+      const wrote = await window.Steward.setStewards(next, caps);
+      if (wrote) {
+        const at = wrote && typeof wrote === "object" && Number(wrote.created_at) || now();
+        const kept = {};
+        for (const p2 of next) if (Array.isArray(caps[p2])) kept[p2] = caps[p2].filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
+        _careRoster = new Set(next);
+        _stewardCaps = kept;
+        if (before.length !== next.length) _rememberExStewards(before, next, at);
+        if (!o.capsOnly) _justRemoved.set(who, at);
+      }
+      return { wrote, carry, next, refused: "" };
+    };
+    const p = _rosterTurn.then(turn, turn);
+    _rosterTurn = p.catch(() => {
+    });
+    return p;
+  }
   window.Steward = {
     pubkey: null,
     npub: null,
@@ -23258,7 +23787,7 @@ zoo`.split("\n");
     // copy is one the member honours. A genuine removal arrives through the subscription, which does set it
     // empty. AUDIT-8.
     setCareRoster(list) {
-      const next = new Set((list || []).filter(Boolean));
+      const next = new Set(_dropJustRemoved((list || []).filter(Boolean), null));
       if (next.size || !_careRosterKnown) _careRoster = next;
       _reCheckCareKeyPending();
       try {
@@ -25839,9 +26368,29 @@ zoo`.split("\n");
       if (!/^[0-9a-f]{64}$/.test(oldH) || !/^[0-9a-f]{64}$/.test(newH)) throw new Error("That doesn\u2019t look like a member code.");
       if (oldH === newH) throw new Error("That is the same key they already have.");
       const low = (a) => (a || []).map((x) => String(x || "").toLowerCase()).filter(Boolean);
+      let carryOld = null;
       if (o.blockOld) {
+        try {
+          if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, {});
+        } catch (e) {
+          carryOld = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
+        }
         const blocked = await w(() => window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]));
         if (!blocked) throw new Error("Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.");
+        if (carryOld && !carryOld.refused) {
+          try {
+            const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH);
+            carryOld.swapped = sw.swapped;
+            carryOld.swapFailed = sw.failed;
+            carryOld.swapOther = sw.other;
+            carryOld.swapUnchecked = sw.unchecked;
+          } catch (e) {
+            carryOld.swapped = [];
+            carryOld.swapFailed = [];
+            carryOld.swapOther = [];
+            carryOld.swapUnchecked = ["the groups they may have been on"];
+          }
+        }
       }
       const mins = low(o.minors), appr = low(o.approved);
       const wasMinor = mins.indexOf(oldH) !== -1, wasCleared = appr.indexOf(oldH) !== -1;
@@ -25973,6 +26522,8 @@ zoo`.split("\n");
         else failed.push("rota:" + r.service);
       }
       return {
+        carry: carryOld,
+        // what the old key's church settings came to (null: not a steward's key, or no block)
         minorCarried: wasMinor,
         clearedCarried: wasCleared,
         guardiansCarried: !!nextG,
@@ -26060,6 +26611,8 @@ zoo`.split("\n");
             }
           }
           const _rosterBefore = _careRoster;
+          cur = _dropJustRemoved(cur, e.created_at);
+          for (const [k, at] of [..._justRemoved]) if ((e.created_at || 0) >= at) _justRemoved.delete(k);
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
           _careRosterSeen = true;
@@ -26130,6 +26683,22 @@ zoo`.split("\n");
         doc.n = _stewardNamesCt;
       }
       return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
+    },
+    // REMOVE A STEWARD AND KEEP WHAT THEY SAVED (owner, 2026-11-17) — see _removeStewardKeeping. Called by
+    // DashStewardsPanel.remove and, with { capsOnly: true }, by its setCaps when every capability is unticked.
+    removeStewardKeeping(pk, opts) {
+      return _removeStewardKeeping(pk, opts);
+    },
+    // the carry alone — DashMembers.block runs it BEFORE the block is published (owner answer d), with { blocked: true }
+    carryOverStewardDocs(pk, opts) {
+      return _carryOverStewardDocs(pk, opts);
+    },
+    // is this key on the roster now, or was it ever on it as far as this console has seen?
+    isOrWasSteward(pk) {
+      const p = String(pk || "").toLowerCase();
+      if (!p) return false;
+      for (const x of _careRoster) if (String(x).toLowerCase() === p) return true;
+      return _exStewardSet().has(p);
     },
     // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). When the owner takes a helper off the roster the
     // relay (correctly) stops serving them the church's documents — INCLUDING the stewards: roster event that would
@@ -28957,6 +29526,7 @@ zoo`.split("\n");
       _careRoster = /* @__PURE__ */ new Set();
       _careRosterKnown = false;
       _careRosterSeen = false;
+      _justRemoved.clear();
       _stewardCaps = {};
       _stewardNames = {};
       _stewardNamesCt = "";

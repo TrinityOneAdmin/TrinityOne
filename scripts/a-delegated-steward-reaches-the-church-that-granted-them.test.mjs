@@ -122,6 +122,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     // per-church state setActiveIdentity resets — cells, nothing more
     lastProfile: {}, _profileLoaded: false, _clearanceSent: new Map(),
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
+    _justRemoved: new Map(),   // who this console just took off the roster (2026-11-18): setActiveIdentity clears it
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {},
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(), _localBlockedAt: 0, _blockedLastSet: () => new Set(),   // (the switch seeds the church's last blocklist, 2026-10-02: not this file's question)
     _applyNoPhotoList: () => {}, CAP_KEYS: {}, _capState: {}, _checkinMigrated: '',
