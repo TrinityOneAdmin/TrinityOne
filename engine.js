@@ -1047,6 +1047,27 @@ window.safeImgUrl = function (v) {
 
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
+  // THE TRANSLATION THE MEMBER PICKED (2026-11-18). Round-2 device testing: "the reader returns to BSB after every restart".
+  // Nothing saved the choice: `active` lived only in memory, and at boot addSource made the FIRST Bible registered active,
+  // which is BSB on every phone. Now setActive() (a member's deliberate pick, and nothing else) saves the URL the Bible was
+  // loaded from, and restoreInstalled() loads that record FIRST, so it is already the active one the moment Bible.loaded
+  // turns true — when the reader resolves its saved place (app.jsx), Today picks its verse and the widget publishes. Never
+  // "load BSB, then switch": that writes BSB's place over the chosen Bible's saved place (app.jsx's save effect).
+  // TOTAL: whatever is stored, the answer is a recorded, non-quarantined url or null. JSON.parse("null") and "5" do not throw,
+  // and the record map is a plain object ("constructor", "__proto__"), so membership is hasOwnProperty, never m[url].
+  // The key survives a locked-boot wipe (scripts/locked-boot-wipe.test.mjs lists it). Not in the member backup, like readLoc.
+  const TRANSLATION_KEY = "trinityone.bible.translation";
+  function _savedTranslationUrl(m){
+    try{
+      const v = JSON.parse(localStorage.getItem(TRANSLATION_KEY) || "null");
+      if(!v || typeof v !== "object" || typeof v.url !== "string") return null;
+      if(!Object.prototype.hasOwnProperty.call(m, v.url)) return null;
+      const r = m[v.url];
+      return (r && typeof r === "object" && !r.quarantined) ? v.url : null;
+    }catch(e){ return null; }
+  }
+  // Only a Bible that came from a record can be brought back first, so only its url is kept; nothing is saved without one.
+  function _saveTranslation(abbr){ try{ const url = urlOf[urlKey("bibles", abbr)]; if(url) localStorage.setItem(TRANSLATION_KEY, JSON.stringify({ url })); }catch(e){} }
   function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : (item.kind === "dict" || item.kind === "worddef" || item.kind === "original") ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
   // A RECORD MUST NAME THE MODULE THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR.
   // addSource/addCommentary/addDict have always deduped a colliding name (NT -> NT2), and the record kept
@@ -1197,7 +1218,9 @@ window.safeImgUrl = function (v) {
     // small await is added to boot; in the normal case it is a service-worker cache read, and on a
     // first-ever launch this loop is empty because nothing is installed yet.
     const pins = Object.keys(m).length ? await publishedPins() : {};
-    for(const url of Object.keys(m)){
+    // The picked translation first (see TRANSLATION_KEY); with no valid choice, exactly the order it always was.
+    const _picked = _savedTranslationUrl(m);
+    for(const url of (_picked ? [_picked, ...Object.keys(m).filter(k => k !== _picked)] : Object.keys(m))){
       const meta = m[url];
       try{
         if(meta.quarantined) continue;   // an unsafe stored file: never loaded again; it stays listed so it can be removed
@@ -2082,7 +2105,7 @@ window.safeImgUrl = function (v) {
     // read?" must not answer by comparing names: names are unique per category, not across the phone, and
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
-    setActive(v){ if(modules[v]){ active = v; notify(); } },
+    setActive(v){ if(modules[v]){ active = v; _saveTranslation(v); notify(); } },   // a member's pick: the only writer of active that saves it
     versions, books, maxChapter, getVerses, firstChapter, passageFor, getCommentary, commentaryList, getCrossRefs, crossrefLicense, crossrefList, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
