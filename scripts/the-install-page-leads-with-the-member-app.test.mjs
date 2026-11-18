@@ -59,7 +59,7 @@ function linkContainers(html) {
     }
     if (close) continue;
     const href = (attrs.match(/href="([^"]*)"/) || [])[1];
-    if (href) out.push({ href, details: stack.map((d) => ({ ...d })) });
+    if (href) out.push({ href, cls: (attrs.match(/class="([^"]*)"/) || [])[1] || '', details: stack.map((d) => ({ ...d })) });
   }
   assert.equal(stack.length, 0, 'the page left a <details> unclosed, so the structure cannot be trusted');
   return out;
@@ -70,15 +70,19 @@ const linkTo = (links, href) => {
   return hits[0];
 };
 
+// Tests 1, 2 and 4 read the same page, so one box serves all three.
+let _both = null;
+const bothHeld = () => (_both ||= boxHolding(['trinityone.apk', 'trinityone-steward.apk']));
+
 test('with both apps held, the member app is the one download in plain view', async () => {
-  const links = linkContainers(await boxHolding(['trinityone.apk', 'trinityone-steward.apk']));
+  const links = linkContainers(await bothHeld());
   const member = linkTo(links, '/trinityone.apk');
   assert.equal(member.details.length, 0,
     'the member app download sits inside a <details>, so a member has to open something to find the app meant for them');
 });
 
 test('with both apps held, the steward download is behind a disclosure that starts closed', async () => {
-  const html = await boxHolding(['trinityone.apk', 'trinityone-steward.apk']);
+  const html = await bothHeld();
   const steward = linkTo(linkContainers(html), '/trinityone-steward.apk');
   assert.ok(steward.details.length >= 1,
     'the steward download is in plain view beside the member app — the two-equal-buttons confusion is back');
@@ -87,6 +91,17 @@ test('with both apps held, the steward download is behind a disclosure that star
   // It comes after the numbered steps, so the steps' "Download and install above" still points at the member app.
   assert.ok(html.indexOf('href="/trinityone-steward.apk"') > html.indexOf('</ol>'),
     'the steward disclosure was placed above the install steps');
+  assert.ok(html.indexOf('href="/trinityone-steward.apk"') < html.indexOf('Pass this on'),
+    'the steward disclosure was placed below the "Pass this on" box');
+});
+
+test('with both apps held, only the member app gets the solid button', async () => {
+  const links = linkContainers(await bothHeld());
+  const classes = (l) => l.cls.split(/\s+/);
+  assert.ok(classes(linkTo(links, '/trinityone-steward.apk')).includes('quiet'),
+    'the steward download has the same solid button as the member app, so the two compete again');
+  assert.ok(!classes(linkTo(links, '/trinityone.apk')).includes('quiet'),
+    'the member app download was given the quiet button');
 });
 
 test('a box holding only the steward app does not hide the only thing it can offer', async () => {

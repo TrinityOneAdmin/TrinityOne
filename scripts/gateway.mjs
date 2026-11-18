@@ -443,7 +443,7 @@ const BUILD = (() => {
 const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk'];
 const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward' };
 const APK_BLURBS = {
-  'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, giving and the church calendar.',
+  'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, care and the church calendar.',
   'trinityone-steward.apk': 'For the people who run the church. It installs alongside the member app rather than replacing it.',
 };
 const APK_DIR = join(DATA_DIR, 'apks');
@@ -1021,7 +1021,7 @@ function installPageHtml({ held, base, qr }) {
   const cards = present.filter((h) => !(tuckSteward && h.name === 'trinityone-steward.apk')).map((h) => card(h, false)).join('\n');
   const steward = tuckSteward ? present.find((h) => h.name === 'trinityone-steward.apk') : null;
   const leaders = steward
-    ? '<details class="leaders"><summary>For church leaders — TrinityOne Steward</summary>' + card(steward, true) + '</details>'
+    ? '<details class="leaders"><summary>For church leaders</summary>' + card(steward, true) + '</details>'
     : '';
   const empty = '<section class="card"><h2>Nothing to install yet</h2><p class="blurb">This machine is not holding a copy of the app right now. Whoever looks after it can add one from the relay control panel — “Let members install the app from this box”.</p></section>';
   return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
@@ -1046,6 +1046,7 @@ function installPageHtml({ held, base, qr }) {
     + '.leaders>summary::after{content:"";flex:none;width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);margin:-4px 4px 0 0;transition:transform .15s}'
     + '.leaders[open]>summary::after{transform:rotate(-135deg);margin-top:4px}'
     + '.leaders>.card{background:none;border:0;box-shadow:none;margin:0;padding:0 18px 18px}'
+    + '@media (prefers-reduced-motion:reduce){.leaders>summary::after{transition:none}}'
     + '.sha{margin-top:12px;font-size:12.5px;color:var(--ink2)}'
     + '.sha summary{cursor:pointer;color:var(--clay);font-weight:700}'
     + '.sha p{margin:8px 0 6px}'
