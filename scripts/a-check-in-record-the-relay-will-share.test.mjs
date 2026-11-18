@@ -280,7 +280,7 @@ before(async () => {
   // and that group's roster names the person. careAdmin() is the grant being taken away here, so a fixture
   // that only *claimed* to make one would be testing nothing.
   await send(w, doc(church, D.MEALS_SETTINGS, { enabled: true, adminGroupId: CARE_TEAM }));
-  await send(w, doc(church, D.ROSTER + CARE_TEAM, { pubs: [careBoss.pub] }));
+  await send(w, doc(church, D.ROSTER + CARE_TEAM, { pubs: [careBoss.pub, netKey.pub] }));   // the network key is listed too (audit 2026-11-18): careAdmin() refuses it ONLY if networkOf() is true, which makes the control below depend on the join
   // A NETWORK KEY, declared BY THE CHURCH OVER ITSELF — the only way one can be declared (note()'s NETWORK_D
   // branch requires CHURCH_PUBS.has(e.pubkey)).
   await send(w, doc(church, D.NETWORK + netKey.pub, { joined: now() }));
@@ -638,7 +638,7 @@ test('FIXTURE CONTROL: the roster, the care team, the network and the parent map
   // back to the church; non-vacuity of the refusals is proved by per-door sabotage (re-add networkOf at the door), see the commit.
   assert.equal(one(await asks(church, { kinds: [30078], authors: [church.pub], '#d': [D.NETWORK + netKey.pub] }), D.NETWORK + netKey.pub), 1,
     'the church\'s network declaration was not stored -- the network link never formed, so "the network is refused" below would be measuring nothing');
-  assert.deepEqual(await asks(netKey, { kinds: [30078], '#d': [minorsDoc] }), [], 'the network key READ `minors:` (the wall is gone)');
+  assert.deepEqual(await asks(netKey, { kinds: [30078], '#d': [minorsDoc] }), [], 'the network key, listed on the care team beside careBoss (who reads minors: above), READ `minors:` -- the join was never recorded (networkOf false) or the wall is gone');
   assert.deepEqual(await asks(cara, { kinds: [30078], '#d': [minorsDoc] }), [],
     're-anchor: an ordinary member reads `minors:`, so the two controls above prove nothing');
 });

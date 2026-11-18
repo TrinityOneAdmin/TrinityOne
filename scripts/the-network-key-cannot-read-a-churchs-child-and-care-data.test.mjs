@@ -139,7 +139,7 @@ after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(data
 // control is: the same undeclared document is REFUSED to a stranger and ACCEPTED from the joined network key.
 // Sabotage proof: make networkOf() return false and the second assertion fails.
 test('CONTROL: the join really took -- the church\'s own network:<key> declaration is stored and served back to the church', async () => {
-  // WALL (2026-11-18): a declared network key can do nothing a stranger cannot, so liveness cannot be anchored on a differential any
+  // WALL (2026-11-18): a declared network key can no longer write or read church content a stranger cannot (tested: a-declared-network-key-is-a-stranger-for-everything-else), so liveness cannot be anchored on a differential any
   // more; this shows the declaration is stored. Non-vacuity of each refusal below is proved by per-door SABOTAGE (re-add networkOf).
   const cw0 = await connect(church); await sleep(200);
   const got = await read(cw0, [{ kinds: [30078], authors: [church.pub], '#d': ['trinityone/network:' + networkKey.pub] }]); cw0.close();

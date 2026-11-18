@@ -396,9 +396,15 @@ test('the OK-frame reason asks the network question accept() asked, not a relay-
     'plain member of church A; the event names church A, so accept() refused them AS A MEMBER — and the ' +
     'reason excused them as "a network" and printed the generic sentence instead of the honest one. ' +
     '(AUDIT-undeclared-doc-types-2026-09-22 L1.) Frame: ' + JSON.stringify(crossed));
-  assert.match(GATEWAY_CODE, /const _rIsNetwork = _rcp \? networkOf\(evt\.pubkey, _rcp\) : NETWORKS\.has\(evt\.pubkey\);/,
-    'the OK-frame reason is back on the relay-wide NETWORKS set, so it can describe a refusal by a rule that ' +
-    'did not make it (AUDIT-undeclared-doc-types-2026-09-22 L1)');
+  // WALL (2026-11-18): the old text-match on `_rIsNetwork` is replaced by a BEHAVIOURAL row. A key that is BOTH a member of A and A's own
+  // declared network is a member for the catch-all (the network half no longer counts), so it is refused an undeclared document AND
+  // told the honest reason, not the generic "not a member" sentence the old network exemption would have given it.
+  { const j = await publishAs(net, doc(net, 'trinityone/member:' + church.pub, { joined: now() }, [['p', church.pub]]));
+    assert.equal(j[2], true, 'fixture: the network key could not join A as a member: ' + JSON.stringify(j));
+    await sleep(250);
+    const both = await publishAs(net, doc(net, 'trinityone/zzz:' + church.pub + ':both', { both: true }, [['church', church.pub]]));
+    assert.equal(both[2], false, 'a key that is a member AND the declared network wrote an undeclared document: ' + JSON.stringify(both));
+    assert.match(String(both[3]), /undeclared document type/, 'a member that is also the network was given the generic reason, not the honest one: ' + JSON.stringify(both)); }
   // WALL (2026-11-18, owner decision): this last row CHANGED ON PURPOSE. A's network key writing A's own undeclared document
   // used to land through the 30078 catch-all (`isAnyChurch || isNetwork`); a joined network key no longer gets that uncapped
   // catch-all, it is refused like any member for a type outside the member list. (A church key still lands.)

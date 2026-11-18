@@ -21,7 +21,7 @@ import { D } from './trinity-doc-types.mjs';
 import { finalizeEvent } from 'nostr-tools/pure';
 
 const NET = 'trinityone';
-const church = H.key(), network = H.key(), treasurer = H.key(), roomSteward = H.key(), member = H.key(), stranger = H.key();
+const church = H.key(), network = H.key(), treasurer = H.key(), roomSteward = H.key(), member = H.key(), stranger = H.key(), careMember = H.key(), kid = H.key();
 const cp = church.pub;
 let relay, spawnedAt, seq = 0;
 const at = () => H.now() + (seq++);
@@ -58,6 +58,10 @@ before(async () => {
   await author(ev(church, D.NETWORK + network.pub, { joined: H.now() }, []));
   await author(ev(church, D.STEWARDS + cp, { pubkeys: [treasurer.pub, roomSteward.pub], caps: { [treasurer.pub]: ['finance'], [roomSteward.pub]: ['sealedrooms'] } }, []));
   await author(ev(church, D.GROUP + 'g1', { name: 'Leaders', visibility: 'invite', members: [member.pub] }));
+  // LIVENESS FIXTURE (audit 2026-11-18): care-team roster naming an ordinary member AND the network key, plus a children list.
+  await author(ev(church, 'trinityone/meals-settings', { adminGroupId: 'ctl-team' }, []));
+  await author(ev(church, D.ROSTER + 'ctl-team', { pubs: [careMember.pub, network.pub] }));
+  await author(ev(church, D.MINORS + cp, { pubkeys: [kid.pub] }, []));
   await H.sleep(300);
   for (const [label, d] of FIN) stored[label] = d;
   for (const [label, d] of FIN) await author(ev(label === 'billapproval' ? treasurer : church, d, { sealed: 'x', bill: 'b1', ts: H.now() }));
@@ -68,10 +72,12 @@ test('FRESHNESS (rule 10): the relay under test was spawned AFTER scripts/gatewa
   assert.ok(spawnedAt > statSync(new URL('./gateway.mjs', import.meta.url).pathname).mtimeMs, 'a stale relay enforces old gates');
 });
 
-test('CONTROL: the join really took -- the church\'s own network:<key> declaration is stored and served back to the church', async () => {
-  // A declared network key can do nothing a stranger cannot, so there is no write/read differential to anchor on; this shows the
-  // declaration is stored. Non-vacuity of each refusal is proved by SABOTAGE (re-add networkOf at the door; see the commit message).
-  assert.equal(await served(church, D.NETWORK + network.pub), true, 'the church\'s join declaration was not stored -- the link never formed');
+test('CONTROL: the join really took -- the network key is on the church care team and is STILL refused minors:, while an ordinary care-team member is served it', async () => {
+  // careAdmin() admits any rostered key EXCEPT a network key, so if the join were never recorded (networkOf false) the rostered network
+  // key would read `minors:`. Reading as both keys therefore depends on networkOf(). Sabotage: delete `else s.add(np)` in note().
+  const m = D.MINORS + cp;
+  assert.equal(await served(careMember, m), true, 're-anchor: the ordinary care-team member cannot read minors: -- the roster fixture did not take');
+  assert.equal(await served(network, m), false, 'the network key, on the care team, read minors: -- the join was never recorded (networkOf false) or careAdmin lost its refusal');
 });
 
 for (const [label, d] of FIN) {

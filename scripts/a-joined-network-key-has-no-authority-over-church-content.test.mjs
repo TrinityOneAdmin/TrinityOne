@@ -31,7 +31,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Math.floor(Date.now() / 1000);
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 const P = 'trinityone/';
-const church = K(), networkKey = K(), steward = K(), finSteward = K(), member = K();
+const church = K(), networkKey = K(), steward = K(), finSteward = K(), member = K(), careMember = K(), kid = K();
 const CH = [['church', church.pub]];
 let relay, dataDir, spawnedAt;
 let seq = 0;
@@ -86,6 +86,13 @@ before(async () => {
   const w = await connect(null), cw = await connect(church);
   const ok = async (c, e, why) => { const [k, m] = await publish(c, e); assert.equal(k, true, why + ' (' + m + ')'); return e; };
   await ok(cw, doc(church, P + 'network:' + networkKey.pub, { joined: now() }), 'church could not join the network');
+  // LIVENESS FIXTURE (audit 2026-11-18): a church-authored care-team roster naming BOTH an ordinary care-team member and the network
+  // key, plus the children list. careAdmin() refuses the network key ONLY IF networkOf() is true, so reading `minors:` as each of them
+  // measurably depends on the join having been recorded (see the CONTROL test).
+  await ok(cw, doc(church, P + 'meals-settings', { adminGroupId: 'ctl-team' }), 'meals-settings refused');
+  await ok(cw, doc(church, P + 'roster:ctl-team', { pubs: [careMember.pub, networkKey.pub] }, CH), 'care-team roster refused');
+  const minorsEvt = await ok(cw, doc(church, P + 'minors:' + church.pub, { pubkeys: [kid.pub] }), 'minors list refused');
+  stored.__minors = minorsEvt.id;
   await ok(cw, doc(church, P + 'stewards:' + church.pub, { pubkeys: [steward.pub, finSteward.pub], caps: { [steward.pub]: ['content'], [finSteward.pub]: ['finance'] } }), 'steward roster refused');
   await ok(w, doc(member, P + 'member:' + church.pub, { joined: now() }, [['p', church.pub]]), 'member join refused');
   await sleep(400);
@@ -99,15 +106,13 @@ test('FRESHNESS (rule 10): the relay under test was spawned AFTER scripts/gatewa
   assert.ok(spawnedAt > gw, 'a relay older than gateway.mjs would enforce old gates against the new bundle');
 });
 
-test('CONTROL: the join really took -- the church\'s own network:<key> declaration is stored and served back to the church', async () => {
-  // WALL (2026-11-18): after the isMember narrowing a declared network key can do NOTHING a stranger cannot (that is the point), so
-  // there is no longer an observable write/read DIFFERENCE to anchor liveness on. What can still be shown is that the declaration the
-  // church published is stored and readable, so the fixture is a real joined network. That the refusals below are not vacuous is
-  // proved by SABOTAGE, one per door (re-add networkOf at the door and the matching test below fails) -- see the commit message.
-  const d = P + 'network:' + networkKey.pub;
-  const w = await connect(church); await sleep(200);
-  const got = await read(w, [{ kinds: [30078], authors: [church.pub], '#d': [d] }]); w.close();
-  assert.equal(got.length, 1, 'the church\'s join declaration was not stored -- the network link never formed, so every refusal below proves nothing');
+test('CONTROL: the join really took -- the network key is listed on the church care team and is STILL refused minors:, while the ordinary care-team member is served it', async () => {
+  // WHY THIS ONE (audit 2026-11-18). A declared network key can no longer write or read church content a stranger cannot (tested: a-declared-network-key-is-a-stranger-for-everything-else), so there is no write differential to
+  // anchor on. But careAdmin() admits any rostered key EXCEPT a network key, so if the join were never recorded (networkOf false) the
+  // rostered network key would be a care admin and WOULD read `minors:`. Reading it as both keys therefore depends on networkOf().
+  // Sabotage proof: delete `else s.add(np)` in note()'s NETWORK_D branch and the first assertion fails.
+  assert.equal(await served(careMember, stored.__minors), true, 're-anchor: the ordinary care-team member cannot read minors: -- the roster/meals fixture did not take');
+  assert.equal(await served(networkKey, stored.__minors), false, 'the network key, listed on the care team, read minors: -- the join was never recorded (networkOf is false) or careAdmin() lost its refusal');
 });
 
 for (const [label, d, body, cap] of DOCS) {
