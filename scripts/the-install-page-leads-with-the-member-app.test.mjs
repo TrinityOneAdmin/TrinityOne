@@ -154,18 +154,31 @@ for (const [label, ua] of [['iPhone', UA_IPHONE], ['iPad (iOS UA)', UA_IPAD], ['
 });
 
 for (const [label, ua] of [['Android', UA_ANDROID], ['desktop', UA_DESKTOP]]) {
-  test('a ' + label + ' visitor still gets the Android page, with the iPhone steps only behind a closed chevron', async () => {
+  test('a ' + label + ' visitor gets the Android page; the iPhone steps are hidden (desktop) or absent (Android)', async () => {
     const { html, vary } = await pageAs(ua);
     const links = linkContainers(html);
     assert.equal(linkTo(links, '/trinityone.apk').details.length, 0, 'the member .apk is no longer in plain view for ' + label);
     assert.ok(closedAll(linkTo(links, '/trinityone-steward.apk')), 'the steward .apk is not behind a closed chevron for ' + label);
-    assert.ok(closedAll(linkTo(links, TF_MEMBER)),
-      'the member TestFlight link is in plain view on the ' + label + ' page, competing with the download that works there');
     assert.ok(closedAll(linkTo(links, TF_STEWARD)), 'the steward TestFlight link is in plain view on the ' + label + ' page');
     assert.ok(/User-Agent/i.test(vary), 'no Vary: User-Agent on the ' + label + ' page');
-    // An iPad sends a Mac UA and lands here, so the lede must not promise it an app-store-free install.
+    // An iPad sends a Mac UA and lands on this page, so the lede must not promise it an app-store-free install.
     const lede = (html.match(/<p class="lede">([\s\S]*?)<\/p>/) || [])[1] || '';
     assert.match(lede, /^Android phones:/, 'the wifi/no-app-store promise is no longer scoped to Android phones');
-    assert.match(lede, /iPhone or iPad/, 'the lede does not point an iPad (which arrives with a Mac UA) to its chevron');
+    const iphoneFold = (html.match(/<details class="fold iphone"[^>]*>/) || [])[0];
+    if (label === 'Android') {
+      // An Android phone has no use for the iPhone steps, and the lede must not point at a section that is not there.
+      assert.equal(links.filter((l) => l.href === TF_MEMBER).length, 0, 'an Android phone is shown the member TestFlight link');
+      assert.equal(iphoneFold, undefined, 'an Android phone is shown the "iPhone or iPad" chevron');
+      assert.doesNotMatch(lede, /iPhone|iPad/, 'the Android lede points at an iPhone section the page does not have');
+    } else {
+      assert.ok(closedAll(linkTo(links, TF_MEMBER)),
+        'the member TestFlight link is in plain view on the ' + label + ' page, competing with the download that works there');
+      assert.ok(iphoneFold && !/\sopen/.test(iphoneFold), 'the ' + label + ' page has no closed "iPhone or iPad" chevron');
+      assert.match(lede, /iPhone or iPad/, 'the lede does not point an iPad (which arrives with a Mac UA) to its chevron');
+      const at = (re) => html.search(re);
+      assert.ok(at(/<details class="fold iphone"/) < at(/<details class="fold leaders"/),
+        'the "iPhone or iPad" chevron is not above "For church leaders"');
+      assert.ok(at(/<\/ol>/) < at(/<details class="fold iphone"/), 'the "iPhone or iPad" chevron is above the Android steps');
+    }
   });
 }
