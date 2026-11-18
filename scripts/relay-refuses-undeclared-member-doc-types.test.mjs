@@ -312,11 +312,13 @@ test('the church key keeps the catch-all: it can still write an undeclared type'
   assert.equal(frame[2], true, 'the church key was refused its own undeclared document — that is a separate package, not this one: ' + JSON.stringify(frame));
 });
 
-test('a network key keeps the catch-all too', async () => {
+test('a network key NO LONGER has the catch-all (wall, 2026-11-18): it is refused an undeclared document; a church key is not', async () => {
+  // Narrowed on purpose (a3f3c096's hunk): a joined network key takes the ordinary member path, so an undeclared type is refused.
+  // The anchor that the church path is untouched is the test directly above this one (the church key IS accepted).
   const untagged = await publishAs(net, doc(net, ZZZ + church.pub, { viaNetwork: true }));
-  assert.equal(untagged[2], true, 'a network key was refused an undeclared document it could write before: ' + JSON.stringify(untagged));
+  assert.equal(untagged[2], false, 'a network key was still accepted an undeclared document through the catch-all: ' + JSON.stringify(untagged));
   const tagged = await publishAs(net, doc(net, ZZZ + church.pub + ':tagged', { viaNetwork: true }, [['church', church.pub]]));
-  assert.equal(tagged[2], true, 'a network key naming its church was refused an undeclared document: ' + JSON.stringify(tagged));
+  assert.equal(tagged[2], false, 'a network key naming its church was accepted an undeclared document: ' + JSON.stringify(tagged));
 });
 
 // ── /import IS NOT NARROWED: a restore keeps what a newer app wrote ──────────────────────────────────────
