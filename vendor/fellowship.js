@@ -8897,11 +8897,10 @@
     return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
   };
   var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
-  var _hubEosed = (hub) => {
+  var _hubEosed = (hub, full) => {
     hub.eosed = true;
     hub.eosedAt = Date.now();
-    if (hub.pendingFull) {
-      hub.pendingFull = false;
+    if (full) {
       hub.fullAt = Math.floor(Date.now() / 1e3);
       hub.dirty = true;
     }
@@ -9353,6 +9352,9 @@
     if (hub.closer) return;
     const cp = hub.cp;
     const since = _hubSince(hub);
+    const full = !!hub.pendingFull;
+    const gen = hub.gen = (hub.gen || 0) + 1;
+    let dead = false;
     const filters = [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
     if (since) for (const f of filters) f.since = since;
     const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
@@ -9456,7 +9458,8 @@
         }
       },
       oneose() {
-        _hubEosed(hub);
+        if (dead || hub.gen !== gen) return;
+        _hubEosed(hub, full);
         _docsHubSaveSoon(hub);
         _maybeRebuildFamily(hub);
         for (const h of [...hub.handlers]) {
@@ -9469,6 +9472,7 @@
       }
     });
     hub.closer = () => {
+      dead = true;
       try {
         sub.close();
       } catch {
@@ -9614,6 +9618,9 @@
     if (hub.closer) return;
     const cp = hub.cp;
     const since = _hubSince(hub);
+    const full = !!hub.pendingFull;
+    const gen = hub.gen = (hub.gen || 0) + 1;
+    let dead = false;
     const filters = [{ kinds: [1], "#p": [cp] }, { kinds: [30078], "#p": [cp] }];
     if (since) filters[1].since = since;
     const k1since = _hubSinceKind1(hub);
@@ -9659,7 +9666,8 @@
         }
       },
       oneose() {
-        _hubEosed(hub);
+        if (dead || hub.gen !== gen) return;
+        _hubEosed(hub, full);
         _memHubSaveSoon(hub);
         for (const l of [...hub.listeners]) {
           try {
@@ -9671,6 +9679,7 @@
       }
     });
     hub.closer = () => {
+      dead = true;
       try {
         sub.close();
       } catch {

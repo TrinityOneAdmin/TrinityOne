@@ -2804,7 +2804,14 @@ const _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
 // F12: record WHEN the relay answered, not merely that it did — an EOSE from before we authenticated has to
 // be distinguishable from one after, and `eosed` is set once and never reset (including across the post-auth
 // refetch), so a boolean cannot tell them apart.
-const _hubEosed = (hub) => { hub.eosed = true; hub.eosedAt = Date.now(); if (hub.pendingFull) { hub.pendingFull = false; hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
+//
+// `full` is whether THE SUB THAT ANSWERED was the full fetch, captured when that sub was opened. It used to read
+// hub.pendingFull here, which is the HUB's flag and belongs to whichever sub opened last. nostr-tools reports a
+// sub we cancel as answered (its close counts as EOSE) and runs that close only after the replacement has opened,
+// so the cancelled sub consumed the replacement's "this is the full fetch" and stamped fullAt before anything had
+// arrived; the next refetch was then incremental and the older documents never came for a day (Oppo, 2026-11-18;
+// reference/INVESTIGATION-oppo-devotional-missing-2026-11-18.md). Callers never reach here for a sub they cancelled.
+const _hubEosed = (hub, full) => { hub.eosed = true; hub.eosedAt = Date.now(); if (full) { hub.fullAt = Math.floor(Date.now() / 1000); hub.dirty = true; } };
 
 // ── docs hub: the church's kind-30078 corpus (groups, plans, devotionals, serving, care, …) ──
 // APPROVAL RECOVERY. A church with approval on withholds its whole corpus from a member until a steward
@@ -3262,6 +3269,12 @@ function _docsHubOpen(hub) {
   if (hub.closer) return;
   const cp = hub.cp;
   const since = _hubSince(hub);
+  // COMPLETION BELONGS TO THIS SUB. Captured here, per sub: whether it is the full fetch, and a way to tell, when
+  // its oneose fires, that we have since cancelled or replaced it. A cancelled sub's "EOSE" is nostr-tools reporting
+  // our own close, not the relay answering, so it says nothing at hub level (see _hubEosed).
+  const full = !!hub.pendingFull;
+  const gen = hub.gen = (hub.gen || 0) + 1;
+  let dead = false;
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
   if (since) for (const f of filters) f.since = since;
   const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
@@ -3329,7 +3342,8 @@ function _docsHubOpen(hub) {
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { _featureFailed('live update', d, err); } }
     },
     oneose() {
-      _hubEosed(hub); _docsHubSaveSoon(hub);
+      if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer (no eosed, no fullAt, no handlers)
+      _hubEosed(hub, full); _docsHubSaveSoon(hub);
       // F11: rebuild the parent's children HERE. This fires on a socket that has just answered us, and only
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
@@ -3338,7 +3352,7 @@ function _docsHubOpen(hub) {
       for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
     },
   });
-  hub.closer = () => { try { sub.close(); } catch {} };
+  hub.closer = () => { dead = true; try { sub.close(); } catch {} };   // `dead` FIRST: nostr-tools runs the close later
 }
 // ── THE MEMBER APP'S FAILURE CHANNEL. ARCHITECTURE-AUDIT-2026-07-30 A2 ───────────────────────────────────
 // The console has three ways to say "that did not work" (steward-write-blocked ×4, steward-publish-error,
@@ -3448,6 +3462,10 @@ function _memHubOpen(hub) {
   if (hub.closer) return;
   const cp = hub.cp;
   const since = _hubSince(hub);
+  // completion belongs to this sub — the same rule, and the same reason, as _docsHubOpen
+  const full = !!hub.pendingFull;
+  const gen = hub.gen = (hub.gen || 0) + 1;
+  let dead = false;
   const filters = [{ kinds: [1], '#p': [cp] }, { kinds: [30078], '#p': [cp] }];
   // The docs half takes the ordinary cursor (with its periodic full re-sync). The kind-1 half NEVER full-syncs:
   // re-pulling the church's whole chat history to recompute a member count is megabytes over 2G, daily, for a
@@ -3472,11 +3490,12 @@ function _memHubOpen(hub) {
       for (const l of [...hub.listeners]) { try { l.onchange && l.onchange(e.pubkey); } catch (err) { console.error(err); } }
     },
     oneose() {
-      _hubEosed(hub); _memHubSaveSoon(hub);
+      if (dead || hub.gen !== gen) return;   // a sub we cancelled or replaced: not an answer
+      _hubEosed(hub, full); _memHubSaveSoon(hub);
       for (const l of [...hub.listeners]) { try { l.oneose && l.oneose(); } catch (err) { console.error(err); } }
     },
   });
-  hub.closer = () => { try { sub.close(); } catch {} };
+  hub.closer = () => { dead = true; try { sub.close(); } catch {} };   // `dead` FIRST: nostr-tools runs the close later
 }
 function _onChurchMembers(cp, l) {
   const hub = _memHub(cp);

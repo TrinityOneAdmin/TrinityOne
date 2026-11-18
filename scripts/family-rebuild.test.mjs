@@ -56,7 +56,11 @@ test('and it actually runs after an identity arrives', () => {
   // re-runs after an offline start is RUN in scripts/an-unlinked-child-stays-gone-after-a-lock.test.mjs.
   assert.match(SRC, /function _maybeRebuildFamily\(hub\) \{\s*if \(!sk \|\| hub\.familyRebuilt\) return;[\s\S]{0,200}_rebuildFamily\(hub\.cp\)/,
     'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
-  assert.match(SRC, /_hubEosed\(hub\); _docsHubSaveSoon\(hub\);[\s\S]{0,800}_maybeRebuildFamily\(hub\);/,
+  // 2026-11-18: re-anchored on `_hubEosed(hub, full…)` (the hub's EOSE now says whether THIS sub was the full fetch)
+  // and read over _docsHubOpen to its END, not an 800-character window the function had outgrown (audit F8).
+  const _from = SRC.indexOf('function _docsHubOpen');
+  const _open = SRC.slice(_from, SRC.indexOf('\nfunction ', _from + 10));
+  assert.match(_open, /_hubEosed\(hub, full\b[^;]*\); _docsHubSaveSoon\(hub\);[\s\S]*_maybeRebuildFamily\(hub\);/,
     'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
   assert.match(V, /_rebuildFamily/, 'the rebuild is missing from the shipped bundle');
 });
