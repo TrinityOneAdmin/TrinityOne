@@ -1,0 +1,30 @@
+TrinityOne - third-party notices
+================================
+
+TrinityOne itself is licensed under the GNU Affero General Public License v3 (see LICENSE). This file lists
+third-party code that is copied INTO this repository (vendored) or added as a new native dependency, with its origin
+and licence. Packages installed from npm into node_modules are not listed here; their licences travel with them.
+
+native/trinity-media-session/
+  Origin:   @jofr/capacitor-media-session 4.0.0 (npm), https://github.com/jofr/capacitor-media-session
+            Author: Jonas <jofr@vivaldi.net>
+  Licence:  GNU General Public License v3.0 or later (GPL-3.0-or-later). The full text is
+            native/trinity-media-session/LICENSE, copied unchanged from the package. GPL-3.0-or-later code may be
+            combined with this AGPL-3.0 work (GPL-3.0 section 13 / AGPL-3.0 section 13).
+  Taken:    the Android sources only: three Java files, the manifest, and the drawables for play, pause, skip
+            previous/next, stop and the small icon. Not taken: the web/TypeScript layer, the 30-second icons.
+  Changed:  yes, 2026-11-18. Every change is marked "TrinityOne:" in the source. Summary: native exceptions are
+            caught and rejected rather than crashing the app; artwork is accepted only as a data: URI; 'none' stops
+            the service and releases the media session; the service makes its notification channel in onCreate
+            and always calls startForeground in onStartCommand; the service is not exported; a refused foreground
+            start is a reject; separate Play/Pause notification intents; 10-second seek labels; pause on
+            headphones unplugged (BECOMING_NOISY) and on audio-focus loss; the service stops when the activity is
+            destroyed. The plan: TrinityOne-internal/PLAN-AUDIO-PLAYBACK-FIXES-2026-11-18.html (not in this repo).
+
+native/trinity-media-session/android/src/main/res/drawable/ic_trinity_replay_10_24.xml
+native/trinity-media-session/android/src/main/res/drawable/ic_trinity_forward_10_24.xml
+  Origin:   Material Icons "replay_10" and "forward_10", https://github.com/google/material-design-icons
+  Licence:  Apache License 2.0.
+
+androidx.media:media:1.6.0 (Maven, Google), a build dependency of native/trinity-media-session
+  Licence:  Apache License 2.0.

@@ -58,7 +58,7 @@
   // (the `error` event handles that one). Only NotAllowedError means "the browser will not play this": stop wanting.
   const onPlayReject = (tok) => (e) => {
     if (tok !== playTok) return;
-    if (e && e.name === 'NotAllowedError') { wantPlay = false; disarm(); set({ playing: false, loading: false, retrying: false }); }
+    if (e && e.name === 'NotAllowedError') { wantPlay = false; disarm(); set({ playing: false, loading: false, retrying: false }); osSync(); }
   };
 
   // reload the CURRENT element in place. Assigning `src` runs the load algorithm even for the same value, and
@@ -81,6 +81,7 @@
     const track = state.track; if (!track) return;
     cancelRetry(); disarm();
     attempts = 0; wantPlay = true;
+    osTap();   // retry-now is a tap or a return to the app: the foreground
     if (track.src && typeof track.resolve === 'function' && !isNet(track.src)) {
       // a resolved blob (a sermon, a local chapter) that broke: drop it and resolve once more, at the position
       delete track.src; begin(track, queue, resumeAt); return;
@@ -101,6 +102,7 @@
       return;
     }
     set({ failed: true, retrying: false, loading: false, playing: false });   // wantPlay stays: return-to-app may retry
+    osSync();
   }
 
   el.addEventListener('timeupdate', () => { if (el.currentTime > 0) resumeAt = el.currentTime; set({ t: el.currentTime, d: el.duration || 0 }); rearm(); });
@@ -108,15 +110,18 @@
   el.addEventListener('loadeddata', rearm);
   el.addEventListener('canplay', () => { firstLoad = false; rearm(); });
   el.addEventListener('loadstart', applyRate);
-  el.addEventListener('durationchange', () => set({ d: el.duration || 0 }));
-  el.addEventListener('play', () => { set({ playing: true }); arm(); });
-  el.addEventListener('pause', () => { if (!state.retrying) set({ playing: false }); arm(); });
+  el.addEventListener('durationchange', () => { set({ d: el.duration || 0 }); osPos(); });
+  el.addEventListener('seeked', osPos);
+  el.addEventListener('ratechange', osPos);
+  el.addEventListener('play', () => { set({ playing: true }); arm(); osPos(); });
+  el.addEventListener('pause', () => { if (!state.retrying) set({ playing: false }); arm(); osPos(); });
   el.addEventListener('waiting', () => { set({ loading: true }); arm(); });
   el.addEventListener('playing', () => { if (state.retrying) { cancelRetry(); attempts = 0; } set({ loading: false, playing: true, retrying: false, failed: false }); firstLoad = false; rearm(); });
   el.addEventListener('ended', () => {
     set({ playing: false });
-    if (api.hasNext()) { api.next(); return; }
+    if (api.hasNext()) { begin(queue[qi + 1], queue, 0, true); return; }
     wantPlay = false; disarm();   // the end of the queue: nothing more is wanted
+    osSend('none');
   });
   el.addEventListener('error', onFail);
 
@@ -143,26 +148,85 @@
     try { if (/^blob:/.test(u)) URL.revokeObjectURL(u); } catch (e) {}
   }
 
-  function mediaSession(track) {
-    if (!('mediaSession' in navigator)) return;
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: track.title || '', artist: track.subtitle || '', album: track.album || 'TrinityOne',
-        artwork: track.image ? [{ src: track.image, sizes: '512x512', type: 'image/png' }] : [],
-      });
-      const h = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) {} };
-      // explicit, never toggle: a "pause" that arrives while paused (headphones out, a car) must not start sound
-      h('play', () => api.resume()); h('pause', () => api.pause());
-      h('seekbackward', (d) => api.seek(-(d && d.seekOffset || 10)));
-      h('seekforward', (d) => api.seek(d && d.seekOffset || 10));
-      h('previoustrack', queue.length > 1 ? () => api.prev() : null);
-      h('nexttrack', queue.length > 1 ? () => api.next() : null);
-      h('seekto', (d) => { if (d && d.seekTime != null && el.duration) el.currentTime = d.seekTime; });
-    } catch (e) {}
+  // ── OS CONTROLS (plan 2026-11-18, Fix 2). On Android the vendored plugin (native/trinity-media-session) draws the
+  // notification and the lock-screen card, takes Bluetooth / headset buttons, and runs the mediaPlayback foreground
+  // service that keeps playback alive with the screen off. Elsewhere (iOS, the web, desktop) navigator.mediaSession
+  // does what it can. The plugin object is read synchronously, here, and never returned from an async function (a
+  // Capacitor plugin proxy returned from one is awaited as a thenable and hangs).
+  const MSP = (() => { try { const C = window.Capacitor; return (C && typeof C.isPluginAvailable === 'function' && C.isPluginAvailable('MediaSession') && C.Plugins && C.Plugins.MediaSession) || null; } catch (e) { return null; } })();
+  const NAV = (!MSP && typeof navigator !== 'undefined' && navigator && navigator.mediaSession) ? navigator.mediaSession : null;
+  // the app icon, pre-encoded (96 px): the plugin takes ONLY data: artwork, and metadata always carries some
+  const APP_ICON = 'data:image/jpeg;base64,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';
+  const PAUSED_TO_NONE_MS = 10 * 60000;   // owner's choice: after 10 minutes paused the card and the service go
+  let osState = 'none', osPausedTimer = null;
+  const quiet = (p) => { try { if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (e) {} };
+  function osSend(st) {
+    if (st === osState) return;
+    osState = st;
+    if (osPausedTimer) { clearTimeout(osPausedTimer); osPausedTimer = null; }
+    if (st === 'paused') osPausedTimer = setTimeout(() => { osPausedTimer = null; if (osState === 'paused') osSend('none'); }, PAUSED_TO_NONE_MS);
+    if (MSP) {
+      try {
+        const p = MSP.setPlaybackState({ playbackState: st });
+        // a refused foreground start (Android 12+ from the background): this track has no OS controls and no
+        // keep-awake; back to 'none' so the listener's next tap tries the service again
+        if (st === 'playing') { if (p && typeof p.catch === 'function') p.catch(() => { if (osState === 'playing') osState = 'none'; }); }
+        else quiet(p);
+      } catch (e) { if (st === 'playing') osState = 'none'; }
+    } else if (NAV) { try { NAV.playbackState = st; } catch (e) {} }
+  }
+  // the FIRST 'playing' after 'none' is sent only from here: inside api.play()/resume()/retry-now (the listener's
+  // tap) or the return-to-app retry, i.e. with the app in the foreground. Never from a media event.
+  function osTap() { osSend('playing'); osPos(); }
+  // every later change comes from events, and never moves the OS out of 'none'. 'playing' is held while the
+  // listener wants sound: loading, retrying, and between chapters.
+  function osSync() {
+    if (osState === 'none' || !state.track) return;
+    osSend(state.failed ? 'paused' : (wantPlay ? 'playing' : 'paused'));
+  }
+  function osMeta(track) {
+    if (MSP) {
+      const img = (track.image && /^data:/i.test(String(track.image))) ? String(track.image) : APP_ICON;
+      const type = (/^data:([^;,]+)/.exec(img) || [])[1] || 'image/jpeg';
+      try { quiet(MSP.setMetadata({ title: track.title || '', artist: track.subtitle || '', album: track.album || 'TrinityOne', artwork: [{ src: img, sizes: '96x96', type }] })); } catch (e) {}
+      return;
+    }
+    if (NAV && typeof MediaMetadata !== 'undefined') {
+      try { NAV.metadata = new MediaMetadata({ title: track.title || '', artist: track.subtitle || '', album: track.album || 'TrinityOne',
+        artwork: track.image ? [{ src: track.image, sizes: '512x512', type: 'image/png' }] : [] }); } catch (e) {}
+    }
+  }
+  // on play, pause, seek, rate change and duration change only: never on timeupdate (4 Hz over the bridge)
+  function osPos() {
+    const d = el.duration;
+    if (!(d > 0) || !isFinite(d)) return;
+    const o = { duration: d, position: Math.max(0, Math.min(d, el.currentTime || 0)), playbackRate: rate };
+    if (MSP) { try { quiet(MSP.setPositionState(o)); } catch (e) {} }
+    else if (NAV && typeof NAV.setPositionState === 'function') { try { NAV.setPositionState(o); } catch (e) {} }
+  }
+  // explicit play and pause, never toggle: a "pause" that arrives while paused (headphones out, a car) must not start sound
+  const OS_ACTIONS = {
+    play: () => api.resume(),
+    pause: () => api.pause(),
+    seekbackward: (d) => api.seek(-((d && d.seekOffset) || 10)),
+    seekforward: (d) => api.seek((d && d.seekOffset) || 10),
+    seekto: (d) => { if (d && d.seekTime != null) seekAbs(Number(d.seekTime)); },
+    previoustrack: () => api.prev(),
+    nexttrack: () => api.next(),
+    stop: () => api.stop(),
+  };
+  // registered ONCE, when the engine starts (they used to be re-registered on every track; on the plugin each one
+  // keeps a native call alive and rebuilds the notification)
+  function registerOsActions() {
+    Object.keys(OS_ACTIONS).forEach(a => {
+      const run = (d) => { try { OS_ACTIONS[a](d || {}); } catch (e) {} };
+      if (MSP) { try { MSP.setActionHandler({ action: a }, run); } catch (e) {} }
+      else if (NAV) { try { NAV.setActionHandler(a, run); } catch (e) {} }
+    });
   }
 
   // start `track` at `at` seconds. play() is begin(track, list, 0); a re-resolve after a failure keeps its place.
-  function begin(track, list, at) {
+  function begin(track, list, at, byEvent) {
     if (!track || (!track.src && typeof track.resolve !== 'function')) return;
     if (Array.isArray(list) && list.length) { queue = list; qi = Math.max(0, list.findIndex(t => t.id === track.id)); }
     else { queue = [track]; qi = 0; }
@@ -171,6 +235,8 @@
     cancelRetry(); disarm();
     wantPlay = true; resumeAt = at || 0; attempts = 0; firstLoad = false;
     const was = state.track;
+    osMeta(track);
+    if (byEvent) osSync(); else osTap();   // a chapter that follows by itself (ended) never starts the service
     const start = () => {
       if (resumeAt > 0) {
         const want = resumeAt;
@@ -181,7 +247,6 @@
       release(was, track);
       applyRate();
       set({ track, loading: true, failed: false, retrying: false, q: queue, qi });
-      mediaSession(track);
       firstLoad = true; rearm();
       el.play().then(() => { if (tok === playTok) set({ playing: true, loading: false }); }).catch(onPlayReject(tok));
     };
@@ -192,16 +257,22 @@
     try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
     release(was, track);
     set({ track, loading: true, playing: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi });
-    mediaSession(track);
     // a resolve() that fails is not retried by itself: a sermon is a whole-file download, and small pipes come first
     const fail = () => { if (tok === playTok) { pending = false; set({ loading: false, playing: false, failed: true }); } };
     Promise.resolve().then(() => track.resolve()).then(src => {
       if (tok !== playTok) { if (track.bibleLocal && src && /^blob:/.test(src)) { try { URL.revokeObjectURL(src); } catch (e) {} } return; }   // the listener chose something else while this downloaded
-      if (!src) { fail(); return; }
+      if (!src) { fail(); osSync(); return; }
       pending = false; track.src = src;
-      if (!wantPlay) { el.src = src; applyRate(); set({ loading: false, playing: false }); return; }   // paused (a video opened) while it downloaded
+      if (!wantPlay) { el.src = src; applyRate(); set({ loading: false, playing: false }); osSync(); return; }   // paused (a video opened) while it downloaded
       start();
-    }).catch(fail);
+    }).catch(() => { fail(); osSync(); });
+  }
+
+  // an absolute seek (the lock-screen scrubber): like seekTo, in seconds
+  function seekAbs(sec) {
+    if (pending || !(sec >= 0)) return;
+    if (errored()) { const d = state.d || 0; resumeAt = d ? Math.min(d, sec) : sec; set({ t: resumeAt }); retryNow(); return; }
+    if (el.duration) { el.currentTime = Math.max(0, Math.min(el.duration, sec)); resumeAt = el.currentTime; }
   }
 
   const api = {
@@ -230,9 +301,10 @@
     // explicit play (the OS / headphone play action): errored, retrying or failed → retry now
     resume() {
       if (!state.track) return;
-      if (pending) { wantPlay = true; return; }
+      if (pending) { wantPlay = true; osTap(); return; }
       if (errored()) { retryNow(); return; }
       wantPlay = true;
+      osTap();
       const tok = playTok;
       el.play().then(() => {}).catch(onPlayReject(tok));
     },
@@ -242,6 +314,7 @@
       wantPlay = false; cancelRetry(); disarm(); firstLoad = false;
       try { el.pause(); } catch (e) {}
       set({ playing: false, loading: pending ? state.loading : false, retrying: false });
+      osSync();
     },
     // seeking while errored moves the place to resume from and reloads there, rather than doing nothing
     seek(delta) {
@@ -262,10 +335,11 @@
     },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; pending = false; wantPlay = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); },
+    stop() { playTok++; pending = false; wantPlay = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };
+  registerOsActions();
   window.TrinityAudio = api;
 })();
 
