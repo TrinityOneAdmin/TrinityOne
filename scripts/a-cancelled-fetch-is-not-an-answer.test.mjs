@@ -320,3 +320,31 @@ test('T-B 10: with acceptance never recorded, B re-downloads everything at most 
   await sleep(100);
   app.clean(); app.close();
 });
+
+test('T-B 11: B\'s one post-sign-in full is counted when it is ANSWERED — a cancelled one is retried', async (t) => {
+  reset(r1, 'hold'); r1.challengeEveryReq = true; r1.refuseAuth = true;
+  r1.add(doc(church, 'trinityone/joinpolicy:' + cp, { approval: true }, nowS() - 60), false);   // a cursor, so only B decides full vs not
+  const prior = process.listeners('unhandledRejection');   // see T-B 7
+  process.removeAllListeners('unhandledRejection');
+  const swallow = (err, p) => { if (/auth refused/.test(String(err && err.message))) return; for (const l of prior) l(err, p); };
+  process.on('unhandledRejection', swallow);
+  t.after(() => { process.removeListener('unhandledRejection', swallow); for (const l of prior) process.on('unhandledRejection', l); });
+  const app = memberApp({ me: ruth, relays: [r1.url] });
+  app.api._onChurchDocs(cp, { onevent() {}, oneose() {} });
+  assert.ok(await until(() => app.t._relayAuthedAt > 0), 'an AUTH was signed (and refused)');
+  r1.eose();
+  assert.ok(await until(() => app.docsHub(cp).fullAt > 0), 'the first full was answered, pre-acceptance');
+  await sleep(50);
+  app.api.refetchChurchDocs();
+  assert.ok(isFull(app.hubReqs(cp).at(-1)), 'the refull is sent');
+  await sleep(100);
+  app.api.refetchChurchDocs();                         // …and cancelled before anyone answered it
+  assert.ok(isFull(app.hubReqs(cp).at(-1)), 'a refull that was cancelled unanswered must be retried');
+  assert.ok(await until(() => r1.subIds().length === app.hubReqs(cp).length && r1.closes().length === app.hubReqs(cp).length - 1), 'the relay holds the retry and has closed the rest');
+  r1.eose();
+  await sleep(150);
+  app.api.refetchChurchDocs();
+  assert.ok(!isFull(app.hubReqs(cp).at(-1)), 'once answered, the cap holds');
+  await sleep(100);
+  app.clean(); app.close();
+});
