@@ -98,6 +98,8 @@ const WEB_EXT = /\.(html|css|js|jsx|mjs|map|json|png|jpe?g|webp|avif|svg|gif|ico
 const SERVE_OK = (f) =>
   WEB_EXT.test(f)                                   // the web surface itself
   || f === 'LICENSE'                                // the licence, deliberately readable
+  || f === 'NOTICE'                                 // the third-party licence list, deliberately readable, like LICENSE
+  || f === 'native/trinity-media-session/LICENSE'   // the vendored lock-screen plugin's GPL text, the same reason
   || /^modules\//.test(f)                           // Bible/lexicon packs the app downloads on demand
   || /^vendor\/library\/.*\.gz$/.test(f)            // the public-domain book library, fetched by the reader
   || f === 'relay-app/install.sh'                   // the documented one-line self-host installer curls this

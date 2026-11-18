@@ -80,3 +80,9 @@ scripts/gen-confusables-table.py export-ignore
 # the bundle's root package.json names "file:native/trinity-widget", and an `npm install` in an unpacked bundle
 # (relay-app/install.sh, scripts/relay-update.sh) must not meet a dependency that points at nothing.
 native/trinity-widget/android export-ignore
+
+# ── THE LOCK-SCREEN CONTROLS PLUGIN'S NATIVE SOURCES (native/trinity-media-session, PLAN-AUDIO-PLAYBACK-FIXES v3) ──
+# The same rule as the widget above: only an APK build from a git checkout reads them; no relay does. Its package.json
+# STAYS (the root package.json names "file:native/trinity-media-session"), and so does its LICENSE (GPL-3.0-or-later,
+# shipped beside the package it covers; see NOTICE at the root).
+native/trinity-media-session/android export-ignore

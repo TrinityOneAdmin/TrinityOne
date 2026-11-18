@@ -103,7 +103,13 @@ const BUNDLE_OK = (f) =>
   || f === 'android/app/src/main/AndroidManifest.xml'
   // The home-screen widget plugin's MANIFEST only (its Android sources are export-ignored, .gitattributes): the root
   // package.json ships and names "file:native/trinity-widget", so an npm install in an unpacked bundle must find it.
-  || f === 'native/trinity-widget/package.json';
+  || f === 'native/trinity-widget/package.json'
+  // The lock-screen controls plugin, on the widget's pattern (its Android sources are export-ignored, .gitattributes):
+  // its package.json because the root package.json names "file:native/trinity-media-session"; its LICENSE (GPL) and
+  // the root NOTICE (the third-party list that names it) because licence texts ship deliberately, like LICENSE.
+  || f === 'native/trinity-media-session/package.json'
+  || f === 'native/trinity-media-session/LICENSE'
+  || f === 'NOTICE';
 
 // Things that are never right ANYWHERE in the tarball, whatever else the rules say. Belt and braces: these
 // are also covered above, and pinning them separately means a widened allowlist cannot silently readmit them.
@@ -136,7 +142,7 @@ function assertNoInternalDocs(listing, who) {
 const MUST_SHIP = ['scripts/gateway.mjs', 'scripts/event-store.mjs', 'scripts/relay-update.sh',
   'relay-app/release-pubkey.pem', 'relay-app/control.html', 'version.txt', 'package.json',
   'index.html', 'steward.html', 'vendor/fellowship.js', 'vendor/steward.js', 'engine.js', 'LICENSE',
-  'native/trinity-widget/package.json'];   // package.json's file: dependency must resolve
+  'native/trinity-widget/package.json', 'native/trinity-media-session/package.json'];   // package.json's file: dependencies must resolve
 
 function assertStillInstallable(listing, who) {
   for (const f of MUST_SHIP) assert.ok(listing.includes(f), who + ' no longer ships ' + f + ' — the relay cannot run');
