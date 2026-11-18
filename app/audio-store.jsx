@@ -5,10 +5,11 @@
 // EVERYTHING IS INSIDE ONE FUNCTION. app/*.jsx are classic scripts sharing ONE global scope; this file adds exactly one
 // global, window.TrinityAudioStore, so it cannot collide with a name in another file.
 //
-// THE GATE (plan N6). One flag, filesOn() = native && Filesystem present && (android || IOS_BACKUP_EXCLUDE_READY), decides
+// THE GATE (plan N6). One flag, filesOn() = native && Filesystem present && (android || iosBackupExcludeReady), decides
 // file storage, migration and which half of the sweep runs. Nothing here branches on isNativePlatform() alone.
-// IOS_BACKUP_EXCLUDE_READY is FALSE: the iOS exclude-from-backup native call is not built (it needs a Mac), so iOS stays on
-// IndexedDB exactly as today. The web build and the Suite have no native Filesystem and also stay on IndexedDB.
+// iosBackupExcludeReady is set per run by iosGate() at boot: true only when the BackupExclude plugin (PR #24, appended to
+// AppDelegate.swift by scripts/ios-fixup.sh) answers {excluded:true} for Library/audio. Otherwise iOS stays on IndexedDB.
+// The web build and the Suite have no native Filesystem and also stay on IndexedDB.
 //
 // TWO STORES, ONE SHAPE.
 //   · files (Android): Directory.Data, audio/<id>/<book>/<chap>.<ext> and audio/<id>/_unplaced/<n>.<ext>
@@ -26,7 +27,8 @@
   const REG_KEY = 'trinityone.audioSets';
   const VOICE_KEY = 'trinityone.audioVoice';
   const ROOT = 'audio';
-  const IOS_BACKUP_EXCLUDE_READY = false;          // see the header: iOS stays on IndexedDB until the native piece exists
+  // iOS uses file storage only after THIS run's BackupExclude.exclude({path:'audio'}) answered excluded:true (see iosGate)
+  let iosBackupExcludeReady = false;
   const CAP_ENTRY = 64 * 1024 * 1024;              // inflated bytes in one entry
   const CAP_TOTAL = 3 * 1024 * 1024 * 1024;        // inflated bytes in one import
   const CAP_ENTRIES = 5000;
@@ -66,9 +68,27 @@
     const c = cap();
     const native = !!(c && typeof c.isNativePlatform === 'function' && c.isNativePlatform());
     const plat = c && typeof c.getPlatform === 'function' ? c.getPlatform() : '';
-    return native && !!FSP() && (plat === 'android' || (plat === 'ios' && IOS_BACKUP_EXCLUDE_READY));
+    return native && !!FSP() && (plat === 'android' || (plat === 'ios' && iosBackupExcludeReady));
   }
-  const DIR = () => 'DATA';   // Android Directory.Data (iOS would be LIBRARY once IOS_BACKUP_EXCLUDE_READY is true)
+  // Android: Directory.Data. iOS: Directory.Library, the same base the BackupExclude plugin resolves 'audio' against
+  // (FileManager .libraryDirectory, per PR #24), so the folder the plugin excludes is the folder the files go in.
+  const DIR = () => { const c = cap(); return (c && typeof c.getPlatform === 'function' && c.getPlatform() === 'ios') ? 'LIBRARY' : 'DATA'; };
+
+  // THE iOS GATE, run at the start of every boot (the exclusion is re-applied on every start). Only a resolved
+  // {excluded:true} turns file storage on for this run; a missing plugin, a rejection or excluded:false leaves iOS on
+  // IndexedDB. The plugin object is never returned from an async function (Capacitor's plugin proxy answers `then`).
+  async function iosGate() {
+    iosBackupExcludeReady = false;
+    const c = cap();
+    if (!c || typeof c.getPlatform !== 'function' || c.getPlatform() !== 'ios') return false;
+    if (typeof c.isPluginAvailable !== 'function' || !c.isPluginAvailable('BackupExclude')) return false;
+    const P = c.Plugins && c.Plugins.BackupExclude;
+    if (!P || typeof P.exclude !== 'function') return false;
+    let r = null;
+    try { r = await Promise.resolve(P.exclude({ path: 'audio' })).catch(() => null); } catch (e) { r = null; }
+    iosBackupExcludeReady = !!(r && r.excluded === true);
+    return iosBackupExcludeReady;
+  }
 
   // ─────────────── registry ───────────────
   function rows() {
@@ -672,7 +692,7 @@
   let _boot = null, _swept = null;
   function boot() {
     if (!_boot) {
-      _swept = (async () => { try { await sweep(); } catch (e) {} })();
+      _swept = (async () => { try { await iosGate(); } catch (e) {} try { await sweep(); } catch (e) {} })();
       _boot = _swept.then(async () => { try { await migrateWeb(); } catch (e) {} });
     }
     return _boot;

@@ -475,3 +475,47 @@ test('ROUND-4 N6 — "I Sa 3", "Ich 3", "Iki 2", "Ico 2" are never a wrong book;
     const m = S.matchName(name); assert.ok(m, name); assert.deepEqual([m.book, m.chap], bc, name);
   }
 });
+
+// ════════════════ iOS: the BackupExclude gate (PR #24's plugin, faked here) through the real boot path ════════════════
+test('iOS GATE — exclude({path:"audio"}) resolving excluded:true at boot puts iOS on file storage under Directory.Library, and World English migrates', async () => {
+  const idbData = new Map(); seedWeb(idbData, [[43, 1], [43, 2]]);
+  const calls = [];
+  const w = storeWorld({ native: true, platform: 'ios', idbData, backupExclude: 'resolve', excludeCalls: calls });
+  assert.equal(w.S.filesOn(), false, 'iOS used files before the exclusion was confirmed');
+  await w.S.boot();
+  assert.deepEqual(calls.map(c => [c.path, c.fsCallsBefore]), [['audio', 0]], 'exclude was not called once, with "audio", before any file call');
+  assert.equal(w.S.filesOn(), true);
+  assert.deepEqual([...w.disk.keys()].sort(), ['audio/WEB/43/1.mp3', 'audio/WEB/43/2.mp3'], 'World English did not move into files');
+  assert.equal(idbData.size, 0);
+  assert.deepEqual([...w.fs.dirs], ['LIBRARY'], 'iOS files are not under Directory.Library (the base the plugin excludes)');
+  const { id } = await imp(w, [['John_5.mp3', mp3('j5')]]);
+  assert.ok(w.disk.has('audio/' + id + '/43/5.mp3'), 'an iOS import did not go to files');
+  // re-applied on every start: a relaunch calls it again
+  const again = []; await storeWorld({ native: true, platform: 'ios', disk: w.disk, ls: w.ls, idbData, backupExclude: 'resolve', excludeCalls: again }).S.boot();
+  assert.equal(again.length, 1, 'the exclusion is not re-applied on the next start');
+});
+
+test('iOS GATE — plugin missing, rejecting, or answering excluded:false: iOS stays on IndexedDB and nothing migrates', async () => {
+  for (const mode of ['missing', 'reject', 'false']) {
+    const idbData = new Map(); seedWeb(idbData, [[43, 1]]);
+    const w = storeWorld({ native: true, platform: 'ios', idbData, backupExclude: mode });
+    await w.S.boot();
+    assert.equal(w.S.filesOn(), false, mode + ': iOS turned file storage on');
+    assert.ok(idbData.has('WEB/43/1'), mode + ': World English left IndexedDB');
+    assert.equal(w.disk.size, 0, mode);
+    assert.deepEqual(w.fs.calls, [], mode + ': a Filesystem call was made');
+    const { id } = await imp(w, [['John_5.mp3', mp3('j5')]]);
+    assert.ok(idbData.has(id + '/43/5'), mode + ': the import did not use IndexedDB');
+  }
+});
+
+test('iOS GATE — Android is never affected: no exclude call even if a BackupExclude plugin were present, files under Directory.Data', async () => {
+  const calls = [];
+  const idbData = new Map(); seedWeb(idbData, [[43, 1]]);
+  const w = storeWorld({ native: true, platform: 'android', idbData, backupExclude: 'false', excludeCalls: calls });
+  await w.S.boot();
+  assert.deepEqual(calls, []);
+  assert.equal(w.S.filesOn(), true);
+  assert.ok(w.disk.has('audio/WEB/43/1.mp3'));
+  assert.deepEqual([...w.fs.dirs], ['DATA']);
+});

@@ -73,8 +73,8 @@ export function fakeIdb(data = new Map()) {
 // ── fake Capacitor Filesystem (the shim) ──
 export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failWrite = null, noOverwrite = false, failRename = null } = {}) {
   const dec = (b64) => new Uint8Array(Buffer.from(b64, 'base64'));
-  const calls = [];
-  const gate = async (op, path) => { calls.push(op + ' ' + path); if (hang && hang(op, path)) await new Promise(() => {}); };
+  const calls = []; const dirs = new Set();
+  const gate = async (op, path, dir) => { calls.push(op + ' ' + path); if (dir) dirs.add(dir); if (hang && hang(op, path)) await new Promise(() => {}); };
   // hangAfter: the operation HAPPENS, then the process "dies" before the caller hears back
   const after = async (op, path) => { if (hangAfter && hangAfter(op, path)) await new Promise(() => {}); };
   const kids = (path) => {
@@ -83,13 +83,13 @@ export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failW
     return [...out.values()];
   };
   const Filesystem = {
-    async writeFile({ path, data }) { await gate('writeFile', path); if (failWrite && failWrite(path, 'writeFile')) throw new Error('ENOSPC: no space left on device'); files.set(path, dec(data)); return { uri: 'file:///data/' + path }; },
-    async appendFile({ path, data }) { await gate('appendFile', path); if (failWrite && failWrite(path, 'appendFile')) throw new Error('ENOSPC: no space left on device'); const a = files.get(path) || new Uint8Array(0); const b = dec(data); const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); files.set(path, c); },
-    async stat({ path }) { await gate('stat', path); if (!files.has(path)) throw new Error('File does not exist'); return { size: files.get(path).length, type: 'file', uri: 'file:///data/' + path }; },
-    async readdir({ path }) { await gate('readdir', path); return { files: kids(path) }; },
-    async rmdir({ path }) { await gate('rmdir', path); for (const p of [...files.keys()]) if (p === path || p.startsWith(path + '/')) files.delete(p); },
-    async deleteFile({ path }) { await gate('deleteFile', path); if (!files.has(path)) throw new Error('File does not exist'); files.delete(path); },
-    async rename({ from, to }) { await gate('rename', from); if (!files.has(from)) throw new Error('File does not exist'); if (noOverwrite && files.has(to)) throw new Error('Destination exists'); if (failRename && failRename(from, to)) throw new Error('rename failed'); files.set(to, files.get(from)); files.delete(from); await after('rename', to); },
+    async writeFile({ directory, path, data }) { await gate('writeFile', path, directory); if (failWrite && failWrite(path, 'writeFile')) throw new Error('ENOSPC: no space left on device'); files.set(path, dec(data)); return { uri: 'file:///data/' + path }; },
+    async appendFile({ directory, path, data }) { await gate('appendFile', path, directory); if (failWrite && failWrite(path, 'appendFile')) throw new Error('ENOSPC: no space left on device'); const a = files.get(path) || new Uint8Array(0); const b = dec(data); const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); files.set(path, c); },
+    async stat({ directory, path }) { await gate('stat', path, directory); if (!files.has(path)) throw new Error('File does not exist'); return { size: files.get(path).length, type: 'file', uri: 'file:///data/' + path }; },
+    async readdir({ directory, path }) { await gate('readdir', path, directory); return { files: kids(path) }; },
+    async rmdir({ directory, path }) { await gate('rmdir', path, directory); for (const p of [...files.keys()]) if (p === path || p.startsWith(path + '/')) files.delete(p); },
+    async deleteFile({ directory, path }) { await gate('deleteFile', path, directory); if (!files.has(path)) throw new Error('File does not exist'); files.delete(path); },
+    async rename({ from, to, directory }) { await gate('rename', from, directory); if (!files.has(from)) throw new Error('File does not exist'); if (noOverwrite && files.has(to)) throw new Error('Destination exists'); if (failRename && failRename(from, to)) throw new Error('rename failed'); files.set(to, files.get(from)); files.delete(from); await after('rename', to); },
     async mkdir() {},
     async getUri({ path }) { return { uri: 'file:///data/' + path }; },
   };
@@ -103,17 +103,24 @@ export function fakeFs(files = new Map(), { hang = null, hangAfter = null, failW
     return { ok: true, status: 200, blob: async () => new Blob([b], { type: '' }) };
   };
   const convertFileSrc = (uri) => 'https://localhost/_capacitor_file_' + String(uri).replace(/^file:\/\//, '');
-  return { Filesystem, files, calls, fetched, fsFetch, convertFileSrc };
+  return { Filesystem, files, calls, dirs, fetched, fsFetch, convertFileSrc };
 }
 
 // ── a world: one localStorage, one IndexedDB, optionally the native disk; the store loaded for real ──
-export function storeWorld({ native = false, platform = 'android', ls = new Map(), idbData = new Map(), disk = new Map(), fsOpts = {}, extra = {} } = {}) {
+// backupExclude (iOS only): 'resolve' | 'reject' | 'false' (answers excluded:false) | 'missing' — a fake of PR #24's plugin
+export function storeWorld({ native = false, platform = 'android', ls = new Map(), idbData = new Map(), disk = new Map(), fsOpts = {}, extra = {}, backupExclude = 'missing', excludeCalls = [] } = {}) {
   const idb = fakeIdb(idbData);
   const fs = fakeFs(disk, fsOpts);
   const localStorage = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => { ls.set(k, String(v)); }, removeItem: (k) => { ls.delete(k); } };
   const win = {
     fflate, indexedDB: idb.indexedDB, crypto: globalThis.crypto, btoa: globalThis.btoa,
-    Capacitor: native ? { isNativePlatform: () => true, getPlatform: () => platform, convertFileSrc: fs.convertFileSrc, Plugins: { Filesystem: fs.Filesystem } }
+    Capacitor: native ? { isNativePlatform: () => true, getPlatform: () => platform, convertFileSrc: fs.convertFileSrc,
+      isPluginAvailable: (n) => (n === 'BackupExclude' ? backupExclude !== 'missing' : n === 'Filesystem'),
+      Plugins: { Filesystem: fs.Filesystem, ...(backupExclude !== 'missing' ? { BackupExclude: { exclude: async (o) => {
+        excludeCalls.push({ ...o, fsCallsBefore: fs.calls.length });
+        if (backupExclude === 'reject') throw new Error('path must not be empty');
+        return { path: o.path, excluded: backupExclude === 'resolve' };
+      } } } : {}) } }
       : { isNativePlatform: () => false, getPlatform: () => 'web', Plugins: {} },
     ...extra,
   };
