@@ -458,3 +458,66 @@ test('round 6 — Block of a steward: the row says "Blocking… keeping what the
   assert.doesNotMatch(reads(draw(C, {})), /Blocking…/, 'the in-flight line stayed after the block finished');
 });
 
+
+// ══ ROUND 7 (audit of round 6): the Block guard survives the tab unmounting; every Block control goes through it ═════
+test('LOW-2 — Block in flight, Members tab closed and reopened: the row still says "Blocking…" and a press does nothing', async () => {
+  const d = deferred();
+  const r = blockRig({ stewards: [BRAM], carry: () => d.p });
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }], undefined, { unmounts: true });
+  const Other = () => null;
+  await press(draw(C, {}), /Remove \/ block this member/, { which: 0 });
+  await press(draw(C, {}), /Confirm — bans them/);
+  assert.equal(r.order.filter(s => s.step === 'carry').length, 1, 'CONTROL: the Block started');
+  draw(Other, {});                 // another tab: DashMembers unmounts, its hooks are forgotten
+  let tree = draw(C, {});          // back to Members: a fresh mount
+  await flush(); tree = draw(C, {});
+  assert.match(reads(tree), /Blocking… keeping what they set up/, 'after a remount the row forgot the Block in flight');
+  assert.equal(find(tree, n => n && n.type === 'button' && /Remove \/ block this member|Confirm — bans them/.test(String(n.props.title || '')) && String(n.props.title || '')).length, 1,
+    'CONTROL: only the other member’s Block control is offered');
+  await press(tree, /Remove \/ block this member/, { which: 0 });   // the only one offered: Cleo's
+  assert.equal(r.order.filter(s => s.step === 'carry' && s.pk === BRAM).length, 1, 'a second Block of the same person started after the remount');
+  d.res({ carried: [{ d: 'g', label: 'a group' }], notCarried: [], superseded: [] });
+  await flush(30);
+  assert.doesNotMatch(reads(draw(C, {})), /Blocking…/, 'the in-flight line stayed after the block settled');
+  assert.equal(r.order.filter(s => s.step === 'block').length, 1);
+});
+
+test('LOW-1 — the WAITING-LIST confirm goes through the guard: in-flight shown, a double press makes one Block', async () => {
+  const d = deferred();
+  const r = blockRig({ stewards: [BRAM], carry: () => d.p });
+  r.g.window.useStewardJoinPolicy = () => true;
+  r.g.window.useStewardAdmitted = () => [CLEO];   // Bram is waiting to be let in
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }]);
+  const decline = find(draw(C, {}), n => n && n.type === 'button' && /^Decline Bram/.test(String(n.props['aria-label'] || '')));
+  assert.equal(decline.length, 1, 're-anchor: no waiting-list Decline for Bram');
+  decline[0].props.onClick();
+  const confirm = find(draw(C, {}), n => n && n.type === 'button' && /^Confirm: block Bram/.test(String(n.props['aria-label'] || '')));
+  assert.equal(confirm.length, 1, 're-anchor: no waiting-list confirm');
+  confirm[0].props.onClick(); confirm[0].props.onClick();
+  await flush();
+  assert.equal(r.order.filter(s => s.step === 'carry').length, 1, 'a double press on the waiting-list confirm started two Blocks');
+  assert.match(reads(draw(C, {})), /Blocking… keeping what they set up/, 'the waiting-list row does not show the Block in flight');
+  d.res({ carried: [], notCarried: [], superseded: [] }); await flush(30);
+});
+
+test('LOW-1 — the PHONE SHEET’s Block goes through the guard: in-flight shown, a double press makes one Block', async () => {
+  const d = deferred();
+  const r = blockRig({ stewards: [BRAM], carry: () => d.p });
+  let sheet = null;
+  r.g.StewMemberSheet = (p) => { sheet = p; return null; };   // the sheet is another file's component: what it is handed is what this measures
+  r.g.useStewNarrow = () => true;   // a phone: the row offers ⋯ More, which opens the sheet
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }]);
+  await press(draw(C, {}), /More for Bram/, { which: 0 });
+  draw(C, {});
+  assert.ok(sheet, 're-anchor: the member sheet did not open');
+  sheet.actions.find(a => a.key === 'block').onPick();   // "Remove / block" — asks to confirm
+  draw(C, {});
+  const blockIt = sheet.actions.find(a => a.key === 'block');
+  assert.match(blockIt.label, /^Block /, 're-anchor: the sheet is not asking to confirm');
+  blockIt.onPick(); blockIt.onPick();
+  await flush();
+  assert.equal(r.order.filter(s => s.step === 'carry').length, 1, 'a double press in the phone sheet started two Blocks');
+  draw(C, {});
+  assert.match(sheet.actions.find(a => a.key === 'block').label, /Blocking… keeping what they set up/, 'the phone sheet does not show the Block in flight');
+  d.res({ carried: [], notCarried: [], superseded: [] }); await flush(30);
+});

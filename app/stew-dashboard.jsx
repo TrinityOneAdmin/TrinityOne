@@ -8341,6 +8341,8 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
   return Promise.all(jobs).then(() => [...new Set(failed)]);
 }
 
+// who DashMembers is blocking right now — module scope so it survives the tab unmounting (see blockOnce)
+const _blockingInFlight = { pks: new Set(), subs: new Set() };
 function DashMembers({ dmConvos: dmConvosProp }) {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
@@ -9221,12 +9223,21 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   // never blocked, and a second press started a second carry and a second setBlocked from a stale list. Every Block
   // control calls this, not block() directly: the row reads "Blocking… keeping what they set up" until block() settles,
   // and presses in between are ignored. block() itself is unchanged (its own lines say how it ended).
-  const blockingRef = React.useRef(new Set());
-  const [blocking, setBlocking] = React.useState(() => new Set());
+  // The in-flight set lives at MODULE scope (_blockingInFlight, above DashMembers), not in this component: leaving the
+  // Members tab unmounts it, and a guard held here reset on return and offered Block again mid-carry (audit round 6,
+  // LOW-2; the same reason as F9's clearanceBackfillLastSig). Each mounted copy re-renders when the set changes.
+  const [, setBlockingTick] = React.useState(0);
+  React.useEffect(() => {
+    const f = () => setBlockingTick(t => t + 1);
+    _blockingInFlight.subs.add(f);
+    return () => { _blockingInFlight.subs.delete(f); };
+  }, []);
+  const blocking = _blockingInFlight.pks;
   const blockOnce = (pk) => {
-    if (blockingRef.current.has(pk)) return undefined;
-    blockingRef.current.add(pk); setBlocking(new Set(blockingRef.current));
-    const done = () => { blockingRef.current.delete(pk); setBlocking(new Set(blockingRef.current)); };
+    if (_blockingInFlight.pks.has(pk)) return undefined;
+    const ping = () => { for (const f of [..._blockingInFlight.subs]) { try { f(); } catch (e) {} } };
+    _blockingInFlight.pks.add(pk); ping();
+    const done = () => { _blockingInFlight.pks.delete(pk); ping(); };
     let r; try { r = block(pk); } catch (e) { done(); return undefined; }
     return Promise.resolve(r).then(done, done);
   };
