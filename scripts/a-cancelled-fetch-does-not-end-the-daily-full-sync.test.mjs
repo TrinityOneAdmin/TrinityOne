@@ -152,7 +152,7 @@ test('T-A 2: the members hub — a cancelled full fetch does not stop the ten-da
   assert.ok(!anon.some(e => dOf(e) === 'trinityone/member:' + cp), 'member: docs are served to an anonymous reader — this case is void here and belongs in T-B');
   // a warm phone whose daily full is due: cursor recent, last full two days ago
   const storage = memStorage();
-  storage.setItem('trinityone.memhub.' + cp, JSON.stringify({ since: nowS() - 60, fullAt: nowS() - 2 * 86400, members: [] }));
+  storage.setItem('trinityone.memhub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: nowS() - 2 * 86400, members: [] }));
   const app = memberApp({ me: ruth, relays: [URL_], holdAuth: true, storage });
   let list = null;
   const sub = () => app.api.subscribeChurchMembers(cp, (m) => { list = m; });
@@ -196,7 +196,7 @@ test('T-A 6: a live INCREMENTAL answer does not count as the daily full — the 
   class Clock extends Date { static now() { return Date.now() + offset; } }
   const storage = memStorage();
   const fakeNowS = () => Math.floor(Clock.now() / 1000);
-  storage.setItem('trinityone.docshub.' + cp, JSON.stringify({ since: fakeNowS() - 60, fullAt: fakeNowS() - Math.round(23.9 * 3600), events: [] }));
+  storage.setItem('trinityone.docshub.' + cp, JSON.stringify({ v: 2, since: fakeNowS() - 60, fullAt: fakeNowS() - Math.round(23.9 * 3600), events: [] }));
   const app = memberApp({ me: ruth, relays: [URL_], clock: Clock, storage });
   let devos = null;
   app.api.subscribeChurchDevotionals(cp, d => { devos = d; });
@@ -208,4 +208,44 @@ test('T-A 6: a live INCREMENTAL answer does not count as the daily full — the 
   assert.ok(isFull(app.hubReqs(cp).at(-1)), 'the full fetch must run once 24 h have passed since the last FULL, whatever incremental fetches happened since');
   await sleep(300);
   app.clean(); app.close();
+});
+
+// ── T-A 7: a fullAt in the future (a clock once set ahead) does not stop the daily full for ever ──────────────────
+test('T-A 7: a saved fullAt one year in the future yields a full fetch', async () => {
+  const storage = memStorage();
+  storage.setItem('trinityone.docshub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: nowS() + 365 * 86400, events: [] }));
+  const app = memberApp({ me: ruth, relays: [URL_], storage });
+  const off = app.api.subscribeChurchDevotionals(cp, () => {});
+  assert.ok(isFull(app.hubReqs(cp)[0]), 'an impossible (future) fullAt must not count as a recent full');
+  await sleep(300); off(); await sleep(100);
+  app.clean(); app.close();
+});
+
+// ── T-A 8: the one-time refresh — a hub saved before this build (no `v`) does one full fetch, and `v` is written ──
+test('T-A 8: a hub saved without `v` does one full fetch on first open; one saved with v:2 does not; every save writes v:2', async () => {
+  const fresh = nowS() - 3600;   // a full an hour ago — not due for 23 h
+  // without v: both hubs ask for everything once
+  const old = memStorage();
+  old.setItem('trinityone.docshub.' + cp, JSON.stringify({ since: nowS() - 60, fullAt: fresh, events: [] }));
+  old.setItem('trinityone.memhub.' + cp, JSON.stringify({ since: nowS() - 60, fullAt: fresh, members: [] }));
+  const a = memberApp({ me: ruth, relays: [URL_], storage: old });
+  const offD = a.api.subscribeChurchDevotionals(cp, () => {});
+  const offM = a.api.subscribeChurchMembers(cp, () => {});
+  assert.ok(isFull(a.hubReqs(cp)[0]), 'docs hub saved before this build: the first open is full');
+  assert.ok(isFull(a.memReqs(cp)[0]), 'members hub saved before this build: the first open is full');
+  assert.ok(await until(() => a.docsHub(cp).fullAt >= nowS() - 5 && a.memHub(cp).fullAt >= nowS() - 5, 8000), 'both fulls were answered');
+  await sleep(1000);   // the 800 ms saves
+  assert.equal((a.persisted('trinityone.docshub.' + cp) || {}).v, 2, 'the docs hub save writes v:2');
+  assert.equal((a.persisted('trinityone.memhub.' + cp) || {}).v, 2, 'the members hub save writes v:2');
+  offD(); offM(); await sleep(100); a.clean(); a.close();
+  // with v:2 and a recent full: incremental, as before
+  const cur = memStorage();
+  cur.setItem('trinityone.docshub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: fresh, events: [] }));
+  cur.setItem('trinityone.memhub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: fresh, members: [] }));
+  const b = memberApp({ me: ruth, relays: [URL_], storage: cur });
+  const offD2 = b.api.subscribeChurchDevotionals(cp, () => {});
+  const offM2 = b.api.subscribeChurchMembers(cp, () => {});
+  assert.ok(!isFull(b.hubReqs(cp)[0]), 'docs hub saved with v:2: incremental');
+  assert.ok(!isFull(b.memReqs(cp)[0]), 'members hub saved with v:2: incremental');
+  await sleep(300); offD2(); offM2(); await sleep(100); b.clean(); b.close();
 });

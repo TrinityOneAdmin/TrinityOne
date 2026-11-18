@@ -39,7 +39,7 @@ before(async () => {
 });
 after(async () => { try { await r1.close(); } catch {} try { await r2.close(); } catch {} });
 const reset = (r, mode = 'gate') => { r.mode = mode; r.docs = []; r.log = []; r.graceMs = 2500; r.challengeEveryReq = false; r.replayDelayMs = 0; for (const s of r.socks) { try { s.ws.terminate(); } catch {} } };
-const warm = (fullAgoS) => { const s = memStorage(); s.setItem('trinityone.docshub.' + cp, JSON.stringify({ since: nowS() - 60, fullAt: nowS() - fullAgoS, events: [] })); return s; };
+const warm = (fullAgoS) => { const s = memStorage(); s.setItem('trinityone.docshub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: nowS() - fullAgoS, events: [] })); return s; };
 const noAnonSeal = (app) => app.published.filter(p => p.ring === 0);
 
 // ── T-B 1: F12, safeguarding AND names ──────────────────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ test('T-B 2c (audit F2): an empty relay list — asked nobody — is not a full 
 test('T-B 2d: the members hub — every relay refuses the connection — not a full sync either', async () => {
   const storage = memStorage();
   const fullAt0 = nowS() - 2 * 86400;
-  storage.setItem('trinityone.memhub.' + cp, JSON.stringify({ since: nowS() - 60, fullAt: fullAt0, members: [] }));
+  storage.setItem('trinityone.memhub.' + cp, JSON.stringify({ v: 2, since: nowS() - 60, fullAt: fullAt0, members: [] }));
   const app = memberApp({ me: ruth, relays: [deadUrl(DEAD1), deadUrl(DEAD2)], storage });
   let done = 0;
   const off = app.api.subscribeChurchMembers(cp, (_m, isDone) => { if (isDone) done++; });

@@ -8882,6 +8882,7 @@
   var HUB_SAVE_CAP = 3e6;
   var DOCSHUB_KEY = "trinityone.docshub.";
   var MEMHUB_KEY = "trinityone.memhub.";
+  var HUB_V = 2;
   var _dtag = (e) => (e.tags.find((t) => t[0] === "d") || [])[1] || "";
   var _slimEvt = (e) => ({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content });
   var _hubCursor = (hub, e) => {
@@ -8893,18 +8894,20 @@
   };
   var _hubSince = (hub) => {
     const nowS = Math.floor(Date.now() / 1e3);
-    hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S;
+    if ((hub.fullAt || 0) > nowS + FUTURE_SKEW) hub.fullAt = 0;
+    hub.pendingFull = !hub.since || nowS - (hub.fullAt || 0) > FULL_SYNC_S || !!(hub.fullPreAuth && _relayAuthedAt);
     return hub.pendingFull ? 0 : Math.max(0, hub.since - SINCE_SLOP);
   };
   var _hubSinceKind1 = (hub) => Math.max(0, (hub.since || 0) - SINCE_SLOP);
   var _hubEosed = (hub, full, unanswered, save) => {
     hub.eosed = true;
-    hub.eosedAt = Date.now();
+    if (full || !hub.fullPreAuth) hub.eosedAt = Date.now();
     if (!full) return;
     Promise.resolve().then(() => {
       if (unanswered && unanswered()) return;
       hub.fullAt = Math.floor(Date.now() / 1e3);
       hub.dirty = true;
+      hub.fullPreAuth = !(_relayAuthOkAt && Date.now() >= _relayAuthOkAt);
       if (save) save(hub);
     });
   };
@@ -9286,7 +9289,7 @@
     hub.dirty = false;
     const key = DOCSHUB_KEY + hub.cp;
     try {
-      const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
+      const s = JSON.stringify({ v: HUB_V, since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
       if (s.length > HUB_SAVE_CAP) {
         localStorage.removeItem(key);
         return;
@@ -9314,7 +9317,7 @@
       const raw = JSON.parse(localStorage.getItem(DOCSHUB_KEY + cp) || "null");
       if (raw && Array.isArray(raw.events)) {
         hub.since = raw.since || 0;
-        hub.fullAt = raw.fullAt || 0;
+        hub.fullAt = (raw.v || 0) >= HUB_V ? raw.fullAt || 0 : 0;
         for (const e of raw.events) {
           if (e && e.pubkey && Array.isArray(e.tags)) _hubBufSet(hub, e.pubkey + "|" + _dtag(e), e);
         }
@@ -9578,7 +9581,7 @@
     hub.dirty = false;
     const key = MEMHUB_KEY + hub.cp;
     try {
-      const s = JSON.stringify({ since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
+      const s = JSON.stringify({ v: HUB_V, since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
       if (s.length > HUB_SAVE_CAP) {
         localStorage.removeItem(key);
         return;
@@ -9607,7 +9610,7 @@
       const raw = JSON.parse(localStorage.getItem(MEMHUB_KEY + cp) || "null");
       if (raw && Array.isArray(raw.members)) {
         hub.since = raw.since || 0;
-        hub.fullAt = raw.fullAt || 0;
+        hub.fullAt = (raw.v || 0) >= HUB_V ? raw.fullAt || 0 : 0;
         for (const m of raw.members) {
           if (m && m.pubkey) hub.byPub.set(m.pubkey, m);
         }
