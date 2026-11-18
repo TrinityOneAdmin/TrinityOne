@@ -25,6 +25,7 @@ const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => 
 const byLabel = (tree, label) => find(tree, n => n.type === 'button' && n.props && n.props['aria-label'] === label);
 const press = (tree, label) => { const b = byLabel(tree, label); assert.equal(b.length, 1, `expected exactly one "${label}" on the player, found ${b.length}`); b[0].props.onClick({ stopPropagation() {} }); };
 const ACTIONS = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'previoustrack', 'nexttrack', 'stop'];
+const FIXED = ACTIONS.filter(a => a !== 'previoustrack' && a !== 'nexttrack');   // registered once; the skips follow the queue (audit #9)
 
 function fakePlugin({ refuseStart = false, rejectAll = false } = {}) {
   const calls = [], handlers = {}, rejects = [];
@@ -47,8 +48,10 @@ function fakePlugin({ refuseStart = false, rejectAll = false } = {}) {
     },
     setPositionState(o) { calls.push(['pos', o]); return rejectAll ? no('setPositionState') : Promise.resolve(); },
     setActionHandler(opts, cb) {
-      calls.push(['handler', opts && opts.action]);
       if (!opts || !opts.action || typeof cb !== 'function') throw new Error('setActionHandler({ action }, cb)');
+      // the patched plugin's { action, remove: true } (build audit #9): the handler goes, the call resolves once
+      if (opts.remove) { calls.push(['remove', opts.action]); delete handlers[opts.action]; return String(++n); }
+      calls.push(['handler', opts.action]);
       handlers[opts.action] = cb; return String(++n);
     },
   };
@@ -69,11 +72,47 @@ async function playOn(w, ms) { for (let t = 0; t < ms; t += 5000) { await w.cloc
 
 test('the plugin\'s action handlers are registered ONCE, at engine start, and never again per track', async () => {
   const { w, f } = await withPlugin();
-  assert.deepEqual(f.calls.filter(c => c[0] === 'handler').map(c => c[1]).sort(), ACTIONS.slice().sort(), 'not every OS action has a handler');
+  const fixed = () => f.calls.filter(c => c[0] === 'handler' && FIXED.includes(c[1])).map(c => c[1]);
+  assert.deepEqual(fixed().sort(), FIXED.slice().sort(), 'not every OS action has a handler');
   w.A.play(BOOK[0], BOOK); await settle();
   press(w.player(), 'Next track'); await settle();
   w.A.play({ id: 's', title: 'Sermon', src: 'blob:s' }); await settle();
-  assert.equal(f.count('handler'), ACTIONS.length, 'HANDLERS WERE RE-REGISTERED PER TRACK — each one leaks a kept-alive native call');
+  assert.equal(fixed().length, FIXED.length, 'HANDLERS WERE RE-REGISTERED PER TRACK — each one leaks a kept-alive native call');
+});
+
+test('audit #9 — the plugin: Previous / Next exist only while the queue has one, and change only when that changes', async () => {
+  const { w, f } = await withPlugin();
+  const has = () => ['previoustrack', 'nexttrack'].filter(a => typeof f.handlers[a] === 'function');
+  assert.deepEqual(has(), [], 'skip handlers before anything is queued');
+  w.A.play(BOOK[0], BOOK); await settle();
+  assert.deepEqual(has(), ['nexttrack'], 'the first chapter of a book: Next only');
+  press(w.player(), 'Next track'); await settle();
+  assert.deepEqual(has(), ['previoustrack', 'nexttrack']);
+  const adds = f.count('handler');
+  press(w.player(), 'Previous track'); w.el.currentTime = 0; press(w.player(), 'Next track'); await settle();
+  assert.equal(f.count('handler'), adds + 1, 'a skip handler was re-sent although nothing changed');   // chapter 1 dropped Previous, chapter 2 added it back
+  w.el.tick(299); w.el.end(); await settle();          // the last chapter
+  assert.deepEqual(has(), ['previoustrack'], 'the last chapter still offers Next');
+  w.A.play({ id: 's', title: 'One sermon', src: 'blob:s' }); await settle();
+  assert.deepEqual(has(), [], 'A SINGLE SERMON SHOWS PREVIOUS/NEXT — a dead Next in the compact notification');
+  assert.equal(typeof f.handlers.seekforward, 'function', 'the +10 s action went with them');
+  w.A.play(BOOK[1], BOOK); await settle();
+  press(w.player(), 'Close player');
+  assert.deepEqual(has(), [], 'Close left the skip handlers registered');
+});
+
+test('audit #9 — the navigator path (iOS, web): a single sermon sets Previous / Next to null, so iOS keeps its +/-10 s buttons', async () => {
+  const ms = { metadata: null, playbackState: 'none', h: {}, setActionHandler(a, fn) { this.h[a] = fn; } };
+  const w = world({ mediaSession: ms });
+  w.A.play({ id: 's', title: 'One sermon', src: 'blob:s' }); await settle();
+  assert.equal(ms.h.nexttrack, null, 'nexttrack is set for a single sermon');
+  assert.equal(ms.h.previoustrack, null, 'previoustrack is set for a single sermon');
+  assert.equal(typeof ms.h.seekforward, 'function'); assert.equal(typeof ms.h.seekbackward, 'function');
+  w.A.play(BOOK[1], BOOK); await settle();
+  assert.equal(typeof ms.h.nexttrack, 'function'); assert.equal(typeof ms.h.previoustrack, 'function');
+  ms.h.nexttrack(); await settle();
+  assert.equal(w.el.src, BOOK[2].src);
+  assert.equal(ms.h.nexttrack, null, 'the last chapter still has a Next handler');
 });
 
 test('every setMetadata carries artwork, as a data: URI — the app icon unless the track\'s own image is already data:', async () => {
@@ -233,7 +272,8 @@ test('WITHOUT the plugin (iOS, web, desktop): navigator.mediaSession gets metada
   assert.equal(ms.metadata.artwork[0].src, 'https://church.test/pic.jpg', 'the web path lost the track image');
   w.A.next(); await settle();
   assert.equal(ms.metadata.title, 'John 2');
-  assert.deepEqual(set.slice().sort(), ACTIONS.slice().sort(), 'handlers missing, or registered per track: ' + set.join(','));
+  const fixedSet = set.filter(a => FIXED.includes(a));
+  assert.deepEqual(fixedSet.slice().sort(), FIXED.slice().sort(), 'handlers missing, or registered per track: ' + set.join(','));
   ms.h_pause(); assert.equal(w.el.paused, true);
   ms.h_pause(); await settle(); assert.equal(w.el.paused, true, 'navigator "pause" toggled');
   ms.h_play(); await settle(); assert.equal(w.el.paused, false);
@@ -275,4 +315,21 @@ test('the plugin is wired as a local Capacitor plugin, and its Java is TRACKED (
     assert.ok(tracked.includes(`native/trinity-media-session/android/src/main/java/io/github/jofr/capacitor/mediasessionplugin/${f}.java`), f + '.java is not tracked');
   }
   assert.ok(tracked.includes('native/trinity-media-session/android/src/main/AndroidManifest.xml'));
+});
+
+test('audit #3 on the lock screen — the registered "seekto" on a PAUSED, errored track moves the place silently', async () => {
+  const { w, f } = await withPlugin();
+  w.A.play(BOOK[0], BOOK); await settle();
+  w.el.tick(50);
+  w.el.net = () => 'fail'; w.el.failNow(2);
+  f.handlers.pause({ action: 'pause' });
+  w.el.net = () => 'ok';
+  const plays = w.el.plays;
+  f.handlers.seekto({ action: 'seekto', seekTime: 120 }); await settle();
+  assert.equal(w.el.paused, true, 'THE LOCK-SCREEN SCRUBBER STARTED SOUND ON A PAUSED TRACK');
+  assert.equal(w.el.plays, plays);
+  assert.equal(w.el.currentTime, 120);
+  f.handlers.play({ action: 'play' }); await settle();
+  assert.equal(w.el.paused, false);
+  assert.equal(w.el.currentTime, 120);
 });

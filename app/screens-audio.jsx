@@ -230,13 +230,31 @@
     nexttrack: () => api.next(),
     stop: () => api.stop(),
   };
+  const SKIP_ACTIONS = ['previoustrack', 'nexttrack'];
+  const osRun = (a) => (d) => { try { OS_ACTIONS[a](d || {}); } catch (e) {} };
   // registered ONCE, when the engine starts (they used to be re-registered on every track; on the plugin each one
-  // keeps a native call alive and rebuilds the notification)
+  // keeps a native call alive and rebuilds the notification). Previous / Next are the exception: see osSkips().
   function registerOsActions() {
-    Object.keys(OS_ACTIONS).forEach(a => {
-      const run = (d) => { try { OS_ACTIONS[a](d || {}); } catch (e) {} };
-      if (MSP) { try { MSP.setActionHandler({ action: a }, run); } catch (e) {} }
-      else if (NAV) { try { NAV.setActionHandler(a, run); } catch (e) {} }
+    Object.keys(OS_ACTIONS).filter(a => SKIP_ACTIONS.indexOf(a) < 0).forEach(a => {
+      if (MSP) { try { MSP.setActionHandler({ action: a }, osRun(a)); } catch (e) {} }
+      else if (NAV) { try { NAV.setActionHandler(a, osRun(a)); } catch (e) {} }
+    });
+  }
+  // Previous / Next exist only while the queue HAS a previous / next item (build audit #9): a single sermon must not
+  // show a dead Next in Android's compact notification, and on iOS skip handlers replace the lock screen's +/-10 s
+  // buttons. Sent only when that changes, on every track and queue change and on Close.
+  const skipOn = { previoustrack: null, nexttrack: null };
+  function osSkips() {
+    const want = { previoustrack: qi > 0, nexttrack: qi >= 0 && qi + 1 < queue.length };
+    SKIP_ACTIONS.forEach(a => {
+      if (skipOn[a] === want[a]) return;
+      skipOn[a] = want[a];
+      if (MSP) {
+        try {
+          if (want[a]) MSP.setActionHandler({ action: a }, osRun(a));
+          else MSP.setActionHandler({ action: a, remove: true }, () => {});   // the plugin resolves a remove once: a no-op callback
+        } catch (e) {}
+      } else if (NAV) { try { NAV.setActionHandler(a, want[a] ? osRun(a) : null); } catch (e) {} }
     });
   }
 
@@ -250,6 +268,7 @@
     cancelRetry(); disarm();
     wantPlay = true; resumeAt = at || 0; attempts = 0; firstLoad = false;
     osMeta(track);
+    osSkips();
     if (byEvent) osSync(); else osTap();   // a chapter that follows by itself (ended) never starts the service
     const start = () => {
       if (resumeAt > 0) {
@@ -283,7 +302,7 @@
   // an absolute seek (the lock-screen scrubber): like seekTo, in seconds
   function seekAbs(sec) {
     if (pending || !(sec >= 0)) return;
-    if (errored()) { const d = state.d || 0; resumeAt = d ? Math.min(d, sec) : sec; set({ t: resumeAt }); retryNow(); return; }
+    if (errored()) { const d = state.d || 0; seekErrored(d ? Math.min(d, sec) : sec); return; }   // audit #3: silent when paused
     if (el.duration) { el.currentTime = Math.max(0, Math.min(el.duration, sec)); resumeAt = el.currentTime; }
   }
 
@@ -347,7 +366,7 @@
     },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; pending = false; wantPlay = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); },
+    stop() { playTok++; pending = false; wantPlay = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); osSkips(); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };

@@ -21,7 +21,9 @@ import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.media.AudioManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.Binder;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
@@ -78,6 +80,24 @@ public class MediaSessionService extends Service {
     private boolean foreground = false;
     private boolean noisyRegistered = false;
     private AudioFocusRequestCompat focusRequest = null;
+    // TrinityOne (build audit #7): a started service that no plugin ever connects to (a 'playing' then 'none' faster
+    // than the bind, or bindService() failing) would sit in the foreground with the minimal notification. Stopping it
+    // BEFORE startForeground is itself a crash, so onStartCommand checks again later, after startForeground has run.
+    private static final long SELF_CHECK_MS = 10000;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private boolean selfCheckPosted = false;
+    private boolean destroyed = false;
+    private final Runnable selfCheck = new Runnable() {
+        @Override
+        public void run() {
+            try { // TrinityOne (B1)
+                if (destroyed) return;
+                if (plugin == null || playbackState == PlaybackStateCompat.STATE_NONE) destroy();
+            } catch (Exception e) {
+                Log.e(TAG, "self-check failed", e);
+            }
+        }
+    };
 
     private final IBinder binder = new LocalBinder();
 
@@ -251,8 +271,23 @@ public class MediaSessionService extends Service {
 
     @Override
     public void onDestroy() {
+        destroyed = true;
+        try { handler.removeCallbacksAndMessages(null); } catch (Exception e) { Log.e(TAG, "remove callbacks failed", e); }
         releaseAll();
         super.onDestroy();
+    }
+
+    // TrinityOne (build audit #8): the app swiped away from recents. Activity.onDestroy (the plugin's handleOnDestroy)
+    // is not guaranteed then while a foreground service keeps the process alive, so the service stops itself too:
+    // out of the foreground, the session released, stopped. START_NOT_STICKY stays, so it does not come back.
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        try {
+            destroy();
+        } catch (Exception e) {
+            Log.e(TAG, "onTaskRemoved failed", e);
+        }
+        super.onTaskRemoved(rootIntent);
     }
 
     // TrinityOne P4 (replaces upstream's onStartCommand, which never called startForeground: a Bluetooth/car Play
@@ -272,6 +307,10 @@ public class MediaSessionService extends Service {
                         .setContentTitle("Audio")
                         .setSilent(true)
                         .build());
+            }
+            if (!selfCheckPosted) {
+                selfCheckPosted = true;
+                handler.postDelayed(selfCheck, SELF_CHECK_MS);
             }
             final boolean mediaButton = intent != null && Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction());
             if (mediaButton && plugin == null) {
