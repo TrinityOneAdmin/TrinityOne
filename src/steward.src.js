@@ -38,7 +38,7 @@ import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
 // (after the nip44 import on purpose: bundle order follows import order, and the tests that lift a module out of the bundle end their slice at the next `// src/` marker)
-import { NETANN_D, NETEVENT_D, NETKEY_D, NETKEYC_D, rotateRing, sealHop1, openHop1ForChurch, openHop1AsNetwork, hop1Recipients, sealHop2, sealPost, openPost, netEventBody, netEventFields, netAnnounceBody } from './network-seal.src.js';
+import { NETANN_D, NETEVENT_D, NETKEY_D, NETKEYC_D, rotateRing, firstNetKey, cleanRing, sealHop1, openHop1ForChurch, openHop1AsNetwork, hop1Recipients, sealHop2, sealPost, openPost, netEventBody, netEventFields, netAnnounceBody } from './network-seal.src.js';
 import qrcode from 'qrcode-generator';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 // Rules the member app has to agree with, written once. See scripts/trinity-rules.mjs.
@@ -1618,19 +1618,37 @@ async function _queryAsKey(urls, sk, filters, maxWait = NET_QUERY_MAX_WAIT) {
   if (!list.length || !sk) return { events: [], complete: false };
   const p = new SimplePool();
   p.automaticallyAuth = () => async (authEvent) => finalizeEvent(authEvent, sk);
+  const pass = () => new Promise((resolve) => {
+    const events = []; let done = false;
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    const hard = setTimeout(() => fin({ events, complete: false }), maxWait + 2000);   // a backstop if the pool never closes at all
+    try {
+      p.subscribeEose(list, filters, {
+        maxWait,
+        onevent(e) { events.push(e); },
+        onclose(reasons) { clearTimeout(hard); fin({ events, complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every(r => r === 'closed automatically on eose') }); },
+      });
+    } catch (e) { clearTimeout(hard); fin({ events, complete: false }); }
+  });
   try {
-    return await new Promise((resolve) => {
-      const events = []; let done = false;
-      const fin = (v) => { if (!done) { done = true; resolve(v); } };
-      const hard = setTimeout(() => fin({ events, complete: false }), maxWait + 2000);   // a backstop if the pool never closes at all
-      try {
-        p.subscribeEose(list, filters, {
-          maxWait,
-          onevent(e) { events.push(e); },
-          onclose(reasons) { clearTimeout(hard); fin({ events, complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every(r => r === 'closed automatically on eose') }); },
-        });
-      } catch (e) { clearTimeout(hard); fin({ events, complete: false }); }
-    });
+    const first = await pass();
+    // A SLOW LOGIN MAKES A FALSE "COMPLETE AND EMPTY" (B1 audit, 2026-11-19). A relay that withholds documents from a socket that has not logged
+    // in yet holds its end-of-stored-events for the login -- but only for EOSE_AUTH_GRACE_MS (2.5s, scripts/gateway.mjs). On a slow line the
+    // login finishes after that, and the first answer is what an ANONYMOUS reader gets, marked complete. Chosen fix: RE-ASK once the login has
+    // settled, on the same (now logged-in) sockets, and believe the second answer. (The alternative, marking any challenged relay incomplete,
+    // would make every key-envelope read "unknown" -- the relay challenges those at once -- so a founder could never publish a first key.)
+    // A login that FAILED, or did not settle within maxWait, makes the answer incomplete: what came back may be an anonymous reader's view.
+    const challenged = [];
+    for (const r of ((p.relays && typeof p.relays.values === 'function') ? p.relays.values() : [])) if (r && r.challenge) challenged.push(r);
+    if (!challenged.length) return first;
+    const logins = await Promise.race([
+      Promise.all(challenged.map(r => (r.authPromise ? Promise.resolve(r.authPromise).then(() => true, () => false) : Promise.resolve(false)))),
+      new Promise(res => setTimeout(() => res(null), maxWait)),
+    ]);
+    if (!logins || logins.some(ok => !ok)) return { events: first.events, complete: false };
+    const second = await pass();
+    const byId = new Map(); for (const e of [...first.events, ...second.events]) if (e && e.id) byId.set(e.id, e);
+    return { events: [...byId.values()], complete: second.complete };
   } catch (e) { return { events: [], complete: false }; }
   finally {
     // LET AN IN-FLIGHT LOGIN SETTLE BEFORE CLOSING (found by the real-gateway test, 2026-11-18). A relay challenges a key-envelope read at once
@@ -1689,8 +1707,21 @@ async function _netWallMissing(urls) {
     return has(st);
   };
   const out = [];
-  for (const u of (urls || [])) { if (!(await ask(u))) out.push(u); }
+  // IN PARALLEL (B1 audit): one at a time, a dead relay cost up to ~13s each. Still fail-closed: an unreachable relay is "missing".
+  // ⚠ DEVICE CHECK NEEDED: the console's Content-Security-Policy allows no plain `http:` fetch, so in a browser a church relay on plain ws://
+  // (probed over http://) may always fail this probe and block the join. That is the safe direction; it has not been tried on a device.
+  const ok = await Promise.all((urls || []).map(u => ask(u).catch(() => false)));
+  (urls || []).forEach((u, i) => { if (!ok[i]) out.push(u); });
   return out;
+}
+// _netWallMissing with a session cache of the relays that DID confirm the marker (a "missing" answer is never cached: an updated relay passes on the
+// next sync). Callers: _netSyncAll only. joinNetwork deliberately asks fresh every time.
+const _netWallOk = new Set();
+async function _netWallMissingCached(urls) {
+  const ask = (urls || []).filter(u => !_netWallOk.has(u));
+  const missing = ask.length ? await _netWallMissing(ask) : [];
+  for (const u of ask) if (!missing.includes(u)) _netWallOk.add(u);
+  return missing;
 }
 // WHO HAS JOINED the network `np`, as the NETWORK (N5c / Option A). The relay serves a church's join declaration to the key it names and to no
 // one else, so the authors of the live join documents ARE the joined churches. -> { ok, joiners:[churchHex], authoritative }
@@ -1698,6 +1729,8 @@ async function _netWallMissing(urls) {
 // a full page: an empty or partial answer is a relay that is lagging, a login that failed or a socket that never opened -- UNKNOWN, exactly as
 // in C4 -- and handing _netSyncKey an authoritative short list would drop every recipient it did not name.
 const NET_JOIN_READ_LIMIT = 500;
+// NOT DEFENDED (B1 audit, accepted): this trusts the relay's list -- a HACKED relay could add a fake church (which would then be wrapped the key)
+// or hide a real one. A genuine relay serves this only for join docs authored by configured church keys (gateway.mjs canRead, N5c).
 async function _netReadJoiners(np) {
   const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
   if (!nsk || getPublicKey(nsk) !== np) return { ok: false, joiners: [], authoritative: false };
@@ -1780,7 +1813,20 @@ async function _ownJoinLive(np) {
 // vouches is complete (opts.joiners + opts.authoritative) -- because a partial list published as the whole drops churches, and a church
 // absent from hop-1 can never open the ring again. _netSyncAll vouches with _netReadJoiners only on positive, complete evidence (N5c).
 // -> { ok, unchanged?, rotated?, minted?, recipients, reason, waiting? }
+//
+// ONE AT A TIME PER NETWORK (B1 audit, 2026-11-19). Every way in -- _netSyncAll, _netPublishPost, the syncNetworkKey API -- goes through this
+// function, and it queues behind any run already in flight for the same network. Two overlapping runs on a brand-new network both read
+// "absent" and both minted; queued, the second reads what the first published. (Serialised, not merged: each caller's opts -- add / drop --
+// still get their own run.) The first ring is ALSO derived (firstNetKey), so even a mint that slips past this lock makes the same key.
+const _netKeyBusy = new Map();   // np -> the promise of the run in flight (or queued last)
 async function _netSyncKey(np, opts = {}) {
+  const prev = _netKeyBusy.get(np);
+  const run = (async () => { if (prev) { try { await prev; } catch (e) {} } return _netSyncKeyOnce(np, opts); })();
+  _netKeyBusy.set(np, run);
+  run.then(() => { if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np); }, () => { if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np); });
+  return run;
+}
+async function _netSyncKeyOnce(np, opts = {}) {
   const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
   if (!nsk || getPublicKey(nsk) !== np) return { ok: false, reason: 'This console does not hold that network’s key.' };
   if (!churchSk || !churchPub) return { ok: false, reason: 'This console has no church key loaded.' };
@@ -1801,7 +1847,9 @@ async function _netSyncKey(np, opts = {}) {
     if (lsGet(NETRING_SEEN_LS + np) === '1') return { ok: false, waiting: true, reason: 'The network key could not be read just now; a new one will not be minted over the existing one.' };   // C4: positive evidence a ring exists
     const b = _netMintBlockers(np);
     if (b.unproved.length || b.notAuthed || b.notFounder) return { ok: false, waiting: true, reason: b.notFounder ? 'This console did not create the network and cannot see an existing key, so it will not start a new one.' : 'Still connecting — the network key will be set up in a moment.' };
-    ring = rotateRing([]); mintedNow = true;
+    const k0 = await firstNetKey(nsk);   // DERIVED: every first-mint for this network makes the same key (see firstNetKey)
+    if (!k0) return { ok: false, reason: 'Could not make the network key on this device.' };
+    ring = cleanRing([k0]); mintedNow = true;
   } else if (dropped) {
     ring = rotateRing(ring);   // a church left: new posts are sealed under a key it never held
   }
@@ -1874,6 +1922,23 @@ async function _netSyncAll(opts = {}) {
         _joinedNets = found; _joinedNetsFor = churchPub;
       }
       const joined = _joinedNets;
+      // THE WALL, ON EVERY SYNC (B1 audit, 2026-11-19). joinNetwork checks it once; a relay added to the church later, running software from before
+      // the wall, would hand a joined network key the church's private records -- each relay enforces from its own copy. So no hop-1 / hop-2 work is
+      // done while any relay this church writes to (relays(): the proved publish set; nothing added, rule 10) has not confirmed 'network-wall-1'.
+      // Cheap: a relay that confirmed it is not asked again this session; one that did not is asked again next sync.
+      if (joined.size) {
+        const set = relays();
+        const missing = set.length ? await _netWallMissingCached(set) : ['(no relay ready)'];
+        if (missing.length) {
+          const reason = set.length
+            ? 'Network keys are paused: ' + missing.join(', ') + (missing.length === 1 ? ' has' : ' have') + ' not confirmed it runs the software that keeps a network out of your church’s private records. Update ' + (missing.length === 1 ? 'it' : 'them') + ' or remove ' + (missing.length === 1 ? 'it' : 'them') + ' from this church’s relays.'
+            : 'Network keys are paused: no relay is ready for this church yet.';
+          const ownedNow = new Set(netKeys().map(r => r.pub));
+          for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: 'trouble', reason });
+          try { window.dispatchEvent(new CustomEvent('steward-network-status')); } catch (e) {}
+          return { ok: false, wallMissing: set.length ? missing : [], reason };
+        }
+      }
       const owned = new Set();
       for (const r of netKeys()) {
         if (!joined.has(r.pub)) continue;
@@ -16234,6 +16299,7 @@ window.Steward = {
   subscribeNetworkPosts(networkPub, onPosts) {
     const np = toPubHex(networkPub) || networkPub;
     const raw = new Map();
+    const dead = new Map();   // d -> created_at of the newest tombstone seen: an OLDER live copy arriving later (another relay) must not bring a deleted post back
     let ring = null, closed = false, sub = null;
     const emit = () => {
       const out = [];
@@ -16254,7 +16320,8 @@ window.Steward = {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
           const prev = raw.get(d); if (prev && (prev.created_at || 0) >= (e.created_at || 0)) return;
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) raw.delete(d); else raw.set(d, e);
+          if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { raw.delete(d); dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0)); } else raw.set(d, e);
           emit();
         },
         oneose() { emit(); },

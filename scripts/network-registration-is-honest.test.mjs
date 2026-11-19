@@ -164,3 +164,20 @@ test('WALL: no relay ready at all refuses the join (an empty set is not "every r
   assert.equal(r.ok, false); assert.equal(r.stage, 'relay');
   assert.equal(w.c.published.length + w.c.refused.length, 0);
 });
+
+// B1 audit (2026-11-19): the probe asked relays one at a time, so each dead relay cost up to ~13s. It now asks them all at once (still fail-closed).
+test('WALL PROBE IS PARALLEL: three slow relays are checked in about the time of one; SABOTAGE (one at a time) takes three times as long', async () => {
+  const slowFetch = async () => { await new Promise(r => setTimeout(r, 700)); return { ok: true, json: async () => ({ trinityone: { capabilities: ['network-wall-1'] } }) }; };
+  const urls = ['wss://a.example/relay', 'wss://b.example/relay', 'wss://c.example/relay'];
+  const time = async (mutate) => {
+    const relay = fakeRelay(), church = K();
+    const c = bootConsole({ relay, church, joinApi: true, relayUrls: urls, fetchImpl: slowFetch, mutate });
+    const t0 = Date.now(); const r = await c.api.joinNetwork(OTHER); return { ms: Date.now() - t0, r };
+  };
+  const par = await time(null);
+  assert.equal(par.r.ok, true, JSON.stringify(par.r));
+  assert.ok(par.ms < 1500, 'three relays took ' + par.ms + 'ms to probe -- they are being asked one at a time');
+  const serial = (s) => { const a = 'const ok = await Promise.all((urls || []).map((u) => ask(u).catch(() => false)));'; assert.equal(s.split(a).length, 2, 'sabotage anchor not unique'); return s.replace(a, 'const ok = []; for (const u of (urls || [])) ok.push(await ask(u).catch(() => false));'); };
+  const ser = await time(serial);
+  assert.ok(ser.ms >= 2000, 'THE SABOTAGE WAS NOT CAUGHT: one-at-a-time probing finished in ' + ser.ms + 'ms');
+});

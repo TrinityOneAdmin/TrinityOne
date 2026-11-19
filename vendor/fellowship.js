@@ -15764,6 +15764,7 @@
         };
       }
       const raw = /* @__PURE__ */ new Map();
+      const dead = /* @__PURE__ */ new Map();
       let ring = null, ringAt = 0, eosed = false;
       const emit = _coalesce(() => {
         const announcements = [], events = [];
@@ -15817,8 +15818,11 @@
           if (e.pubkey !== np || !d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
           const prev = raw.get(d);
           if (prev && ((prev.created_at || 0) > (e.created_at || 0) || (prev.created_at || 0) === (e.created_at || 0) && prev.id < e.id)) return;
-          if (e.tags.some((t) => t[0] === "deleted") || !e.content) raw.delete(d);
-          else raw.set(d, e);
+          if ((dead.get(d) || -1) >= (e.created_at || 0)) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            raw.delete(d);
+            dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0));
+          } else raw.set(d, e);
           emit();
         },
         oneose() {

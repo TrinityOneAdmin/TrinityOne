@@ -74,6 +74,12 @@ export function fakeRelay() {
 // ── the CONSOLE (vendor/steward.js): the network engine + the API methods that front it ─────────────────────────────────────────────
 // opts.mutate(src) may rewrite the lifted source (used ONLY by the sabotage proofs, which assert their anchor matched).
 const variants = (text, base) => { const out = new Set([base]); for (const m of text.matchAll(new RegExp('\\b' + base + '\\d*\\b', 'g'))) out.add(m[0]); return [...out]; };
+// The default fetch: a REAL request to a local gateway the test spawned (127.0.0.1 / localhost), and for the stand-in relay's made-up host a
+// NIP-11 answer that carries the wall marker (a stand-in relay is a current relay; tests about a relay WITHOUT the marker pass their own fetchImpl).
+const defaultFetch = async (url, init) => {
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(String(url))) return fetch(url, init);
+  return { ok: true, json: async () => ({ trinityone: { capabilities: ['network-wall-1'] }, capabilities: ['network-wall-1'] }) };
+};
 // The default _queryAsKey for a stand-in relay: the relay's own read, reported complete; a read that throws is reported incomplete -- the
 // shipped helper's contract ({ events, complete }, never throws).
 const fakeQueryAsKey = (relay) => async (urls, _sk, filters) => { try { return { events: await relay.querySync(urls, filters), complete: true }; } catch (e) { return { events: [], complete: false }; } };
@@ -113,7 +119,7 @@ export function bootConsole({ relay, church, networks = [], nameKey = null, foun
     ...variants(engine + api, 'finalizeEvent').map(() => (t, sk) => finalizeEvent(JSON.parse(JSON.stringify(t)), sk)), (t) => { const d = tag(t, 'd') || ('k' + t.kind), last = lastStamp.get(d) || 0; const at = Math.max(t.created_at || nowS(), last + 1); lastStamp.set(d, at); return { ...t, created_at: at }; }, nowS, NET, 'trinityone/network:',
     (x) => { const s = String(x || ''); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch (e) { return null; } },
     queryAsKey || fakeQueryAsKey(relay), ...variants(all, 'getPublicKey').map(() => getPublicKey), (k) => ls.has(k) ? ls.get(k) : null, (k, v) => ls.set(k, v),
-    (fn) => { ringListeners.add(fn); return () => ringListeners.delete(fn); }, { getItem: (k) => null }, win, class { constructor(t) { this.type = t; } }, fetchImpl || ((...a) => fetch(...a)),
+    (fn) => { ringListeners.add(fn); return () => ringListeners.delete(fn); }, { getItem: (k) => null }, win, class { constructor(t) { this.type = t; } }, fetchImpl || defaultFetch,
     ...variants(all, 'npubEncode').map(() => npubEncode), (rec) => { savedKeys.push(rec); }, () => 'w' + Math.random().toString(36).slice(2), seedSk,
     ...Object.values(sh.nip)];
   const make = new Function(...names, prelude + src);
@@ -128,13 +134,14 @@ export function bootConsole({ relay, church, networks = [], nameKey = null, foun
 
 // ── the MEMBER APP (vendor/fellowship.js): subscribeNetworkContent, with the REAL hub-replay rule for a late name key ───────────────────
 import { decode as nip19decode } from 'nostr-tools/nip19';
-export function bootMember({ relay, cp, nameKeys = [] }) {
+export function bootMember({ relay, cp, nameKeys = [], mutate = null }) {
   const sh = sharedModule(FELLOW);
   const method = between(FELLOW, '    subscribeNetworkContent(', '    subscribeMyServingRequests(', 'subscribeNetworkContent').replace(/,\s*$/, '');
   const pfxDecl = (/\n  var CHURCH_SEALED_PFXS = [\s\S]*?;\n/.exec(FELLOW) || [])[0];
   assert.ok(pfxDecl, 'could not lift CHURCH_SEALED_PFXS');
   const src = sh.code + pfxDecl + topFn(FELLOW, '_coalesce') + topFn(FELLOW, '_featureFailed') + topFn(FELLOW, 'toPub') + topFn(FELLOW, '_replayChurchCalendar') + (/\n  var _dtag = [^\n]*\n/.exec(FELLOW) || ['\n  var _dtag = (e) => 0;\n'])[0]
     + '\nconst __api = {' + method + '};\n__api.__replay = () => _replayChurchCalendar(__cp, __hub);\nreturn __api;';
+  const srcM = mutate ? mutate(src) : src;
   const nameKeysMap = new Map(); if (nameKeys.length) nameKeysMap.set(cp, nameKeys);
   const hub = { buf: new Map(), handlers: new Set() };
   const dOf = (e) => tag(e, 'd') || '';
@@ -151,7 +158,7 @@ export function bootMember({ relay, cp, nameKeys = [] }) {
   const win = { Fellowship: { relays: ['wss://r.example/relay'] }, dispatchEvent() {} };
   const names = ['__hub', '__cp', '_nameKeys', 'NET', 'pool', '_netRelays', 'window', '_FAILURES', 'CustomEvent', '_onChurchDocs', 'decode', 'console', 'setTimeout', 'clearTimeout', ...Object.keys(sh.nip)];
   const vals = [hub, cp, nameKeysMap, NET, { subscribeMany: relay.subscribeMany }, (r) => r, win, [], class { constructor(n, o) { this.detail = o && o.detail; } }, _onChurchDocs, nip19decode, console, setTimeout, clearTimeout, ...Object.values(sh.nip)];
-  const api = new Function(...names, src)(...vals);
+  const api = new Function(...names, srcM)(...vals);
   return {
     subscribe: (networkNpub, cb) => api.subscribeNetworkContent(networkNpub, cp, cb),
     // the church's name key lands AFTER the documents (the normal warm-start order): what _ingestNameKey does, then the real replay
@@ -214,10 +221,10 @@ export function gatewayRelay(wsUrl, readAs, keys) {
 }
 // THE SHIPPED _queryAsKey, lifted from the console bundle, running on the real nostr-tools pool (esbuild renames imports per bundle)
 import { SimplePool } from 'nostr-tools/pool';
-export function shippedQueryAsKey(mutate = null) {
+export function shippedQueryAsKey(mutate = null, { finalize = finalizeEvent } = {}) {
   let code = (/\n  var NET_QUERY_MAX_WAIT = [^\n]*\n/.exec(STEWARD) || [''])[0] + topFn(STEWARD, '_queryAsKey');
   if (mutate) code = mutate(code);
   const fin = [...new Set(code.match(/\bfinalizeEvent\d*\b/g) || [])], sp = [...new Set(code.match(/\bSimplePool\d*\b/g) || [])];
   assert.ok(fin.length && sp.length, 'could not find the imports the shipped _queryAsKey uses');
-  return new Function(...fin, ...sp, code + '\nreturn _queryAsKey;')(...fin.map(() => finalizeEvent), ...sp.map(() => SimplePool));
+  return new Function(...fin, ...sp, code + '\nreturn _queryAsKey;')(...fin.map(() => finalize), ...sp.map(() => SimplePool));
 }

@@ -35,6 +35,21 @@ export function cleanRing(r) {
   return out.slice(0, NET_RING_MAX);
 }
 export function newNetKey(cryptoObj) { return toHex((cryptoObj || globalThis.crypto).getRandomValues(new Uint8Array(32))); }
+// THE FIRST KEY IS DERIVED, NOT DRAWN (B1 audit, 2026-11-19). Two first-mints for one network -- two syncs overlapping on a brand-new network,
+// or a founder re-minting after a relay wrongly answered "there is none" -- used to produce two DIFFERENT first keys, and whichever envelope
+// landed second made every post sealed under the other unopenable. HKDF-SHA256 over the network secret, with its own label, gives every
+// first-mint the SAME key, so a repeat does no harm. Only the network's secret holder can compute it -- the same party that can already open
+// every hop-1 entry. Later rotations (a church leaving) stay random: those must be keys the departed church never held. Async: WebCrypto.
+// -> 64-hex | null
+export async function firstNetKey(netSk, cryptoObj) {
+  try {
+    const subtle = (cryptoObj || globalThis.crypto).subtle;
+    const ikm = netSk instanceof Uint8Array ? netSk : toBytes(netSk);
+    const k = await subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+    const bits = await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new TextEncoder().encode('trinityone'), info: new TextEncoder().encode('trinityone/netring/0') }, k, 256);
+    return toHex(new Uint8Array(bits));
+  } catch (e) { return null; }
+}
 // A new key goes in FRONT; the old ones stay so older posts still open. (The church that left keeps only the rings it already held.)
 export function rotateRing(ring, cryptoObj) { return cleanRing([newNetKey(cryptoObj), ...cleanRing(ring)]); }
 

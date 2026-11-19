@@ -13927,6 +13927,17 @@ zoo`.split("\n");
   function newNetKey(cryptoObj) {
     return toHex((cryptoObj || globalThis.crypto).getRandomValues(new Uint8Array(32)));
   }
+  async function firstNetKey(netSk, cryptoObj) {
+    try {
+      const subtle = (cryptoObj || globalThis.crypto).subtle;
+      const ikm = netSk instanceof Uint8Array ? netSk : toBytes(netSk);
+      const k = await subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+      const bits2 = await subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("trinityone"), info: new TextEncoder().encode("trinityone/netring/0") }, k, 256);
+      return toHex(new Uint8Array(bits2));
+    } catch (e) {
+      return null;
+    }
+  }
   function rotateRing(ring, cryptoObj) {
     return cleanRing([newNetKey(cryptoObj), ...cleanRing(ring)]);
   }
@@ -16433,33 +16444,46 @@ zoo`.split("\n");
     if (!list.length || !sk2) return { events: [], complete: false };
     const p = new SimplePool();
     p.automaticallyAuth = () => async (authEvent) => finalizeEvent2(authEvent, sk2);
-    try {
-      return await new Promise((resolve) => {
-        const events = [];
-        let done = false;
-        const fin = (v) => {
-          if (!done) {
-            done = true;
-            resolve(v);
-          }
-        };
-        const hard = setTimeout(() => fin({ events, complete: false }), maxWait + 2e3);
-        try {
-          p.subscribeEose(list, filters, {
-            maxWait,
-            onevent(e) {
-              events.push(e);
-            },
-            onclose(reasons) {
-              clearTimeout(hard);
-              fin({ events, complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every((r) => r === "closed automatically on eose") });
-            }
-          });
-        } catch (e) {
-          clearTimeout(hard);
-          fin({ events, complete: false });
+    const pass = () => new Promise((resolve) => {
+      const events = [];
+      let done = false;
+      const fin = (v) => {
+        if (!done) {
+          done = true;
+          resolve(v);
         }
-      });
+      };
+      const hard = setTimeout(() => fin({ events, complete: false }), maxWait + 2e3);
+      try {
+        p.subscribeEose(list, filters, {
+          maxWait,
+          onevent(e) {
+            events.push(e);
+          },
+          onclose(reasons) {
+            clearTimeout(hard);
+            fin({ events, complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every((r) => r === "closed automatically on eose") });
+          }
+        });
+      } catch (e) {
+        clearTimeout(hard);
+        fin({ events, complete: false });
+      }
+    });
+    try {
+      const first = await pass();
+      const challenged = [];
+      for (const r of p.relays && typeof p.relays.values === "function" ? p.relays.values() : []) if (r && r.challenge) challenged.push(r);
+      if (!challenged.length) return first;
+      const logins = await Promise.race([
+        Promise.all(challenged.map((r) => r.authPromise ? Promise.resolve(r.authPromise).then(() => true, () => false) : Promise.resolve(false))),
+        new Promise((res) => setTimeout(() => res(null), maxWait))
+      ]);
+      if (!logins || logins.some((ok) => !ok)) return { events: first.events, complete: false };
+      const second = await pass();
+      const byId = /* @__PURE__ */ new Map();
+      for (const e of [...first.events, ...second.events]) if (e && e.id) byId.set(e.id, e);
+      return { events: [...byId.values()], complete: second.complete };
     } catch (e) {
       return { events: [], complete: false };
     } finally {
@@ -16514,10 +16538,18 @@ zoo`.split("\n");
       return has(st);
     };
     const out = [];
-    for (const u of urls || []) {
-      if (!await ask(u)) out.push(u);
-    }
+    const ok = await Promise.all((urls || []).map((u) => ask(u).catch(() => false)));
+    (urls || []).forEach((u, i3) => {
+      if (!ok[i3]) out.push(u);
+    });
     return out;
+  }
+  var _netWallOk = /* @__PURE__ */ new Set();
+  async function _netWallMissingCached(urls) {
+    const ask = (urls || []).filter((u) => !_netWallOk.has(u));
+    const missing = ask.length ? await _netWallMissing(ask) : [];
+    for (const u of ask) if (!missing.includes(u)) _netWallOk.add(u);
+    return missing;
   }
   var NET_JOIN_READ_LIMIT = 500;
   async function _netReadJoiners(np) {
@@ -16618,7 +16650,27 @@ zoo`.split("\n");
     const j = await _readNetworkJoin(np);
     return !!(j && j.doc && j.doc.joined === true);
   }
+  var _netKeyBusy = /* @__PURE__ */ new Map();
   async function _netSyncKey(np, opts = {}) {
+    const prev = _netKeyBusy.get(np);
+    const run = (async () => {
+      if (prev) {
+        try {
+          await prev;
+        } catch (e) {
+        }
+      }
+      return _netSyncKeyOnce(np, opts);
+    })();
+    _netKeyBusy.set(np, run);
+    run.then(() => {
+      if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np);
+    }, () => {
+      if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np);
+    });
+    return run;
+  }
+  async function _netSyncKeyOnce(np, opts = {}) {
     const nsk = (() => {
       try {
         return skFor(np);
@@ -16653,7 +16705,9 @@ zoo`.split("\n");
       if (lsGet(NETRING_SEEN_LS + np) === "1") return { ok: false, waiting: true, reason: "The network key could not be read just now; a new one will not be minted over the existing one." };
       const b = _netMintBlockers(np);
       if (b.unproved.length || b.notAuthed || b.notFounder) return { ok: false, waiting: true, reason: b.notFounder ? "This console did not create the network and cannot see an existing key, so it will not start a new one." : "Still connecting \u2014 the network key will be set up in a moment." };
-      ring = rotateRing([]);
+      const k0 = await firstNetKey(nsk);
+      if (!k0) return { ok: false, reason: "Could not make the network key on this device." };
+      ring = cleanRing([k0]);
       mintedNow = true;
     } else if (dropped) {
       ring = rotateRing(ring);
@@ -16742,6 +16796,20 @@ zoo`.split("\n");
           _joinedNetsFor = churchPub;
         }
         const joined = _joinedNets;
+        if (joined.size) {
+          const set = relays();
+          const missing = set.length ? await _netWallMissingCached(set) : ["(no relay ready)"];
+          if (missing.length) {
+            const reason = set.length ? "Network keys are paused: " + missing.join(", ") + (missing.length === 1 ? " has" : " have") + " not confirmed it runs the software that keeps a network out of your church\u2019s private records. Update " + (missing.length === 1 ? "it" : "them") + " or remove " + (missing.length === 1 ? "it" : "them") + " from this church\u2019s relays." : "Network keys are paused: no relay is ready for this church yet.";
+            const ownedNow = new Set(netKeys().map((r) => r.pub));
+            for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: "trouble", reason });
+            try {
+              window.dispatchEvent(new CustomEvent("steward-network-status"));
+            } catch (e) {
+            }
+            return { ok: false, wallMissing: set.length ? missing : [], reason };
+          }
+        }
         const owned = /* @__PURE__ */ new Set();
         for (const r of netKeys()) {
           if (!joined.has(r.pub)) continue;
@@ -30082,6 +30150,7 @@ zoo`.split("\n");
     subscribeNetworkPosts(networkPub, onPosts) {
       const np = toPubHex(networkPub) || networkPub;
       const raw = /* @__PURE__ */ new Map();
+      const dead = /* @__PURE__ */ new Map();
       let ring = null, closed = false, sub = null;
       const emit = () => {
         const out = [];
@@ -30104,8 +30173,11 @@ zoo`.split("\n");
             if (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
             const prev = raw.get(d);
             if (prev && (prev.created_at || 0) >= (e.created_at || 0)) return;
-            if (e.tags.some((t) => t[0] === "deleted") || !e.content) raw.delete(d);
-            else raw.set(d, e);
+            if ((dead.get(d) || -1) >= (e.created_at || 0)) return;
+            if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+              raw.delete(d);
+              dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0));
+            } else raw.set(d, e);
             emit();
           },
           oneose() {

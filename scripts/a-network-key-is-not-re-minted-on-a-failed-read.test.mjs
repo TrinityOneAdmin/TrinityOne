@@ -117,9 +117,13 @@ test('NON-VACUITY: with the seen-guard removed, the SAME empty read CLOBBERS the
   const r = await cA.api.syncNetworkKey(N.pub, { add: [C.pub] });
   relay.setMode(null);
   const after = ringOf(relay, N);
-  // the point: without the guard the empty read is taken as "no ring" and a fresh one is minted over the real one
+  // the point: without the guard the empty read is taken as "no ring" and a fresh one is minted over the real one.
+  // PORT NOTE (B1 audit fix, 2026-11-19): the FIRST ring key is now derived from the network secret (firstNetKey), so a re-mint makes the SAME key
+  // and old posts keep opening -- that is the second line of defence working. What the re-mint still destroys is the RECIPIENT LIST: the empty
+  // read saw no envelope, so the church added by hand (B) is gone from the new one. The guard is what prevents that.
   assert.equal(r.minted, true, 'with the guard gone, an empty read should mint (this is the bug the fix prevents)');
-  assert.notEqual(after.key, before.key, 'with the guard gone, the ring key should have been clobbered');
+  assert.equal(after.key, before.key, 'a re-mint of the first ring must make the SAME derived key (firstNetKey)');
+  assert.ok(!after.recipients.includes(B.pub), 'with the guard gone, the re-mint should have dropped the hand-added church from the envelope');
 });
 
 test('a failed netkey read during HOP-2 re-seal waits, it does not crash on a null ring (_netSyncHop2 caller)', async () => {

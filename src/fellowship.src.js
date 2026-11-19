@@ -9331,6 +9331,7 @@ window.Fellowship = {
     const np = toPub(networkNpub), cp = toPub(churchNpub);
     if (!np || !cp) { try { cb({ state: 'locked', announcements: [], events: [], unreadable: 0 }); } catch {} return () => {}; }
     const raw = new Map();   // d -> the newest event for it
+    const dead = new Map();  // d -> created_at of the newest tombstone seen: an OLDER live copy arriving later (another relay) must not bring a deleted post back
     let ring = null, ringAt = 0, eosed = false;
     const emit = _coalesce(() => {
       const announcements = [], events = []; let unreadable = 0;
@@ -9368,7 +9369,8 @@ window.Fellowship = {
         if (e.pubkey !== np || (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D))) return;
         const prev = raw.get(d);
         if (prev && ((prev.created_at || 0) > (e.created_at || 0) || ((prev.created_at || 0) === (e.created_at || 0) && prev.id < e.id))) return;
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) raw.delete(d); else raw.set(d, e);
+        if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written (B1 audit)
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { raw.delete(d); dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0)); } else raw.set(d, e);
         emit();
       },
       oneose() { eosed = true; emit(); },
