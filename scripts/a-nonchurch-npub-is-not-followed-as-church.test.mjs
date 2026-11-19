@@ -38,7 +38,8 @@ function liftFollowChurch(appSrc) {
   const body = fnBody(appSrc, 'const followChurch = (raw, opts) =>', 'followChurch');
   // followChurch is an arrow: `const followChurch = (raw, opts) => { ... }` — the fnBody includes the full
   // declaration. We need to extract just the function body and wrap it so the closure variables are injectable.
-  return body;
+  // memberTourJoin is the first-run-tour neighbour app.jsx declares just above followChurch; stub it here.
+  return 'const memberTourJoin = () => {};\n' + body;
 }
 
 function makeFollowEnv(checkResult) {

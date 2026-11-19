@@ -274,7 +274,7 @@ public class MediaSessionPlugin extends Plugin {
     }
 
     public void actionCallback(String action, JSObject data) {
-        try { // TrinityOne (B1): reached from the session callback, the focus listener and the noisy receiver
+        try { // TrinityOne (B1): reached from the session callback and the noisy receiver
             PluginCall call = actionHandlers.get(action);
             if (call != null && !call.getCallbackId().equals(PluginCall.CALLBACK_ID_DANGLING)) {
                 data.put("action", action);

@@ -125,7 +125,7 @@ function TabBar({ active, onChange, unread = {}, tabs = TABS, onProfile, profile
       {tabs.map(t => {
         const on = active === t.id;
         return (
-          <button key={t.id} onClick={() => onChange(t.id)} style={{
+          <button key={t.id} data-tour={'tab-' + t.id} onClick={() => onChange(t.id)} style={{
             border: 'none', background: 'none', cursor: 'pointer',
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
             padding: '6px 4px', flex: 1, color: on ? 'var(--clay)' : 'var(--ink-3)',
@@ -142,7 +142,7 @@ function TabBar({ active, onChange, unread = {}, tabs = TABS, onProfile, profile
       {/* You & settings — reachable from every tab (hidden while the community is PIN-locked, so a locked
          phone still reads as a plain Bible app). Opens the identity/settings hub. */}
       {onProfile ? (
-        <button onClick={onProfile} title="You & settings" style={{
+        <button data-tour="tab-you" onClick={onProfile} title="You & settings" style={{
           border: 'none', background: 'none', cursor: 'pointer',
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
           padding: '6px 4px', flex: 1, color: 'var(--ink-3)', position: 'relative',
@@ -171,7 +171,7 @@ function DesktopNav({ active, onChange, unread = {}, tabs = TABS, onProfile, pro
         {tabs.map(t => {
           const on = active === t.id;
           return (
-            <button key={t.id} onClick={() => onChange(t.id)} style={{
+            <button key={t.id} data-tour={'tab-' + t.id} onClick={() => onChange(t.id)} style={{
               display: 'flex', alignItems: 'center', gap: 13, padding: '11px 13px', borderRadius: 13,
               border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: on ? 700 : 600,
               background: on ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'transparent',
@@ -186,7 +186,7 @@ function DesktopNav({ active, onChange, unread = {}, tabs = TABS, onProfile, pro
       <div style={{ flex: 1 }} />
       {/* You & settings — same hub as mobile; hidden while PIN-locked */}
       {onProfile ? (
-        <button onClick={onProfile} title="You & settings" style={{
+        <button data-tour="tab-you" onClick={onProfile} title="You & settings" style={{
           display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 13, marginBottom: 4,
           border: 'none', cursor: 'pointer', background: 'transparent', color: 'var(--ink-2)',
           fontFamily: 'var(--font-ui)', fontSize: 14.5, fontWeight: 700, textAlign: 'left',

@@ -114,11 +114,14 @@ const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url),
 test('a fresh join re-opens the docs hub so the relay can serve gated docs', () => {
   const fn = fnBody(FELLOW, 'async announceMembership', 'announceMembership');
   const src = stripComments(fn);
-  assert.match(src, /!firstJoined.*_docsHubs/s,
-    'after a fresh join publish (not a heartbeat), the docs hub must be re-opened — without this a returning ' +
+  // Re-anchored 2026-11-19: the fresh-join reopen is now the shared full refetch of both hubs, gated on this
+  // identity's FIRST accepted join (!wasSent) rather than !firstJoined. What it does is proven by running it in
+  // an-open-church-joiner-gets-the-older-documents.test.mjs (O1/O2); this only pins that the call is still here.
+  assert.match(src, /wasSent = _joinSentFor\(cp\);\s*_markJoinSent\(cp, evt\)/,
+    'the first-acceptance check must be read immediately before the join is marked sent');
+  assert.match(src, /if \(!wasSent\)[^\n]*_refullChurchHubs\(_cp\)/,
+    'after a fresh join publish (not a heartbeat), the hubs must be re-opened — without this a returning ' +
     "member's admitted doc is withheld because the hub opened before the member doc landed on the relay");
-  assert.match(src, /_docsHubOpen\(hub\)/,
-    'the hub must be re-opened, not just closed — closing without re-opening drops the subscription');
   // The same fix in _outboxFlush: the announce may fail and land via retry.
   const flush = fnBody(FELLOW, 'async function _outboxFlush(', '_outboxFlush');   // re-anchored 2026-10-27: it takes `only` now (G2)
   const fs2 = stripComments(flush);
@@ -130,8 +133,8 @@ test('a fresh join re-opens the docs hub so the relay can serve gated docs', () 
 
 test('the rejoin hub re-open survives bundling', () => {
   const vFn = fnBody(VENDOR, 'async announceMembership(', 'vendor announceMembership');
-  assert.match(vFn, /!firstJoined/,
-    'the fresh-join docs-hub re-open was removed by the bundler — dead-code elimination ate it');
-  assert.match(vFn, /_docsHubOpen/,
+  assert.match(vFn, /!wasSent/,
+    'the fresh-join hub re-open was removed by the bundler — dead-code elimination ate it');
+  assert.match(vFn, /_refullChurchHubs/,
     'the hub re-open call was removed from the bundled announceMembership');
 });

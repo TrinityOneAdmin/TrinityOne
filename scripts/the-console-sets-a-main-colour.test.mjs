@@ -166,6 +166,7 @@ async function churchFromProfile(profile) {
     useSt: () => [state, (v) => { state = v; }],
     useStE: (f) => { effects.push(f); },
     useStewardIdv: () => 1, useStewardConn: () => 1,
+    _connNoteOpen: () => {},   // module-level relay-set snapshot (steward-root.jsx); irrelevant to the profile fields
     window: { Steward: { subscribeProfile: (cb) => { cb(profile); return () => {}; }, npub: 'npub1x', isViewingNetwork: () => false }, addEventListener() {}, removeEventListener() {} },
   };
   const preamble = Object.keys(g).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');

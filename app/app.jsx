@@ -992,6 +992,11 @@ function App() {
   // that followed it. The relay refuses those, but the phone still signed and queued the request and retried it.
   // The heartbeat stays out of a church while it is in here. Sim item 20, 2026-10-02.
   const unconfirmedChurches = React.useRef(new Set());
+  // THE FIRST-RUN TOUR (app/member-tour.jsx). Asked for on the first-run transitions only — the setup screen
+  // finishing, an invite adopting an account on a phone never set up, a church being joined — never on boot, so a
+  // member upgrading from an earlier version is not shown it. Absent where the tour file did not load.
+  const memberTourAsk = (why) => { try { if (window.memberTourStart) window.memberTourStart(why); } catch (e) {} };
+  const memberTourJoin = () => { try { if (window.memberTourJoined) window.memberTourJoined(); } catch (e) {} };
   const followChurch = (raw, opts) => {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
@@ -1044,6 +1049,11 @@ function App() {
     if (_wasLeaving) bumpLeave(x => x + 1);
     // Marked BEFORE setActiveChurch below: the heartbeat effect runs on the render that follows it.
     if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) unconfirmedChurches.current.add(npub);
+    // The first-run tour's Community part is now wanted — recorded at once, so an app closed before the church
+    // check below answers still has it to come. It runs only once the church lets this person in (tourAdmitted,
+    // below); for a code that turns out not to be a church nothing ever admits, so nothing runs. This is the only
+    // call: the church check's branches below are all `!alreadyFollowed` too, so they no longer repeat it.
+    if (!alreadyFollowed) memberTourJoin();
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
     // M-9: do NOT announce membership until we confirm this npub is actually a church. A valid npub that
@@ -1243,9 +1253,11 @@ function App() {
           : ('This link sets up a TrinityOne account that someone ELSE created — its key is known to whoever made the link (this is how a parent sets up a child’s account). Only continue if you were handed this link directly and trust them.\n\nIf you just want to join a church, cancel and use a normal join link instead.\n\nContinue?');
         if (!window.confirm(_msg)) { return; }   // bail the entire follow+name flow too
         const before = (window.Fellowship && window.Fellowship.myPubkey) || '';
+        const _freshPhone = !lsGet('trinityone.onboarded', false);   // never set up: this IS its first run
         try {
           await window.TrinityIdentity.importMnemonic(_inviteSeed);
           try { lsSet('trinityone.onboarded', true); } catch (e) {}
+          if (_freshPhone) memberTourAsk('invite');
           // wait for the fellowship transport to re-derive its signing key from the new identity,
           // so membership is announced (and chat is signed) as the invited identity, not the old one
           for (let i = 0; i < 25; i++) { await new Promise(r => setTimeout(r, 100)); const now = window.Fellowship && window.Fellowship.myPubkey; if (now && now !== before) break; }
@@ -1727,6 +1739,13 @@ function App() {
   }, [connTick, lazyReady, keyReady]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
+  // FOR THE FIRST-RUN TOUR (app/member-tour.jsx, audit M1). Was this person still waiting for approval when the app
+  // started? Read once, from the join answer cached for the active church (written below; offline fallback reads
+  // the same key) — such a person is not an upgrading member and still has the Community part to come.
+  const [tourPendingAtBoot] = useA(() => {
+    let c = null; try { c = JSON.parse(localStorage.getItem('trinityone.joinstate.' + activeChurch) || 'null'); } catch (e) {}
+    return !!(c && c.isPending && !c.removed);
+  });
   const joinChurchRef = React.useRef(null);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
@@ -1803,6 +1822,16 @@ function App() {
     }
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
   React.useEffect(() => { approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
+  // Has the ACTIVE church let this person in? For the first-run tour's Community part only (audit M1). Two positive
+  // answers, neither falsely positive: my key is on the admitted list (isAdmitted — the approved toast above relies
+  // on it), or the church's trusted policy needs no approval (openKnown, default-deny in the engine). `loaded` is
+  // required: the initial state says isAdmitted:true before anything has been asked. isPending alone is not used —
+  // the policy is last-document-wins and can briefly read "no approval" before it arrives.
+  const tourAdmitted = (() => {
+    const js = joinState || {};
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    return !!(np && js.loaded && js.churchId === activeChurch && !js.removed && !js.isPending && (js.isAdmitted || js.openKnown));
+  })();
   // events posted by group leaders (members the church empowered) — merged into the church's events
   const [groupEvents, setGroupEvents] = useA([]);
   // depend on STABLE string keys (npub + sorted group-ids), not the array refs — else this re-subscribes on
@@ -2404,6 +2433,9 @@ function App() {
       try { if (navigator.clipboard) { await navigator.clipboard.writeText(t); toast('Copied — paste it anywhere'); } } catch (e) {}
     },
     openHelp: (initial) => setHelp(initial || 'index'),
+    // Help → "Take the tour again": close Help and the profile hub it was opened from, then replay the tour where
+    // the person is. The tour waits for any other sheet to close by itself.
+    replayTour: window.memberTourStart ? () => { setHelp(null); setProfile(false); memberTourAsk('replay'); } : undefined,
     openDevotional: () => setDevo(true),
     openPlan: (p) => setPlan(p),
     openPlanDay: (plan, day) => {
@@ -3030,6 +3062,12 @@ function App() {
 
         <HelpCenter open={!!help} onClose={() => setHelp(null)} initial={help} ctx={ctx} />
 
+        {/* the first-run tour and reader tips (app/member-tour.jsx). Handed the tab only to READ it — never a way to
+            change it — and App's own reasons to wait. */}
+        {window.MemberTourHost ? <MemberTourHost page={tab} inChurch={!!(churches.find(c => c.id === activeChurch) || {}).npub}
+          admitted={tourAdmitted} pendingAtBoot={tourPendingAtBoot}
+          hold={showSplash || showOnboarding || (commLocked && !gateEscaped) || churchSwitcher || !!help || profile} /> : null}
+
         {confirmExit ? (
           <div onClick={() => setConfirmExit(false)} style={{ position: 'absolute', inset: 0, zIndex: 120, background: 'rgba(20,15,10,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
             <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 320, background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24, textAlign: 'center', animation: 'trinityScale .2s ease both' }}>
@@ -3063,8 +3101,8 @@ function App() {
           </div>
         ) : null}
         {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity} suggestedName={pendingNameRef.current}
-          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
-          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
+          onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); memberTourAsk('onboarding'); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
+          onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); memberTourAsk('onboarding'); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
         {/* U1: the SAME restore flow, opened from settings rather than only from first-run. Deliberately its
             OWN handlers: this member is already set up, so it must not re-write trinityone.onboarded or
             re-prompt them to follow a church — it just closes when they are done. */}

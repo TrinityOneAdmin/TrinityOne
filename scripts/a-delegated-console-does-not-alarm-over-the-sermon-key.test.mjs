@@ -270,7 +270,7 @@ async function membersPage({ delegated, rotateMedia, nameResult = null, engineOp
   const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers(', 'DashMembers')
     // + the shared approved-members filter Block rotates to (round 3a, HIGH 1) — compiled in, not stubbed
     + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n')
-    + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0] + '\n' + (DASH.match(/^const _blockingInFlight = .*;$/m) || [''])[0]   /* DashMembers' module-scope Block in-flight set (2026-11-18) */;
+    + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
   const tmp = join(tmpdir(), 'mk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

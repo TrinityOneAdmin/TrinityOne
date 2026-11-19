@@ -2896,7 +2896,7 @@ function TodayScreen({ ctx }) {
           owner belongs to a church with a rota even after the church's NAME was hidden. Hiding one string is
           not hiding the church. AUDIT-2026-07-27. */}
       {!ctx.church ? null : (
-        <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
+        <div data-tour="happening" style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
           <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: "flex", flexDirection: "column", borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)", background: "var(--surface)", border: "1px solid var(--line)", overflow: "hidden" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 13, padding: 14 }}>
               <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: "var(--sage)" }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
@@ -3080,13 +3080,13 @@ function TodayScreen({ ctx }) {
 
       {/* Verse of the day — minimisable hero (near the reading section); hidden entirely when turned off in Settings */}
       {!votdOff && (votdMin ? (
-        <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: mainC ? churchMainGradient(mainC, 150) : 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: mainC ? onMain : 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+        <button type="button" data-tour="votd" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: mainC ? churchMainGradient(mainC, 150) : 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: mainC ? onMain : 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
           <Icon name="sparkle" size={15} color={onMain} style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
           <Icon name="chevD" size={18} color={onMain} style={{ flexShrink: 0, opacity: .92 }} />
         </button>
       ) : (
-      <div data-votd-card="1" onClick={openVotd} style={{
+      <div data-votd-card="1" data-tour="votd" onClick={openVotd} style={{
         position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: votdReadOn ? 'pointer' : 'default',
         background: mainC ? churchMainGradient(mainC, 155) : 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
         padding: '22px 22px 18px', color: onMain, marginBottom: 22, boxShadow: 'var(--shadow-lg)',

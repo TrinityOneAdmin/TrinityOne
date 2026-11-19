@@ -25,7 +25,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8874;
+const PORT = 8876;   // was 8874, which the-storage-api-moves-only-on-the-relays-own-computer (older) holds
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Math.floor(Date.now() / 1000);

@@ -151,7 +151,6 @@ async function joinRowFor({ results = {} } = {}) {
       // slice throws ReferenceError and every test here fails — which is exactly how that regression
       // was caught. `narrow` stays: the sliced siblings above still use it.
       block: () => {}, setConfirmBlock: () => {},
-      blocking: new Set(), blockingLine: () => '', blockOnce: () => {},   // the row's Block goes through blockOnce since 2026-11-18 (one Block at a time, said)
       SkBadge: Stub('SkBadge'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' } },
       nameHandle: () => '', shortNpub: () => 'npub1tam…',

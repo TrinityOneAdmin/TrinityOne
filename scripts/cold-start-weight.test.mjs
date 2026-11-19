@@ -66,7 +66,10 @@ test('the first-paint payload has not quietly grown', () => {
   // Raised 3.1 -> 3.2 MB (2026-10-28, owner): first paint had crept to 3.12 MB across the accumulated
   // unpushed work since 2026-10-16 (the 3.1 headroom was already gone BEFORE this cycle's 5 UI fixes, which
   // added only ~3.4 KB); owner chose RAISE, not trim. ~0.08 MB headroom; still a ratchet, not a budget.
-  const MB = 3.2;
+  // Raised 3.2 -> 3.5 MB (2026-11-19, owner decision): integration/2026-11-17 measured 3.41 MB. Audio Bibles
+  // (audio-store + screens-audio), install-Bible-from-file, share cards and the first-run walkthrough added about
+  // 0.3 MB of shell source between them; owner chose RAISE, not trim. ~0.09 MB headroom; still a ratchet.
+  const MB = 3.5;
   assert.ok(total <= MB * 1024 * 1024,
     'the first-paint shell is now ' + (total / 1048576).toFixed(2) + ' MB across ' + files + ' files, over the ' +
     MB + ' MB ratchet. At the 20 kB/s this product is built for, every extra megabyte is another ~50 seconds ' +

@@ -120,8 +120,10 @@ test('the console’s church hook carries mainColor to the branding panel (and "
     const { React, draw } = miniReact();
     const win = { Steward: { subscribeProfile: (cb) => { cb(profile); return () => {}; }, npub: 'npub1x' },
       addEventListener() {}, removeEventListener() {} };
-    const hook = new Function('React', 'window', 'useSt', 'useStE', 'useStewardIdv', 'useStewardConn',
-      body + '\nreturn useStewardChurch;')(React, win, React.useState, React.useEffect, () => 0, () => 0);
+    // _connNoteOpen (module-level in steward-root.jsx) snapshots the relay set before a stream opens; it has no
+    // bearing on which profile fields the hook carries, so it is stubbed like its siblings useStewardIdv/Conn.
+    const hook = new Function('React', 'window', 'useSt', 'useStE', 'useStewardIdv', 'useStewardConn', '_connNoteOpen',
+      body + '\nreturn useStewardChurch;')(React, win, React.useState, React.useEffect, () => 0, () => 0, () => {});
     let got;
     const Probe = () => { got = hook(); return null; };
     draw(Probe, {}); draw(Probe, {}); draw(Probe, {});

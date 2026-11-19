@@ -31,18 +31,80 @@ test('the plugin still publishes the directory ids this test pins against', () =
   assert.ok(!ACCEPTED.has('Cache'), 'the plugin now accepts mixed case — this test can be retired');
 });
 
+// A CALL TO A ZERO-ARGUMENT HELPER IS ACCEPTED ONLY WHEN ITS BODY PROVABLY RETURNS LITERALS (2026-11-19).
+// app/audio-store.jsx picks the platform's directory once — `const DIR = () => { …; return ios ? 'LIBRARY' : 'DATA'; }`
+// — and passes `directory: DIR()` at 14 sites. That is not a literal, but it is no less checkable: the helper is
+// found in the SAME file (exactly one definition), and every value it can return is resolved to string literals —
+// a literal, or a ternary whose branches resolve. Anything else is unprovable and fails like any other non-literal:
+// a helper that returns a variable, has more than one return or a return that is not last, nests a function, or
+// is not defined in the file. The literals it returns are then checked against the plugin's enum like any other.
+function stringLit(e) { const m = e.match(/^(['"])([^'"\\]*)\1$/); return m ? m[2] : null; }
+function topLevel(e, ch, from = 0) {   // index of `ch` at bracket depth 0 and outside quotes, or -1
+  let depth = 0, q = '';
+  for (let i = from; i < e.length; i++) {
+    const c = e[i];
+    if (q) { if (c === '\\') i++; else if (c === q) q = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if (!depth && c === ch) return i;
+    if ('([{'.includes(c)) depth++; else if (')]}'.includes(c)) depth--;
+  }
+  return -1;
+}
+// The set of string literals expression `e` can evaluate to, or null if that cannot be shown.
+function literalsOf(e) {
+  e = e.trim();
+  const lit = stringLit(e);
+  if (lit !== null) return [lit];
+  if (e[0] === '(' && topLevel(e, ')', 1) === e.length - 1) return literalsOf(e.slice(1, -1));   // ( … ) wrapping it all
+  const q = topLevel(e, '?');
+  if (q === -1) return null;
+  const colon = topLevel(e, ':', q + 1);
+  if (colon === -1) return null;
+  const a = literalsOf(e.slice(q + 1, colon)), b = literalsOf(e.slice(colon + 1));
+  return a && b ? [...a, ...b] : null;
+}
+// `name()` resolved through its definition in `src`: { values } or { why } when it cannot be proved.
+function helperReturns(src, name) {
+  const defs = [...src.matchAll(new RegExp('(?:const|let|var)\\s+' + name + '\\s*=\\s*\\(\\s*\\)\\s*=>\\s*|function\\s+' + name + '\\s*\\(\\s*\\)\\s*', 'g'))];
+  if (defs.length !== 1) return { why: defs.length + ' definitions of ' + name + ' in this file (need exactly 1)' };
+  let at = defs[0].index + defs[0][0].length;
+  if (src[at] !== '{') {   // expression-bodied arrow: up to the `;` at depth 0
+    const end = topLevel(src.slice(at), ';');
+    const vals = literalsOf(src.slice(at, at + end));
+    return vals ? { values: vals } : { why: name + '() returns something other than string literals' };
+  }
+  const close = topLevel(src.slice(at + 1), '}');
+  const body = src.slice(at + 1, at + 1 + close);
+  const code = body.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, "''");   // strings blanked: 'function' in a typeof check is not a function
+  if (/\bfunction\b|=>/.test(code)) return { why: name + '() nests a function; not provable here' };
+  const rets = [...body.matchAll(/\breturn\b/g)];
+  if (rets.length !== 1) return { why: name + '() has ' + rets.length + ' returns (need exactly 1, last)' };
+  const from = rets[0].index + 'return'.length, semi = topLevel(body.slice(from), ';');
+  const expr = body.slice(from, semi === -1 ? body.length : from + semi);
+  if (body.slice(semi === -1 ? body.length : from + semi + 1).trim()) return { why: name + '()’s return is not its last statement' };
+  const vals = literalsOf(expr);
+  return vals ? { values: vals } : { why: name + '() returns something other than string literals: ' + expr.trim() };
+}
+
 test('every directory: literal in app/ is one of the plugin’s own ids (exact case)', () => {
   const hits = [];
   for (const f of readdirSync(new URL('app/', ROOT))) {
     if (!f.endsWith('.jsx')) continue;
     const src = readFileSync(new URL('app/' + f, ROOT), 'utf8');
     for (const m of src.matchAll(/directory\s*:\s*([^,}\n]+)/g)) {
-      hits.push({ where: 'app/' + f + ':' + src.slice(0, m.index).split('\n').length, token: m[1].trim() });
+      hits.push({ where: 'app/' + f + ':' + src.slice(0, m.index).split('\n').length, token: m[1].trim(), src });
     }
   }
   assert.ok(hits.length >= 5, 'the grep found ' + hits.length + ' directory: sites — the app writes files through at least five; re-anchor the pattern');
   const bad = [];
   for (const h of hits) {
+    const call = h.token.match(/^([A-Za-z_$][\w$]*)\(\)$/);
+    if (call) {
+      const r = helperReturns(h.src, call[1]);
+      if (r.why) { bad.push(h.where + ' passes ' + h.token + ', which cannot be proved to return only literals: ' + r.why); continue; }
+      for (const v of r.values) if (!ACCEPTED.has(v)) bad.push(h.where + ' passes ' + h.token + ', which can return \'' + v + '\' — the plugin rejects it with INVALID_DIR; accepted: ' + [...ACCEPTED].join(', '));
+      continue;
+    }
     const lit = h.token.match(/^['"]([^'"]*)['"]$/);
     if (!lit) { bad.push(h.where + ' passes a non-literal (' + h.token + ') — pin it or extend this test'); continue; }
     if (!ACCEPTED.has(lit[1])) bad.push(h.where + ' passes ' + h.token + ' — the plugin rejects it with INVALID_DIR; accepted: ' + [...ACCEPTED].join(', '));
