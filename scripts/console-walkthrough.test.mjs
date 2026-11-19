@@ -382,6 +382,24 @@ test('POINT OF USE: the tour\'s Settings and Help step tells a helper the helper
   assert.equal(stepText(boot()), S.text);
 });
 
+test('POINT OF USE: the tour\'s Members step tells a helper holding Members only what they can do; an owner the owner words', () => {
+  const stepText = (h) => {
+    h.mod.stewTourStart('replay');
+    let tree = h.show();
+    for (let g = 0; g < 20; g++) {
+      const b = bubble(tree);
+      assert.ok(b, 'the tour ended before Members');
+      if (titleOf(b) === 'Members') return texts(find(b, n => n.type === 'p')[0].kids || []).join('');
+      press(b, 'Next');
+      tree = h.show();
+    }
+    throw new Error('the tour never reached Members');
+  };
+  const S = boot().mod.STEW_TOUR_STEPS.find(s => s.id === 'members');
+  assert.equal(stepText(helperBoot(['members'])), 'Everyone who has joined.');
+  assert.equal(stepText(boot()), S.text);
+});
+
 test('the tour hides while a dialog opens over it, and comes back at the same step — not ended, not restarted', () => {
   const h = boot();
   h.mod.stewTourStart('replay');

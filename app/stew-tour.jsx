@@ -50,7 +50,10 @@ const STEW_TOUR_STEPS = [
   { id: 'invite', title: 'Inviting people', targets: ['joincode'],
     text: 'This is how people join. Share the code or QR: they scan it or type it into the TrinityOne app.' },
   { id: 'members', title: 'Members', nav: 'members',
-    text: 'Everyone who has joined. Mark who is a child, and which adults are cleared to work with them. The safety rules then apply on their own.' },
+    text: 'Everyone who has joined. Mark who is a child, and which adults are cleared to work with them. The safety rules then apply on their own.',
+    // A helper cannot mark children or cleared adults: the relay takes those lists only from the church key
+    // (scripts/gateway.mjs, owner-only). So a helper is told only the first, true, sentence.
+    helperText: 'Everyone who has joined.' },
   { id: 'groups', title: 'Groups', nav: 'groups',
     text: 'Chat rooms and announcement channels. Your starter groups are already here. Choose which are open, invite-only, or safe for children.' },
   { id: 'settings', title: 'Settings and Help', nav: 'settings', also: ['help'],
