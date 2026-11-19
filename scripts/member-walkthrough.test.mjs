@@ -348,6 +348,59 @@ test('M1-e: never let in — nothing runs and nothing is spent; removed — noth
   assert.equal(r.store.getItem('trinityone.tour.community'), null);
 });
 
+test('POINT OF USE (L4): on a thin link (church check never answers), the Community part never pops up over someone typing; it shows once they stop', async () => {
+  const held = [];   // the church check's 10 s retries, released by hand
+  let announced = 0, looks = 0;   // looks: the host's 700 ms look-again
+  const h = bootApp({
+    fellowship: { checkChurch: async () => 'unknown', announceMembership: () => { announced++; } },
+    setup: (w) => { const st = w.setTimeout; w.setTimeout = (fn, ms, ...a) => { if (ms === 700) looks++; return ms === 10000 ? (held.push(fn), 0) : st(fn, ms, ...a); }; },
+  });
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.ctxOf(h.show().tree).followChurch(NPUB);
+  for (let i = 0; i < 3; i++) { await settle(); assert.equal(held.length, 1, 'premise: the church check did not schedule retry ' + (i + 1)); held.shift()(); }
+  await settle();
+  assert.equal(announced, 1, 'premise: the third retry did not send the join (app.jsx: the retry else-branch)');
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part showed before the church let them in');
+  // they are typing a message when the church's answer finally comes in
+  h.window.document.activeElement = { tagName: 'TEXTAREA', closest: () => null };
+  h.join(OPEN);
+  h.show();
+  h.screens([ADULT_ROOM]);
+  looks = 0;
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part popped up over someone typing');
+  // a blur sends no event the host hears, so while it holds a start back it must look again by itself
+  assert.ok(looks > 0, 'the host held the start back for typing but never looks again, so nothing would show until something else re-rendered');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent while held back for typing');
+  h.window.document.activeElement = { tagName: 'BODY', closest: () => null };   // they finish: focus leaves the box
+  const b = bubbleOf(h.show(), h);
+  assert.ok(b, 'the Community part did not show once they stopped typing');
+  assert.equal(b.step.title, 'Community');
+});
+
+test('L4: what counts as typing — text boxes, text-like inputs, selects, editable areas; not a checkbox, and not the tour itself', () => {
+  const { React } = miniReact();
+  const doc = { querySelector: () => null, activeElement: null };
+  const K = loadScreen('app/tour-kit.jsx', ['tourKitFlag', 'tourKitFlagSet', 'tourKitFind', 'tourKitWalk', 'tourKitInsets', 'TourKitBubble'], { React, window: {}, document: doc, localStorage: { getItem: () => null, setItem() {} }, console });
+  const { memberTourTyping } = loadScreen('app/member-tour.jsx', ['memberTourTyping'], { React, window: {}, document: doc, console, ...K, Event: class {} });
+  const at = (el) => { doc.activeElement = el; return memberTourTyping(); };
+  const el = (tagName, extra) => ({ tagName, closest: () => null, ...extra });
+  assert.equal(at(null), false);
+  assert.equal(at(el('BODY')), false);
+  assert.equal(at(el('TEXTAREA')), true);
+  assert.equal(at(el('INPUT', { type: 'text' })), true);
+  assert.equal(at(el('INPUT', { type: 'search' })), true);
+  assert.equal(at(el('INPUT', {})), true, 'an input with no type is a text box');
+  assert.equal(at(el('INPUT', { type: 'checkbox' })), false);
+  assert.equal(at(el('INPUT', { type: 'button' })), false);
+  assert.equal(at(el('SELECT')), true);
+  assert.equal(at(el('DIV', { isContentEditable: true })), true);
+  assert.equal(at(el('BUTTON')), false);
+  assert.equal(at(el('TEXTAREA', { closest: (sel) => (sel === '[data-member-tour]' ? {} : null) })), false, 'focus inside the tour counted as typing');
+});
+
 test('an upgrading member (set up on an earlier version, already in a church) gets no tour, and no Community part on a later join', async () => {
   const h = bootApp({ church: true });
   h.endSplash();

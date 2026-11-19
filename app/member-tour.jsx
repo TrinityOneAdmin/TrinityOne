@@ -29,7 +29,8 @@
 //
 // WHAT IT NEVER DOES. It never shows over the splash, the setup screen, the PIN gate, the follow-a-church sheet or
 // any other open sheet (App's `hold`, plus every BottomSheet/Overlay on the back stack, plus any aria-modal
-// dialog) — it waits. It writes nothing to a relay: "seen" is per device, in localStorage.
+// dialog) — it waits. An automatic start also waits while the person is typing (memberTourTyping, audit L4): the
+// Community part can come long after the join, and a dialog taking focus would drop the keyboard mid-message. It writes nothing to a relay: "seen" is per device, in localStorage.
 //
 // YOUNG PEOPLE. The Groups step reads what the Community screen itself drew (data-tour-minor / data-tour-count on
 // its groups anchor, app/screens-chat.jsx), so it can only ever point at the list that young person really has.
@@ -45,10 +46,10 @@
 // window.__trinityBackStack (app/ui.jsx), window.TrinityAudioStore (app/audio-store.jsx, optional).
 // Top-level names DECLARED here — unique across the member app's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): MEMBER_TOUR_BIBLE, MEMBER_TOUR_COMMUNITY,
-// MEMBER_TOUR_GROUPS, MEMBER_TOUR_TIPS, memberTourStore, memberTourKey, memberTourSeen, memberTourSeenSet,
-// memberTourWaiting, memberTourWaitSet, memberTourStart, memberTourJoined, memberTourReader, memberTourPlan,
-// memberTourGroupsText, memberTourGroupFacts, memberTourPing, memberTourNextTip, memberTourHasAudio,
-// memberTourBlocked, useMemberTourLayer, memberTourPrimary, MemberTourBubble, MemberTourHost.
+// MEMBER_TOUR_GROUPS, MEMBER_TOUR_TIPS, MEMBER_TOUR_NOT_TEXT, memberTourStore, memberTourKey, memberTourSeen,
+// memberTourSeenSet, memberTourWaiting, memberTourWaitSet, memberTourTyping, memberTourStart, memberTourJoined,
+// memberTourReader, memberTourPlan, memberTourGroupsText, memberTourGroupFacts, memberTourPing, memberTourNextTip,
+// memberTourHasAudio, memberTourBlocked, useMemberTourLayer, memberTourPrimary, MemberTourBubble, MemberTourHost.
 // (member-tour.jsx is loaded by index.html only; steward.html does not load it.)
 
 // ── the words (approved by the owner, 2026-11-18 — MEMBER-WALKTHROUGH-COPY-2026-11-18.html) ─────────────────
@@ -190,6 +191,20 @@ function memberTourBlocked() {
   try { const st = window.__trinityBackStack; if (st && st.some(e => e && !e.memberTour)) return true; } catch (e) {}
   try { return !!document.querySelector('[role="dialog"][aria-modal="true"]:not([data-member-tour])'); } catch (e) { return false; }
 }
+// Is the person typing? Focus in a text box, a text-like input, a select or an editable area — not one of the
+// tour's own. An automatic start waits for it to end (audit L4); a replay from Help does not.
+const MEMBER_TOUR_NOT_TEXT = ['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'file', 'color'];
+function memberTourTyping() {
+  try {
+    const a = document.activeElement;
+    if (!a || !a.tagName) return false;
+    if (a.closest && a.closest('[data-member-tour]')) return false;
+    const t = String(a.tagName).toUpperCase();
+    if (t === 'TEXTAREA' || t === 'SELECT') return true;
+    if (t === 'INPUT') return MEMBER_TOUR_NOT_TEXT.indexOf(String(a.type || 'text').toLowerCase()) < 0;
+    return !!a.isContentEditable;
+  } catch (e) { return false; }
+}
 // Put the tour (or a tip) on the back stack, so Android Back and Escape (both go through window.trinityGoBack)
 // close it first, as they close a sheet. Marked, so memberTourBlocked does not count it.
 function useMemberTourLayer(open, onClose) {
@@ -250,8 +265,9 @@ function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
     memberTourStore.pending = { ...(memberTourStore.pending || {}), community: true, at: Date.now() };
   }
   const pending = memberTourStore.pending;
+  const typing = !!(pending && !pending.replay) && memberTourTyping();   // an automatic start waits; nothing is consumed
   React.useEffect(() => {
-    if (pending && !run && !blocked) {
+    if (pending && !run && !blocked && !typing) {
       memberTourStore.pending = null;
       // Community only for someone the church has let in; an automatic start only on the Community page. Left
       // out here, nothing is spent: the wait flag asks again on the next admission / visit.
@@ -265,15 +281,15 @@ function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
       if (i >= 0) setRun({ plan, i });
       return;
     }
-    if (run || pending) return;
+    if (run || pending) return;   // (a pending start held back while typing stays pending)
     if (tip && (blocked || !present(tip.targets[0]))) { setTip(null); return; }   // a sheet opened, or the reader closed: it has been seen
     if (tip || blocked) return;
     const c = wantTip();
     if (c) { memberTourSeenSet(c.key); setTip(c); }
   });
-  // Waiting behind something that sends no event (a sheet closing): look again shortly.
+  // Waiting behind something that sends no event (a sheet closing, the keyboard closing): look again shortly.
   React.useEffect(() => {
-    if (!blocked || !(pending || run || (!tip && tipsLeft()))) return undefined;
+    if (!(typing && pending) && (!blocked || !(pending || run || (!tip && tipsLeft())))) return undefined;
     const t = setTimeout(() => force(x => x + 1), 700);
     return () => clearTimeout(t);
   });
