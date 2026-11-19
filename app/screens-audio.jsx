@@ -169,7 +169,9 @@
     if (el.paused && wantPlay && !held && !pending && !el.ended && !el.error) {
       held = true; disarm();
       const wasRetrying = state.retrying;
-      cancelRetry();   // a call during a reload: stop retrying; the place (resumeAt) is kept and Play retries from it
+      // a call during a reload: stop any pending retry TIMER only. NOT cancelRetry(): its clearSeek() would drop the
+      // reload's seek back to the place, and a resume after the call would start at 0:00 (re-audit N1).
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
       set({ playing: false, loading: false, retrying: false, failed: wasRetrying || state.failed });
       osSync(); osPos();
       return;
@@ -177,7 +179,7 @@
     if (!state.retrying) set({ playing: false }); arm(); osPos();
   });
   el.addEventListener('waiting', () => { set({ loading: true }); arm(); });
-  el.addEventListener('playing', () => { if (unwantedPlay()) { try { el.pause(); } catch (e) {} return; } followPlay(); if (state.retrying) { cancelRetry(); attempts = 0; } set({ loading: false, playing: true, retrying: false, failed: false }); firstLoad = false; rearm(); });
+  el.addEventListener('playing', () => { if (unwantedPlay()) { try { el.pause(); } catch (e) {} return; } followPlay(); if (state.retrying) { cancelRetry(); attempts = 0; } set({ loading: false, playing: true, retrying: false, failed: false }); osSync(); firstLoad = false; rearm(); });   // osSync AFTER failed clears (N1)
   el.addEventListener('ended', () => {
     set({ playing: false });
     if (api.hasNext()) { begin(queue[qi + 1], queue, 0, true); return; }

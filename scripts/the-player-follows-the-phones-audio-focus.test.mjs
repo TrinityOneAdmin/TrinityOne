@@ -267,3 +267,31 @@ test('audit #4 — a call, then a stream error, then the listener opens the app 
   assert.equal(w.el.plays, plays, 'OPENING THE APP DURING A CALL STARTED SOUND');
   assert.equal(w.el.loads.length, loads);
 });
+
+// ── re-audit 2026-11-19 (Round 2): N1, N2 ──
+
+test('N1 — a call during a retry reload, then the phone resumes: it plays on FROM ITS PLACE, and the lock screen says playing', async () => {
+  const { w, f } = await playing();                    // at 0:30
+  w.el.net = () => 'fail'; w.el.failNow(2); await settle();
+  w.el.net = () => 'hang';
+  await w.clock.advance(2000);                          // the reload is in flight, its seek back to 0:30 waiting
+  w.el.sysPause(); await settle();                      // the call
+  w.el.finish(); await settle();                        // the reload's load completes during the call
+  w.el.sysResume(); await settle();                     // the call ends; the phone resumes
+  assert.equal(w.el.paused, false);
+  assert.equal(w.el.currentTime, 30, 'THE RESUME STARTED AT 0:00 — the seek back to the place was dropped');
+  assert.equal(last(f), 'playing', 'THE LOCK SCREEN SAYS PAUSED WHILE IT PLAYS');
+  assert.equal(byLabel(w.player(), 'Pause').length, 1);
+});
+
+test('N2 — Close, then play again, then a call: the phone\'s resume plays (a tap clears "the card was closed")', async () => {
+  const { w, f } = await playing();
+  press(w.player(), 'Close player'); await settle();
+  w.A.play(BOOK[1], BOOK); await settle();
+  assert.equal(w.el.paused, false);
+  w.el.sysPause(); await settle();
+  assert.equal(last(f), 'paused');
+  w.el.sysResume(); await settle();
+  assert.equal(w.el.paused, false, 'EVERY RESUME AFTER THE FIRST CLOSE OF THE SESSION IS REFUSED');
+  assert.equal(last(f), 'playing');
+});
