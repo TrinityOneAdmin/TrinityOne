@@ -787,6 +787,10 @@ function ChatScreen({ ctx }) {
         </React.Fragment>
       ) : null}
 
+      {/* THE GROUPS STEP OF THE TOUR (app/member-tour.jsx) points here, and reads its words from what this list really
+          holds for THIS reader: whether they are treated as a child, and how many groups and teams they were shown.
+          A plain wrapper: no style, so the sections' margins behave exactly as before. */}
+      <div data-tour="groups" data-tour-minor={iAmMinor ? '1' : '0'} data-tour-count={String(teamGroups.length + plainGroups.length)}>
       {teamGroups.length ? (
         <React.Fragment>
           <CatLabel label="Teams" ck="teams" />
@@ -829,6 +833,7 @@ function ChatScreen({ ctx }) {
           </React.Fragment>
         );
       })()}
+      </div>
       </React.Fragment>
       )}
       </React.Fragment>

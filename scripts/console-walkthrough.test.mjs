@@ -12,7 +12,7 @@
 // anchor — deleting a data-tour attribute from stew-dashboard.jsx makes its step vanish here too.
 //
 // WHAT IS REAL: help-illustrations, help-data, screens-help, stew-modal (useStewDialog + its document Escape
-// handler), stew-help, stew-tour, stew-dashboard — compiled into one function scope, as the browser puts
+// handler), stew-help, tour-kit (the shared bubble, 2026-11-18), stew-tour, stew-dashboard — compiled into one function scope, as the browser puts
 // classic scripts into one global scope. What is NOT: the modal COUNT. The miniature React never runs effect
 // cleanups, so stew-modal's count could only ever go up; the tests drive window.stewModalOpen themselves.
 import { test } from 'node:test';
@@ -23,10 +23,10 @@ import { compileScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
-const FILES = ['app/help-illustrations.jsx', 'app/help-data.jsx', 'app/screens-help.jsx', 'app/stew-modal.jsx', 'app/stew-help.jsx', 'app/stew-tour.jsx', 'app/stew-dashboard.jsx'];
+const FILES = ['app/help-illustrations.jsx', 'app/help-data.jsx', 'app/screens-help.jsx', 'app/stew-modal.jsx', 'app/stew-help.jsx', 'app/tour-kit.jsx', 'app/stew-tour.jsx', 'app/stew-dashboard.jsx'];
 const JS = FILES.map(compileScreen).join('\n;\n');
 const WANT = ['StewDashboard', 'StewSetupWizard', 'DelegateBrief', 'StewTourHost', 'stewNav', 'NAV',
-  'stewTourPlan', 'stewTourWalk', 'stewTourSectionTip', 'stewTourPlace', 'stewTourStart', 'STEW_TOUR_TIPS', 'STEW_TOUR_STEPS'];
+  'stewTourPlan', 'tourKitWalk', 'stewTourSectionTip', 'tourKitPlace', 'stewTourStart', 'STEW_TOUR_TIPS', 'STEW_TOUR_STEPS'];
 
 // opts: { church, delegate, innerWidth, caps (bool: capabilities allowed), store (a Map to share across boots) }
 function boot(opts = {}) {
@@ -237,9 +237,9 @@ test('a step whose anchor is not on screen is skipped, never pointed at', () => 
   const plan = h.mod.stewTourPlan(h.mod.stewNav(h.mod.NAV, {}, { capState: () => ({ allowed: true }) }), {});
   const present = (t) => t !== 'joincode';
   const inv = plan.findIndex(s => s.id === 'invite');
-  assert.equal(h.mod.stewTourWalk(plan, inv, 1, present), inv + 1);
-  assert.equal(h.mod.stewTourWalk(plan, inv, -1, present), inv - 1);
-  assert.equal(h.mod.stewTourWalk(plan, plan.length, 1, present), -1);
+  assert.equal(h.mod.tourKitWalk(plan, inv, 1, present), inv + 1);
+  assert.equal(h.mod.tourKitWalk(plan, inv, -1, present), inv - 1);
+  assert.equal(h.mod.tourKitWalk(plan, plan.length, 1, present), -1);
 });
 
 // ── section tips ───────────────────────────────────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ test('the bubble stays inside a 16px gutter at phone width', () => {
   const h = boot();
   const vp = { w: 390, h: 800 }, size = { w: 320, h: 190 };
   for (const rect of [null, { left: 4, top: 4, right: 48, bottom: 48, width: 44, height: 44 }, { left: 300, top: 700, right: 390, bottom: 760, width: 90, height: 60 }]) {
-    const p = h.mod.stewTourPlace(rect, size, vp);
+    const p = h.mod.tourKitPlace(rect, size, vp);
     assert.ok(p.left >= 16 && p.left + size.w <= vp.w - 16, `left ${p.left} out of the gutter for ${JSON.stringify(rect)}`);
     assert.ok(p.top >= 16 && p.top + size.h <= vp.h - 16, `top ${p.top} out of the gutter for ${JSON.stringify(rect)}`);
   }

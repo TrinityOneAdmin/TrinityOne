@@ -24,13 +24,17 @@
 // The file MUST be named stew-*.jsx: scripts/sync-web.sh strips app/stew-*.js out of the member web build, and
 // scripts/build-steward-apk.sh derives the steward APK's file list from steward.html.
 //
+// THE BUBBLE ITSELF LIVES IN app/tour-kit.jsx (2026-11-18), shared with the member app's tour: finding an anchor,
+// placing the bubble, drawing the ring and the dim. What stays here is everything that is the console's own — the
+// steps and tips, who sees which, when it starts, and what counts as "another console dialog is open".
+//
 // Globals this file takes from elsewhere (loaded before it in steward.html): React, useStewDialog
-// (stew-modal.jsx), window.stewModalOpen (stew-modal.jsx), window.Steward.
+// (stew-modal.jsx), window.stewModalOpen (stew-modal.jsx), window.Steward, and from tour-kit.jsx tourKitFind,
+// tourKitWalk, tourKitReducedMotion, tourKitFlag, tourKitFlagSet, TourKitBubble (which uses tourKitPlace).
 // Top-level names DECLARED here — unique across the console's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): STEW_TOUR_STEPS, STEW_TOUR_TIPS, STEW_TOUR_LOCKED,
 // stewTourStore, stewTourChurch, stewTourKey, stewTourSeen, stewTourSeenSet, stewTourStart, stewTourPlan,
-// stewTourWalk, stewTourSectionTip, stewTourPlace, stewTourFind, stewTourBlocked, stewTourHoldTips,
-// stewTourReducedMotion, StewTourBubble, StewTourTip, StewTourHost.
+// stewTourSectionTip, stewTourBlocked, stewTourHoldTips, StewTourBubble, StewTourTip, StewTourHost.
 
 // ── the words (approved by the owner, 2026-11-18 — CONSOLE-WALKTHROUGH-COPY-2026-11-18.html) ────────────────
 // `nav` names a console section the step points at; `targets` names any other anchor. A step with neither is
@@ -74,8 +78,8 @@ function stewTourChurch() {
   try { const S = window.Steward || {}; return String(S.actingChurch || S.pubkey || S.churchPub || ''); } catch (e) { return ''; }
 }
 function stewTourKey(church, what) { return 'trinityone.steward.tour.' + (church || 'none') + '.' + what; }
-function stewTourSeen(church, what) { try { return localStorage.getItem(stewTourKey(church, what)) === '1'; } catch (e) { return false; } }
-function stewTourSeenSet(church, what) { try { localStorage.setItem(stewTourKey(church, what), '1'); } catch (e) {} }
+function stewTourSeen(church, what) { return tourKitFlag(stewTourKey(church, what)); }
+function stewTourSeenSet(church, what) { tourKitFlagSet(stewTourKey(church, what)); }
 
 // Ask for the tour. 'wizard' and 'brief' are the two automatic starts and happen at most once per church on
 // this device; 'replay' (Help) always starts it. Returns whether a start was queued.
@@ -115,15 +119,6 @@ function stewTourPlan(nav, opts) {
   }
   return out;
 }
-// From index `from`, walking `dir` (+1 / -1), the first step that can be shown: one with no anchor, or whose
-// first anchor `present()` finds. -1 when there is none (the end, or the start).
-function stewTourWalk(plan, from, dir, present) {
-  for (let i = from; i >= 0 && i < plan.length; i += dir) {
-    const s = plan[i];
-    if (!s.targets.length || present(s.targets[0])) return i;
-  }
-  return -1;
-}
 // The tip for a section, or null. `seen(what)` answers from storage. A locked section gets the locked tip
 // (helpers only, once); an unlocked one gets its own tip once; Manna and anything unknown get nothing.
 function stewTourSectionTip(section, opts) {
@@ -139,32 +134,7 @@ function stewTourSectionTip(section, opts) {
   if (!t || seen('tip.' + section)) return null;
   return { kind: 'section', key: 'tip.' + section, title: t.title, text: t.text };
 }
-// Where the bubble goes: beside the target if there is room (the sidebar), else below, else above, always
-// inside a 16px gutter. No rect → centred.
-function stewTourPlace(rect, size, vp) {
-  const M = 16, G = 12;
-  const clampX = (x) => Math.max(M, Math.min(x, vp.w - size.w - M));
-  const clampY = (y) => Math.max(M, Math.min(y, vp.h - size.h - M));
-  if (!rect) return { side: 'center', left: clampX((vp.w - size.w) / 2), top: clampY((vp.h - size.h) / 2) };
-  if (rect.right + G + size.w <= vp.w - M && rect.width <= vp.w / 3) {
-    return { side: 'right', left: rect.right + G, top: clampY(rect.top + rect.height / 2 - size.h / 2) };
-  }
-  const left = clampX(rect.left + rect.width / 2 - size.w / 2);
-  if (rect.bottom + G + size.h <= vp.h - M) return { side: 'below', left, top: rect.bottom + G };
-  if (rect.top - G - size.h >= M) return { side: 'above', left, top: rect.top - G - size.h };
-  return { side: 'below', left, top: clampY(rect.bottom + G) };
-}
-
 // ── the DOM ─────────────────────────────────────────────────────────────────────────────────────────────────
-// An anchor that is on screen (in the DOM and laid out), or null.
-function stewTourFind(t) {
-  try {
-    const el = document.querySelector('[data-tour="' + t + '"]');
-    if (!el) return null;
-    if (el.getClientRects && !el.getClientRects().length) return null;   // display:none / not laid out
-    return el;
-  } catch (e) { return null; }
-}
 // Is something else in front of the console? Every console dialog registers in stew-modal.jsx's count; the
 // error banner and the join toast carry data-stew-overlay; an aria-modal dialog that skipped the count is
 // caught by the last selector. The tour's own bubble is excluded.
@@ -178,82 +148,13 @@ function stewTourBlocked() {
 function stewTourHoldTips() {
   try { return localStorage.getItem('trinityone.steward.newchurch') === '1' && localStorage.getItem('trinityone.steward.wizard.done') !== '1'; } catch (e) { return false; }
 }
-function stewTourReducedMotion() {
-  try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) { return false; }
-}
 
 // ── the tour bubble ─────────────────────────────────────────────────────────────────────────────────────────
 // A console dialog like any other (useStewDialog): Escape and Android Back skip the tour, focus moves into the
 // bubble and is trapped there, and it counts as an open dialog so the error banner gets out of its way.
-function StewTourBubble({ step, pos, count, first, last, onNext, onBack, onSkip }) {
-  const panelRef = useStewDialog(onSkip);
-  const [box, setBox] = React.useState(null);
-  const reduced = stewTourReducedMotion();
-  const measure = () => {
-    let rects = [], size = { w: 320, h: 190 }, vp = { w: 1024, h: 768 };
-    try {
-      // the LAYOUT viewport: on a phone innerWidth can report wider than the page is laid out (measured at
-      // 390px: a 390px-wide bubble placed off the right edge), clientWidth is what the CSS pixels are
-      const de = document.documentElement;
-      vp = { w: (de && de.clientWidth) || window.innerWidth || 1024, h: (de && de.clientHeight) || window.innerHeight || 768 };
-      size = { w: Math.min(320, vp.w - 32), h: 190 };   // the width is ours to set; only the height is measured
-      const p = panelRef.current;
-      if (p && p.getBoundingClientRect) { const r = p.getBoundingClientRect(); if (r.height) size = { w: size.w, h: r.height }; }
-      for (const t of step.targets) {
-        const el = stewTourFind(t);
-        if (el && el.getBoundingClientRect) { const r = el.getBoundingClientRect(); rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }); }
-      }
-    } catch (e) {}
-    setBox({ rects, size, vp });
-  };
-  React.useEffect(() => {
-    try { const el = step.targets.length ? stewTourFind(step.targets[0]) : null; if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
-    measure();
-    const t = setTimeout(measure, 80);   // once more after layout settles (the bubble's own height, a scroll)
-    return () => clearTimeout(t);
-  }, [step.id]);   // eslint-disable-line react-hooks/exhaustive-deps
-  React.useEffect(() => {
-    const f = () => measure();
-    try { window.addEventListener('resize', f); window.addEventListener('scroll', f, true); } catch (e) {}
-    return () => { try { window.removeEventListener('resize', f); window.removeEventListener('scroll', f, true); } catch (e) {} };
-  }, [step.id]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const vp = box ? box.vp : { w: 1024, h: 768 };
-  const size = box ? box.size : { w: 320, h: 190 };
-  const rects = box ? box.rects : [];
-  const place = stewTourPlace(rects[0] || null, size, vp);
-  const PAD = 6;
-  const titleId = 'stew-tour-title', textId = 'stew-tour-text';
-  const btn = { minHeight: 40, padding: '8px 14px', borderRadius: 11, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer' };
-  return (
-    <div data-stew-tour="layer" style={{ position: 'fixed', inset: 0, zIndex: 260 }}>
-      {/* the dim, with a hole round each target. Clicks on it do nothing — a stray tap must not end the tour. */}
-      <svg width="100%" height="100%" aria-hidden="true" style={{ position: 'absolute', inset: 0, display: 'block' }}>
-        <defs>
-          <mask id="stew-tour-mask">
-            <rect x="0" y="0" width="100%" height="100%" fill="white" />
-            {rects.map((r, i) => <rect key={i} x={r.left - PAD} y={r.top - PAD} width={r.width + PAD * 2} height={r.height + PAD * 2} rx="12" fill="black" />)}
-          </mask>
-        </defs>
-        <rect x="0" y="0" width="100%" height="100%" fill="rgba(30,24,18,.46)" mask="url(#stew-tour-mask)" />
-      </svg>
-      {rects.map((r, i) => <div key={i} aria-hidden="true" style={{ position: 'absolute', left: r.left - PAD, top: r.top - PAD, width: r.width + PAD * 2, height: r.height + PAD * 2, borderRadius: 12, boxShadow: '0 0 0 3px var(--clay)', pointerEvents: 'none' }} />)}
-      <div ref={panelRef} data-stew-tour="bubble" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={textId} tabIndex={-1}
-        style={{ position: 'absolute', left: place.left, top: place.top, width: size.w, boxSizing: 'border-box', visibility: box ? 'visible' : 'hidden',
-          background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 16, padding: '16px 16px 14px',
-          boxShadow: '0 18px 50px rgba(0,0,0,.24)', outline: 'none', fontFamily: 'var(--font-ui)',
-          animation: reduced ? 'none' : 'lumenScale .2s ease both' }}>
-        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4 }}>{pos} of {count}</div>
-        <h2 id={titleId} style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, margin: '0 0 6px' }}>{step.title}</h2>
-        <p id={textId} style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 14px' }}>{step.text}</p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={onSkip} style={{ ...btn, border: 'none', background: 'none', color: 'var(--ink-3)', padding: '8px 4px' }}>Skip tour</button>
-          <div style={{ flex: 1 }} />
-          {first ? null : <button onClick={onBack} style={{ ...btn, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)' }}>Back</button>}
-          <button onClick={onNext} className="sk-btn sk-btn--clay" style={btn}>{last ? 'Done' : 'Next'}</button>
-        </div>
-      </div>
-    </div>
-  );
+function StewTourBubble(props) {
+  const panelRef = useStewDialog(props.onSkip);
+  return <TourKitBubble {...props} panelRef={panelRef} mark="data-stew-tour" />;
 }
 
 // ── the section tip ─────────────────────────────────────────────────────────────────────────────────────────
@@ -261,12 +162,12 @@ function StewTourBubble({ step, pos, count, first, last, onNext, onBack, onSkip 
 // nothing else open) or "Got it" dismisses it.
 function StewTourTip({ tip, onDone }) {
   const [box, setBox] = React.useState(null);
-  const reduced = stewTourReducedMotion();
+  const reduced = tourKitReducedMotion();
   React.useEffect(() => {
     const measure = () => {
       try {
         const vw = window.innerWidth || 1024;
-        const el = stewTourFind('main');
+        const el = tourKitFind('main');
         const r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
         if (r && r.width) { const w = Math.min(380, r.width - 32); setBox({ left: r.left + (r.width - w) / 2, top: r.top + 12, w }); }
         else { const w = Math.min(380, vw - 32); setBox({ left: (vw - w) / 2, top: 72, w }); }
@@ -339,12 +240,12 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab }) {
   });
   if (isNetwork) return null;
   if (run) {
-    const present = (t) => !!stewTourFind(t);
+    const present = (t) => !!tourKitFind(t);
     const step = plan[run.i];
     if (!step) return null;
     const live = plan.filter(s => !s.targets.length || present(s.targets[0]) || s === step);
-    const next = stewTourWalk(plan, run.i + 1, 1, present);
-    const prev = stewTourWalk(plan, run.i - 1, -1, present);
+    const next = tourKitWalk(plan, run.i + 1, 1, present);
+    const prev = tourKitWalk(plan, run.i - 1, -1, present);
     const end = () => setRun(null);
     return <StewTourBubble step={step} pos={live.indexOf(step) + 1} count={live.length} first={prev < 0} last={next < 0}
       onSkip={end} onNext={() => { if (next < 0) end(); else setRun({ i: next }); }} onBack={() => { if (prev >= 0) setRun({ i: prev }); }} />;
