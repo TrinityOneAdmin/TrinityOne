@@ -2300,7 +2300,7 @@ function _liveNewestKey(url, key) { return LIVE_NEWEST_LS + String(url || '').re
 function _liveNewestRemembered(url) {
   let key = ''; try { key = _gate.provedKey(url, pub); } catch (e) { key = ''; }
   if (!key) return false;
-  try { const v = JSON.parse(lsGet(_liveNewestKey(url, key)) || 'null'); return !!(v && v.liveNewest === 1); } catch (e) { return false; }
+  try { const v = JSON.parse(lsGet(_liveNewestKey(url, key)) || 'null'); return !!(v && v.liveNewest === 2); } catch (e) { return false; }
 }
 function _relaysAllLiveNewest(urls) { return Array.isArray(urls) && urls.length > 0 && urls.every(_liveNewestRemembered); }
 async function _relayLiveNewest(url) {
@@ -2320,7 +2320,8 @@ async function _relayLiveNewest(url) {
   if (!key) return null;
   const k = _liveNewestKey(url, key);
   // the build is not stored: nothing would read it back (Fable audit NIT); a downgrade is caught by its next answer
-  if (tri.liveNewest === 1) { lsSet(k, JSON.stringify({ liveNewest: 1, at: now() })); return true; }
+  // 2 = newest-wins + the void floor + (bb)/(cc); a 3dc90605-era box answers 1 and keeps the strict rule (plan 0e rev 8)
+  if (tri.liveNewest === 2) { lsSet(k, JSON.stringify({ liveNewest: 2, at: now() })); return true; }
   try { localStorage.removeItem(k); } catch (e) {}
   return false;
 }

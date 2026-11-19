@@ -3787,20 +3787,32 @@ const GROUP_GONE = new Set();        // groupIds whose definition has been tombs
 const LIVE_AT = new Map();
 const _liveAuthor = (by, cp) => CHURCH_PUBS.has(by) || stewardCan(by, cp, 'any');
 const _voidReplayQueued = new Set();
-function _replayVoidLive(cp) {
-  if (_hydrating || !cp || _voidReplayQueued.has(cp)) return;
+const _voidReplayAdded = new Map();   // church -> Set(keys just added to its roster), coalesced with the replay
+function _replayVoidLive(cp, added) {
+  if (_hydrating || !cp) return;
+  if (added && added.length) { let s0 = _voidReplayAdded.get(cp); if (!s0) { s0 = new Set(); _voidReplayAdded.set(cp, s0); } for (const k of added) s0.add(k); }
+  if (_voidReplayQueued.has(cp)) return;
   _voidReplayQueued.add(cp);
   setImmediate(() => {
     _voidReplayQueued.delete(cp);
+    const addedNow = [...(_voidReplayAdded.get(cp) || [])]; _voidReplayAdded.delete(cp);
+    // GROUPS: every group of this church is re-derived from its stored copies (a removed author's copy becomes void, a
+    // re-added one valid again — N6/item 5); the derivation itself drops VOID_DEF / VOID_FLOOR before deciding
+    for (const [gid, owner] of [...GROUP_CHURCH]) if (owner === cp) _deriveGroup(gid);
+    // a re-added author's ROSTER / MEALS copies: any address holding one, or holding a void team list, is replayed
+    const readd = new Set();
+    for (const [rid] of VOID_ROSTER) readd.add('roster|' + rid);
+    for (const k of addedNow) {   // a RE-ADDED key's roster / meals copies (item 5): their address is replayed so they count again
+      let mine = []; try { mine = store.query({ kinds: [30078], authors: [k], '#church': [cp], limit: 2000 }); } catch { mine = []; }
+      for (const x of mine) { const dd = dtag(x); if (dd.startsWith(ROSTER_D)) readd.add('roster|' + dd.slice(ROSTER_D.length)); else if (dd === MEALS_SETTINGS_D) readd.add('meals|' + cp); }
+    }
     const stale = [...LIVE_AT].filter(([, v]) => v && v.cp === cp && !_liveAuthor(v.by, v.cp)).map(([k]) => k);
+    for (const k of readd) if (!stale.includes(k)) stale.push(k);
     for (const k of stale) {
       LIVE_AT.delete(k);
       const [kind, ...rest] = k.split('|');
       let d = '';
-      if (kind === 'group') { const id = rest.slice(1).join('|'); d = GROUP_D + id;
-        BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id);
-        GROUP_EVENTPOLICY.delete(id); GROUP_GONE.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); }
-      else if (kind === 'roster') { const id = rest.join('|'); d = ROSTER_D + id; ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); }
+      if (kind === 'roster') { const id = rest.join('|'); d = ROSTER_D + id; ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); VOID_ROSTER.delete(id); }
       else if (kind === 'meals') { d = MEALS_SETTINGS_D; MEALS_ADMIN_GROUP.delete(cp); MEALS_OPEN_MEMBER.delete(cp); }
       if (!d) continue;
       let copies = [];
@@ -3818,6 +3830,106 @@ function liveNewest(key, e, cp) {
   }
   LIVE_AT.set(key, { at, id: e.id, by: e.pubkey, cp });
   return true;
+}
+
+// ── A GROUP'S LIVE STATE IS DERIVED FROM EVERY COPY STORED AT ITS ADDRESS (plan 0e rev 8; owner answers w, y, aa, bb) ───
+// Removing a helper must never open their private room, and a woken box must not fall open before the church's kept
+// copy reaches it. Every time ANY copy of group <id> is noted — live, /import, reconcile, hydrate, or a stewards: change —
+// _deriveGroup reads the stored copies there (the store holds one per author) and decides from the SET, so the answer
+// is the same whatever order they arrived in, live or after a restart:
+//   valid  author is the church or an 'any' steward of the church the copy names (the branch's own authority test)
+//   void   any other copy tagged ['church', <our church>] — a removed helper's, or a forgery that came by sync/import
+//   N = newest valid, V = newest void, by liveNewest's order (created_at, then the LOWER id)
+//   · no N, no V  → nothing changes
+//   · no N, V     → (bb) V's own settings (private stays private, open stays open), NEVER child-safe   [VOID_DEF]
+//   · N, and (no V, or N beats V, or N is church-signed and tagged ['kept', V's author])  → N governs
+//   · else        → the FLOOR (y): the tighter of N and V (table in the plan), child-safe only if both are [VOID_FLOOR]
+// The 'kept' tag is how the church's kept copy clears the floor even when the removed helper's unseen copy on this box
+// is newer and tighter (aa); it counts only on a church-signed copy, and only for the author it names.
+// Ownership: GROUP_CHURCH once a VALID copy set it (pinned, as before — a co-tenant cannot back-date its way in);
+// unset → the id's embedded owner, else the earliest valid copy's church, else the void copy's. A claim made only by a
+// void copy never blocks a valid one (N7). A team floor reads the roster as it is now: the group is re-derived when its
+// roster changes (N3). Leaders a void copy names get no power: grantorOk asks the AUTHOR's authority (N9).
+// Residual (stated): a forged copy can only TIGHTEN a room that has a valid copy, or define one that has none as never
+// child-safe — no looser than an undefined group today (memory relay-undefined-group-read-fails-open).
+const VOID_ROSTER = new Map();  // rosterId -> { created_at, id } — a team list defined by a void copy alone (cc)
+const VOID_DEF = new Map();     // groupId -> { at, id, by, cp }  — the room is defined by a void copy alone (bb)
+const VOID_FLOOR = new Map();   // groupId -> { at, id, by, cp }  — a void copy's floor over the governing valid copy (y)
+const GROUP_OWNER_VALID = new Set();   // groupIds whose GROUP_CHURCH was set by a valid copy (pinned)
+const _newer = (a, b) => (a.created_at || 0) > (b.created_at || 0) || ((a.created_at || 0) === (b.created_at || 0) && String(a.id) < String(b.id));
+const _gVis = (c, dead) => (dead ? 'gone' : (c.visibility === 'invite' ? 'invite' : (c.kind === 'team' ? 'team' : 'open')));
+const _gMembers = (c) => new Set((Array.isArray(c.members) ? c.members : []).map(p => toHexPub(p) || p).filter(Boolean));
+const _gDead = (e) => (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
+const _gJson = (e) => { try { const c = JSON.parse(e.content); return c && typeof c === 'object' ? c : {}; } catch { return {}; } };
+function _groupWrite(id, owner, base, { vis, members, childsafe, broadcast }) {
+  // base: the content that governs names, leaders and event policy
+  GROUP_CHURCH.set(id, owner);
+  if (vis === 'gone') { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); GROUP_GONE.add(id); return; }
+  GROUP_GONE.delete(id);
+  if (childsafe) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);
+  const c = base.c;
+  if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60)); else GROUP_NAMES.delete(id);
+  if (broadcast) BROADCAST.add(id); else BROADCAST.delete(id);
+  { const p = String(c.eventPolicy || ''); if (p === 'stewards' || p === 'leaders' || p === 'everyone') GROUP_EVENTPOLICY.set(id, p); else GROUP_EVENTPOLICY.delete(id); }
+  GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : [])); GROUP_LEADER_BY.set(id, { by: base.e.pubkey, cp: owner });
+  if (vis === 'invite') { GROUP_VIS.set(id, 'invite'); GROUP_MEMBERS.set(id, members); }
+  else if (vis === 'team') { GROUP_VIS.set(id, 'team'); GROUP_MEMBERS.delete(id); }
+  else { GROUP_VIS.set(id, 'open'); GROUP_MEMBERS.delete(id); }
+}
+function _deriveGroup(id) {
+  let copies = [];
+  try { copies = store.query({ kinds: [30078], '#d': [GROUP_D + id], limit: 500 }); } catch { copies = []; }
+  const valid = [], voids = [];
+  for (const x of copies) {
+    if (!x || x.kind !== 30078) continue;
+    const named = namedChurch(x);
+    if (CHURCH_PUBS.has(x.pubkey) || stewardCan(x.pubkey, named, 'any')) valid.push({ e: x, cp: named || x.pubkey });
+    else if (named) voids.push({ e: x, cp: named });
+  }
+  const asc = (a, b) => ((a.e.created_at || 0) - (b.e.created_at || 0)) || (String(a.e.id) < String(b.e.id) ? 1 : -1);
+  let owner = GROUP_OWNER_VALID.has(id) ? GROUP_CHURCH.get(id) : '';
+  if (!owner) owner = idNamesOwner(id) || '';
+  // a TOMBSTONE never claims an id (as before: the old branch returned before GROUP_CHURCH.set) — the earliest LIVE valid
+  // copy's church does; only an id with nothing but tombstones falls back to the earliest of those
+  if (!owner) { const fv = valid.filter(x => !_gDead(x.e)).sort(asc)[0] || valid.slice().sort(asc)[0]; owner = fv ? fv.cp : ''; }
+  if (!owner) { const fw = voids.slice().sort(asc)[0]; owner = fw ? fw.cp : ''; }
+  if (!owner) return;
+  const ownOk = (x) => x.cp === owner || stewardCan(x.e.pubkey, owner, 'any');
+  let N = null, V = null;
+  for (const x of valid) if (ownOk(x) && (!N || _newer(x.e, N.e))) N = x;
+  for (const x of voids) if (x.cp === owner && (!V || _newer(x.e, V.e))) V = x;
+  VOID_DEF.delete(id); VOID_FLOOR.delete(id);
+  if (!N && !V) return;
+  if (N && !_gDead(N.e)) GROUP_OWNER_VALID.add(id);   // pinned only by a live valid copy
+  const mk = (x) => ({ e: x.e, c: _gJson(x.e), dead: _gDead(x.e) });
+  if (!N) {   // (bb): the void copy alone, never child-safe
+    const v = mk(V);
+    VOID_DEF.set(id, { at: V.e.created_at || 0, id: V.e.id, by: V.e.pubkey, cp: owner });
+    _groupWrite(id, owner, v, { vis: _gVis(v.c, v.dead), members: _gMembers(v.c), childsafe: false, broadcast: v.c.kind === 'broadcast' });
+    return;
+  }
+  const n = mk(N);
+  const kept = !!V && CHURCH_PUBS.has(N.e.pubkey) && (N.e.tags || []).some(t => t[0] === 'kept' && String(t[1] || '').toLowerCase() === String(V.e.pubkey).toLowerCase());
+  if (!V || _newer(N.e, V.e) || kept) {
+    _groupWrite(id, owner, n, { vis: _gVis(n.c, n.dead), members: _gMembers(n.c), childsafe: n.c.childsafe === true, broadcast: n.c.kind === 'broadcast' });
+    return;
+  }
+  // (y) the floor: the tighter of N and V; a team's people read now from its roster (N3)
+  const v = mk(V);
+  VOID_FLOOR.set(id, { at: V.e.created_at || 0, id: V.e.id, by: V.e.pubkey, cp: owner });
+  const vn = _gVis(n.c, n.dead), vv = _gVis(v.c, v.dead);
+  const R = ROSTER_PEOPLE.get(id) || new Set();
+  const inter = (a, b) => new Set([...a].filter(x => b.has(x)));
+  let vis, members = new Set();
+  if (vn === 'gone' || vv === 'gone') vis = 'gone';
+  else if (vv === 'open') { vis = vn; members = _gMembers(n.c); }
+  else if (vv === 'invite') {
+    vis = 'invite';
+    members = vn === 'open' ? _gMembers(v.c) : vn === 'invite' ? inter(_gMembers(v.c), _gMembers(n.c)) : inter(_gMembers(v.c), R);
+  } else {   // void team
+    if (vn === 'invite') { vis = 'invite'; members = inter(_gMembers(n.c), R); } else vis = 'team';
+  }
+  _groupWrite(id, owner, n, { vis, members, childsafe: n.c.childsafe === true && v.c.childsafe === true, broadcast: n.c.kind === 'broadcast' || v.c.kind === 'broadcast' });
 }
 
 // WHO WAS A CANCELLED EVENT FOR? Cancelling an event is the only shape this product has ever had for "it is
@@ -4216,7 +4328,8 @@ function clearDerivedMaps() {
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
                    FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS, PUBVERSE,
-                   LIVE_AT]) { try { m.clear(); } catch {} }
+                   LIVE_AT, VOID_DEF, VOID_FLOOR, VOID_ROSTER]) { try { m.clear(); } catch {} }
+  try { GROUP_OWNER_VALID.clear(); } catch {}
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -4387,32 +4500,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   // load-bearing defence on the peer-resync path, where accept() never runs. Do not narrow these back
   // without reading that test; and do not "fix" this by making replay differ from live ingest, because a
   // gate that disagrees with itself across paths is the whole defect.
-  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {
-    const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
-    if (!idOwnerOk(GROUP_CHURCH.get(id), e, id)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
-    // R-7: keep GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS so canRead()/accept() still know the ownership and
-    // visibility of a deleted room — clearing them made the room fall through to the default-allow path.
-    // GROUP_GONE marks it as tombstoned; canRead() and accept() check it.
-    if (!liveNewest('group|' + (namedChurch(e) || e.pubkey) + '|' + id, e, namedChurch(e) || e.pubkey)) return;   // owner answer (p): an older copy changes nothing — see LIVE_AT
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); GROUP_GONE.add(id); return; }
-    GROUP_GONE.delete(id);   // R-7: undo — a non-tombstone re-publish restores the room
-    if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
-    GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
-    if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
-    if (c.kind === 'broadcast') BROADCAST.add(id); else BROADCAST.delete(id);
-    // WHO MAY CREATE EVENTS HERE. Only the three known values are honoured; anything else (a typo, an
-    // older client, a forged value) falls back to the safe historical behaviour rather than being trusted.
-    { const p = String(c.eventPolicy || ''); if (p === 'stewards' || p === 'leaders' || p === 'everyone') GROUP_EVENTPOLICY.set(id, p); else GROUP_EVENTPOLICY.delete(id); }
-    // a group def may name member leaders who can post events for that group
-    GROUP_LEADERS.set(id, new Set(Array.isArray(c.leaders) ? c.leaders : [])); GROUP_LEADER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
-    // invite-only groups carry the allowlist of member pubkeys who may post
-    if (c.visibility === 'invite') { GROUP_VIS.set(id, 'invite'); GROUP_MEMBERS.set(id, new Set((Array.isArray(c.members) ? c.members : []).map(p => toHexPub(p) || p).filter(Boolean))); }
-    // A SERVING TEAM'S ROOM IS PRIVATE TO ITS ROSTER. Its membership lives in the team's ROSTER doc
-    // (ROSTER_PEOPLE), not in the group doc's `members` — the two-list split that let round 9's "Members
-    // only" Welcome team, roster `people: []`, be read and posted in by the whole church while Serving
-    // correctly told those same people they were on no team.
-    else if (c.kind === 'team') { GROUP_VIS.set(id, 'team'); GROUP_MEMBERS.delete(id); }
-    else { GROUP_VIS.set(id, 'open'); GROUP_MEMBERS.delete(id); }
+  else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any') || namedChurch(e))) {
+    // EVERY copy of a group our church is named in — valid or void — re-derives the room from the stored set at its
+    // address (_deriveGroup: newest valid, void floor, bb). R-7 still holds: a tombstone keeps GROUP_CHURCH/VIS/MEMBERS
+    // and marks GROUP_GONE. AUDIT-2026-07-24 C1 (a co-tenant never redefines another church's id) is the ownership rule
+    // inside _deriveGroup.
+    _deriveGroup(d.slice(GROUP_D.length));
   }
   else if (d.startsWith(BLOCKED_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(BLOCKED_D.length) === e.pubkey) {
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
@@ -4572,8 +4665,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
         }
       } catch {}
     }
+    const before = STEWARDS_BY.get(e.pubkey) || new Set();
     STEWARDS_BY.set(e.pubkey, set); STEWARD_CAPS.set(e.pubkey, caps);
-    _replayVoidLive(e.pubkey);   // a removed or narrowed steward's live entries are void now — see LIVE_AT
+    _replayVoidLive(e.pubkey, [...set].filter(k => !before.has(k)));   // a removed or narrowed steward's live entries are void now — see LIVE_AT
   }
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
@@ -4589,7 +4683,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       if (prev && (prev.by === prev.cp || stewardCan(prev.by, prev.cp, 'any'))
           && e.pubkey !== prev.cp && !stewardCan(e.pubkey, prev.cp, 'any')) return; }
     if (!liveNewest('roster|' + id, e, namedChurch(e) || e.pubkey)) return;   // owner answer (p) — see LIVE_AT
-    if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); return; }
+    VOID_ROSTER.delete(id);   // a valid copy governs (cc)
+    if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); if (VOID_FLOOR.has(id)) _deriveGroup(id); return; }
     // READ `pubs` FIRST, FALL BACK TO `people`. From 2026-09-05 the console seals the roster's NAMES under
     // the church name key and publishes the keys alongside in the clear, as `{ pubs: [...], e: "<sealed>" }`.
     //
@@ -4626,6 +4721,23 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       }
     } catch {}
     ROSTER_PODS.set(id, podMap);
+    if (VOID_FLOOR.has(id)) _deriveGroup(id);   // a team floor reads its roster as it is now (N3)
+  }
+  // (cc) A TEAM LIST WITH NO VALID COPY keeps the removed helper's last list of people until the church saves it, so the
+  // team's room still works for its team. Only when no valid copy governs the address (LIVE_AT); ROSTER_BY records the
+  // void author, so careAdmin (which asks the author's authority) grants nothing from it.
+  else if (d.startsWith(ROSTER_D) && namedChurch(e)) {
+    const id = d.slice(ROSTER_D.length), cp = namedChurch(e);
+    const cur = LIVE_AT.get('roster|' + id);
+    if (cur && _liveAuthor(cur.by, cur.cp)) return;
+    { const prev = ROSTER_BY.get(id); if (prev && prev.cp !== cp) return; }
+    const v = VOID_ROSTER.get(id);
+    if (v && !_newer(e, v)) return;
+    VOID_ROSTER.set(id, { created_at: e.created_at || 0, id: e.id });
+    if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); return; }
+    const set = new Set(); try { const c = JSON.parse(e.content); const src = Array.isArray(c.pubs) ? c.pubs : ((c.people || []).map(p => p && p.pub)); src.forEach(x => { const h = toHexPub(x); if (h) set.add(h); }); } catch {}
+    ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp }); ROSTER_PODS.set(id, new Map());
+    if (VOID_FLOOR.has(id)) _deriveGroup(id);
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
     const fcp = finCp(e);
@@ -5566,7 +5678,8 @@ function accept(e) {
       // 'content')` already refuses anyone who is not a steward of the NAMED church — so a steward of church
       // A gains nothing by guessing an id that happens to collide with one of church B's sermons; the write
       // is refused before the id is ever looked at.
-      if (d.startsWith(GROUP_D) && !idOwnerOk(GROUP_CHURCH.get(d.slice(GROUP_D.length)), e, d.slice(GROUP_D.length))) return false;
+      // the owner a LIVE VALID copy pinned (GROUP_OWNER_VALID); a claim made only by a tombstone or a void copy never blocks a valid writer (plan 0e rev 8, N7)
+      if (d.startsWith(GROUP_D)) { const gid0 = d.slice(GROUP_D.length); if (!idOwnerOk(GROUP_OWNER_VALID.has(gid0) ? GROUP_CHURCH.get(gid0) : undefined, e, gid0)) return false; }
       if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
       return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
@@ -8512,7 +8625,9 @@ function serveStatic(req, res) {
         // roster or meals-settings address (LIVE_AT). An owner console carries a removed helper's settings from a partial
         // answer only once EVERY relay it uses has said this; until then it keeps the strict rule. An unauthenticated
         // claim: it decides how cautious that console is, never admission (CLAUDE.md rule 10).
-        liveNewest: 1,
+        // 2 = newest-wins + the void floor + (bb)/(cc) (plan 0e rev 8). A 3dc90605-era box said 1 and has no floor, so a
+        // console keeps the strict rule with it (Opus audit of rev 6, finding 10).
+        liveNewest: 2,
         media: !MEDIA_OFF,                    // does this relay host self-hosted media (blobs)? — the client hides the upload UI when false
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches

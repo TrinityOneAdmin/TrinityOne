@@ -70,7 +70,10 @@ test('group: a NEWER church copy arriving after an older helper copy governs (ne
   assert.equal(await posts(W.relay, W.child, gid), true, 'after a restart');
 });
 
-test('group VOID (0c N1): a REMOVED helper’s newer copy blocks nothing — the church’s older correction governs, live and after restart', async () => {
+// CHANGED (plan 0e rev 8, owner answer y): a removed helper's NEWER copy no longer simply loses to the church's older one —
+// its tighter settings stay as a FLOOR until a newer valid copy, or the church's 'kept' copy, arrives. Here the void copy
+// is adults-only and the church's older correction child-safe: the room stays adults-only (child-safe only if BOTH say so).
+test('group VOID → FLOOR (y): a REMOVED helper’s newer adults-only copy keeps the room adults-only over the church’s older child-safe one, live and after restart', async () => {
   const W = await church('newest-void');
   const gid = W.cp.slice(0, 16) + '-room';
   const theirs = doc(W.helper, GROUP_D + gid, { name: 'Room' }, { tags: tag(W.cp) });                                // adults only, newest
@@ -78,9 +81,9 @@ test('group VOID (0c N1): a REMOVED helper’s newer copy blocks nothing — the
   await must(W.relay, W.roster([]));                                                                                  // the helper is removed
   const correction = doc(W.C, GROUP_D + gid, { name: 'Room', childsafe: true }, { at: theirs.created_at - 3 });       // church copy, OLDER than theirs
   await must(W.relay, correction);
-  assert.equal(await posts(W.relay, W.child, gid), true, 'A REMOVED HELPER’S NEWER COPY STILL PINS THE ROOM against the church');
+  assert.equal(await posts(W.relay, W.child, gid), false, 'THE ROOM FELL OPEN TO A CHILD in the gap (floor, answer y)');
   await W.restart();
-  assert.equal(await posts(W.relay, W.child, gid), true, 'after a restart');
+  assert.equal(await posts(W.relay, W.child, gid), false, 'after a restart');
 });
 
 test('group: a same-second tie goes to the LOWER event id, in both arrival orders', async () => {

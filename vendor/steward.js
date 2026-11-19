@@ -16863,7 +16863,7 @@ zoo`.split("\n");
     if (!key) return false;
     try {
       const v = JSON.parse(lsGet(_liveNewestKey(url, key)) || "null");
-      return !!(v && v.liveNewest === 1);
+      return !!(v && v.liveNewest === 2);
     } catch (e) {
       return false;
     }
@@ -16903,8 +16903,8 @@ zoo`.split("\n");
     }
     if (!key) return null;
     const k = _liveNewestKey(url, key);
-    if (tri.liveNewest === 1) {
-      lsSet(k, JSON.stringify({ liveNewest: 1, at: now() }));
+    if (tri.liveNewest === 2) {
+      lsSet(k, JSON.stringify({ liveNewest: 2, at: now() }));
       return true;
     }
     try {

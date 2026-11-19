@@ -185,7 +185,7 @@ test('F1 (s) — a relay answering WITHOUT the field (an older build) clears a r
   const old = await H.startOldRelay({ name: 'f1-old', churches: [C.cp] });
   const keys = new Map([[old.wsUrl, old.relayPub]]);
   eng._gate = { provedKey: (u) => keys.get(u) || '' };
-  eng._ls.set(eng._liveNewestKey(old.wsUrl, old.relayPub), JSON.stringify({ liveNewest: 1 }));   // remembered from before a downgrade
+  eng._ls.set(eng._liveNewestKey(old.wsUrl, old.relayPub), JSON.stringify({ liveNewest: 2 }));   // remembered from before a downgrade
   assert.equal(eng._relaysAllLiveNewest([old.wsUrl]), true, 'FIXTURE: the yes was not remembered');
   assert.equal(await eng._relayLiveNewest(old.wsUrl), false, 'the older build was not read as "no"');
   assert.equal(eng._relaysAllLiveNewest([old.wsUrl]), false, 'a box that no longer says liveNewest kept its remembered yes');
@@ -387,7 +387,7 @@ test('NIT — a NIP-11 answer with NO trinityone block clears a remembered yes',
     const C = await churchOn(1, 'f1-noblock');
     const eng = owner(C);
     eng._gate = { provedKey: () => 'b'.repeat(64) };
-    eng._ls.set(eng._liveNewestKey(url, 'b'.repeat(64)), JSON.stringify({ liveNewest: 1 }));
+    eng._ls.set(eng._liveNewestKey(url, 'b'.repeat(64)), JSON.stringify({ liveNewest: 2 }));
     assert.equal(eng._relaysAllLiveNewest([url]), true, 'FIXTURE');
     assert.equal(await eng._relayLiveNewest(url), false);
     assert.equal(eng._relaysAllLiveNewest([url]), false, 'an answer with no trinityone block kept a remembered yes');
@@ -485,6 +485,22 @@ test('MED-4c (R-L2) — the REAL publish(): a "newer version stored" refusal ans
   const po = {};
   assert.equal(await pub2(older, po), false, 'a "newer version" refusal of a copy this console does not hold was answered as success');
   assert.match(String(po.reason || ''), /newer version/, 'the refusal reason the carry classifies as "newer" is not reported');
+});
+
+// ══ the capability flag (plan 0e rev 8, Opus finding 10): only liveNewest 2 (newest-wins + the void floor) counts ══════
+test('flag — a relay answering liveNewest: 1 (a 3dc90605-era box, no floor) is NOT remembered; this build answers 2 and is', async () => {
+  const http = await import('node:http');
+  const srv = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/nostr+json' }); res.end(JSON.stringify({ name: 'old build', trinityone: { enforces: true, liveNewest: 1 } })); });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  try {
+    const url = 'ws://127.0.0.1:' + srv.address().port + '/relay';
+    const C = await churchOn(1, 'f1-flag');
+    const eng = owner(C);
+    eng._gate = { provedKey: (u) => (u === url ? 'b'.repeat(64) : C.relays[0].relayPub) };
+    assert.equal(await eng._relayLiveNewest(url), false, 'a floor-less box was treated as running newest-wins + floor');
+    assert.equal(eng._relaysAllLiveNewest([url]), false);
+    assert.equal(await eng._relayLiveNewest(C.relays[0].wsUrl), true, 'CONTROL: this build’s relay did not answer 2');
+  } finally { srv.close(); }
 });
 
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════
