@@ -255,13 +255,46 @@ async function reconnectRuth({ fold }) {
   return reads(draw(C, {}));
 }
 
-test('F4b — Reconnect: once the old key folds out of the member list, the done screen still names the person', { todo: 'F4 round (plan §5, F4b)' }, async () => {
+test('F4b — Reconnect: once the old key folds out of the member list, the done screen still names the person', async () => {
   const said = await reconnectRuth({ fold: true });
   assert.match(said, /Done\. Ruth Okafor is back in their place/, 'THE DONE SCREEN LOST THE NAME (sim: "Done. this member…"): ' + said.slice(0, 400));
-  assert.doesNotMatch(said, /this member/);
+  assert.doesNotMatch(said, /Reconnect this member|Done\. this member/, 'the modal fell back to "this member"');   // the page elsewhere may say "this member" (e.g. the folded row\'s controls)
 });
 
 test('F4b — CONTROL: with the member list unchanged the done screen names the person (so the fold is the cause)', async () => {
   const said = await reconnectRuth({ fold: false });
   assert.match(said, /Done\. Ruth Okafor is back in their place/, said.slice(0, 400));
+});
+
+// ══ F4 (plan rev 4 §5): the done screen never says "nothing needed" over a relay that did not answer ═══════════════════
+async function reconnectDone(carry) {
+  const OLD = '3'.repeat(64), NEW = '4'.repeat(64);
+  const steward = { actingChurch: '', isOrWasSteward: (pk) => pk === OLD, parseMemberKey: (t) => (t === 'new-code' ? NEW : null),
+    reseatMember: () => Promise.resolve({ carry, blockedOld: true, failed: [] }) };
+  const g = { ...common(), CkModal: (p) => (p && p.children) || null, StewQRScanner: () => null, stewOnPhoneApp: () => false,
+    window: { Steward: steward, useStewardSafeguard: () => ({ minors: [], approved: [], expiry: {}, minorsKnown: true }), useStewardGuardians: () => ({ links: {}, closed: {} }),
+      useStewardBlocked: () => [], useStewardRosters: () => [], useStewardRotas: () => [], useMealsSettings: () => ({}), useStewardReseats: () => [] } };
+  const { C, draw } = await compiled('ReseatModal', g);
+  const props = { member: OLD, memberName: 'Ruth', realName: '', isMinor: false, admittedList: [], onClose() {} };
+  let tree = draw(C, props);
+  find(tree, n => n && n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: true } });
+  tree = draw(C, props);
+  find(tree, n => n && n.type === 'input' && n.props.type !== 'checkbox')[0].props.onChange({ target: { value: 'new-code' } });
+  await press(draw(C, props), /Yes — this is Ruth/);
+  await flush();
+  return reads(draw(C, props));
+}
+test('F4 — a relay did not answer the swap read (nothing to check): "Ordinary groups need nothing" is NOT said', async () => {
+  const said = await reconnectDone({ carried: [], notCarried: [], superseded: [], swapped: [], swapFailed: [], swapOther: [], swapUnchecked: [], swapAnyUnanswered: true });
+  assert.doesNotMatch(said, /Ordinary groups need nothing/, 'SAID "NOTHING NEEDED" OVER A RELAY THAT DID NOT ANSWER');
+  const ok = await reconnectDone({ carried: [], notCarried: [], superseded: [], swapped: [], swapFailed: [], swapOther: [], swapUnchecked: [], swapAnyUnanswered: false });
+  assert.match(ok, /Ordinary groups need nothing/, 'CONTROL: the line went missing when every relay answered');
+});
+test('(r) — Block of a former helper: groups that could not be checked are said, with what to do', async () => {
+  const r = blockRig({ carry: allKept(), blocked: true, stewards: [] });
+  r.g.window.Steward.isOrWasSteward = (pk) => pk === BRAM;
+  const real = r.g.window.Steward.blockStewardKeeping;
+  r.g.window.Steward.blockStewardKeeping = async (pk, list) => ({ ...(await real(pk, list)), groupsOff: { swapped: [], failed: [], other: [], unchecked: ['the group “Youth”'], anyUnanswered: true } });
+  const said = await blockBram(r);
+  assert.match(said, /Couldn’t check the group “Youth” — open Groups and check whether they are still on it\./, said.slice(0, 600));
 });

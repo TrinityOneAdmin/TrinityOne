@@ -503,7 +503,7 @@ function liftReseat(eng, C) {
   const obj = new Function('scope', 'with (scope) { return ({ ' + body + ' }); }')(eng);
   return (a, b, o) => obj.reseatMember(a, b, o);
 }
-async function f4Case({ downR2 }) {
+async function f4Case({ downR2, fresh = true }) {
   const C = await churchOn(2, 'f4');
   const [r1, r2] = C.relays;
   const eng = owner(C);
@@ -514,12 +514,14 @@ async function f4Case({ downR2 }) {
   const rm = await eng._removeStewardKeeping(tess.pub);   // Revoke: the carry makes the church copy
   assert.ok(rm.wrote && rm.carry.carried.some(c => c.d === GROUP_D + gid), 'FIXTURE: the removal did not carry her group: ' + JSON.stringify(rm.carry));
   eng._exStewards.add(tess.pub);   // what _rememberExStewards records on the real console (the rig records the call)
+  // the console's Groups list (subscribeGroups → _lastGroups) as a genuine read, as the church's copy shows it
+  if (fresh) eng._lastGroups = { cp: C.cp, list: Object.assign([{ id: gid, name: 'Tess Bible Group', leaders: [tess.pub], members: [tess.pub, other], _by: C.cp }], { _fresh: true }) };
   if (downR2) { r2.proc.kill('SIGKILL'); await sleep(200); }
   const reseat = liftReseat(eng, C);
   const res = await reseat(tess.pub, tessNew.pub, { blockOld: true, blocked: [], minors: [], approved: [], admitted: [], reseats: [] });
   return { C, r1, r2, eng, res, gid, tess, tessNew, other };
 }
-test('F4 — Reconnect ("taken") of a FORMER helper: the church’s copy of her group names the new key on every relay', { todo: 'F4 round (plan §5)' }, async () => {
+test('F4 — Reconnect ("taken") of a FORMER helper: the church’s copy of her group names the new key on every relay', async () => {
   const { C, r1, r2, res, gid, tessNew, other } = await f4Case({ downR2: false });
   assert.ok((res.carry && res.carry.swapped || []).length, 'THE SCREEN IS NOT TOLD THE GROUPS MOVED (sim F4): ' + JSON.stringify(res.carry));
   for (const relay of [r1, r2]) {
@@ -528,7 +530,62 @@ test('F4 — Reconnect ("taken") of a FORMER helper: the church’s copy of her 
     assert.deepEqual(g.members, [tessNew.pub, other], relay.name + ': the invite list still names the old key');
   }
 });
-test('F4 — Reconnect ("taken") of a FORMER helper with r2 OFF: the screen is told what could not be checked', { todo: 'F4 round (plan §5)' }, async () => {
+test('F4 — Reconnect ("taken") of a FORMER helper with r2 OFF: the screen is told what could not be checked', async () => {
   const { res } = await f4Case({ downR2: true });
-  assert.ok((res.carry && res.carry.swapUnchecked || []).length, 'NOTHING SAYS WHAT COULD NOT BE CHECKED (sim F4, checklist 8): ' + JSON.stringify(res.carry));
+  assert.ok((res.carry && res.carry.swapUnchecked || []).includes('the group “Tess Bible Group”'), 'NOTHING SAYS WHAT COULD NOT BE CHECKED (sim F4, checklist 8): ' + JSON.stringify(res.carry));
+  assert.equal(res.carry.swapAnyUnanswered, true, 'the done screen is not told a relay did not answer');
+  assert.deepEqual(res.carry.swapped || [], [], 'a group was re-saved although a relay did not answer (the swap is strict)');
+});
+test('F4 — the Groups list not loaded yet: "the groups they may have been on" could not be checked; nothing swapped', async () => {
+  const { res } = await f4Case({ downR2: false, fresh: false });
+  assert.ok((res.carry.swapUnchecked || []).includes('the groups they may have been on'), JSON.stringify(res.carry));
+  assert.equal(res.carry.swapAnyUnanswered, true);
+  assert.deepEqual(res.carry.swapped || [], []);
+});
+test('F4 (answer o) — an ORDINARY member (never a helper) reconnected with "taken": nothing is swapped', async () => {
+  const C = await churchOn(1, 'f4-ordinary');
+  const eng = owner(C);
+  const mia = H.key(), miaNew = H.key();
+  const gid = C.cp.slice(0, 16) + '-mia';
+  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Mia’s', visibility: 'invite', members: [mia.pub] }, { tagChurch: false }));
+  eng._lastGroups = { cp: C.cp, list: Object.assign([{ id: gid, name: 'Mia’s', members: [mia.pub], _by: C.cp }], { _fresh: true }) };
+  const res = await liftReseat(eng, C)(mia.pub, miaNew.pub, { blockOld: true, blocked: [], minors: [], approved: [], admitted: [], reseats: [] });
+  assert.equal(res.carry, null, 'an ordinary member’s re-seat ran the carry/swap');
+  assert.deepEqual(JSON.parse((await churchCopy(C, GROUP_D + gid, C.relays[0])).content).members, [mia.pub], 'the church’s group was changed');
+});
+// ══ OWNER ANSWER (r): Block of a FORMER helper takes them off the church's group copies that name them ═════════════
+async function blockFormer({ downR2 }) {
+  const { C, r1, r2, eng, gid, tess, other } = await (async () => {
+    const C = await churchOn(2, 'r-block');
+    const [r1, r2] = C.relays;
+    const eng = owner(C);
+    const tess = await newSteward(C), other = H.key().pub;
+    await setRoster(eng, [tess.pub], { [tess.pub]: ['content'] });
+    const gid = C.cp.slice(0, 16) + '-tess';
+    await mustPut(C, raw(C, tess, GROUP_D + gid, { name: 'Tess Bible Group', leaders: [tess.pub], visibility: 'invite', members: [tess.pub, other] }));
+    const rm = await eng._removeStewardKeeping(tess.pub);
+    assert.ok(rm.wrote && rm.carry.carried.some(c => c.d === GROUP_D + gid), 'FIXTURE: not carried');
+    eng._lastGroups = { cp: C.cp, list: Object.assign([{ id: gid, name: 'Tess Bible Group', leaders: [tess.pub], members: [tess.pub, other], _by: C.cp }], { _fresh: true }) };
+    return { C, r1, r2, eng, gid, tess, other };
+  })();
+  eng.window.Steward.setBlocked = async (list) => { const e = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', BLOCKED_D + C.cp], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, C.church.sk); return (await putAll(C, e))[0] ? e : false; };
+  eng.window.Steward.stewardRemovalOutcome = async () => 'unknown';
+  if (downR2) { r2.proc.kill('SIGKILL'); await sleep(200); }
+  const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 6000 });
+  return { C, r1, r2, b, gid, tess, other };
+}
+test('(r) — Block of a FORMER helper takes her off leaders and members of the church’s group copy, on every relay', async () => {
+  const { C, r1, r2, b, gid, tess, other } = await blockFormer({ downR2: false });
+  assert.ok(b.blocked, 'FIXTURE: the block did not land');
+  assert.deepEqual(b.groupsOff && b.groupsOff.swapped, ['the group “Tess Bible Group”'], JSON.stringify(b.groupsOff));
+  for (const relay of [r1, r2]) {
+    const g = JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content);
+    assert.ok(!JSON.stringify(g).includes(tess.pub), relay.name + ': THE BLOCKED FORMER HELPER IS STILL NAMED: ' + JSON.stringify(g));
+    assert.deepEqual(g.members, [other]);
+  }
+});
+test('(r) — Block of a FORMER helper with r2 OFF: nothing is re-saved and the group is listed as not checked', async () => {
+  const { b } = await blockFormer({ downR2: true });
+  assert.deepEqual(b.groupsOff.swapped, []);
+  assert.ok(b.groupsOff.unchecked.includes('the group “Tess Bible Group”'), JSON.stringify(b.groupsOff));
 });

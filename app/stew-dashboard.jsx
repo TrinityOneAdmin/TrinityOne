@@ -7853,7 +7853,13 @@ window.DashResources = DashResources;
 // `realName` is the member's ACTUAL display name or '' — deliberately separate from `memberName`, which
 // falls back to "this member" for the prose. Only a real name may be vouched across with the seat; writing
 // a placeholder into the re-seat doc would publish "this member" as somebody's profile name.
-function ReseatModal({ member, memberName, realName, isMinor, admittedList, onClose }) {
+function ReseatModal({ member, memberName: memberNameNow, realName: realNameNow, isMinor, admittedList, onClose }) {
+  // THE NAME AS IT WAS WHEN THE MODAL OPENED (F4b, sim of 98c7143d: every done screen said "Done. this member…"). The
+  // caller works the name out from its member list on every render, and once the re-seat lands the console folds the old
+  // key OUT of that list — so the title and the done screen fell back to "this member". The last real name seen is kept.
+  const nameSeen = React.useRef({ shown: memberNameNow, real: realNameNow });
+  if (realNameNow) nameSeen.current = { shown: memberNameNow, real: realNameNow };
+  const memberName = nameSeen.current.shown, realName = nameSeen.current.real;
   // A re-seat is a SEAT MOVING, and everything attached to the seat has to move with it — the child marking,
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
@@ -7975,7 +7981,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
           {res && res.carry && (res.carry.swapOther || []).length ? <b>{'Another steward has changed ' + res.carry.swapOther.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
           {res && res.carry && (res.carry.swapUnchecked || []).length ? <b>{'Couldn’t check ' + res.carry.swapUnchecked.join(', ') + ' — open Groups and check whether they should be on ' + (res.carry.swapUnchecked.length > 1 ? 'them' : 'it') + '. '}</b> : null}
           One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.swapped || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
-          again.{res && res.carry && ((res.carry.swapFailed || []).length || (res.carry.swapOther || []).length || (res.carry.swapUnchecked || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
+          again.{res && res.carry && (res.carry.swapAnyUnanswered || (res.carry.swapFailed || []).length || (res.carry.swapOther || []).length || (res.carry.swapUnchecked || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
             thief reading the church for ever, and the screen said nothing either way. It can only be true
@@ -9187,9 +9193,16 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         const rosterLine = !given ? ''
           : given.onRoster ? (given.outcome === 'landed' ? '' : given.outcome === 'unknown' ? 'Couldn’t confirm they were taken off the helper list — check Helpers.' : 'Blocked, but still listed as a helper — remove them from Helpers.')
           : (given.rosterUnknown && onRosterHere ? 'Blocked, but still listed as a helper — remove them from Helpers.' : '');
+        // OWNER ANSWER (r): a former helper's name taken off the church's groups — and what could not be, said
+        const go = (given && given.groupsOff) || null;
+        const groupsLine = !go ? '' : [
+          (go.failed || []).length ? 'Couldn’t take them off ' + go.failed.join(', ') + ' — open Groups and take them off by hand.' : '',
+          (go.unchecked || []).length ? 'Couldn’t check ' + go.unchecked.join(', ') + ' — open Groups and check whether they are still on ' + (go.unchecked.length > 1 ? 'them' : 'it') + '.' : '',
+          (go.other || []).length ? 'Another helper has changed ' + go.other.join(', ') + ' since, and it still names them — check it by hand.' : '',
+        ].filter(Boolean).join(' ');
         const saveNote = [ok === false
           ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
-          : '', rosterLine].filter(Boolean).join(' ');
+          : '', rosterLine, groupsLine].filter(Boolean).join(' ');
         if (saveNote) setBlockWarn(saveNote);
         // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
         // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.

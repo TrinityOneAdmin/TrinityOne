@@ -21666,15 +21666,64 @@ zoo`.split("\n");
   var SWAP_PUBLISH_MS = 8e3;
   async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
-    const out = { swapped: [], failed: [], other: [], unchecked: [] };
-    if (!from || !to || from === to || !carry || !sk || !pub) return out;
+    const out = { swapped: [], failed: [], other: [], unchecked: [], anyUnanswered: false };
+    if (!from || from === to || !carry || !sk || !pub) return out;
     const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
     const labelOf = /* @__PURE__ */ new Map();
     for (const c of carry.carried || []) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
     for (const d of carry.superseded || []) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, "");
+    let gl = null;
+    try {
+      gl = _lastGroups.cp === pub && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+    } catch (e) {
+      gl = null;
+    }
+    if (gl) {
+      for (const g of gl) {
+        if (!g || !g.id) continue;
+        const names = [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
+        const d = "trinityone/group:" + g.id;
+        if (names && !labelOf.has(d)) labelOf.set(d, g.name ? "the group \u201C" + String(g.name).slice(0, 60) + "\u201D" : "");
+      }
+    } else {
+      out.unchecked.push("the groups they may have been on");
+      out.anyUnanswered = true;
+    }
     const ds = [...labelOf.keys()];
-    if (!ds.length) return out;
     const urls = relays();
+    if (!ds.length) {
+      const probe = (url) => new Promise((resolve) => {
+        let done = false, sub = null;
+        const fin = (c) => {
+          if (done) return;
+          done = true;
+          try {
+            if (sub) sub.close();
+          } catch (e) {
+          }
+          let a = false;
+          try {
+            a = _keyReadAuthedOn(url);
+          } catch (e) {
+            a = false;
+          }
+          resolve(!!c && a);
+        };
+        try {
+          sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [pub], "#d": ["trinityone/group:"], limit: 1 }], { onevent() {
+          }, oneose() {
+            fin(true);
+          }, maxWait: 11e3 });
+        } catch (e) {
+          fin(false);
+          return;
+        }
+        setTimeout(() => fin(false), 6e3);
+      });
+      const ok = urls.length ? await Promise.all(urls.map(probe)) : [false];
+      if (!ok.every(Boolean)) out.anyUnanswered = true;
+      return out;
+    }
     const ask = (url) => new Promise((resolve) => {
       const evs = [];
       let done = false, sub = null;
@@ -21713,6 +21762,7 @@ zoo`.split("\n");
     });
     const answers = urls.length ? await Promise.all(urls.map(ask)) : [];
     const whole = answers.length > 0 && answers.every((a) => a.complete);
+    if (!whole) out.anyUnanswered = true;
     const newest = /* @__PURE__ */ new Map();
     for (const a of answers) for (const e of a.evs) {
       const d = ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
@@ -21917,6 +21967,13 @@ zoo`.split("\n");
       try {
         await q;
       } catch (e) {
+      }
+      if (!out.onRoster && !out.rosterUnknown) {
+        try {
+          out.groupsOff = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, "");
+        } catch (e) {
+          out.groupsOff = { swapped: [], failed: [], other: [], unchecked: ["the groups they may have been on"], anyUnanswered: true };
+        }
       }
       return out;
     })();
@@ -26549,11 +26606,13 @@ zoo`.split("\n");
             carryOld.swapFailed = sw.failed;
             carryOld.swapOther = sw.other;
             carryOld.swapUnchecked = sw.unchecked;
+            carryOld.swapAnyUnanswered = !!sw.anyUnanswered;
           } catch (e) {
             carryOld.swapped = [];
             carryOld.swapFailed = [];
             carryOld.swapOther = [];
             carryOld.swapUnchecked = ["the groups they may have been on"];
+            carryOld.swapAnyUnanswered = true;
           }
         }
       }
