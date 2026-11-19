@@ -414,6 +414,20 @@ function featuredSermonNow(pin, sermons) {
   return cur && cur.title !== pin.title ? { ...pin, title: cur.title } : pin;
 }
 
+// A NETWORK'S PUBLIC PROFILE, AS THE MEMBER APP MAY USE IT (Networks, member step 1, 2026-11-19).
+// `e` is a raw kind-0 event from Fellowship.subscribeNetworkProfile; `networkPub` is the hex key the church's network:<pub> document named.
+// Answers { name, shortName, at } or null. ONLY a profile signed by that very key counts: a network's title on a member's screen must not be
+// something a stranger (or a relay answering with somebody else's kind-0) can choose. `short_name` is the tab title the network steward set
+// (console: Network identity -> Short name); it is capped here as well as where it is written, at 16 characters.
+// Callers: App's network-profile effect only.
+function netProfileOf(e, networkPub) {
+  if (!e || e.kind !== 0 || !networkPub || e.pubkey !== networkPub) return null;
+  let c = null; try { c = JSON.parse(e.content || ''); } catch { return null; }
+  if (!c || typeof c !== 'object') return null;
+  const clip = (v, n) => Array.from(String(v == null ? '' : v).replace(/\s+/g, ' ').trim()).slice(0, n).join('').trim();
+  return { name: clip(c.name, 80), shortName: clip(c.short_name, 16), at: e.created_at || 0 };
+}
+
 function App() {
   const [t, setTweak] = useSettings();
   const Bible = useBible();
@@ -885,11 +899,12 @@ function App() {
     const followed = (lsGet('trinityone.followedChurches', []) || []).filter(f => f && f.id && !base.find(b => b.id === f.id));
     return [...base, ...followed];
   });
-  // NETWORKS SWITCH (app/data.jsx): `churchesStored` is what is kept on the phone, network entries included, so
-  // turning networks back on brings them back. `churches` is what every screen and every lookup sees: with the
-  // switch off a followed network is not listed, cannot be switched to, and cannot be the active church (the
-  // heal effect below falls back to a real church exactly as it does for any id not in the list).
-  const churches = React.useMemo(() => window.NETWORKS_ENABLED === true ? churchesStored : churchesStored.filter(c => c.kind !== 'network'), [churchesStored]);
+  // `churchesStored` is what is kept on the phone; `churches` is what every screen and every lookup sees. A network entry is not listed,
+  // cannot be switched to, and cannot be the active church (the heal effect below falls back to a real church exactly as it does for any
+  // id not in the list).
+  // A NETWORK IS NEVER A CHURCH TO A MEMBER (owner 2026-11-19): entries an older build auto-added (kind 'network') stay on the phone but are
+  // never listed, switched to or made active, whatever the switch says. Network content reaches a member through What's happening instead.
+  const churches = React.useMemo(() => churchesStored.filter(c => c.kind !== 'network'), [churchesStored]);
   // persist the followed (real, npub-id) churches — incl. names resolved from the relay — on any change
   useAE(() => { try { lsSet('trinityone.followedChurches', churchesStored.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0)); } catch (e) {} }, [churchesStored]);
   // on load, refresh each followed church's name/groups from the relay (names may have changed)
@@ -962,7 +977,7 @@ function App() {
     }
     // NETWORKS SWITCH: a code that is a network this phone already knows (a stored entry tagged kind 'network') is refused.
     // An unknown network npub is not recognisable here; it falls to checkChurch below, which finds no church for it.
-    if (window.NETWORKS_ENABLED !== true && churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('Networks aren’t available yet'); return false; }
+    if (churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('That code is for a network of churches, not a church'); return false; }
     // UX #1: validate the bech32 CHECKSUM before following. The regex matches shape only, so a mistyped code (one
     // wrong char) previously passed and we'd follow a phantom church stuck showing the placeholder name "Church".
     // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
@@ -1770,51 +1785,88 @@ function App() {
     if (!_geNp || !F || !F.subscribeGroupEvents || !gids.length) { setGroupEvents([]); return; }
     return F.subscribeGroupEvents(_geNp, gids, setGroupEvents);
   }, [_geNp, _geGidsKey, connTick, lazyReady]);
-  // the wider networks the active church belongs to (+ resolve their names) — members can follow them
+  // ── NETWORKS IN THE MEMBER APP (owner decisions 2026-11-19, reference/DOMAIN.md "Network content in the member app") ──
+  // A network is NEVER a church here: no switcher entry, no "view the network". Its content reaches a member three ways only:
+  //   · a tab inside What's happening (ctx.netTabs, drawn by ServingScreen), titled with the network's custom SHORT NAME;
+  //   · one quiet line + a dot on the What's happening card while an update is unread (ctx.netLine);
+  //   · its events inside Events / Calendar, tagged, with no RSVP (merged into ctx.churchEvents below, only while the church's
+  //     own calendar feature is on).
+  // Everything is behind NETWORKS_ENABLED (app/data.jsx): with it off no network is even looked up.
+  // The networks the active church has joined (it publishes network:<networkPub>).
   const [churchNetworks, setChurchNetworks] = useA([]);
-  const [networkNames, setNetworkNames] = useA({});
   useAE(() => {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (window.NETWORKS_ENABLED !== true || !np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { /* NETWORKS SWITCH (app/data.jsx): off = a member follows no network */ setChurchNetworks([]); return; }
     return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
   }, [activeChurch, churches, connTick, lazyReady]);
+  // CHILD GUARD (owner 2026-10-21, re-confirmed 2026-11-18): the church's markings are trusted -- an unmarked member is an adult. Nothing from a
+  // network is put on screen until this church's clearance answer has LOADED (assumeKnownFor === activeChurch), and never for a member this
+  // church has marked a child (the relay's netReader withholds the content from them too). Deliberately NOT "assume a child when unmarked".
+  // STEP-2 SEAM (child-friendly posts, DOMAIN.md 2026-11-18): when a church opts in, a marked child will be served only posts tagged
+  // "Suitable for children". That changes THIS line (and filters the posts by their tag) -- nothing on the screens decides it.
+  const netCleared = window.NETWORKS_ENABLED === true && !!activeChurch && assumeKnownFor === activeChurch && !safeguard.isMinor;
+  // The network's PUBLIC profile (kind-0): its name and the short name its steward chose for the members' tab. Only a profile SIGNED BY THE
+  // NETWORK KEY counts (netProfileOf): a name is the one thing a stranger could try to put on this tab.
+  const [netProfiles, setNetProfiles] = useA({});   // networkPub -> { name, shortName, at }
+  const _netProfKey = churchNetworks.map(n => n.networkPub).sort().join(',');
   useAE(() => {
-    if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
-    const offs = churchNetworks.map(n => window.Fellowship.subscribeChurchProfile(n.npub, (p) => { if (p && p.name) setNetworkNames(m => ({ ...m, [n.networkPub]: p.name })); }));
+    const F = window.Fellowship;
+    if (!netCleared || !_netProfKey || !(F && F.subscribeNetworkProfile)) return;
+    const offs = churchNetworks.map(n => F.subscribeNetworkProfile(n.npub, (e) => {
+      const p = netProfileOf(e, n.networkPub); if (!p) return;
+      setNetProfiles(m => (m[n.networkPub] && m[n.networkPub].at > p.at) ? m : ({ ...m, [n.networkPub]: p }));
+    }));
     return () => offs.forEach(o => { try { o && o(); } catch {} });
-  }, [churchNetworks]);
-  // autocascade: a church's network is auto-followed (added to the switcher, tagged as a network) so
-  // its content is there without the member hunting for it — they just switch to it to view it.
+  }, [_netProfKey, netCleared]);   // eslint-disable-line
+  const _netTitle = (pub) => { const p = netProfiles[pub] || {}; return p.shortName || p.name || 'Network'; };
+  // The network's announcements + events, SEALED in two hops (subscribeNetworkContent): 'locked' until the church's re-seal of the ring has
+  // reached this phone -- "waiting for your church", never an error. Keyed church|network, so a church switch never shows one church's state
+  // for another's.
+  const _actNpub = (churches.find(c => c.id === activeChurch) || {}).npub || '';
+  const [netContentBy, setNetContentBy] = useA({});   // '<churchNpub>|<networkPub>' -> { state, announcements, events }
   useAE(() => {
-    if (!churchNetworks.length) return;
-    setChurches(cs => {
-      let next = cs, changed = false;
-      for (const n of churchNetworks) {
-        if (!next.find(c => c.id === n.npub)) { next = [...next, { id: n.npub, npub: n.npub, name: networkNames[n.networkPub] || 'Network', initials: 'NW', accent: 'var(--clay)', kind: 'network', sub: 'Network' }]; changed = true; }
-      }
-      return changed ? next : cs;
-    });
-  }, [churchNetworks, networkNames]);
-  // content aggregation: pull the network's events into the member's own views, tagged with
-  // the network name (so a region-wide gathering shows on everyone's calendar without switching).
-  const [netEventsBy, setNetEventsBy] = useA({});
-  const [netAnnounceBy, setNetAnnounceBy] = useA({});
-  useAE(() => {
-    const F = window.Fellowship; if (!F) return;
-    const subs = [];
-    churchNetworks.forEach(n => {
-      const label = networkNames[n.networkPub] || 'Network';
-      if (F.subscribeChurchEvents) subs.push(F.subscribeChurchEvents(n.npub, (evs) => setNetEventsBy(m => ({ ...m, [n.networkPub]: evs.map(e => ({ ...e, _network: label, _networkPub: n.networkPub })) }))));
-      // (network PLANS were read here as if the network were a church. Removed 2026-11-18: since N5a a network key may write only its own
-      // net* documents, so no plan can ever arrive -- and this path was never child-gated. Plan audit M1.)
-      if (F.subscribeNetworkAnnouncements) subs.push(F.subscribeNetworkAnnouncements(n.npub, (ps) => setNetAnnounceBy(m => ({ ...m, [n.networkPub]: ps.map(p => ({ ...p, _network: label, _networkPub: n.networkPub })) }))));
-    });
+    const F = window.Fellowship;
+    if (!netCleared || !_actNpub || !_netProfKey || !(F && F.subscribeNetworkContent)) return;
+    const subs = churchNetworks.map(n => F.subscribeNetworkContent(n.npub, _actNpub, (r) => setNetContentBy(m => ({ ...m, [_actNpub + '|' + n.networkPub]: {
+      state: r && r.state === 'ready' ? 'ready' : 'locked',
+      announcements: ((r && r.announcements) || []).map(p => ({ ...p, _networkPub: n.networkPub })),
+      events: ((r && r.events) || []).map(e => ({ ...e, _networkPub: n.networkPub })),
+    } }))));
     return () => subs.forEach(o => { try { o && o(); } catch {} });
-  }, [churchNetworks, networkNames]);
-  const activeNetworkPubs = new Set(churchNetworks.map(n => n.networkPub));
-  const netEvents = Object.entries(netEventsBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
-  const netAnnouncements = Object.entries(netAnnounceBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  }, [_netProfKey, netCleared, _actNpub, connTick]);   // eslint-disable-line
+  // Per-device "read" mark, one per church+network: the newest update this member has looked at on the Network tab.
+  // localStorage['trinityone.netSeen'] = { '<churchNpub>|<networkPub>': <created_at> }. Writer: markNetTabSeen (ServingScreen's Network tab).
+  const [netSeen, setNetSeen] = useA(() => { try { return JSON.parse(localStorage.getItem('trinityone.netSeen') || '{}') || {}; } catch { return {}; } });
+  const netTabs = !netCleared ? [] : churchNetworks.map(n => {
+    const c = netContentBy[_actNpub + '|' + n.networkPub];
+    const title = _netTitle(n.networkPub);
+    const prof = netProfiles[n.networkPub] || {};
+    const announcements = ((c && c.announcements) || []).map(a => ({ ...a, _network: title })).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const events = ((c && c.events) || []).map(e => ({ ...e, _network: title }));
+    const seenAt = Number(netSeen[_actNpub + '|' + n.networkPub] || 0);
+    return { networkPub: n.networkPub, npub: n.npub, key: 'net:' + n.networkPub, title, name: prof.name || title, state: c ? c.state : 'loading', announcements, events,
+      unread: announcements.filter(a => (a.ts || 0) > seenAt) };
+  });
+  const netEvents = netTabs.flatMap(t => t.events);
+  const netAnnouncements = netTabs.flatMap(t => t.announcements).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  // The ONE line on the What's happening card: the newest unread update across this church's networks (only from the last 60 days, so a
+  // fresh install is not greeted by a months-old post). null = nothing unread = no line and no dot.
+  const netLine = (() => {
+    const cut = Math.floor(Date.now() / 1000) - 60 * 24 * 3600;
+    let best = null;
+    for (const t of netTabs) for (const a of t.unread) if ((a.ts || 0) > cut && (!best || (a.ts || 0) > (best.ts || 0))) best = { ...a, tabKey: t.key, title: t.title };
+    return best;
+  })();
+  const markNetTabSeen = (networkPub) => {
+    const t = netTabs.find(x => x.networkPub === networkPub); if (!t || !_actNpub) return;
+    const top = t.announcements.reduce((m, a) => Math.max(m, a.ts || 0), 0);
+    const k = _actNpub + '|' + networkPub;
+    if (!top || top <= Number(netSeen[k] || 0)) return;
+    const next = { ...netSeen, [k]: top };
+    setNetSeen(next);
+    try { localStorage.setItem('trinityone.netSeen', JSON.stringify(next)); } catch {}
+  };
   // broadcast-channel posts from the church (kind-1 in its broadcast groups) — surfaced as notifications
   const [broadcastMsgs, setBroadcastMsgs] = useA([]);
   useAE(() => {
@@ -2422,9 +2474,10 @@ function App() {
       setServReplies(m => ({ ...m, ['swapans~' + ask.id]: yes ? 'swapyes' : 'swapno' }));
       return true;
     },
-    churchEvents: (() => { const visible = churchEvents.filter(_eventVisibleToMe); const seen = new Set(visible.map(e => e.id).filter(Boolean)); const all = [...visible, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
+    churchEvents: (() => { const visible = churchEvents.filter(_eventVisibleToMe); const seen = new Set(visible.map(e => e.id).filter(Boolean)); const all = [...visible, ...groupEvents.filter(e => !seen.has(e.id)), ...(_notifCalOn ? netEvents : [])];   /* network events obey the church's own calendar switch (they stay in the Network tab) */ return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
+    netTabs, netLine, markNetTabSeen,   // Networks (member step 1): the What's happening tab(s), the card's one line + dot, and its read mark
     servingSeenTs: servSeenTs, markServingSeen,   // the Serving & events card's "something new" mark (see the block above)
     churchRotas, churchRosters, churchServices, churchRunsheets, churchGroups, rotaVis,
     // Care / Meal trains: settings + open needs + everyone's fills/skips, plus this member's sign-up actions.
@@ -2582,7 +2635,7 @@ function App() {
     // groups this member may post events for (the steward named them a leader)
     myLeaderGroups: churchGroups.filter(g => (g.leaders || []).includes((window.Fellowship && window.Fellowship.myPubkey) || '')),
     publishGroupEvent: (groupId, ev) => { const np = (churches.find(c => c.id === activeChurch) || {}).npub; return window.Fellowship.publishGroupEvent(np, groupId, ev); },
-    churchNetworks: churchNetworks.map(n => ({ ...n, name: networkNames[n.networkPub] || '', following: !!churches.find(c => c.id === n.npub) })),
+    churchNetworks: netTabs.map(t => ({ networkPub: t.networkPub, npub: t.npub, name: t.title, tabKey: t.key })),   // the Community 'Part of' chip: only what the Network tab shows, and it opens that tab
     openServing: (tab, focus) => { setGroup(null); setPeople(false); setDmInbox(false); setDmPeer(null); setServingTab(typeof tab === 'string' ? tab : 'serving'); setCareFocus(focus || null); setOpenServing(true); markServingSeen(); if (desktop) setTab('chat'); },   // opening the overlay is what clears the card's "something new" mark — every route in, not only the Today card, and never on launch or a timer
     servingTab, careFocus,
     openEvent: (e) => setEventOv(e),

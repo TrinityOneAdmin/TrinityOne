@@ -15745,14 +15745,14 @@
       };
     },
     // ── a network's announcements + events, SEALED (Networks N5b, 365dff7a; ported 2026-11-18). The cleartext reader above is refused by every
-    // walled relay and goes when Phase B2 rewires app/app.jsx onto this.
+    // walled relay; since member step 1 (2026-11-19) the member app reads only this, and the one above has no caller in app/.
     //   REQ authors:[network], kind 30078, t=trinityone -- the d-prefix (netann: / netevent:) is filtered here, because a relay filter matches
     //   `#d` exactly. The relay serves these to a member of a church that JOINED the network with the matching scope, and never to that
     //   church's marked children (netReader, scripts/gateway.mjs). The ring that opens them arrives as the CHURCH's hop-2 document
     //   (netkeyc:<network>, church-authored, sealed under the church name key) through the church-docs hub. Until it has, cb gets state
     //   'locked' -- never an error, never an empty list dressed up as "nothing posted".
     // cb({ state: 'locked' | 'ready', announcements: [{id, text, ts, networkPub}], events: [{id, ...event fields, ts, networkPub}], unreadable })
-    // Callers (rule 2): none yet -- app/app.jsx's network effect moves onto it in Phase B2 (behind NETWORKS_ENABLED).
+    // Callers (rule 2): app/app.jsx's network-content effect (behind NETWORKS_ENABLED, and only once the member is cleared as not a child).
     subscribeNetworkContent(networkNpub, churchNpub, cb) {
       const np = toPub(networkNpub), cp = toPub(churchNpub);
       if (!np || !cp) {
@@ -16402,6 +16402,36 @@
       if (answers.some((a) => a.events.some(isPolicy))) return "church";
       if (_getInvitePending().some((p) => p.cp === cp)) return "unknown";
       return answers.every((a) => a.answered) ? "not-found" : "unknown";
+    },
+    // A NETWORK'S PUBLIC PROFILE (kind-0) for the member app's Network tab title (Networks member step 1, 2026-11-19). Hands the RAW newest event
+    // to cb -- the app decides what it may use (app/app.jsx netProfileOf: signed by the network key, short_name capped). Read over the same two
+    // gated sets the member already reads a network from: the shared pool (as subscribeChurchProfile did for a network) and the member's relays
+    // (as subscribeNetworkContent does). An event from any other author is dropped here as well.
+    // Callers (rule 2): app/app.jsx's network-profile effect only.
+    subscribeNetworkProfile(networkNpub, cb) {
+      const np = toPub(networkNpub);
+      if (!np) return () => {
+      };
+      let latest = -1;
+      const relays = [.../* @__PURE__ */ new Set([...groupReadRelays(np), ..._netRelays(window.Fellowship.relays)])];
+      const sub = pool.subscribeMany(relays, [{ kinds: [0], authors: [np] }], {
+        onevent(e) {
+          if (!e || e.pubkey !== np || (e.created_at || 0) <= latest) return;
+          latest = e.created_at || 0;
+          try {
+            cb({ kind: e.kind, pubkey: e.pubkey, created_at: e.created_at, content: e.content });
+          } catch {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

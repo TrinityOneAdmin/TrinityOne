@@ -583,11 +583,13 @@ function ChatScreen({ ctx }) {
           <Icon name="chevR" size={17} color="var(--clay)" />
         </div>
       ) : null}
-      {/* the wider network(s) this church belongs to — a small line right under the church it's part of */}
+      {/* the wider network(s) this church belongs to — a small line right under the church it's part of. ctx.churchNetworks is exactly the
+          networks whose tab What's happening shows (empty with the switch off, for a child, or before clearance), and the chip OPENS that tab:
+          a network is never switched to as if it were a church (owner 2026-11-19). */}
       {(ctx.churchNetworks || []).length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: givingOn ? 16 : 20, animation: 'trinityFade .5s ease .05s both' }}>
           {ctx.churchNetworks.map(n => (
-            <button key={n.networkPub} onClick={() => { ctx.setActiveChurch(n.npub); ctx.toast('Viewing ' + (n.name || 'the network')); }} title="Tap to see its announcements & events" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px 5px 8px', borderRadius: 999, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+            <button key={n.networkPub} onClick={() => { ctx.openServing && ctx.openServing(n.tabKey); }} title="Tap to see its updates & events" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px 5px 8px', borderRadius: 999, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
               <Icon name="globe" size={14} color="var(--clay)" />
               <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>Part of</span>
               <span style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 150 }}>{n.name || 'a network'}</span>
@@ -1554,7 +1556,7 @@ function ServingEntry({ ctx }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14 }}>
           <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>What's happening</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, display: 'flex', alignItems: 'center' }}>What's happening{ctx.netLine ? <NetUnreadDot line={ctx.netLine} /> : null}</div>
             <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what's on · RSVP · your rota{(ctx.care && ctx.care.settings && ctx.care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)' }}> · Care</span> : null}</div>
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
@@ -1567,6 +1569,8 @@ function ServingEntry({ ctx }) {
             {!pending ? <span role="button" tabIndex={0} onClick={dismiss} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') dismiss(e); }} aria-label="Dismiss" title="Dismiss — it comes back for your next slot" style={{ flexShrink: 0, width: 40, height: 40, margin: '-13px -8px -13px auto', borderRadius: 999, background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>✕</span> : null}
           </div>
         ) : null}
+        {/* the network's one line (screens-today.jsx NetUpdateLine), below the serving line -- the same as on Today */}
+        {ctx.netLine ? <NetUpdateLine line={ctx.netLine} ctx={ctx} /> : null}
       </button>
     </div>
   );

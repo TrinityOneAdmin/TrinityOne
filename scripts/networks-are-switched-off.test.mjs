@@ -6,8 +6,8 @@
 //   settings-cards-sit-in-authored-stacks, the-switcher-names-the-consoles-own-church,
 //   the-not-on-the-website-tick-is-the-owners.
 // This file is the member app. A member has no create / join control, but App() follows every network their
-// church belongs to (adds it to the church switcher, aggregates its events, plans and announcements). That is
-// the only route into a network from the member app, so it is what the switch cuts.
+// church belongs to (since 2026-11-19: a tab in What's happening, one line on Today, its events in Events/Calendar --
+// never a church-switcher entry). That is the only route into a network from the member app, so it is what the switch cuts.
 //
 // The REAL App from app/app.jsx, loaded with every script index.html lists (app/data.jsx included, which is
 // where the member app's switch is given its value). The ON row sets window.NETWORKS_ENABLED = true BEFORE the
@@ -74,11 +74,16 @@ test('NETWORKS OFF: a followed network is not listed, is not the active church, 
   assert.equal(ctxOf(m.draw()).activeChurch, NPUB, 'the active church is still the network');
   assert.match(m.window.localStorage.getItem('trinityone.followedChurches'), new RegExp(NETNPUB), 'the network was deleted from storage, so turning networks back on would not bring it back');
 });
-test('NETWORKS ON (control): the same phone lists the network and keeps it active', async () => {
+// CHANGED ON PURPOSE 2026-11-19 (Networks member step 1, owner decision "a network is never a church to a member"). This row used to be the
+// control that the switch brings a followed network BACK into the switcher. It no longer does, with the switch on OR off: network content now
+// reaches a member through a tab in What's happening (a-network-reaches-members-only-through-whats-happening.test.mjs). The entry still stays
+// in storage (asserted above), so nothing is deleted from a phone.
+test('NETWORKS ON: a stored network is STILL not listed and not the active church (a network is never a church to a member)', async () => {
   const m = boot(true, { seedNetwork: true });
   await settle(m);
-  assert.ok(ctxChurches(m).includes(NETNPUB), 'with the switch on the followed network is not listed, so the OFF test proves nothing');
-  assert.equal(ctxOf(m.draw()).activeChurch, NETNPUB);
+  assert.ok(!ctxChurches(m).includes(NETNPUB), 'with the switch on a stored network is listed as a church');
+  assert.ok(ctxChurches(m).includes(NPUB), 're-anchor: the real church went missing too');
+  assert.equal(ctxOf(m.draw()).activeChurch, NPUB, 'the active church is still the network');
 });
 test('NETWORKS OFF: pasting a known network\'s code as a church is refused, with a message', async () => {
   const m = boot(undefined, { seedNetwork: true });

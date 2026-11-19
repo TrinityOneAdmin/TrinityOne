@@ -32,6 +32,7 @@ const SUBSCRIPTIONS = [
   'subscribeMyReqReplies',
   'subscribeMyRsvps',
   'subscribeChurchProfile',
+  'subscribeNetworkProfile',   // Networks member step 1 (2026-11-19): the network's kind-0, for the members' tab title
 ];
 
 for (const name of SUBSCRIPTIONS) {
