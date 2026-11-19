@@ -530,6 +530,7 @@ function appScope(app, extra) {
     lsSet: () => {}, lsGet: () => null, lsCanWrite: () => true, localStorage: app.store,
     toast: (m) => state.toasts.push(String(m)),
     unconfirmedChurches: { current: new Set() }, leavingNow: { current: new Set() }, bumpLeave: () => {},
+    memberTourJoin: () => {},   // the first-run-tour neighbour app.jsx declares just above followChurch
     _mergeChurchProfile: (cs) => cs,
     window: app.win, React: { useRef: (v) => ({ current: v }) },
     String, JSON, Date, Math, Number, Array, Object, Boolean, console, Promise, setTimeout, clearTimeout, Set, Map, URLSearchParams,
