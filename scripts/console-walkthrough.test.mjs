@@ -151,6 +151,8 @@ test('POINT OF USE: finishing the setup wizard starts the tour, and it walks all
   const wiz = find(tree, n => n.type === h.mod.StewSetupWizard);
   assert.equal(wiz.length, 1, 'the wizard did not open');
   assert.equal(bubble(tree), null, 'the tour showed before the wizard finished');
+  // the harness does not count the wizard as an open dialog, so this is the dashboard's own holdTips at work
+  assert.equal(tipOf(tree), null, 'a section tip showed while the setup wizard was open');
   wiz[0].props.onDone();                      // the handler StewDashboard really gave the wizard
   tree = h.show();
   const b = bubble(tree);
