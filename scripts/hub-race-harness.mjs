@@ -51,6 +51,9 @@ function hubCore() {
   return V.slice(a, b);
 }
 
+// Is the 2026-11-19 refull helper in this bundle? (absent on the base the Step 0 tests are first run against)
+export const HAS_REFULL = V.includes('\n  function _refullChurchHubs(');
+
 function scopeOf(stubs, missing) {
   return new Proxy(stubs, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
@@ -66,7 +69,11 @@ function scopeOf(stubs, missing) {
 
 // ── the member app, one boot ──────────────────────────────────────────────────────────────────────────────────
 // opts: { me, relays: string[] (mutable via app.setRelays), storage, locked (sk unset until unlock()),
-//         holdAuth (sk set, but the signer waits on window.Fellowship.ready until releaseAuth()), clock: Date class }
+//         holdAuth (sk set, but the signer waits on window.Fellowship.ready until releaseAuth()), clock: Date class,
+//         announce (also lift the SHIPPED announceMembership + the join-sent stamp, for the open-church join tests),
+//         publishAny (replace the transport stub below), realAdmitted (lift the SHIPPED _noteAdmitted instead of the
+//         no-op stub), onReq(rec) (called as each REQ is recorded, to read hub state at that instant) }
+// T-A and T-B pass none of the three new options, so they get exactly the rig they had.
 export function memberApp(opts) {
   const { me } = opts;
   const missing = [], failures = [], published = [], reqs = [], authRefetch = [];
@@ -76,7 +83,11 @@ export function memberApp(opts) {
   // Record every REQ the hub sends (the filters as sent), then hand it to the real pool. The shipped empty-list
   // wrapper is lifted ON TOP of this, exactly as it wraps the real pool in the bundle.
   const realSubMany = pool.subscribeMany.bind(pool);
-  pool.subscribeMany = (urls, filters, params) => { reqs.push({ at: Date.now(), urls: [...urls], filters: JSON.parse(JSON.stringify(filters)) }); return realSubMany(urls, filters, params); };
+  pool.subscribeMany = (urls, filters, params) => {
+    const rec = { at: Date.now(), urls: [...urls], filters: JSON.parse(JSON.stringify(filters)) };
+    reqs.push(rec); if (opts.onReq) { try { opts.onReq(rec); } catch {} }
+    return realSubMany(urls, filters, params);
+  };
   let releaseReady;
   // holdAuth: the key is coming, and the signer parks on `ready` until releaseAuth(). locked: a PIN-locked boot —
   // init() has already resolved `ready` keyless, so the shipped signer throws 'no key' and that socket never auths.
@@ -112,6 +123,14 @@ export function memberApp(opts) {
     loadMembersCache: () => [], saveMembersCache: () => {}, _superseded: () => false, profiles: {}, saveProfiles: () => {},
     _noPhoto: new Set(), pubSet: (a) => new Set(a || []), _sgSelf: null,
     console: { error: (...a) => failures.push('console.error ' + a.map(String).join(' ')), warn() {}, log() {} },
+    // announceMembership's surroundings (opts.announce). The TRANSPORT is a stub, but it is the shipped rule:
+    // allSettled, and only a relay that actually said OK counts. nostr-tools RESOLVES an undialable relay with
+    // "connection failure: …", so Promise.any would count a dead relay as an acceptance (plan audit F8).
+    _publishAny: opts.publishAny || ((urls, evt) => Promise.allSettled(pool.publish(urls, evt)).then(rs => {
+      if (!rs.some(r => r.status === 'fulfilled' && !/^connection failure/.test(String(r.value)))) throw new Error('no relay accepted');
+    })),
+    publishSetFor: () => relays, _announceBlocked: () => false, _leaveGen: {}, _queueJoinIntent: () => {},
+    _outbox: [], _outboxSave: () => {}, _outboxDropJoins: () => false, _resendJoinToBoxesGainedInFlight: () => {},
   };
   if (opts.clock) t.Date = opts.clock;
   const scope = scopeOf(t, missing);
@@ -125,6 +144,12 @@ export function memberApp(opts) {
     fn('_docsHubSaveNow'), fn('_docsHubSaveSoon'), fn('_docsHub'), fn('_docsHubOpen'), fn('_onChurchDocs'), fn('refetchChurchDocs'),
     fn('_memHubSaveNow'), fn('_memHubSaveSoon'), fn('_memHub'), fn('_memHubOpen'), fn('_onChurchMembers'),
     fn('_noteAuthAccepted'), fn('reconnectAll'),
+    // the shared "the relay now counts us" refull (2026-11-19) — lifted only if the bundle has it, so the Step 0
+    // tests run against the bundle from before it existed
+    ...(HAS_REFULL ? [fn('_refullChurchHubs')] : []),
+    ...(opts.announce ? [vr('_lastStampF'), fn('_monotonicF'), vr('JOINSENT_KEY'), vr('_joinSent'), fn('_joinSentLoad'), fn('_joinSentSave'),
+      fn('_markJoinSent'), fn('_joinSentFor'), '_joinSentLoad();'] : []),
+    ...(opts.realAdmitted ? [vr('ADMITTED_OK_LS'), vr('_admittedDone'), fn('_noteAdmitted')] : []),
     stmt(V, 'var _poolSubMany = pool.subscribeMany.bind(pool);', '_poolSubMany'),
     stmt(V, 'pool.subscribeMany = (urls, filters, handlers) =>', 'the shipped empty-relay-list wrapper'),
     stmt(V, 'pool.automaticallyAuth = (url) =>', 'the shipped NIP-42 signer'),
@@ -134,10 +159,13 @@ export function memberApp(opts) {
     method('    subscribeChurchMembers(churchNpub, onMembers) {', 'subscribeChurchMembers') + ',',
     method('    subscribeChurchSafeguard(churchNpub, onLists) {', 'subscribeChurchSafeguard') + ',',
     method('    async syncSealedNames(churchNpubs) {', 'syncSealedNames', 'async ') + ',',
+    ...(opts.announce ? [method('    async announceMembership(npubOrHex) {', 'announceMembership', 'async ') + ','] : []),
+    ...(HAS_REFULL ? ['_refullChurchHubs,'] : []),
     '_docsHub, _memHub, _onChurchDocs, _onChurchMembers, refetchChurchDocs, reconnectAll };',
   ].join('\n');
   const api = new Function('scope', 'with (scope) {\n' + body + '\n}')(scope);
   t.window.Fellowship.syncSealedNames = (...a) => api.syncSealedNames(...a);
+  if (opts.announce) t.window.Fellowship.announceMembership = (...a) => api.announceMembership(...a);
   return {
     api, t, reqs, published, missing, failures, authRefetch, storage, pool,
     setRelays: (r) => { relays = [...r]; t.window.Fellowship.relays = [...r]; },
