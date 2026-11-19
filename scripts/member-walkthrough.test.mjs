@@ -1037,6 +1037,16 @@ test('both pages load tour-kit.jsx, before their own tour; neither tour file is 
   assert.ok(idx.indexOf('app/tour-kit.jsx') >= 0 && idx.indexOf('app/tour-kit.jsx') < idx.indexOf('app/member-tour.jsx') && idx.indexOf('app/member-tour.jsx') < idx.indexOf('app/app.jsx'),
     'index.html must load tour-kit.jsx, then member-tour.jsx, then app.jsx');
   assert.ok(stw.indexOf('app/tour-kit.jsx') >= 0 && stw.indexOf('app/tour-kit.jsx') < stw.indexOf('app/stew-tour.jsx'), 'steward.html must load tour-kit.jsx before stew-tour.jsx');
-  // scripts/sync-web.sh deletes app/stew-*.js and app/steward-root.js from the member build
-  for (const f of ['tour-kit', 'member-tour']) assert.ok(!/^stew-/.test(f) && f !== 'steward-root', f + ' would be stripped from the member build');
+  // The member build (scripts/sync-web.sh, READ AS IT IS — audit T1): every `rm -f "$WWW"/app/<glob>` in the real build script, as a regex over the compiled file's path.
+  const globs = [];
+  for (const line of read('scripts/sync-web.sh').split('\n')) {
+    if (!/\brm -f\b/.test(line.replace(/#.*$/, ''))) continue;
+    for (const m of line.matchAll(/"\$WWW"\/(app\/[^\s"]+)/g)) globs.push(m[1]);
+  }
+  assert.ok(globs.length >= 1, 'found no rm -f of app/ files in scripts/sync-web.sh — re-anchor this test');
+  const toRe = (g) => new RegExp('^' + g.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '.') + '$');
+  const stripped = (f) => globs.some(g => toRe(g).test(f));
+  // CONTROL: the console's tour IS stripped, so the reading of the script is live
+  assert.ok(stripped('app/stew-tour.js'), 'the console\'s tour is not stripped by these globs (' + globs.join(', ') + ') — the test is not reading the build script');
+  for (const f of ['app/tour-kit.js', 'app/member-tour.js']) assert.ok(!stripped(f), f + ' is deleted from the member build by ' + globs.join(', '));
 });
