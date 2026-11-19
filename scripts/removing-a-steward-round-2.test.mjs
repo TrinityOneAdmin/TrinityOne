@@ -307,8 +307,9 @@ test('HIGH 1 — the care team NOT READ YET: the team list is not carried, and i
 // LOW 5 — meals-settings is decided FIRST. Her OWN meals-settings is known from phase A already; what only phase B can show
 // is ANOTHER author's copy — here the church's, naming team `churchTeam`, which this console's StewardMeals has not caught up
 // with (careTeamId() still answers an older team). She has more than one slice (60) of documents: the church's care team
-// roster is her NEWEST, her meals-settings her OLDEST, and the relay answers newest first — so without the ordering the
-// roster is decided in slice 1, before slice 2 shows the church's copy naming it as the care team.
+// roster is her OLDEST, her meals-settings her NEWEST, and the carry takes her documents in the order this relay answers
+// them, oldest first (measured: without the ordering, meals-settings landed last) — so without the ordering the roster is
+// decided in slice 1, before slice 2 shows the church's copy naming it as the care team.
 test('LOW 5 — over 60 documents: the care team named only by the CHURCH’s meals-settings copy is still not carried', async () => {
   const C = await churchOn(1, 'f3-slices');
   const eng = owner(C);
@@ -317,9 +318,9 @@ test('LOW 5 — over 60 documents: the care team named only by the CHURCH’s me
   const kim = await newSteward(C);
   await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
   await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: churchTeam }, { tagChurch: false }));
-  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: hers }));
-  for (let i = 0; i < 61; i++) await mustPut(C, raw(C, kim, GROUP_D + C.cp.slice(0, 16) + '-g' + i, { name: 'Group ' + i }));
   await mustPut(C, raw(C, kim, ROSTER_D + churchTeam, { pubs: [H.key().pub] }));
+  for (let i = 0; i < 61; i++) await mustPut(C, raw(C, kim, GROUP_D + C.cp.slice(0, 16) + '-g' + i, { name: 'Group ' + i }));
+  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: hers }));
   await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
   const r = await eng._removeStewardKeeping(kim.pub);
   assert.ok(r.wrote);
