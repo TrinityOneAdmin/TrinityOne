@@ -118,14 +118,14 @@ test('O6c: a refull answered BEFORE sign-in does not spend B — the post-sign-i
   const t0 = Date.now();
   app.api._refullChurchHubs(cp);                         // the trigger, while sign-in is still pending
   assert.ok(isFull(app.hubReqs(cp).at(-1)), 'the refull is full');
-  assert.ok(await until(() => app.docsHub(cp).fullAt * 1000 >= t0 - 1000, 3000), 'the refull was answered (before sign-in)');
+  assert.ok(await until(() => app.docsHub(cp).eosedAt >= t0, 3000), 'the refull was answered (before sign-in)');
   await sleep(50);
   assert.equal(app.docsHub(cp).fullPreAuth, true, 'that answer was before sign-in, so B is still owed');
   app.releaseAuth();
   assert.ok(await until(() => app.t._relayAuthOkAt > 0, 6000), 'the relay accepted our auth');
   app.api.refetchChurchDocs();                           // the shipped post-auth refetch
   assert.ok(isFull(app.hubReqs(cp).at(-1)), 'the post-sign-in refetch must still be full — the pre-sign-in refull must not spend B');
-  assert.equal(app.docsHub(cp).refullDone, false, 'refullDone was set before B\'s re-full was answered');
+  assert.ok(!app.docsHub(cp).refullDone, 'refullDone was set before B\'s re-full was answered');
   assert.ok(await until(() => app.docsHub(cp).refullDone === true, 4000), 'B\'s re-full, once answered, sets refullDone');
   await sleep(200);
   app.clean(); app.close();
