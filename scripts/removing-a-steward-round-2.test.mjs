@@ -12,10 +12,9 @@
 // every relay in relays() and answers success on the first that accepts — as the console's publish() does
 // (Promise.any, plan 0b R-L1).
 //
-//   F1  A relay that is OFF (connection refused) or ASLEEP (SIGSTOP: the socket opens, nothing answers) must not stop
-//       the carry: what the answering relays show is kept, dated exactly one second after the helper's own save
-//       (owner answer k). Today one unanswered relay = nothing carried. `todo` until the F1 round, which also adds
-//       the "every relay runs the newest-wins build" condition of answer (s) to these fixtures.
+//   F1  OWNER ANSWER (ee), which supersedes (k): a relay that is OFF or ASLEEP means NOTHING is kept — the removal still
+//       goes ahead, inside its limit, and lists what was not kept. With every relay up the church copy is dated NOW and
+//       reported carried.
 //   F2b BLOCKING A CURRENT HELPER TAKES THEM OFF THE HELPER LIST (owner answer l), after the carry and after the block
 //       (plan 0b/0c R-M4): pressed on the real DashMembers over the lifted engine, read back from the relay.
 //   F3  A HELPER WHO NO LONGER HELD CARE (owner answers m, q, t): the care team's roster is not re-signed under the
@@ -93,9 +92,13 @@ const churchCopy = async (C, d, relay) => (await copiesAt(C, d, relay)).filter(e
 const churchSent = (eng, C, d) => eng.sent.filter(e => e.pubkey === C.cp && dOf(e) === d);
 const rosterOn = async (C, relay) => { const e = await churchCopy(C, STEWARDS_D + C.cp, relay); return e ? (JSON.parse(e.content).pubkeys || []) : null; };
 
-// ══ F1 — a silent relay must not stop the carry (owner answer k) ═════════════════════════════════════════════════════
-// TODO(F1 round): answer (s) makes rule (k) apply only when every relay in relays() is remembered as running the
-// newest-wins relay build (plan 0d H-s); these fixtures gain that step then.
+// ══ F1 — owner answer (ee): a silent relay means NOTHING is kept, the removal still goes ahead, and the screen says so ═══
+// (ee) supersedes (k): no partial-answer keeping. These are the agreed behaviour on real relays, with the helper's save 12
+// days old: r2 OFF (connection refused) or ASLEEP (SIGSTOP; SIGCONT in a finally and on any exit) → the removal completes
+// inside its limit, the church re-signs NOTHING, and the helper's group is in the not-kept list the screen shows (its
+// label is what stewCarryNote prints — the screen half is removing-a-steward-round-2-on-screen.test.mjs F2). Every relay
+// up → the group is kept, dated NOW (not the helper's save + 1) and reported "carried".
+const TWELVE_DAYS = 12 * 86400;
 async function f1Case(how) {
   const C = await churchOn(2, 'f1-' + how);
   const [r1, r2] = C.relays;
@@ -103,24 +106,34 @@ async function f1Case(how) {
   const sam = await newSteward(C);
   await setRoster(eng, [sam.pub], { [sam.pub]: ['content'] });
   const gid = C.cp.slice(0, 16) + '-youth';
-  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Youth Group by Hannah', leaders: [] }, { tagChurch: false }));
-  const S = await mustPut(C, raw(C, sam, GROUP_D + gid, { name: 'Youth Group by Sam', leaders: [sam.pub] }));
+  const old = Math.floor(Date.now() / 1000) - TWELVE_DAYS;
+  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Youth Group by Hannah', leaders: [] }, { tagChurch: false, at: old - 100 }));
+  const S = await mustPut(C, raw(C, sam, GROUP_D + gid, { name: 'Youth Group by Sam', leaders: [sam.pub] }, { at: old }));
   if (how === 'killed') { r2.proc.kill('SIGKILL'); await sleep(200); }
-  else { frozen.add(r2); r2.proc.kill('SIGSTOP'); }
+  else if (how === 'frozen') { frozen.add(r2); r2.proc.kill('SIGSTOP'); }
   try {
     const t0 = Date.now();
     const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 8000 });
     const took = Date.now() - t0;
-    assert.ok(r.wrote, 'the roster write did not land on r1');
-    assert.ok(took < 11000, 'the carry was not bounded by its limit: ' + took + ' ms');
-    const kept = await churchCopy(C, GROUP_D + gid, r1);
-    assert.ok(kept, 'NOTHING WAS CARRIED with r2 ' + how + ' (sim F1): ' + JSON.stringify(r.carry.notCarried));
-    assert.equal(JSON.parse(kept.content).name, 'Youth Group by Sam', 'r1 reverted to the church’s older copy');
-    assert.equal(kept.created_at, S.created_at + 1, 'the church copy is not dated exactly one second after the helper’s save (answer k)');
-  } finally { if (frozen.has(r2)) { r2.proc.kill('SIGCONT'); frozen.delete(r2); } }
+    assert.ok(r.wrote, 'the removal did not go ahead');
+    assert.ok(took < 12000, 'the removal was not bounded by its limit: ' + took + ' ms');
+    const sent = churchSent(eng, C, GROUP_D + gid);
+    if (how === 'all-up') {
+      assert.equal(sent.length, 1, 'not kept with every relay up: ' + JSON.stringify(r.carry.notCarried));
+      assert.ok(sent[0].created_at >= Math.floor(t0 / 1000) - 2, 'the church copy is not dated now: ' + sent[0].created_at + ' vs ' + Math.floor(t0 / 1000));
+      assert.ok(r.carry.carried.some(c => c.d === GROUP_D + gid), 'not reported as carried: ' + JSON.stringify(r.carry));
+      assert.equal(JSON.parse((await churchCopy(C, GROUP_D + gid, r1)).content).name, 'Youth Group by Sam');
+      void S;
+    } else {
+      assert.deepEqual(sent, [], 'SOMETHING WAS KEPT WHILE A RELAY WAS SILENT (owner answer ee: keep nothing)');
+      assert.ok(r.carry.notCarried.some(n => n.d === GROUP_D + gid && /Youth Group by Sam/.test(n.label)),
+        'THE SCREEN WOULD NOT NAME THE GROUP THAT WAS NOT KEPT: ' + JSON.stringify(r.carry.notCarried));
+    }
+  } finally { if (frozen.has(r2)) { try { r2.proc.kill('SIGCONT'); } catch {} frozen.delete(r2); } }
 }
-test('F1 — r2 OFF (connection refused): Remove keeps the helper’s group on r1, dated S+1', { todo: 'F1 round (plan §2, 0d H-s)' }, () => f1Case('killed'));
-test('F1 — r2 ASLEEP (SIGSTOP): the carry finishes inside its limit and keeps the helper’s group on r1, dated S+1', { todo: 'F1 round (plan §2.3)' }, () => f1Case('frozen'));
+test('F1 (ee) — r2 OFF: the removal goes ahead, NOTHING is kept, and what was not kept is listed', () => f1Case('killed'));
+test('F1 (ee) — r2 ASLEEP: the removal finishes inside its limit, NOTHING is kept, and it is listed', () => f1Case('frozen'));
+test('F1 (ee) — every relay up: the helper’s 12-day-old group is kept, dated NOW, and reported carried', () => f1Case('all-up'));
 
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════
 // The real DashMembers, its Block pressed, over the engine lifted from the bundle. setBlocked is a stand-in that
