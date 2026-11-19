@@ -111,6 +111,34 @@
     await iosGate();
     return filesOn();
   }
+  // L2 (audit pr24): before the first FILE write this session, make sure Library/audio carries the
+  // backup-exclude attribute, so a write can never land under a root that lost/never-got it. A directory's
+  // exclusion covers its whole subtree, later files included, so re-excluding the root is enough, and this
+  // code never removes the ROOT (only audio/<id> subfolders). On a NORMAL run iosGate() already created +
+  // confirmed the root at boot, so there's nothing to redo — skip (that keeps the one boot-time exclude the
+  // only call). The real gap is a LATCHED run whose boot exclude did not confirm (files are on via the
+  // latch, iosBackupExcludeReady is false, ensureGate() short-circuits): there we re-apply, covering every
+  // iOS write path — import, the World English move (R5-1c), putWebChapter, placeUnplaced — since they all
+  // go through fWrite or move. exclude() (re)creates the root AND sets the attribute, so the order is right
+  // even if the folder is missing. Timeout-raced exactly like iosGate() so a stuck plugin can never hang a
+  // write; at most one attempt per session.
+  let iosRootExcluded = false;
+  async function ensureIosRootExcluded() {
+    if (iosRootExcluded || !isIos() || !filesOn()) return;
+    iosRootExcluded = true;
+    if (iosBackupExcludeReady) return;   // boot exclude already confirmed the root this run; nothing to redo
+    const c = cap();
+    const P = (c && typeof c.isPluginAvailable === 'function' && c.isPluginAvailable('BackupExclude')) ? (c.Plugins && c.Plugins.BackupExclude) : null;
+    if (!P || typeof P.exclude !== 'function') return;
+    let timer = null;
+    try {
+      await Promise.race([
+        Promise.resolve(P.exclude({ path: 'audio' })).catch(() => null),
+        new Promise(res => { timer = setTimeout(() => res(null), LIM.excludeMs); }),
+      ]);
+    } catch (e) {}
+    if (timer) clearTimeout(timer);
+  }
 
   // ─────────────── registry ───────────────
   function rows() {
@@ -165,6 +193,7 @@
   // one leaves it for the boot sweep. A half-written chapter can therefore never count as present, hide an intact
   // IndexedDB copy, or stop a download fetching it again.
   async function fWrite(path, u8) {
+    await ensureIosRootExcluded();
     const P = FSP(); const tmp = path + '.part';
     try {
       await P.writeFile({ path: tmp, data: b64(u8.subarray(0, WRITE_CHUNK)), directory: DIR(), recursive: true });
@@ -258,6 +287,7 @@
   }
   async function move(id, fromSub, ext, toSub) {
     if (filesOn()) {
+      await ensureIosRootExcluded();
       const P = FSP();
       const to = fpath(id, toSub, ext);
       try { await P.mkdir({ path: to.slice(0, to.lastIndexOf('/')), directory: DIR(), recursive: true }); } catch (e) {}

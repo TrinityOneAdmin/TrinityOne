@@ -495,6 +495,23 @@ test('iOS GATE — exclude({path:"audio"}) resolving excluded:true at boot puts 
   assert.equal(again.length, 1, 'the exclusion is not re-applied on the next start');
 });
 
+test('iOS GATE — latched run whose boot exclude did not confirm: the root is re-excluded before the first file write (L2, audit pr24)', async () => {
+  // this phone latched to file storage on an earlier run; today the plugin answers excluded:false, so
+  // iosGate leaves iosBackupExcludeReady false but the latch keeps files on. A write must still re-apply
+  // exclude('audio') so a root that lost/never-got the attribute this session is excluded before files land.
+  const ls = new Map([['trinityone.audioFilesIos', '1']]);
+  const calls = [];
+  const w = storeWorld({ native: true, platform: 'ios', ls, backupExclude: 'false', excludeCalls: calls });
+  await w.S.boot();
+  assert.equal(w.S.filesOn(), true, 'the latch did not keep files on');
+  const afterBoot = calls.length;                                   // the boot iosGate attempt
+  const { id } = await imp(w, [['John_5.mp3', mp3('j5')]]);
+  assert.ok(w.disk.has('audio/' + id + '/43/5.mp3'), 'the latched import did not go to files');
+  const extra = calls.slice(afterBoot);
+  assert.equal(extra.length, 1, 'exclude({path:"audio"}) was not re-applied exactly once before the file write');
+  assert.equal(extra[0].path, 'audio', 're-exclude used a path other than "audio"');
+});
+
 test('iOS GATE — plugin missing, rejecting, or answering excluded:false: iOS stays on IndexedDB and nothing migrates', async () => {
   for (const mode of ['missing', 'reject', 'false']) {
     const idbData = new Map(); seedWeb(idbData, [[43, 1]]);

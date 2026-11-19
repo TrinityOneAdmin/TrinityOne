@@ -190,19 +190,14 @@ public class BackupExcludePlugin: CAPPlugin, CAPBridgedPlugin {
         return base.appendingPathComponent(relPath)
     }
 
-    /// Reject empty, absolute, or `..`-containing paths. Returns true (and rejects the
-    /// call) when the path is invalid.
+    /// Allowlist. This plugin exists ONLY to exclude Library/audio from backup. Accepting
+    /// arbitrary paths (".", "./", "WebKit", ...) would let a caller mark the whole Library
+    /// directory — which holds WebKit storage and the app's keys — as excluded from backup,
+    /// so an iCloud restore would lose them. Accept exactly "audio"; reject everything else.
+    /// Returns true (and rejects the call) when the path is not allowed.
     private func rejectIfInvalid(_ path: String, _ call: CAPPluginCall) -> Bool {
-        if path.isEmpty {
-            call.reject("path must not be empty")
-            return true
-        }
-        if path.hasPrefix("/") {
-            call.reject("path must be relative to the Library directory, not absolute")
-            return true
-        }
-        if path.split(separator: "/", omittingEmptySubsequences: false).contains("..") {
-            call.reject("path must not contain '..'")
+        if path != "audio" {
+            call.reject("path must be exactly \"audio\"")
             return true
         }
         return false
