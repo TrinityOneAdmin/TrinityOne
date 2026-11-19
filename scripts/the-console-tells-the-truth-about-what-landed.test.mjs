@@ -102,6 +102,9 @@ async function revokeWhenOkIsLost(w, urls, { roster: rosterNow = [STEW, OTHER], 
     await revokes()[0].props.onClick();
     tree = draw(C, { church: { name: 'St Aidan' } });
     await press(tree, /Confirm — revoke this helper/);
+    // SETTLE ON TIMERS, NOT A FIXED NUMBER OF TICKS (2026-11-19): the outcome is now re-read inside the stand-in engine
+    // (as _settleStewardRemoval does), behind this world's setTimeout(0) pool — press()'s six setImmediate turns raced it
+    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5));
     tree = draw(C, { church: { name: 'St Aidan' } });
   }
   return { calls, said: reads(tree), revokeControls: revokes().length };

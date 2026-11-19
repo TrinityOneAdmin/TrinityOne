@@ -470,7 +470,9 @@ test('never a child — a carried care-team list loses anyone the children list 
   const eng = owner(); const dana = await newSteward(); const x = H.key().pub, kid = H.key().pub;
   await setRoster(eng, [dana.pub], { [dana.pub]: ['care'] });
   await sleep(1100);
-  const danaAt = Math.floor(Date.now() / 1000);
+  // newer than any church copy of careteam:<cp> an earlier test left (a carried copy is dated its author's save + 1)
+  const prior = await churchCopy(CARETEAM_D + cp);
+  const danaAt = Math.max(Math.floor(Date.now() / 1000), prior ? prior.created_at + 2 : 0);
   await mustPut(raw(dana, CARETEAM_D + cp, { pubs: [x, kid] }, { at: danaAt }));
   eng.window.Steward.readMinors = async () => ({ known: true, list: [kid] });
   const r = await eng._carryOverStewardDocs(dana.pub);
