@@ -994,30 +994,6 @@
     if (fetchBtn) { fetchBtn.disabled = noSource; fetchBtn.title = noSource ? 'Set an update source first' : ''; }
     const keep = document.getElementById('keepApkCurrent'); if (keep) keep.checked = s.keepCurrent === true;
     const open = document.getElementById('openInstall'); if (open && s.shareUrl) open.href = s.shareUrl;
-    // "GIVE PEOPLE THIS" ONLY WHEN THERE IS SOMETHING PEOPLE CAN USE. The box answers with the address the
-    // ASKER used, and this panel asks from 127.0.0.1 — so on a Suite box that is not yet public the card
-    // printed http://127.0.0.1:8787/install under "share the address" and a QR encoding the same (owner's
-    // screenshot, 2026-09-19). That address resolves, on a member's phone, to the member's phone. Same rule
-    // as the console's installPageUrl(): loopback is refused; a private (LAN) address works on the church's
-    // own wifi and is carried and LABELLED; anything else is printed as it is. The gateway now folds this
-    // box's own tunnel into shareUrl, so once "Make it public" has been pressed the address here follows.
-    const share = String(s.shareUrl || '');
-    let host = '';
-    try { host = new URL(share).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch (e) { host = ''; }
-    const LOOP = /^(localhost|::1|0\.0\.0\.0|127\.)/, LAN = /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)|\.local$/;
-    const kind = !share ? 'none' : LOOP.test(host) ? 'local' : LAN.test(host) ? 'lan' : 'public';
-    const url = document.getElementById('installUrl');
-    const h2 = document.getElementById('installShareH'), p2 = document.getElementById('installShareP'), qr = document.getElementById('installQr');
-    if (url) { url.textContent = kind === 'local' || kind === 'none' ? '' : share; url.style.display = kind === 'local' || kind === 'none' ? 'none' : ''; }
-    if (qr) qr.style.display = kind === 'local' || kind === 'none' ? 'none' : 'block';
-    if (h2) h2.textContent = kind === 'local' ? 'Not shareable yet' : kind === 'none' ? 'No address yet' : 'Give people this';
-    if (p2) p2.textContent = kind === 'local'
-      ? 'This works only on this computer — press “Make it public” in Reach members from anywhere, above, to get an address you can share.'
-      : kind === 'lan'
-        ? 'This works on your own wifi only. Point a phone camera at the code, or share the address — for one that works anywhere, press “Make it public” above.'
-        : kind === 'none'
-          ? 'The relay did not say where it can be reached.'
-          : 'Point a phone camera at the code, or share the address. It opens the install page — no password, nothing to sign into.';
   }
 
   document.getElementById('fetchApk')?.addEventListener('click', async () => {

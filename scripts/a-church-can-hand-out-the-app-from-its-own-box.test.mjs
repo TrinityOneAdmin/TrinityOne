@@ -249,7 +249,7 @@ function fakeDom(ids) {
 
 async function runPanel(reply) {
   const src = fnBody(CONTROL, 'async function loadApkStatus()', 'loadApkStatus');
-  const dom = fakeDom(['apkHeld', 'installerCard', 'keepApkCurrent', 'installUrl', 'openInstall']);
+  const dom = fakeDom(['apkHeld', 'installerCard', 'keepApkCurrent', 'openInstall']);
   const calls = [];
   const globals = {
     document: dom.document,
@@ -294,8 +294,6 @@ test('a behind box gets a headline an operator cannot miss, and an instruction',
     'the warning does not say what to do about it');
   assert.match(html, /0\.9\.99/, 'the card does not state which build the box currently holds');
   assert.match(html, /added 2 days ago/i, 'the card does not say how old the held copy is');
-  assert.equal(dom.els.get('installUrl').textContent, 'https://grace.example/install',
-    'the address a church shares is not put on screen, so there is nothing to hand out');
 });
 
 test('a box that is up to date says members can install from it, and holds no warning', async () => {
@@ -319,7 +317,7 @@ test('the panel’s markup carries every element the function writes to, and no 
   // The lifted function proves the behaviour; this proves the card it writes into actually exists on the
   // page, which no amount of running the function can show.
   const html = readFileSync(join(ROOT, 'relay-app/control.html'), 'utf8');
-  for (const id of ['installerCard', 'apkHeld', 'keepApkCurrent', 'installUrl', 'openInstall', 'fetchApk']) {
+  for (const id of ['installerCard', 'apkHeld', 'keepApkCurrent', 'openInstall', 'fetchApk']) {
     assert.ok(html.includes('id="' + id + '"'), `#${id} is missing from the panel, so loadApkStatus writes into nothing`);
   }
   assert.match(html, /Let members install the app from this box/,
