@@ -144,3 +144,24 @@ test('SHIPPED publishProfile: the kind-0 carries short_name, capped at 16; a pro
   await ch.run({ name: 'Grace Church' });
   assert.ok(!('short_name' in JSON.parse(ch.out[0].content)), 'a church that never set a short name now publishes a short_name key');
 });
+
+// ── audit of 590fa968 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+test('SHIPPED netShortName: drops zero-width / bidi characters, keeps emoji joiners, and caps by grapheme', () => {
+  assert.equal(netShortName('‮BB​&⁦RB﻿‎'), 'BB&RB');
+  const fam = '\u{1F468}‍\u{1F469}‍\u{1F467}';
+  assert.equal(netShortName(fam.repeat(20)), fam.repeat(16), 'a family emoji was split or the cap counted code points');
+  assert.equal(netShortName('  Bed   Bath  '), 'Bed Bath');
+});
+
+test('the field keeps a space typed between two words (it is trimmed on Save, not per keystroke), and strips a bidi override as typed', async () => {
+  const p = identityPage({ network: true });
+  let t = p.render();
+  field(t)[0].props.onChange({ target: { value: 'Bed ' } });
+  t = p.render();
+  assert.equal(field(t)[0].props.value, 'Bed ', 'the space after a word was eaten as it was typed');
+  field(t)[0].props.onChange({ target: { value: '‮Bed Bath ' } });
+  t = p.render();
+  assert.equal(field(t)[0].props.value, 'Bed Bath ');
+  await find(t, n => n.type === 'button' && (n.kids || []).some(k => k === 'Save'))[0].props.onClick();
+  assert.deepEqual(p.published, [{ short_name: 'Bed Bath' }]);
+});

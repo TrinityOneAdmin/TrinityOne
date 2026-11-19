@@ -261,3 +261,75 @@ test('COMMUNITY CARD: the same line and dot, below the serving line, opening the
   const off = await servingEntry({ netLine: null });
   assert.equal(byTestId(off.tree, 'net-line').length + byTestId(off.tree, 'net-dot').length, 0);
 });
+
+// ── audit of 590fa968 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+test('CALENDAR TAB (MyMonth): a network event on the selected day is tagged "🌐 from <short name>" with no RSVP; a church event keeps its RSVP (control)', () => {
+  const day = iso(0);
+  const t = serving({ extraCtx: { netTabs: [TAB()], servingTab: 'calendar', churchEvents: [{ ...NET_EVENT, date: day }, { ...CHURCH_EVENT, date: day }] } });
+  const rows = find(t.tree, n => n.type === 'div' && n.props && n.props.style && n.props.style.padding === 14 && n.props.style.borderRadius === 18 && /Advent prayer evening|Carols by candlelight/.test(said(n)));
+  const net = rows.find(c => /Advent prayer evening/.test(said(c))), own = rows.find(c => /Carols by candlelight/.test(said(c)));
+  assert.ok(net && own, 're-anchor: the calendar day did not list both events');
+  assert.deepEqual(byTestId(net, 'net-from').map(n => said(n)), ['🌐 from BB&RB'], 'the network event in the Calendar tab is not tagged');
+  const rsvp = (c) => find(c, n => n.type === 'button' && /^(Going|Maybe|Can’t)$/.test(said(n).trim())).length;
+  assert.equal(rsvp(net), 0, 'a network event in the Calendar tab offers RSVP');
+  assert.equal(rsvp(own), 3, 'CONTROL: the church event in the Calendar tab has no RSVP');
+});
+
+test('NAMES ARE ISOLATED: the tab label, the pane title, the event tag and the Today line put the network-chosen name inside <bdi>', () => {
+  const t = serving({ extraCtx: { netTabs: [TAB()], servingTab: KEY, churchEvents: [NET_EVENT] } });
+  const bdis = find(t.tree, n => n.type === 'bdi').map(said);
+  assert.ok(bdis.includes('BB&RB'), 'the tab label is not in a <bdi>: ' + JSON.stringify(bdis));
+  assert.ok(bdis.includes('Bed, Bath & Regions Beyond'), 'the pane title is not in a <bdi>');
+  const ev = serving({ extraCtx: { netTabs: [TAB()], servingTab: 'events', churchEvents: [NET_EVENT] } });
+  assert.ok(find(byTestId(ev.tree, 'net-from')[0], n => n.type === 'bdi').length === 1, 'the event tag name is not in a <bdi>');
+  const line = byTestId(today({ netLine: LINE }).draw(), 'net-line')[0];
+  assert.equal(find(line, n => n.type === 'bdi').length, 2, 'the Today line does not isolate the title and the headline');
+});
+
+// ChatScreen's "Part of <network>" chip (app/screens-chat.jsx), the REAL ChatScreen with the harness of no-child-safe-rooms-is-not-no-rooms.
+function chat(ctxOver = {}) {
+  const { React, draw } = miniReact();
+  const win = {
+    NETWORKS_ENABLED: true,
+    Fellowship: { myPubkey: 'mehex', relays: ['wss://relay.example'], subscribeChurchGroups: (_np, cb) => { cb([]); return () => {}; },
+      subscribeChurchCategories: (_np, cb) => { cb([]); return () => {}; }, subscribeGroups: () => () => {}, displayFor: () => ({ handle: 'sam', color: '#888' }), assumeMinor: async () => false },
+    TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
+    TrinityIdentity: { current: { handle: 'me', color: '#123456' } },
+    addEventListener: () => {}, removeEventListener: () => {},
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  };
+  const mod = loadScreen('app/screens-chat.jsx', ['ChatScreen'], {
+    React, window: win,
+    document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
+    location: { search: '', href: 'https://app.trinityone.church/' },
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    lsGet: (_k, d) => d, lsSet: () => {}, todayISO: () => '2026-11-19',
+    Icon: () => null, IconBtn: ({ name }) => React.createElement('button', { title: name }),
+    Overlay: ({ open, children }) => (open ? children : null), ScreenScroll: ({ children }) => children,
+    ChurchPill: () => null, UserAvatar: () => null, SectionLabel: ({ children }) => children,
+    BottomSheet: ({ open, children }) => (open ? children : null), safeCssColor: (c) => c, relTime: () => 'now',
+    D: { GROUPS: [], RELAYS: [] },
+  });
+  const opened = [], switched = [];
+  const ctx = {
+    toast: () => {}, church: { npub: 'npub1church', name: 'St Bede', id: 'c1' },
+    joinState: { loaded: true, isPending: false, removed: false, offline: false, unknown: false },
+    myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor: false, clearanceKnown: true },
+    openPeople: () => {}, openDM: () => {}, openDMInbox: () => {}, openGroup: () => {},
+    openServing: (k) => opened.push(k), setActiveChurch: (x) => switched.push(x), servPending: [], care: { settings: { enabled: false } },
+    ...ctxOver,
+  };
+  const render = () => draw(mod.ChatScreen, { ctx });
+  render();
+  return { tree: render(), opened, switched };
+}
+test('COMMUNITY CHIP: "Part of <network>" opens that network\'s tab in What\'s happening and never switches church; no chip without one', () => {
+  const c = chat({ churchNetworks: [{ networkPub: NETHEX, npub: 'npub1net', name: 'BB&RB', tabKey: KEY }] });
+  const chip = find(c.tree, n => n.type === 'button' && /Part of\s*BB&RB/.test(said(n)));
+  assert.equal(chip.length, 1, 'no "Part of" chip for the joined network');
+  chip[0].props.onClick();
+  assert.deepEqual(c.opened, [KEY], 'the chip did not open the network tab');
+  assert.deepEqual(c.switched, [], 'the chip switched the member to the network as if it were a church');
+  const none = chat({ churchNetworks: [] });
+  assert.equal(find(none.tree, n => n.type === 'button' && /Part of/.test(said(n))).length, 0);
+});

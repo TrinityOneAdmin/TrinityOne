@@ -424,8 +424,17 @@ function netProfileOf(e, networkPub) {
   if (!e || e.kind !== 0 || !networkPub || e.pubkey !== networkPub) return null;
   let c = null; try { c = JSON.parse(e.content || ''); } catch { return null; }
   if (!c || typeof c !== 'object') return null;
-  const clip = (v, n) => Array.from(String(v == null ? '' : v).replace(/\s+/g, ' ').trim()).slice(0, n).join('').trim();
-  return { name: clip(c.name, 80), shortName: clip(c.short_name, 16), at: e.created_at || 0 };
+  return { name: netClipText(c.name, 80), shortName: netClipText(c.short_name, 16), at: e.created_at || 0 };
+}
+// A network-chosen string made safe to show as one short line: zero-width and bidi-control characters removed (they let a name look like
+// another, or reverse the text around it -- U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+FEFF; U+200C/200D are KEPT: they join emoji sequences and some scripts), whitespace collapsed, then capped at `n`
+// user-perceived characters (grapheme clusters via Intl.Segmenter where the WebView has it, else code points). The same rule as the console's
+// Steward.netShortName. Callers: netProfileOf.
+function netClipText(v, n) {
+  const s = String(v == null ? '' : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+  let parts = null;
+  try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
+  return (parts || Array.from(s)).slice(0, n).join('').trim();
 }
 
 function App() {
@@ -1792,20 +1801,39 @@ function App() {
   //   · its events inside Events / Calendar, tagged, with no RSVP (merged into ctx.churchEvents below, only while the church's
   //     own calendar feature is on).
   // Everything is behind NETWORKS_ENABLED (app/data.jsx): with it off no network is even looked up.
-  // The networks the active church has joined (it publishes network:<networkPub>).
-  const [churchNetworks, setChurchNetworks] = useA([]);
+  // The networks the active church has joined (it publishes network:<networkPub>). TAGGED WITH THE CHURCH IT WAS READ FOR (audit of 590fa968):
+  // the engine's address reader never emits on an empty answer, so after a switch to a church in no network the list from the PREVIOUS church
+  // would stay on screen for ever. A list read for another church is simply not used.
+  const _netNp = (churches.find(c => c.id === activeChurch) || {}).npub || '';
+  const [churchNetsFor, setChurchNetsFor] = useA({ cp: '', list: [] });
   useAE(() => {
     if (!lazyReady) return;
-    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (window.NETWORKS_ENABLED !== true || !np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { /* NETWORKS SWITCH (app/data.jsx): off = a member follows no network */ setChurchNetworks([]); return; }
-    return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
-  }, [activeChurch, churches, connTick, lazyReady]);
-  // CHILD GUARD (owner 2026-10-21, re-confirmed 2026-11-18): the church's markings are trusted -- an unmarked member is an adult. Nothing from a
-  // network is put on screen until this church's clearance answer has LOADED (assumeKnownFor === activeChurch), and never for a member this
-  // church has marked a child (the relay's netReader withholds the content from them too). Deliberately NOT "assume a child when unmarked".
+    const np = _netNp;
+    if (window.NETWORKS_ENABLED !== true || !np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { /* NETWORKS SWITCH (app/data.jsx): off = a member follows no network */ setChurchNetsFor({ cp: np, list: [] }); return; }
+    setChurchNetsFor({ cp: np, list: [] });
+    return window.Fellowship.subscribeChurchNetworks(np, (list) => setChurchNetsFor({ cp: np, list: Array.isArray(list) ? list : [] }));
+  }, [_netNp, connTick, lazyReady]);
+  const churchNetworks = (churchNetsFor.cp && churchNetsFor.cp === _netNp) ? churchNetsFor.list : [];
+  // CHILD GUARD (owner 2026-10-21, re-confirmed 2026-11-18): the church's MARKINGS are trusted -- an unmarked member is an adult and is served,
+  // exactly as the relay's netReader serves by marking (minorOf). The only client guard is: nothing until this church has ANSWERED.
+  // Fellowship.minorStanding answers 'marked' | 'unmarked' | 'unknown' (src/fellowship.src.js _minorStanding). It is NOT assumeMinor:
+  // assumeMinor also says "true" for a lookup that failed AND for an unmarked member of a church that uses safeguarding (the feed's
+  // assume-a-child policy), and it cannot tell those apart. So: unknown / failed / not yet settled -> not cleared (no subscription, nothing
+  // painted); settled 'unmarked' -> cleared; 'marked' or the church's own clearance saying child (safeguard.isMinor) -> never.
   // STEP-2 SEAM (child-friendly posts, DOMAIN.md 2026-11-18): when a church opts in, a marked child will be served only posts tagged
   // "Suitable for children". That changes THIS line (and filters the posts by their tag) -- nothing on the screens decides it.
-  const netCleared = window.NETWORKS_ENABLED === true && !!activeChurch && assumeKnownFor === activeChurch && !safeguard.isMinor;
+  const [netStanding, setNetStanding] = useA({ cp: '', v: 'unknown' });
+  useAE(() => {
+    let live = true;
+    const np = _netNp, F = window.Fellowship;
+    if (window.NETWORKS_ENABLED !== true || !np || !F || typeof F.minorStanding !== 'function') { setNetStanding({ cp: np, v: 'unknown' }); return; }
+    let q; try { q = F.minorStanding(np); } catch (e) { q = Promise.reject(e); }
+    Promise.resolve(q)
+      .then(v => { if (live) setNetStanding({ cp: np, v: (v === 'marked' || v === 'unmarked') ? v : 'unknown' }); })
+      .catch(() => { if (live) setNetStanding({ cp: np, v: 'unknown' }); });
+    return () => { live = false; };
+  }, [_netNp, safeguard.isMinor, connTick]);
+  const netCleared = window.NETWORKS_ENABLED === true && !!_netNp && netStanding.cp === _netNp && netStanding.v === 'unmarked' && !safeguard.isMinor;
   // The network's PUBLIC profile (kind-0): its name and the short name its steward chose for the members' tab. Only a profile SIGNED BY THE
   // NETWORK KEY counts (netProfileOf): a name is the one thing a stranger could try to put on this tab.
   const [netProfiles, setNetProfiles] = useA({});   // networkPub -> { name, shortName, at }
@@ -1897,7 +1925,7 @@ function App() {
   const _notifResOn = _notifFeat.resources !== false;
   const notifications = React.useMemo(() => {   // P8: recompute only when a notification source changes, not every render
     const out = [];
-    netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
+    netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true, networkPub: a._networkPub }));
     broadcastMsgs.forEach(m => out.push({ id: 'bc:' + m.id, kind: 'notice', group: _churchNameFor, text: m.text, ts: m.ts, groupObj: churchGroups.find(g => g.id === m.gid) || null }));
     // the feature-gated church-resource rows (devotional / sermon / reading plan / event) — built by
     // notifFeatureRows in screens-extras.jsx so the gate is point-of-use testable (App() cannot be rendered).
@@ -1909,7 +1937,8 @@ function App() {
   }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor, servReqs, _notifCalOn, _notifResOn]);   // eslint-disable-line
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
-  const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
+  // A network update read on its Network tab (markNetTabSeen) is read here too: the bell does not keep counting what the member has seen.
+  const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs && !(n.kind === 'network' && n.networkPub && (n.ts || 0) <= Number(netSeen[_actNpub + '|' + n.networkPub] || 0))).length;
   const markNetSeen = () => { const top = notifications[0] && notifications[0].ts; if (top && top > netSeenTs) { setNetSeenTs(top); try { localStorage.setItem('trinityone.net-seen', String(top)); } catch {} } };
 
   // ── "something new" on the Serving & events card ──────────────────────────────────────────────────────────

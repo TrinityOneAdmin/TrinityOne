@@ -1348,7 +1348,7 @@ function KidsRegister({ ctx }) {
 // "🌐 from <short name>": the tag on a network event wherever a member meets it (Events, Calendar, the event sheet). Its NAME is the network's
 // short name, read only from a profile the network key signed (app/app.jsx netProfileOf).
 function SvNetFrom({ e }) {
-  return <span data-testid="net-from" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '1px 8px', whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'🌐 from ' + ((e && e._network) || 'Network')}</span>;
+  return <span data-testid="net-from" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '1px 8px', whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'🌐 from '}<bdi>{(e && e._network) || 'Network'}</bdi></span>;   /* <bdi>: a network-chosen name cannot reorder the text around it */
 }
 function svNetAgo(ts) {
   const s = Math.max(0, Math.floor(Date.now() / 1000) - (ts || 0));
@@ -1370,7 +1370,7 @@ function NetworkTab({ t, ctx }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>{initials}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}>{t.name || t.title}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}><bdi>{t.name || t.title}</bdi></div>
           {/* "N churches" is left out: the member app has no honest count of who joined (only the network key can read that). */}
           {churchName ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>{churchName} is a member</div> : null}
         </div>
@@ -1590,7 +1590,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
-                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && (pending.length + swapView.asks.length) ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length + swapView.asks.length}</span> : null}
+                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {k.indexOf('net:') === 0 ? <bdi>{lbl}</bdi> : lbl}{k === 'serving' && (pending.length + swapView.asks.length) ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length + swapView.asks.length}</span> : null}
               </button>
             );
           })}

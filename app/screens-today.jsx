@@ -3262,7 +3262,7 @@ function NetUpdateLine({ line, ctx }) {
       style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0, cursor: 'pointer',
         background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', color: 'var(--clay-ink)' }}>
       <span aria-hidden="true" style={{ flexShrink: 0 }}>{'🌐'}</span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{(line.title || 'Network') + ' · ' + head}</span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}><bdi>{line.title || 'Network'}</bdi>{' · '}<bdi>{head}</bdi></span>
       <span aria-hidden="true" style={{ marginLeft: 'auto', flexShrink: 0, color: 'var(--ink-3)', fontWeight: 400 }}>{'›'}</span>
     </div>
   );

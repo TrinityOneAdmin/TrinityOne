@@ -20,7 +20,7 @@ const NPUB = 'npub1' + '0'.repeat(58);
 const NETNPUB = 'npub1' + '2'.repeat(58);
 const NET = { npub: 'npub1' + '1'.repeat(58), networkPub: 'f'.repeat(64) };
 
-function boot(flag, { seedNetwork = false } = {}) {
+function boot(flag, { seedNetwork = false, seedAsChurch = false } = {}) {
   const r = fakeReact();
   const env = appBrowser(); const window = env.window;
   if (flag !== undefined) window.NETWORKS_ENABLED = flag;
@@ -30,9 +30,12 @@ function boot(flag, { seedNetwork = false } = {}) {
   const App = loadApp({ React: r.React, window, expr: 'App' });
   window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church' }];
   window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(seedNetwork ? NETNPUB : NPUB));
-  if (seedNetwork) window.localStorage.setItem('trinityone.followedChurches', JSON.stringify([{ id: NETNPUB, npub: NETNPUB, name: 'Regions Beyond', kind: 'network', sub: 'Network' }]));
+  if (seedNetwork) window.localStorage.setItem('trinityone.followedChurches', JSON.stringify([{ id: NETNPUB, npub: NETNPUB, name: 'Regions Beyond', ...(seedAsChurch ? {} : { kind: 'network', sub: 'Network' }) }]));
   const calls = {}, callbacks = {};
-  window.Fellowship = new Proxy({ myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x }, {
+  // REAL answers for the two clearance questions (audit of 590fa968): the catch-all below would hand back a function, which a Promise
+  // resolves to a truthy non-answer -- test 2 then passed by accident rather than because the member was cleared.
+  window.Fellowship = new Proxy({ myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x,
+    assumeMinor: () => Promise.resolve(false), minorStanding: () => Promise.resolve('unmarked') }, {
     get: (t, k) => {
       if (k in t) return t[k];
       if (k === 'then' || typeof k === 'symbol') return undefined;
@@ -79,6 +82,11 @@ test('NETWORKS OFF: a followed network is not listed, is not the active church, 
 // reaches a member through a tab in What's happening (a-network-reaches-members-only-through-whats-happening.test.mjs). The entry still stays
 // in storage (asserted above), so nothing is deleted from a phone.
 test('NETWORKS ON: a stored network is STILL not listed and not the active church (a network is never a church to a member)', async () => {
+  // CONTROL (audit of 590fa968): the SAME stored entry without kind 'network' IS listed -- so the entry is well-formed and reaches the list,
+  // and the only thing keeping it out below is that it is a network.
+  const ctl = boot(true, { seedNetwork: true, seedAsChurch: true });
+  await settle(ctl);
+  assert.ok(ctxChurches(ctl).includes(NETNPUB), 'CONTROL: the seeded entry is not listed even as a church, so the check below proves nothing');
   const m = boot(true, { seedNetwork: true });
   await settle(m);
   assert.ok(!ctxChurches(m).includes(NETNPUB), 'with the switch on a stored network is listed as a church');

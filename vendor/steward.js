@@ -20169,7 +20169,14 @@ zoo`.split("\n");
     return pool.subscribeMany(relays(), filters, handlers);
   }
   function netShortName(v) {
-    return Array.from(String(v == null ? "" : v).replace(/\s+/g, " ").trim()).slice(0, 16).join("").trim();
+    const s = String(v == null ? "" : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, "").replace(/\s+/g, " ").trim();
+    let parts = null;
+    try {
+      if (typeof Intl !== "undefined" && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(void 0, { granularity: "grapheme" }).segment(s), (x) => x.segment);
+    } catch (e) {
+      parts = null;
+    }
+    return (parts || Array.from(s)).slice(0, 16).join("").trim();
   }
   function _ownOrigin() {
     if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "";

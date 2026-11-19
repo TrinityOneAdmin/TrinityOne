@@ -8629,6 +8629,22 @@
     if (audience === null) return true;
     return audience.length > 0;
   }
+  async function _minorStanding(cp) {
+    if (!cp) return "unknown";
+    const me = _mePub();
+    if (!me) return "unknown";
+    const mine = _sgMine(cp);
+    if (mine && mine.known) return mine.isMinor ? "marked" : "unmarked";
+    try {
+      const v = localStorage.getItem(SG_ASSUME_KEY + cp + "|" + me);
+      if (v === "1") return "marked";
+      if (v === "0") return "unmarked";
+    } catch (e) {
+    }
+    const audience = await _fetchChildCareAudience(cp);
+    if (audience === null || audience === void 0) return "unknown";
+    return "unmarked";
+  }
   async function _careNeedRefusal(cp) {
     const mine = _sgMine(cp);
     if (mine && mine.isMinor) return "minor-cannot-open";
@@ -15133,6 +15149,16 @@
         return await _assumeMinor(cp);
       } catch (e) {
         return true;
+      }
+    },
+    // 'marked' | 'unmarked' | 'unknown' -- see _minorStanding. A failure is 'unknown', never an answer.
+    async minorStanding(churchNpub) {
+      const cp = toPub(churchNpub);
+      if (!cp) return "unknown";
+      try {
+        return await _minorStanding(cp);
+      } catch (e) {
+        return "unknown";
       }
     },
     async canOpenCareNeed() {

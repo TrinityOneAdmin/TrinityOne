@@ -592,7 +592,7 @@ function ChatScreen({ ctx }) {
             <button key={n.networkPub} onClick={() => { ctx.openServing && ctx.openServing(n.tabKey); }} title="Tap to see its updates & events" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px 5px 8px', borderRadius: 999, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
               <Icon name="globe" size={14} color="var(--clay)" />
               <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>Part of</span>
-              <span style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 150 }}>{n.name || 'a network'}</span>
+              <span style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 150 }}><bdi>{n.name || 'a network'}</bdi></span>
               <Icon name="chevR" size={14} color="var(--ink-3)" />
             </button>
           ))}

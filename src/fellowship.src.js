@@ -2410,6 +2410,26 @@ async function _assumeMinor(cp) {
   if (audience === null) return true;
   return audience.length > 0;
 }
+// HAS THIS CHURCH MARKED ME A CHILD? -- answered by MARKING only (Networks member step 1; audit of 590fa968). 'marked' | 'unmarked' | 'unknown'.
+// Not _assumeMinor: that answers "true" for three different things -- marked, could-not-ask, and "this church uses safeguarding and has not
+// cleared me" (an assume-a-child POLICY) -- and network content must follow the owner's 2026-10-21 rule instead: trust the church's markings,
+// an unmarked member is an adult and is served (the relay's netReader does the same, by minorOf). So:
+//   my own sealed clearance has arrived            -> marked / unmarked, as it says
+//   a remembered answer for (church, me)           -> marked / unmarked (written only from that clearance, by _assumeMinor above)
+//   the church answered "who does it clear?"       -> unmarked: nothing marks me, whether or not the church uses safeguarding
+//   it could not be asked (null), or no key yet    -> unknown, and the caller shows nothing
+// Callers: Fellowship.minorStanding (app/app.jsx's network child gate only).
+async function _minorStanding(cp) {
+  if (!cp) return 'unknown';
+  const me = _mePub();
+  if (!me) return 'unknown';
+  const mine = _sgMine(cp);
+  if (mine && mine.known) return mine.isMinor ? 'marked' : 'unmarked';
+  try { const v = localStorage.getItem(SG_ASSUME_KEY + cp + '|' + me); if (v === '1') return 'marked'; if (v === '0') return 'unmarked'; } catch (e) {}
+  const audience = await _fetchChildCareAudience(cp);
+  if (audience === null || audience === undefined) return 'unknown';
+  return 'unmarked';
+}
 // MAY THIS PERSON OPEN A PUBLIC NEED? Module scope, not a method, so publishCareNeed reaches the real rule
 // rather than whatever `window.Fellowship` happens to be — and so a test that lifts the publisher lifts this
 // with it instead of stubbing the one decision that matters.
@@ -8826,6 +8846,12 @@ window.Fellowship = {
   async assumeMinor(churchNpub) {
     const cp = toPub(churchNpub) || window.Fellowship.churchPub;
     try { return await _assumeMinor(cp); } catch (e) { return true; }
+  },
+  // 'marked' | 'unmarked' | 'unknown' -- see _minorStanding. A failure is 'unknown', never an answer.
+  async minorStanding(churchNpub) {
+    const cp = toPub(churchNpub);
+    if (!cp) return 'unknown';
+    try { return await _minorStanding(cp); } catch (e) { return 'unknown'; }
   },
   async canOpenCareNeed() {
     const cp = window.Fellowship.churchPub;

@@ -5967,8 +5967,14 @@ function _subscribeMany(filters, handlers) {
 // A network's SHORT NAME: the title of the tab its members see inside What's happening (owner 2026-11-19). One line, at most 16 characters
 // (code points, so an emoji is one). '' = not set. Callers: publishProfile (the kind-0 it writes); the console's Short name field
 // (app/stew-dashboard.jsx NetShortNameField) caps with the same rule through window.Steward.netShortName.
+// Zero-width and bidi-control characters are removed first (U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+FEFF; U+200C/200D are KEPT: they join emoji sequences and some scripts: they let a name look like another,
+// or reverse the text around it), and the cap counts grapheme clusters where Intl.Segmenter exists, else code points. The member app applies
+// the same rule on read (app/app.jsx netClipText).
 function netShortName(v) {
-  return Array.from(String(v == null ? '' : v).replace(/\s+/g, ' ').trim()).slice(0, 16).join('').trim();
+  const s = String(v == null ? '' : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+  let parts = null;
+  try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
+  return (parts || Array.from(s)).slice(0, 16).join('').trim();
 }
 
 // one-shot read of the single NEWEST event matching `filters` (or null), bounded by a short timeout.

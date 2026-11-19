@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeReact, appBrowser, loadApp, nodes } from './app-screens.mjs';
 
-const CHURCH = 'npub1' + '0'.repeat(58);
+const CHURCH = 'npub1' + '0'.repeat(58), CHURCH2 = 'npub1' + '3'.repeat(58);
 const NETHEX = 'ab'.repeat(32), NETNPUB = 'npub1' + 'q'.repeat(10) + 'x'.repeat(40) + 'wxyz';
 const OTHERHEX = 'cd'.repeat(32);
 const iso = (days) => { const d = new Date(Date.now() + days * 864e5); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
@@ -27,20 +27,22 @@ const NOW = Math.floor(Date.now() / 1000);
 const POSTS = [{ id: 'a1', text: 'Older news', ts: NOW - 3 * 86400 }, { id: 'a2', text: 'Regional youth weekend: booking opens Monday\nLeaders, see the pack.', ts: NOW - 3600 }];
 const EVENTS = [{ id: 'ev1', title: 'Advent prayer evening', date: iso(10), time: '19:00', where: 'Bath Abbey' }];
 
-function boot({ flag = 'on', features, assume = 'adult', seedNetwork = false } = {}) {
+function boot({ flag = 'on', features, standing = 'unmarked', assumeChild = false, seedNetwork = false, second = false } = {}) {
   const r = fakeReact(); const env = appBrowser(); const window = env.window;
   if (flag === 'on') window.NETWORKS_ENABLED = true;   // 'default' leaves app/data.jsx to give the switch its shipped value
   window.Bible = { loaded: true, activeVersion: 'KJV', subscribe: () => () => {}, books: () => ['John'], maxChapter: () => 21, defaultLoc: () => ({ book: 'John', chap: 1 }) };
   window.MyData = { seedIfEmpty() {}, on: () => () => {}, list: () => [], settings: { get: () => ({}) }, count: () => 0, set: () => {} };
   window.TrinityData = {};
   const App = loadApp({ React: r.React, window, expr: 'App' });
-  window.TrinityData.CHURCHES = [{ id: CHURCH, npub: CHURCH, name: 'St Bede', ...(features ? { features } : {}) }];
+  window.TrinityData.CHURCHES = [{ id: CHURCH, npub: CHURCH, name: 'St Bede', ...(features ? { features } : {}) }, ...(second ? [{ id: CHURCH2, npub: CHURCH2, name: 'St Aidan' }] : [])];
   window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(CHURCH));
   if (seedNetwork) window.localStorage.setItem('trinityone.followedChurches', JSON.stringify([{ id: NETNPUB, npub: NETNPUB, name: 'Regions Beyond', kind: 'network', sub: 'Network' }]));
   const calls = [];
-  // assume: 'adult' answers the clearance question at once; 'never' leaves it unanswered (a promise that never settles)
-  const assumeMinor = assume === 'never' ? () => new Promise(() => {}) : () => Promise.resolve(false);
-  window.Fellowship = new Proxy({ myPubkey: 'ee'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, assumeMinor },
+  // standing: what Fellowship.minorStanding answers -- 'unmarked' | 'marked' | 'unknown', or 'never' (never settles) / 'throw' (rejects).
+  // assumeChild: what assumeMinor answers (true = the feed's assume-a-child policy); the network gate must NOT follow it.
+  const minorStanding = standing === 'never' ? () => new Promise(() => {}) : standing === 'throw' ? () => Promise.reject(new Error('relay down')) : () => Promise.resolve(standing);
+  const assumeMinor = () => Promise.resolve(!!assumeChild);
+  window.Fellowship = new Proxy({ myPubkey: 'ee'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, assumeMinor, minorStanding },
     { get: (t, k) => {
       if (k in t) return t[k];
       if (k === 'then' || typeof k === 'symbol') return undefined;
@@ -154,7 +156,7 @@ test('CHILD: a member this church marked a child gets no tab, no line, no networ
 });
 
 test('BEFORE CLEARANCE: until this church has answered "is this member a child?", nothing from a network is subscribed or shown', async () => {
-  const m = boot({ assume: 'never' });
+  const m = boot({ standing: 'never' });
   await m.settle(); await m.join();
   assert.ok(!m.last('subscribeNetworkContent'), 'network content was subscribed before the clearance answer loaded');
   const c = m.ctx();
@@ -184,4 +186,63 @@ test('A NETWORK IS NEVER A CHURCH: joining one adds nothing to the switcher, and
   assert.ok(!ids.includes(NETNPUB), 'joining a network put it in the church switcher');
   const stored = JSON.parse(f.window.localStorage.getItem('trinityone.followedChurches') || '[]');
   assert.ok(!stored.some(c => c.id === NETNPUB || c.kind === 'network'), 'a network was auto-added to the stored church list');
+});
+
+// ── audit of 590fa968 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const nothing = (m, why) => {
+  assert.ok(!m.last('subscribeNetworkContent'), why + ': network content was subscribed');
+  assert.ok(!m.last('subscribeNetworkProfile'), why + ': the network profile was read');
+  const c = m.ctx();
+  assert.equal(c.netTabs.length, 0, why + ': a tab'); assert.equal(c.netLine, null, why + ': a line'); assert.equal(c.churchNetworks.length, 0, why + ': a chip');
+};
+test('CHILD GATE: a clearance lookup that THROWS clears nobody -- nothing subscribed, nothing shown', async () => {
+  const m = boot({ standing: 'throw' }); await m.settle(); await m.join(); await m.tick(); m.draw();
+  nothing(m, 'lookup threw');
+});
+test('CHILD GATE: a lookup that answers "unknown" (could not ask the church) clears nobody', async () => {
+  const m = boot({ standing: 'unknown' }); await m.settle(); await m.join();
+  nothing(m, 'unknown');
+});
+test('CHILD GATE: settled and MARKED a child by this church -> nothing (even before the safeguarding subscription says so)', async () => {
+  const m = boot({ standing: 'marked' }); await m.settle(); await m.join();
+  nothing(m, 'marked');
+});
+test('CHILD GATE: an UNMARKED member of a church whose assume-a-child policy is on (assumeMinor true) IS served -- markings are trusted', async () => {
+  const m = boot({ standing: 'unmarked', assumeChild: true }); await m.settle(); await m.join(); await m.deliver();
+  const c = m.ctx();
+  assert.equal(c.netTabs.length, 1, 'an unmarked adult was hidden from network content by the assume-a-child policy');
+  assert.ok(c.netLine, 'no line for an unmarked adult');
+});
+
+test('CHURCH SWITCH: moving from a church in a network to one in none leaves no tab, chip or line, and opens no content subscription for it', async () => {
+  const m = boot({ second: true }); await m.settle(); await m.join(); await m.deliver();
+  assert.equal(m.ctx().netTabs.length, 1, 'CONTROL: the first church\'s network did reach the screens');
+  m.ctx().setActiveChurch(CHURCH2); m.draw(); await m.tick(); m.draw(); await m.tick(); m.draw();
+  assert.equal(m.ctx().activeChurch, CHURCH2, 're-anchor: the switch did not happen');
+  // the engine never answers for a church with no network document (it does not emit on an empty EOSE): send nothing
+  const c = m.ctx();
+  assert.equal(c.netTabs.length, 0, 'the previous church\'s network tab is still on screen');
+  assert.equal(c.churchNetworks.length, 0, 'the previous church\'s "Part of" chip is still on screen');
+  assert.equal(c.netLine, null, 'the previous church\'s network line is still on screen');
+  assert.ok(!m.calls.some(x => x[0] === 'subscribeNetworkContent' && x[1][1] === CHURCH2), 'network content was subscribed for the church that joined nothing');
+});
+
+test('BELL: reading a network\'s tab also clears the bell\'s count for that network\'s updates; a newer update counts again', async () => {
+  const m = boot(); await m.settle(); await m.join(); await m.deliver();
+  let c = m.ctx();
+  assert.equal(c.netUnread, 2, 'CONTROL: the bell does not count the two network updates');
+  c.markNetTabSeen(NETHEX); m.draw(); await m.tick();
+  assert.equal(m.ctx().netUnread, 0, 'reading the network tab left the bell counting its updates');
+  m.last('subscribeNetworkContent')[2]({ state: 'ready', announcements: [...POSTS, { id: 'a3', text: 'New', ts: NOW - 30 }], events: EVENTS, unreadable: 0 }); m.draw(); await m.tick();
+  assert.equal(m.ctx().netUnread, 1);
+});
+
+test('SHORT NAME: zero-width and bidi characters are dropped and the cap counts graphemes (a family emoji is one)', async () => {
+  const m = boot(); await m.settle(); await m.join(); await m.deliver();
+  await m.profile(NETHEX, { name: 'N‮evil', short_name: '‮BB​&⁦RB﻿' }, NOW);
+  assert.equal(m.ctx().netTabs[0].title, 'BB&RB', 'invisible / direction characters reached the tab title');
+  assert.equal(m.ctx().netTabs[0].name, 'Nevil');
+  const fam = '\u{1F468}‍\u{1F469}‍\u{1F467}';
+  await m.profile(NETHEX, { name: 'N', short_name: fam.repeat(20) }, NOW + 1);
+  assert.equal(m.ctx().netTabs[0].title, fam.repeat(16), 'the cap did not count whole grapheme clusters');
 });

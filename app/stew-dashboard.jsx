@@ -172,6 +172,14 @@ const NETWORK_WORDS_PAGE = { k: 'networds', n: 'Network recovery words', d: 'The
 // the network's name. Callers: DashSettings' identity page, network view only.
 function NetShortNameField({ church }) {
   const cap = (v) => (window.Steward && window.Steward.netShortName) ? window.Steward.netShortName(v) : Array.from(String(v || '')).slice(0, 16).join('');
+  // WHILE TYPING: invisible / bidi characters out and at most 16 characters, but NOT trimmed -- trimming each keystroke ate the space between
+  // two words as it was typed. The full rule (trim, collapse) is applied by `cap` on Save.
+  const live = (v) => {
+    const s = String(v == null ? '' : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '');
+    let parts = null;
+    try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
+    return (parts || Array.from(s)).slice(0, 16).join('');
+  };
   const saved = (church && church.short_name) || '';
   const [val, setVal] = React.useState(saved);
   const [busy, setBusy] = React.useState(false);
@@ -188,8 +196,8 @@ function NetShortNameField({ church }) {
     <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
       <label htmlFor="net-short-name" style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Short name (shown as the members' tab title)</label>
       <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-        <input id="net-short-name" data-testid="net-short-name" value={val} maxLength={32} placeholder={(church && church.name) ? Array.from(church.name).slice(0, 16).join('') : 'e.g. BB&RB'}
-          onChange={(e) => { setVal(cap(e.target.value)); setNote(''); }}
+        <input id="net-short-name" data-testid="net-short-name" value={val} placeholder={(church && church.name) ? Array.from(church.name).slice(0, 16).join('') : 'e.g. BB&RB'}
+          onChange={(e) => { setVal(live(e.target.value)); setNote(''); }}
           style={{ flex: 1, minWidth: 0, height: 38, padding: '0 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14, fontFamily: 'var(--font-ui)' }} />
         <button onClick={save} disabled={busy || !dirty} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}>{busy ? 'Saving…' : 'Save'}</button>
       </div>
