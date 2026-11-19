@@ -193,9 +193,11 @@ test('RELABEL: network view says Network for the settings group, identity and ke
   assert.ok(titles(nt).includes('Network identity'));
   const net2 = run({ network: true });
   const nk = drawTwice(net2.draw, net2.mod.DashSettings, { initialSection: 'key', onSectionConsumed() {} });
-  assert.ok(settingsRows(nk).some(r => /set-item-n Network key/.test(r)));
-  assert.ok(titles(nk).includes('Network key'), JSON.stringify(titles(nk)));
-  assert.equal(find(nk, n => n.type === 'section' && n.props['aria-label']).map(n => n.props['aria-label'])[0], 'Network key');
+  // B2a AUDIT (2026-11-19) CHANGED THIS ON PURPOSE: October pinned a "Network key" page here -- but that page reveals the CHURCH recovery phrase.
+  // In the network view the key page is now hidden, and a deep link to it lands on Network identity.
+  assert.ok(!settingsRows(nk).some(r => /set-item-n (Network|Church) key/.test(r)), 'the key page is listed in the network view: ' + JSON.stringify(settingsRows(nk)));
+  assert.ok(!titles(nk).some(t => /key/i.test(t)), JSON.stringify(titles(nk)));
+  assert.ok(titles(nk).includes('Network identity'), JSON.stringify(titles(nk)));
 
   const ch = run({ network: false });
   const ct = drawTwice(ch.draw, ch.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} });
@@ -227,19 +229,26 @@ test('NETWORK OVERVIEW DASHBOARD: Announcements and Events are two separate card
 });
 
 test('NETWORK SETTINGS: network view hides the six church-only pages and keeps the rest; church view lists all of them', () => {
-  // PORTED 2026-11-19: today's page wording (Features is "What members see"; "Help run a church"; Branding merged into Identity; "Hand over the church"; "Helpers")
-  const HIDDEN = [/Video & audio/, /What members see/, /Rules & privacy/, /Chat message tags/, /Belong to a group of churches/, /Help run a church/];
+  // PORTED 2026-11-19: today's page wording. B2a AUDIT: the network view is now an ALLOW-LIST -- only Network identity is shown; every other page
+  // acts on the church's key or data (the key page revealed the CHURCH phrase). Per-page reasons: NETWORK_SETTINGS_PAGES in app/stew-dashboard.jsx.
+  const HIDDEN = [/Video & audio/, /What members see/, /Rules & privacy/, /Chat message tags/, /Belong to a group of churches/, /Help run a church/,
+                  /Your calendar on your own site/, /Export, import and recovery/, /Under every notice from here/, /Where your church publishes/, /By address, auto-find or name/,
+                  /Copy across, keep in sync/, /Self-host with the Suite/, /Recovery phrase and backup/, /Give someone full control/, /Let someone help run the church/];
   const net = run({ network: true });
   const nr = settingsRows(drawTwice(net.draw, net.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).join(' | ');
   for (const re of HIDDEN) assert.doesNotMatch(nr, re, 'network view still lists ' + re + ': ' + nr);
-  for (const re of [/Network identity/, /Network key/, /Relays/, /Backup & data/, /Run your own box/, /Hand over the church/, /Helpers/]) assert.match(nr, re, 'network view lost a kept page ' + re + ': ' + nr);
+  assert.match(nr, /Network identity/, 'network view lost its identity page: ' + nr);
+  assert.equal(settingsRows(drawTwice(net.draw, net.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).filter(r => /set-item-n /.test(r)).length, 1, 'the network view lists more than its identity page: ' + nr);
   const ch = run({ network: false });
   const cr = settingsRows(drawTwice(ch.draw, ch.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).join(' | ');
   for (const re of HIDDEN) assert.match(cr, re, 'church view lost ' + re + ': ' + cr);
   // a deep link to a hidden page must not crash or open it: it lands on a valid page
   const dl = run({ network: true });
-  const dt = drawTwice(dl.draw, dl.mod.DashSettings, { initialSection: 'rules', onSectionConsumed() {} });
-  assert.ok(titles(dt).length >= 1 && !titles(dt).includes('Rules & privacy'), JSON.stringify(titles(dt)));
+  for (const k of ['rules', 'key', 'stewards', 'delegated', 'voice', 'website', 'backup', 'relays', 'add-relay', 'history', 'ownbox']) {   // B2a audit: every hidden page, by deep link
+    const d1 = run({ network: true });
+    const dt = drawTwice(d1.draw, d1.mod.DashSettings, { initialSection: k, onSectionConsumed() {} });
+    assert.deepEqual(titles(dt).filter(t => !/Network identity|Network branding/.test(t)), [], 'a deep link to "' + k + '" opened a church page in the network view: ' + JSON.stringify(titles(dt)));
+  }
 });
 
 test('NETWORK SETTINGS: the filter recomputes when the same mounted component switches church -> network (memo dependency)', () => {

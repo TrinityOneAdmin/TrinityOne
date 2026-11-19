@@ -66,7 +66,9 @@ test('(a) the screen says what the network CAN and CANNOT do, and that you can l
   // PORTED 2026-11-19 (B2a): no feed (owner: announcements and events only), and the screen now says what other churches will see.
   assert.match(said, /THE NETWORK CAN Post announcements and events to your members\./);
   assert.doesNotMatch(said, /feed/i, 'the join screen still promises a feed');
-  assert.match(said, /WHAT THE NETWORK’S CHURCHES WILL SEE Your church’s name and town become visible to the network and to the other churches in it\./);
+  // B2a audit: there is no town field -- the screen says only what is true
+  assert.match(said, /WHAT THE NETWORK’S CHURCHES WILL SEE The network and its other churches will see that your church has joined, and can see your church’s public profile \(its name and picture\)\./);
+  assert.doesNotMatch(said, /town/i, 'the join screen promises a town the app does not have');
   assert.match(said, /THE NETWORK CANNOT See or change anything of your church’s own: your children’s records, guardians, check-in, care and pastoral conversations, your rotas, plans and groups, your members, or your finance\./);
   assert.match(said, /You can leave at any time\./);
 });
@@ -108,6 +110,16 @@ test('(b) B2a: a join refused because a relay lacks the WALL names that relay in
   assert.match(said, /Not joined: wss:\/\/old\.example\/relay hasn’t confirmed the network safety update\./, 'the steward is not told which relay blocks the join: ' + said.slice(0, 300));
   assert.equal(p.codeInput().props.value, NPUB, 'the draft was cleared by a refused join');
   assert.match(said, /Join\s+Sussex Gospel Partnership\s*\?/, 'the screen vanished as if the join had worked');
+});
+
+test('(b) B2a audit: a join refused because a relay could not be REACHED says "couldn\'t reach … try again later", not "update it"', async () => {
+  const p = boot({ join: async () => ({ ok: false, stage: 'relay', missing: ['wss://down.example/relay'], lacking: [], unreachable: ['wss://down.example/relay'], reason: 'x' }) });
+  await toTheJoinScreen(p);
+  p.box().props.onChange({ target: { checked: true } }); p.draw();
+  await p.btn('Join network').props.onClick(); await settle();
+  const said = p.say().replace(/\s+/g, ' ');
+  assert.match(said, /Not joined: couldn’t reach wss:\/\/down\.example\/relay to check it is up to date\. Try again later\./, said.slice(0, 300));
+  assert.doesNotMatch(said, /safety update|remove/i);
 });
 
 test('(b) editing the code after the screen is up withdraws the screen (the yes was for another network)', async () => {

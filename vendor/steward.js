@@ -16510,7 +16510,7 @@ zoo`.split("\n");
   var NETRING_SEEN_LS = "trinityone.netring.seen.";
   var _hop2Done = /* @__PURE__ */ new Map();
   var _netStatus = /* @__PURE__ */ new Map();
-  async function _netWallMissing(urls) {
+  async function _netWallCheck(urls) {
     const has = (x) => !!x && Array.isArray(x.capabilities) && x.capabilities.includes(NETWORK_WALL_CAP);
     const ask = async (url) => {
       const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
@@ -16535,30 +16535,45 @@ zoo`.split("\n");
         }
       };
       const info = await get(http, "application/nostr+json");
-      if (info && has(info.trinityone)) return true;
+      if (info && has(info.trinityone)) return "ok";
       const st = await get(root + "/status", "");
-      return has(st);
+      if (has(st)) return "ok";
+      return info || st ? "none" : "down";
     };
-    const out = [];
-    const ok = await Promise.all((urls || []).map((u) => ask(u).catch(() => false)));
+    const got = await Promise.all((urls || []).map((u) => ask(u).catch(() => "down")));
+    const lacking = [], unreachable = [];
     (urls || []).forEach((u, i3) => {
-      if (!ok[i3]) out.push(u);
+      if (got[i3] === "none") lacking.push(u);
+      else if (got[i3] !== "ok") unreachable.push(u);
     });
-    return out;
+    return { lacking, unreachable };
   }
+  var _netIsShippedRelay = (u) => {
+    const n = (x) => String(x || "").trim().toLowerCase().replace(/\/+$/, "");
+    return CANONICAL_RELAYS.some((c) => n(c) === n(u));
+  };
   async function _netWallGate() {
     const set = relays();
-    if (!set.length) return { waiting: true, missing: [], reason: "Still connecting \u2014 no relay is ready for this church yet." };
-    const missing = await _netWallMissingCached(set);
-    if (!missing.length) return null;
-    return { waiting: false, missing, reason: "Network keys are paused: " + missing.join(", ") + (missing.length === 1 ? " has" : " have") + " not confirmed it runs the software that keeps a network out of your church\u2019s private records. Update " + (missing.length === 1 ? "it" : "them") + " or remove " + (missing.length === 1 ? "it" : "them") + " from this church\u2019s relays." };
+    if (!set.length) return { waiting: true, missing: [], lacking: [], unreachable: [], reason: "Still connecting \u2014 no relay is ready for this church yet." };
+    const { lacking, unreachable } = await _netWallCheckCached(set);
+    if (!lacking.length && !unreachable.length) return null;
+    const missing = [...lacking, ...unreachable];
+    const list = (a) => a.join(", "), one = (a) => a.length === 1;
+    const reach = unreachable.length ? "Couldn\u2019t reach " + list(unreachable) + " to check " + (one(unreachable) ? "it is" : "they are") + " up to date \u2014 it will try again later." : "";
+    if (!lacking.length) return { waiting: true, missing, lacking, unreachable, reason: "Network keys are waiting. " + reach };
+    const own = lacking.filter((u) => !_netIsShippedRelay(u)), shipped = lacking.filter((u) => _netIsShippedRelay(u));
+    const parts = [];
+    if (own.length) parts.push(list(own) + (one(own) ? " has" : " have") + " not confirmed " + (one(own) ? "it runs" : "they run") + " the software that keeps a network out of your church\u2019s private records. Update " + (one(own) ? "it" : "them") + " or remove " + (one(own) ? "it" : "them") + " from this church\u2019s relays.");
+    if (shipped.length) parts.push("The shared relay " + list(shipped) + (one(shipped) ? " has" : " have") + " not confirmed that update yet; network work waits until it is updated (nothing to change on your side).");
+    if (reach) parts.push(reach);
+    return { waiting: false, missing, lacking, unreachable, reason: "Network keys are paused: " + parts.join(" ") };
   }
   var _netWallOk = /* @__PURE__ */ new Set();
-  async function _netWallMissingCached(urls) {
+  async function _netWallCheckCached(urls) {
     const ask = (urls || []).filter((u) => !_netWallOk.has(u));
-    const missing = ask.length ? await _netWallMissing(ask) : [];
-    for (const u of ask) if (!missing.includes(u)) _netWallOk.add(u);
-    return missing;
+    const r = ask.length ? await _netWallCheck(ask) : { lacking: [], unreachable: [] };
+    for (const u of ask) if (!r.lacking.includes(u) && !r.unreachable.includes(u)) _netWallOk.add(u);
+    return r;
   }
   var NET_JOIN_READ_LIMIT = 500;
   async function _netReadJoiners(np) {
@@ -16822,14 +16837,14 @@ zoo`.split("\n");
         if (joined.size) {
           const wall = await _netWallGate();
           if (wall) {
-            if (wall.waiting) _netSyncAt = 0;
+            if (wall.waiting && !(wall.unreachable && wall.unreachable.length)) _netSyncAt = 0;
             const ownedNow = new Set(netKeys().map((r) => r.pub));
             for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: wall.waiting ? "waiting" : "trouble", reason: wall.reason });
             try {
               window.dispatchEvent(new CustomEvent("steward-network-status"));
             } catch (e) {
             }
-            return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+            return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, lacking: wall.lacking, unreachable: wall.unreachable, reason: wall.reason };
           }
         }
         const owned = /* @__PURE__ */ new Set();
@@ -30043,8 +30058,10 @@ zoo`.split("\n");
       if (np === churchPub) return { ok: false, stage: "code", reason: "That is this church\u2019s own code, not a network\u2019s." };
       const set = relays();
       if (!set.length) return { ok: false, stage: "relay", reason: "No relay is ready for this church yet, so it cannot join a network." };
-      const missing = await _netWallMissing(set);
-      if (missing.length) return { ok: false, stage: "relay", missing, reason: "Not joined. " + (missing.length === set.length ? "This church\u2019s relays have" : missing.length + " of this church\u2019s " + set.length + " relays have") + " not confirmed they run the software that keeps a network out of your church\u2019s private records (" + missing.join(", ") + "). They need updating first." };
+      const { lacking, unreachable } = await _netWallCheck(set);
+      const missing = [...lacking, ...unreachable];
+      if (lacking.length) return { ok: false, stage: "relay", missing, lacking, unreachable, reason: "Not joined. " + (lacking.length === set.length ? "This church\u2019s relays have" : lacking.length + " of this church\u2019s " + set.length + " relays have") + " not confirmed they run the software that keeps a network out of your church\u2019s private records (" + lacking.join(", ") + "). They need updating first." };
+      if (unreachable.length) return { ok: false, stage: "relay", missing, lacking, unreachable, reason: "Not joined: couldn\u2019t reach " + unreachable.join(", ") + " to check " + (unreachable.length === 1 ? "it is" : "they are") + " up to date. Try again later." };
       const prev = await _readNetworkJoin(np);
       const base = prev && prev.doc && typeof prev.doc === "object" ? prev.doc : {};
       const doc = { ...base, joined: true, v: 1 };
@@ -30171,13 +30188,14 @@ zoo`.split("\n");
       return _netStatus.get(toPubHex(networkPub) || networkPub) || null;
     },
     // How many churches have joined a network THIS console holds the key of, read live AS that key (c92c6e3a; works in network view, where
-    // syncNetworkKeys is church-only). -> a number >= 1, or null = UNKNOWN (no key, read failed, nothing came back -- never 0). Never throws.
+    // syncNetworkKeys is church-only). -> a number >= 1 (a complete read), { atLeast: n } (a partial one), or null = UNKNOWN (never 0). Never throws.
     // Callers (rule 2): DashNetworkOverview (app/stew-dashboard.jsx) only.
     async networkJoinerCount(networkPub) {
       try {
         const np = toPubHex(networkPub) || networkPub;
         const jr = await _netReadJoiners(np);
-        return jr && jr.ok && jr.joiners.length > 0 ? jr.joiners.length : null;
+        if (!(jr && jr.ok && jr.joiners.length > 0)) return null;
+        return jr.authoritative ? jr.joiners.length : { atLeast: jr.joiners.length };
       } catch (e) {
         return null;
       }
@@ -30825,6 +30843,7 @@ zoo`.split("\n");
       let latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
         onevent(e) {
+          if (e.pubkey !== np) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           let prof;

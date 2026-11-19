@@ -142,14 +142,27 @@ const NAV_TIPS = {
 };
 // NETWORK VIEW (Networks port, B2a, 2026-11-19 -- from October's 9d3373db / 6ed485ff / c56c20ee / 9a8617df). It applies only while the console is
 // switched to a network identity AND the Networks switch is on (stewNetView); with the switch off nothing below changes the console. Module scope, so
-// the nav, the tab effects and DashSettings read one fact. Rule 2 -- readers: stewNav, StewDashboard, DashSettings, DashNetworksPanel, NetworkBackBar.
+// the nav, the tab effects and DashSettings read one fact. Rule 2 -- readers: stewNav, StewDashboard, DashSettings, DashNetworksPanel, NetworkBackBar,
+// DashBrandingPanel, the key panel title, useRegistrationRetry's caller.
 const NETWORK_NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'settings', label: 'Network settings', ic: 'globe' },
 ];
-// settings pages that mean nothing for a network: a church's own members' media tabs, features, rules, chat tags, becoming a steward, and joining a
-// network (circular).
-const NETWORK_HIDDEN_SETTINGS = new Set(['media', 'features', 'rules', 'tags', 'network', 'become']);
+// THE SETTINGS PAGES THE NETWORK VIEW SHOWS -- AN ALLOW-LIST (B2a audit, 2026-11-19). October hid six pages and kept the rest; the audit found the kept
+// "Network key" page revealing the CHURCH's recovery phrase (exportMnemonic is the church seed), so every page was reviewed and only those that
+// genuinely act on the NETWORK stay. A page added later is hidden here until someone decides otherwise. Per page:
+//   identity  -- KEPT: publishes the ACTIVE identity's profile, which in network view is the network's own (name, picture, branding).
+//   key       -- hidden: Reveal / Copy / Back up export the CHURCH recovery phrase (the HIGH).
+//   stewards  -- hidden: "Hand over the church" hands over the church key.
+//   delegated -- hidden: Helpers are the church's helpers.
+//   voice     -- hidden: the steward by-line on the church's notices.
+//   website   -- hidden: the church's public calendar feed.
+//   backup    -- hidden: the church backup file (it carries the church key).
+//   relays / add-relay / history / ownbox -- hidden: the church's relay set, its history copy, its own box; a network publishes through the
+//                church's relays, so changing them here would silently change the church's.
+//   media / features / rules / tags -- hidden: the church's own members' settings.   network / become -- hidden: circular / a church action.
+//   access    -- hidden: a delegate's page (never shown to an owner anyway).
+const NETWORK_SETTINGS_PAGES = new Set(['identity']);
 function stewNetView(church) { return !!(church && church.isNetwork) && typeof window !== 'undefined' && window.NETWORKS_ENABLED === true; }
 // THE ONE NAME FOR A NETWORK (B2a). The switcher used the name saved on this device when the network was created or imported; the composer used the
 // network's published profile (kind-0). They disagreed until a profile read happened to rewrite the saved one. Both now show the PUBLISHED name when
@@ -306,7 +319,8 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
     try { ok = window.Steward.setActiveIdentity(pub) !== false; } catch (e) { ok = false; }
     if (ok) { setPickErr(''); setOpen(false); return; }
     let why = ''; try { why = (window.Steward.networkOpenProblem && window.Steward.networkOpenProblem(pub)) || ''; } catch (e) {}
-    setPickErr('Can’t open this network here.' + (why ? ' ' + why : ''));
+    const isNet = ids.some(i => i.pub === pub && i.kind === 'network');   // a failed switch to a CHURCH (e.g. a helper just removed) must say church
+    setPickErr((isNet ? 'Can’t open this network here.' : 'Can’t open this church here.') + (why && isNet ? ' ' + why : ''));
   };
   // the one-line phone shape: fills the column it is given, the text sits on the bottom edge under the heading
   const compactBtn = { position: 'absolute', inset: 0, width: '100%', display: 'flex', alignItems: 'flex-end', gap: 5, padding: '0 0 3px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', minWidth: 0, fontFamily: 'var(--font-ui)' };
@@ -2551,11 +2565,11 @@ function StewDashboard({ initial = 'overview' }) {
       }
     }, 1200);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [_capIdv, _capConn, tick, _stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
+  }, [_capIdv, _capConn, tick, _stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {}), netView]);   // netView: belt-and-braces (B2a audit) -- leaving the network view re-runs the mint
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
   // Owner consoles only — see the note in selfRegister. A delegate's console fired this with the name of the
   // church they were helping and registered THEIR OWN key under it.
-  useRegistrationRetry(church.name);
+  useRegistrationRetry(netView ? '' : church.name);   // NOT in network view: church.name is then the NETWORK's name, and this registers the CHURCH key (B2a audit)
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
   const editName = () => setRenaming(true);
   // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav
@@ -11293,7 +11307,7 @@ function DashNetworkOverview() {
     let alive = true;
     try {
       const q = window.Steward.networkJoinerCount && window.Steward.networkJoinerCount(net.pub);
-      if (q && q.then) q.then(n => { if (alive && typeof n === 'number') setLiveJoined(n); }).catch(() => {});
+      if (q && q.then) q.then(n => { if (alive && (typeof n === 'number' || (n && typeof n.atLeast === 'number'))) setLiveJoined(n); }).catch(() => {});   // a number, or { atLeast } when not every relay answered
     } catch (e) {}
     return () => { alive = false; window.removeEventListener('steward-network-status', f); };
   }, [net && net.pub]);
@@ -11303,12 +11317,15 @@ function DashNetworkOverview() {
     setConfirming(''); setRmErr('');
     let r = null;
     try { r = await window.Steward.removeNetworkPost(net.pub, p.kind, p.id); } catch (e) { r = null; }
-    if (r && r.ok === false) setRmErr('That didn’t come down — it is still showing to the churches.' + (r.reason ? ' (' + r.reason + ')' : ''));
+    // a throw or no answer is NOT a removal: say so too (B2a audit) -- only { ok: true } is success
+    if (!r || r.ok !== true) setRmErr('That didn’t come down — it is still showing to the churches.' + (r && r.reason ? ' (' + r.reason + ')' : ''));
   };
   if (!net) {
     return <Panel title="Network"><div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>This console does not hold a network’s key yet.</div></Panel>;
   }
-  const joined = typeof liveJoined === 'number' ? liveJoined : (st && typeof st.joiners === 'number' ? st.joiners : null);
+  // A PARTIAL READ IS "AT LEAST", NEVER A CONFIDENT LOW NUMBER (B2a audit): networkJoinerCount answers { atLeast: n } when not every relay answered.
+  const joinedAtLeast = !!(liveJoined && typeof liveJoined === 'object');
+  const joined = typeof liveJoined === 'number' ? liveJoined : joinedAtLeast ? liveJoined.atLeast : (st && typeof st.joiners === 'number' ? st.joiners : null);
   const when = (p) => p.kind === 'event' ? ((p.date || '') + (p.time ? ' ' + p.time : '') + (p.where ? ' · ' + p.where : '')) : (p.ts ? new Date(p.ts * 1000).toLocaleDateString() : '');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -11316,8 +11333,8 @@ function DashNetworkOverview() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ flex: '1 1 160px', minWidth: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', padding: '14px 16px' }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 4 }}>Churches joined</div>
-          <div aria-hidden="true" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 28, lineHeight: 1.1, color: 'var(--ink)' }}>{joined === null ? '…' : joined}</div>
-          <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 3 }}>{joined === null ? 'Checking which churches have joined…' : joined + (joined === 1 ? ' church has' : ' churches have') + ' joined this network.'}</div>
+          <div aria-hidden="true" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 28, lineHeight: 1.1, color: 'var(--ink)' }}>{joined === null ? '…' : joined + (joinedAtLeast ? '+' : '')}</div>
+          <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 3 }}>{joined === null ? 'Checking which churches have joined…' : joinedAtLeast ? 'At least ' + joined + (joined === 1 ? ' church has' : ' churches have') + ' joined this network (not every relay answered).' : joined + (joined === 1 ? ' church has' : ' churches have') + ' joined this network.'}</div>
         </div>
         <div style={{ flex: '3 1 280px', minWidth: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', padding: '14px 16px' }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Network code</div>
@@ -11369,9 +11386,12 @@ function DashNetworksPanel() {
   // A REFUSAL IS SAID, NEVER DRESSED AS SUCCESS (B2a). A relay without the network wall is named in plain words; the console's own reasons (stage
   // 'start' / 'code' / 'readback') are shown as written; a relay's refusal goes through publishErrorMessage as before.
   const said = (r) => {
-    if (r && r.stage === 'relay' && Array.isArray(r.missing) && r.missing.length) {
-      const many = r.missing.length > 1;
-      return 'Not joined: ' + r.missing.join(', ') + (many ? ' haven’t' : ' hasn’t') + ' confirmed the network safety update. Your church can join once ' + (many ? 'they are' : 'it is') + ' updated.';
+    if (r && r.stage === 'relay') {
+      // a relay that ANSWERED without the update, versus one that could not be reached (a transient: try again) -- B2a audit
+      const lacking = Array.isArray(r.lacking) ? r.lacking : (Array.isArray(r.missing) ? r.missing : []);
+      const unreachable = Array.isArray(r.unreachable) ? r.unreachable : [];
+      if (lacking.length) { const many = lacking.length > 1; return 'Not joined: ' + lacking.join(', ') + (many ? ' haven’t' : ' hasn’t') + ' confirmed the network safety update. Your church can join once ' + (many ? 'they are' : 'it is') + ' updated.'; }
+      if (unreachable.length) return 'Not joined: couldn’t reach ' + unreachable.join(', ') + ' to check ' + (unreachable.length > 1 ? 'they are' : 'it is') + ' up to date. Try again later.';
     }
     const reason = (r && r.reason) || '';
     if (r && r.stage && r.stage !== 'join' && r.stage !== 'leave' && reason) return reason;
@@ -11468,7 +11488,7 @@ function DashNetworksPanel() {
               <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>THE NETWORK CANNOT</div>
               <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px' }}>See or change anything of your church’s own: your children’s records, guardians, check-in, care and pastoral conversations, your rotas, plans and groups, your members, or your finance.</p>
               <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>WHAT THE NETWORK’S CHURCHES WILL SEE</div>
-              <p data-join-visible="1" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px' }}>Your church’s name and town become visible to the network and to the other churches in it.</p>
+              <p data-join-visible="1" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px' }}>The network and its other churches will see that your church has joined, and can see your church’s public profile (its name and picture).</p>
               <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>You can leave at any time.</p>
               <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: 'var(--ink)', marginBottom: 12, cursor: 'pointer' }}>
                 <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} style={{ marginTop: 3 }} />
@@ -14524,7 +14544,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
   // bodies, so the list and the detail cannot disagree: a page missing from this list cannot be opened, and
   // one present in it always has a body.
   const groups = React.useMemo(() => SETTINGS_GROUPS
-    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true) && !(stewNetView(church) && NETWORK_HIDDEN_SETTINGS.has(p.k)))])   // NETWORKS SWITCH: the Network page; NETWORK VIEW hides NETWORK_HIDDEN_SETTINGS
+    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true) && !(stewNetView(church) && !NETWORK_SETTINGS_PAGES.has(p.k)))])   // NETWORKS SWITCH: the Network page; NETWORK VIEW shows only NETWORK_SETTINGS_PAGES
     .filter(([, items]) => items.length), [delegated, stewNetView(church)]);   // B2a: the view is a dependency (church <-> network on one mounted page)
   const pages = groups.reduce((a, [, items]) => a.concat(items), []);
   // ON A PHONE THE LIST IS THE FIRST SCREEN and a page opens on tap, so nothing is open to begin with. In a

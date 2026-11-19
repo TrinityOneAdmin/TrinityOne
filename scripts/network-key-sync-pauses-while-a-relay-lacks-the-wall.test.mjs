@@ -59,7 +59,7 @@ test('CACHE: a relay that confirmed the wall is not asked again this session; on
 
 // (re-anchored 2026-11-19: the check is now one gate, _netWallGate, used by the sync and by every step under it)
 test('SABOTAGE: with the wall gate removed, the same relay without the wall gets key work done through it', async () => {
-  const w = rig({ wallOn: { 'one.example': true, 'two.example': false }, mutate: (s) => scoped(s, 'async function _netWallGate(', 'async function _netWallMissingCached(', 'if (!missing.length) return null;', 'return null;') });
+  const w = rig({ wallOn: { 'one.example': true, 'two.example': false }, mutate: (s) => scoped(s, 'async function _netWallGate(', 'async function _netWallCheckCached(', 'if (!lacking.length && !unreachable.length) return null;', 'return null;') });   // (re-anchored B2a audit: the gate now tells unreachable from lacking)
   await w.c.api.syncNetworkKeys({ force: true });
   assert.ok(w.c.published.length > 0, 'THE SABOTAGE WAS NOT CAUGHT: without the check the sync still published nothing');
 });
@@ -96,7 +96,44 @@ test('NO RELAY READY YET (boot): the status says waiting, not trouble -- and the
   assert.match(c.api.networkStatus(N.pub).reason, /connecting/i);
   const again = await c.api.syncNetworkKeys();   // NOT forced: a roster tick a moment later
   assert.notEqual(again.skipped, true, 'the next sync was throttled for 30s although the first one never ran');
-  const s = mk((src) => scoped(src, 'async function _netSyncAll(', 'async function _netPublishPost(', 'if (wall.waiting) _netSyncAt = 0;', ''));
+  const s = mk((src) => scoped(src, 'async function _netSyncAll(', 'async function _netPublishPost(', 'if (wall.waiting && !(wall.unreachable && wall.unreachable.length)) _netSyncAt = 0;', ''));   // (re-anchored B2a audit)
   await s.c.api.syncNetworkKeys({ force: true });
   assert.equal((await s.c.api.syncNetworkKeys()).skipped, true, 'THE SABOTAGE WAS NOT CAUGHT: with the sync stamped, the next call still ran');
+});
+
+// ── B2a audit (2026-11-19): an UNREACHABLE relay is not a relay "without the wall", and a SHIPPED relay is never something to remove ──────────
+const SHIPPED = 'wss://app.trinityone.church/relay';
+function rig2(hosts) {   // hosts: host -> 'ok' | 'none' (answers without the marker) | 'down' (no answer)
+  const relay = fakeRelay(), N = K(), A = K();
+  const fetchImpl = async (url) => { const m = hosts[new URL(url).host] || 'ok'; if (m === 'down') throw new Error('unreachable'); const caps = m === 'ok' ? ['network-wall-1'] : [];
+    return { ok: true, json: async () => ({ trinityone: { capabilities: caps }, capabilities: caps }) }; };
+  const urls = Object.keys(hosts).map(h => h === 'app.trinityone.church' ? SHIPPED : 'wss://' + h + '/relay');
+  const c = bootConsole({ relay, church: A, networks: [N], nameKey: rnd32(), founded: [N.pub], relayUrls: urls, fetchImpl }); c.join(N.pub);
+  return { c, N };
+}
+test('UNREACHABLE: a relay that does not answer is "couldn\'t reach … try again later" (waiting, still nothing published) -- never "update or remove it"', async () => {
+  const { c, N } = rig2({ 'one.example': 'ok', 'two.example': 'down' });
+  const r = await c.api.syncNetworkKeys({ force: true });
+  assert.equal(r.ok, false); assert.equal(r.waiting, true, 'an unreachable relay is a transient: the status must say waiting');
+  assert.deepEqual(r.unreachable, ['wss://two.example/relay']); assert.deepEqual(r.lacking, []);
+  assert.match(r.reason, /Couldn’t reach wss:\/\/two\.example\/relay/); assert.match(r.reason, /try again later/);
+  assert.doesNotMatch(r.reason, /remove|Update/, 'an unreachable relay was called out of date / something to remove');
+  assert.equal(c.api.networkStatus(N.pub).key, 'waiting');
+  assert.equal(c.published.length, 0, 'fail-closed: nothing may be published while a relay could not be checked');
+  const p = await c.api.publishNetworkPost(N.pub, 'announcement', { text: 'x' });
+  assert.equal(p.ok, false); assert.match(p.reason, /Couldn’t reach/);
+});
+test('SHIPPED RELAY without the marker: named, but the steward is never told to remove it; a CHURCH relay without it still is (control)', async () => {
+  const a = rig2({ 'app.trinityone.church': 'none' });
+  const r = await a.c.api.syncNetworkKeys({ force: true });
+  assert.equal(r.ok, false); assert.match(r.reason, /app\.trinityone\.church/);
+  assert.doesNotMatch(r.reason, /remove/i, 'the steward was told to remove a SHIPPED relay -- they cannot');
+  assert.match(r.reason, /nothing to change on your side/);
+  const b = rig2({ 'old.example': 'none' });
+  const rb = await b.c.api.syncNetworkKeys({ force: true });
+  assert.match(rb.reason, /old\.example/); assert.match(rb.reason, /remove it from this church’s relays/, 'CONTROL: a church\'s own old relay is no longer offered for removal');
+  // mixed: both named, each with its own advice
+  const m = rig2({ 'app.trinityone.church': 'none', 'old.example': 'none', 'gone.example': 'down' });
+  const rm = await m.c.api.syncNetworkKeys({ force: true });
+  assert.match(rm.reason, /old\.example\/relay has not confirmed it runs/); assert.match(rm.reason, /The shared relay wss:\/\/app\.trinityone\.church\/relay has not confirmed/); assert.match(rm.reason, /Couldn’t reach wss:\/\/gone\.example/);
 });

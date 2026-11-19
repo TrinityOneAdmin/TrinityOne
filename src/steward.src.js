@@ -1686,7 +1686,9 @@ const _netStatus = new Map();                         // np -> what the last _ne
 // used only to REFUSE: a missing or unreadable marker blocks the join; a present one never admits a relay. `urls` is the set the church
 // already writes to (relays(), the proved publish set) -- this adds no relay and changes no admission (RELAY-ADMISSION.md, rule 10).
 // -> [url, ...] lacking the marker (an unreachable relay counts as lacking it: "could not check" is not "checked").
-async function _netWallMissing(urls) {
+// B2a audit (2026-11-19): a relay that ANSWERED without the marker (lacking) is told apart from one that did not answer (unreachable) -- the
+// second is a transient, and a shipped relay must never be called something to remove. -> { lacking: [url], unreachable: [url] }
+async function _netWallCheck(urls) {
   const has = (x) => !!x && Array.isArray(x.capabilities) && x.capabilities.includes(NETWORK_WALL_CAP);
   const ask = async (url) => {
     const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
@@ -1704,39 +1706,53 @@ async function _netWallMissing(urls) {
       } catch (e) { return null; }
     };
     const info = await get(http, 'application/nostr+json');
-    if (info && has(info.trinityone)) return true;
+    if (info && has(info.trinityone)) return 'ok';
     const st = await get(root + '/status', '');
-    return has(st);
+    if (has(st)) return 'ok';
+    return (info || st) ? 'none' : 'down';   // it ANSWERED without the marker, or it did not answer at all
   };
-  const out = [];
-  // IN PARALLEL (B1 audit): one at a time, a dead relay cost up to ~13s each. Still fail-closed: an unreachable relay is "missing".
+  // IN PARALLEL (B1 audit): one at a time, a dead relay cost up to ~13s each. Still fail-closed: an unreachable relay is never "ok".
   // ⚠ DEVICE CHECK NEEDED: the console's Content-Security-Policy allows no plain `http:` fetch, so in a browser a church relay on plain ws://
   // (probed over http://) may always fail this probe and block the join. That is the safe direction; it has not been tried on a device.
-  const ok = await Promise.all((urls || []).map(u => ask(u).catch(() => false)));
-  (urls || []).forEach((u, i) => { if (!ok[i]) out.push(u); });
-  return out;
+  const got = await Promise.all((urls || []).map(u => ask(u).catch(() => 'down')));
+  const lacking = [], unreachable = [];
+  (urls || []).forEach((u, i) => { if (got[i] === 'none') lacking.push(u); else if (got[i] !== 'ok') unreachable.push(u); });
+  return { lacking, unreachable };
 }
+// The relays that did not confirm, for a caller that only needs the union. Callers: none in the engine now (kept for the lifted-code tests).
+async function _netWallMissing(urls) { const r = await _netWallCheck(urls); return [...r.lacking, ...r.unreachable]; }
 // THE WALL CHECK BEFORE NETWORK KEY WORK -- AN ALARM, NOT A GUARD (re-audit 2026-11-19; the B1 comment overclaimed). A relay running software from
 // before the wall decides what a joined network key may read from THAT relay's copy of the church's join document, whatever this console does next;
 // pausing key work here takes nothing back from it. What the pause does: it stops this console adding fresh key material and posts while one of the
 // church's own relays is on old software, and it tells the steward, plainly, which relay -- the remedy is to update or remove that relay (or leave
 // the network). Used by _netSyncAll, _netSyncKeyOnce, _netSyncHop2 and _netPublishPost, so every API way in is covered. Rule 10: relays() only.
 //   -> null (every relay confirmed) | { waiting: true, reason } (no relay ready yet: still connecting) | { waiting: false, missing, reason }
+// A SHIPPED relay (the shared pool every church is on) is never something the steward can remove, so it is never told to (B2a audit).
+const _netIsShippedRelay = (u) => { const n = (x) => String(x || '').trim().toLowerCase().replace(/\/+$/, ''); return CANONICAL_RELAYS.some(c => n(c) === n(u)); };
 async function _netWallGate() {
   const set = relays();
-  if (!set.length) return { waiting: true, missing: [], reason: 'Still connecting — no relay is ready for this church yet.' };
-  const missing = await _netWallMissingCached(set);
-  if (!missing.length) return null;
-  return { waiting: false, missing, reason: 'Network keys are paused: ' + missing.join(', ') + (missing.length === 1 ? ' has' : ' have') + ' not confirmed it runs the software that keeps a network out of your church’s private records. Update ' + (missing.length === 1 ? 'it' : 'them') + ' or remove ' + (missing.length === 1 ? 'it' : 'them') + ' from this church’s relays.' };
+  if (!set.length) return { waiting: true, missing: [], lacking: [], unreachable: [], reason: 'Still connecting — no relay is ready for this church yet.' };
+  const { lacking, unreachable } = await _netWallCheckCached(set);
+  if (!lacking.length && !unreachable.length) return null;
+  const missing = [...lacking, ...unreachable];
+  const list = (a) => a.join(', '), one = (a) => a.length === 1;
+  const reach = unreachable.length ? 'Couldn’t reach ' + list(unreachable) + ' to check ' + (one(unreachable) ? 'it is' : 'they are') + ' up to date — it will try again later.' : '';
+  if (!lacking.length) return { waiting: true, missing, lacking, unreachable, reason: 'Network keys are waiting. ' + reach };
+  const own = lacking.filter(u => !_netIsShippedRelay(u)), shipped = lacking.filter(u => _netIsShippedRelay(u));
+  const parts = [];
+  if (own.length) parts.push(list(own) + (one(own) ? ' has' : ' have') + ' not confirmed ' + (one(own) ? 'it runs' : 'they run') + ' the software that keeps a network out of your church’s private records. Update ' + (one(own) ? 'it' : 'them') + ' or remove ' + (one(own) ? 'it' : 'them') + ' from this church’s relays.');
+  if (shipped.length) parts.push('The shared relay ' + list(shipped) + (one(shipped) ? ' has' : ' have') + ' not confirmed that update yet; network work waits until it is updated (nothing to change on your side).');
+  if (reach) parts.push(reach);
+  return { waiting: false, missing, lacking, unreachable, reason: 'Network keys are paused: ' + parts.join(' ') };
 }
 // _netWallMissing with a session cache of the relays that DID confirm the marker (a "missing" answer is never cached: an updated relay passes on the
 // next sync). Callers: _netWallGate only. joinNetwork deliberately asks fresh every time.
 const _netWallOk = new Set();
-async function _netWallMissingCached(urls) {
+async function _netWallCheckCached(urls) {
   const ask = (urls || []).filter(u => !_netWallOk.has(u));
-  const missing = ask.length ? await _netWallMissing(ask) : [];
-  for (const u of ask) if (!missing.includes(u)) _netWallOk.add(u);
-  return missing;
+  const r = ask.length ? await _netWallCheck(ask) : { lacking: [], unreachable: [] };
+  for (const u of ask) if (!r.lacking.includes(u) && !r.unreachable.includes(u)) _netWallOk.add(u);
+  return r;
 }
 // WHO HAS JOINED the network `np`, as the NETWORK (N5c / Option A). The relay serves a church's join declaration to the key it names and to no
 // one else, so the authors of the live join documents ARE the joined churches. -> { ok, joiners:[churchHex], authoritative }
@@ -1962,11 +1978,11 @@ async function _netSyncAll(opts = {}) {
       if (joined.size) {
         const wall = await _netWallGate();
         if (wall) {
-          if (wall.waiting) _netSyncAt = 0;
+          if (wall.waiting && !(wall.unreachable && wall.unreachable.length)) _netSyncAt = 0;   // boot: retry at once; an unreachable relay waits for the normal tick
           const ownedNow = new Set(netKeys().map(r => r.pub));
           for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: wall.waiting ? 'waiting' : 'trouble', reason: wall.reason });
           try { window.dispatchEvent(new CustomEvent('steward-network-status')); } catch (e) {}
-          return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+          return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, lacking: wall.lacking, unreachable: wall.unreachable, reason: wall.reason };
         }
       }
       const owned = new Set();
@@ -16244,8 +16260,10 @@ window.Steward = {
     // network key this church's private records. A missing marker refuses; a present one never admits (rule 10). Nothing is published.
     const set = relays();
     if (!set.length) return { ok: false, stage: 'relay', reason: 'No relay is ready for this church yet, so it cannot join a network.' };
-    const missing = await _netWallMissing(set);
-    if (missing.length) return { ok: false, stage: 'relay', missing, reason: 'Not joined. ' + (missing.length === set.length ? 'This church’s relays have' : missing.length + ' of this church’s ' + set.length + ' relays have') + ' not confirmed they run the software that keeps a network out of your church’s private records (' + missing.join(', ') + '). They need updating first.' };
+    const { lacking, unreachable } = await _netWallCheck(set);
+    const missing = [...lacking, ...unreachable];
+    if (lacking.length) return { ok: false, stage: 'relay', missing, lacking, unreachable, reason: 'Not joined. ' + (lacking.length === set.length ? 'This church’s relays have' : lacking.length + ' of this church’s ' + set.length + ' relays have') + ' not confirmed they run the software that keeps a network out of your church’s private records (' + lacking.join(', ') + '). They need updating first.' };
+    if (unreachable.length) return { ok: false, stage: 'relay', missing, lacking, unreachable, reason: 'Not joined: couldn’t reach ' + unreachable.join(', ') + ' to check ' + (unreachable.length === 1 ? 'it is' : 'they are') + ' up to date. Try again later.' };
     const prev = await _readNetworkJoin(np);
     const base = prev && prev.doc && typeof prev.doc === 'object' ? prev.doc : {};
     const doc = { ...base, joined: true, v: 1 };
@@ -16328,10 +16346,11 @@ window.Steward = {
   // what the last sync learned about one network this church is in: { owner, joiners, key:'active'|'waiting'|'trouble', reason } | null
   networkStatus(networkPub) { return _netStatus.get(toPubHex(networkPub) || networkPub) || null; },
   // How many churches have joined a network THIS console holds the key of, read live AS that key (c92c6e3a; works in network view, where
-  // syncNetworkKeys is church-only). -> a number >= 1, or null = UNKNOWN (no key, read failed, nothing came back -- never 0). Never throws.
+  // syncNetworkKeys is church-only). -> a number >= 1 (a complete read), { atLeast: n } (a partial one), or null = UNKNOWN (never 0). Never throws.
   // Callers (rule 2): DashNetworkOverview (app/stew-dashboard.jsx) only.
   async networkJoinerCount(networkPub) {
-    try { const np = toPubHex(networkPub) || networkPub; const jr = await _netReadJoiners(np); return (jr && jr.ok && jr.joiners.length > 0) ? jr.joiners.length : null; }
+    // B2a audit: a PARTIAL read (not every relay answered, or a full page) is { atLeast: n } -- never a confident low number. -> n | { atLeast } | null
+    try { const np = toPubHex(networkPub) || networkPub; const jr = await _netReadJoiners(np); if (!(jr && jr.ok && jr.joiners.length > 0)) return null; return jr.authoritative ? jr.joiners.length : { atLeast: jr.joiners.length }; }
     catch (e) { return null; }
   },
   // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
@@ -16921,6 +16940,7 @@ window.Steward = {
     const np = toPubHex(networkPub) || networkPub; let latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
       onevent(e) {
+        if (e.pubkey !== np) return;   // B2a audit: only the network's OWN profile names it (a relay could serve any kind-0; the self-heal below would then rename the saved key)
         if (e.created_at < latest) return; latest = e.created_at;
         let prof; try { prof = JSON.parse(e.content); } catch { return; }
         onProfile(prof);

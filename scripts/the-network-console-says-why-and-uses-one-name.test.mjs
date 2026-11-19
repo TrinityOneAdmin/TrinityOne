@@ -23,6 +23,7 @@ function consoleWith(React, opts0 = {}) {
     useStewardChurch: () => ({ name: net() ? 'Sussex Gospel Partnership' : 'Grace Church', npub: net() ? NPUB : 'npub1grace', isNetwork: net(), features: {}, rules: {} }),
     useStewardIdv: () => 0,
     useStewardRelays: () => [], useStewardNetworks: () => [], useStewardRosters: () => [],
+    useStewardStewardedChurches: () => opts0.stewarded || [],
     useStewardMembers: () => [{ pubkey: 'm1' }], useStewardGroups: () => [],
     useStewardAdmitted: () => [], useStewardJoinPolicy: () => false,
     useStewardStats: () => ({}), useStewardActivity: () => [], useStewardRequests: () => [],
@@ -166,4 +167,87 @@ test('NETWORK VIEW mounts no church machinery (join notices, key distribution); 
   assert.deepEqual(MACHINERY(drawTwice(nv.draw, nv.mod.StewDashboard, {})), [], 'the network view runs the church\'s join notices / key distribution');
   const sab = run({ network: true, mutate: (js) => { assert.equal(js.split(GATE).length - 1, 2, 'sabotage anchor: the gate should appear in both layouts'); return js.split(GATE).join('React.createElement(React.Fragment, null, React.createElement(JoinNotifier, null), React.createElement(KeyDistributor, null))'); } });
   assert.notDeepEqual(MACHINERY(drawTwice(sab.draw, sab.mod.StewDashboard, {})), [], 'THE SABOTAGE WAS NOT CAUGHT');
+});
+
+// ── B2a audit (2026-11-19) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// HIGH: the settings page titled "Network key" in the network view revealed the CHURCH recovery phrase (exportMnemonic is the church seed).
+const KEYPAGE = (tree) => find(tree, n => n.type === 'button' && /Reveal recovery phrase/.test(said(n)));
+const PAGES_ONLY_IDENTITY = (js) => { const a = 'const NETWORK_SETTINGS_PAGES = /* @__PURE__ */ new Set(["identity"]);'; assert.equal(js.split(a).length, 2, 'sabotage anchor not unique'); return js.replace(a, 'const NETWORK_SETTINGS_PAGES = /* @__PURE__ */ new Set(["identity", "key"]);'); };
+function keyPage({ network, mutate }) {
+  const exported = [];
+  const r = run({ network, mutate, steward: { exportMnemonic: () => { exported.push(1); return 'church words one two three'; } } });
+  const t = drawTwice(r.draw, r.mod.DashSettings, { initialSection: 'key', onSectionConsumed() {} });
+  return { r, t, exported };
+}
+test('HIGH: in the network view the key page -- and its Reveal / Copy / Back up of the CHURCH phrase -- cannot be reached, even by a deep link', () => {
+  const ch = keyPage({ network: false });
+  const rv = KEYPAGE(ch.t); assert.equal(rv.length, 1, 'CONTROL: the church console lost its key page');
+  rv[0].props.onClick(); ch.r.draw(ch.r.mod.DashSettings, { initialSection: 'key', onSectionConsumed() {} });
+  assert.equal(ch.exported.length, 1, 'CONTROL: Reveal no longer reads the church phrase in the church view');
+  const nv = keyPage({ network: true });
+  assert.equal(KEYPAGE(nv.t).length, 0, 'the network view still offers to reveal a recovery phrase -- it is the CHURCH\'s');
+  assert.doesNotMatch(said(nv.t), /Recovery phrase and backup|Network key/, 'the key page is still listed in the network view');
+  assert.equal(nv.exported.length, 0);
+});
+test('HIGH SABOTAGE: with "key" put back on the network view\'s allow-list, the church phrase is offered in the network view', () => {
+  assert.equal(KEYPAGE(keyPage({ network: true, mutate: PAGES_ONLY_IDENTITY }).t).length, 1, 'THE SABOTAGE WAS NOT CAUGHT');
+});
+
+// a failed switch to a CHURCH says church
+test('SWITCH FAILS to a CHURCH (e.g. a helper just removed): it says "church", not "network"', () => {
+  const ST = 'ee'.repeat(32);
+  const r = run({ stewarded: [ST], steward: { identities: () => [{ kind: 'church', pub: CHURCHPUB, name: 'Grace Church' }, { kind: 'steward', pub: ST, name: 'St Aidan’s' }],
+    activePub: CHURCHPUB, churchPub: CHURCHPUB, isViewingNetwork: () => false, isDelegated: () => false, setActiveIdentity: () => false, networkOpenProblem: () => 'x' } });
+  const props = { church: CHURCH, churchName: 'Grace Church', initials: 'GC', onEditName() {} };
+  row(openSwitcher(r.draw, r.mod, props), /You steward this church/).props.onClick();
+  const alert = find(r.draw(r.mod.IdentitySwitcher, props), n => n.props && n.props.role === 'alert')[0];
+  assert.ok(alert, 'a failed switch to a church said nothing'); assert.match(said(alert), /Can’t open this church here\./); assert.doesNotMatch(said(alert), /network/i);
+});
+
+// a removal that throws or answers nothing is not a removal
+test('REMOVE: a call that throws, or answers nothing, says the post did not come down (control: { ok:true } says nothing); SABOTAGE hides it', () => {
+  const tryRemove = async (answer, mutate) => {
+    const r = run({ network: true, mutate, steward: { subscribeNetworkPosts: (p, cb) => { cb([{ id: 'a1', kind: 'announcement', text: 'Harvest', ts: 1 }]); return () => {}; }, removeNetworkPost: async () => answer() } });
+    const press = () => find(drawTwice(r.draw, r.mod.DashNetworkOverview, {}), n => n.type === 'button' && /Remove|Really remove/.test(said(n)))[0].props.onClick();
+    await press(); await press(); await new Promise(res => setTimeout(res, 10));
+    return find(r.draw(r.mod.DashNetworkOverview, {}), n => n.props && n.props.role === 'alert').map(said).join(' ');
+  };
+  return (async () => {
+    assert.match(await tryRemove(() => { throw new Error('socket'); }), /didn’t come down/, 'a removal that THREW said nothing');
+    assert.match(await tryRemove(() => null), /didn’t come down/, 'a removal that answered nothing said nothing');
+    assert.equal(await tryRemove(() => ({ ok: true })), '', 'CONTROL: a removal that worked raised an error');
+    const old = (js) => { const a = 'if (!r || r.ok !== true) setRmErr('; assert.equal(js.split(a).length, 2); return js.replace(a, 'if (r && r.ok === false) setRmErr('); };
+    assert.equal(await tryRemove(() => null, old), '', 'THE SABOTAGE WAS NOT CAUGHT');
+  })();
+});
+
+// a partial joiner count is "at least"
+test('JOINED COUNT: a partial read says "at least N" (never a confident low number); a complete read says N', async () => {
+  const count = async (answer) => { const r = run({ network: true, steward: { networkJoinerCount: async () => answer, networkStatus: () => null } }); drawTwice(r.draw, r.mod.DashNetworkOverview, {}); await new Promise(res => setTimeout(res, 10)); return said(r.draw(r.mod.DashNetworkOverview, {})); };
+  assert.match(await count({ atLeast: 2 }), /At least 2 churches have joined this network \(not every relay answered\)/);
+  const full = await count(3); assert.match(full, /3 churches have joined this network\./); assert.doesNotMatch(full, /At least/);
+});
+
+// the registration retry does not run with the network's name
+test('REGISTRATION RETRY: the network view does not re-register the church key under the network\'s name (control: the church view does); SABOTAGE re-registers', () => {
+  const regs = (network, mutate) => { const got = []; const r = run({ network, mutate, steward: { selfRegister: async (n) => { got.push(n); return {}; } } }); drawTwice(r.draw, r.mod.StewDashboard, {}); return got; };
+  assert.deepEqual(regs(false), ['Grace Church'], 'CONTROL: the church view no longer registers with its own name');
+  assert.deepEqual(regs(true), [], 'the network view registered the CHURCH key under the NETWORK\'s name');
+  const old = (js) => { const a = 'useRegistrationRetry(netView ? "" : church.name);'; assert.equal(js.split(a).length, 2); return js.replace(a, 'useRegistrationRetry(church.name);'); };
+  assert.deepEqual(regs(true, old), ['Sussex Gospel Partnership'], 'THE SABOTAGE WAS NOT CAUGHT');
+});
+
+// the auditor's cap-key test: the church view mints after its timer, the network view never does
+test('CAPABILITY KEYS: the church view mints after its timer; the network view does not; SABOTAGE (guard dropped) mints in the network view', async () => {
+  const mints = async (network, mutate) => {
+    const got = [];
+    const r = run({ network, mutate, steward: { ensureCapKeyFor: async (kind) => { got.push(kind); }, stewardCaps: () => ({}), actingChurch: '' } });
+    drawTwice(r.draw, r.mod.StewDashboard, {});
+    await new Promise(res => setTimeout(res, 1500));
+    return got;
+  };
+  assert.ok((await mints(false)).length > 0, 'CONTROL: the church view minted no capability key after the timer');
+  assert.deepEqual(await mints(true), [], 'the network view minted church capability keys');
+  const old = (js) => { const a = 'if (!S || S.actingChurch || netView || !S.ensureCapKeyFor) return;'; assert.equal(js.split(a).length, 2); return js.replace(a, 'if (!S || S.actingChurch || !S.ensureCapKeyFor) return;'); };
+  assert.ok((await mints(true, old)).length > 0, 'THE SABOTAGE WAS NOT CAUGHT');
 });

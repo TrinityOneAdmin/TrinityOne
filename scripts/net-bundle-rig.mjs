@@ -82,6 +82,8 @@ const defaultFetch = async (url, init) => {
 };
 // The default _queryAsKey for a stand-in relay: the relay's own read, reported complete; a read that throws is reported incomplete -- the
 // shipped helper's contract ({ events, complete }, never throws).
+// the shipped relay list, as the bundle has it (the wall gate never tells a steward to remove one of these)
+const SHIPPED_RELAYS = JSON.parse(((/\n  var CANONICAL_RELAYS = (\[[^\]]*\]);/.exec(STEWARD) || [])[1] || '[]').replace(/'/g, '"'));
 const fakeQueryAsKey = (relay) => async (urls, _sk, filters) => { try { return { events: await relay.querySync(urls, filters), complete: true }; } catch (e) { return { events: [], complete: false }; } };
 export function bootConsole({ relay, church, networks = [], nameKey = null, founded = [], authed = true, unproved = [], mutate = null, joined = [], queryAsKey = null, relayUrl = 'wss://r.example/relay', relayUrls = null, ls: lsIn = null, joinApi = false, fetchImpl = null }) {
   const sh = sharedModule(STEWARD);
@@ -110,7 +112,7 @@ export function bootConsole({ relay, church, networks = [], nameKey = null, foun
   const all = engine + api + jApi;
   const names = ['__state', 'pool', 'relays', 'relaysRaw', '_gate', '_isRelayAuthed', 'skFor', 'netKeys', 'publish', ...variants(all, 'finalizeEvent'), '_monotonic', 'now', 'NET', 'NETWORK_D',
     'toPubHex', '_queryAsKey', ...variants(all, 'getPublicKey'), 'lsGet', 'lsSet', '_onNameKeyRing', 'localStorage', 'window', 'CustomEvent', 'fetch',
-    ...variants(all, 'npubEncode'), 'saveNetKey', 'generateSeedWords', 'privateKeyFromSeedWords', ...Object.keys(sh.nip)];
+    ...variants(all, 'npubEncode'), 'saveNetKey', 'generateSeedWords', 'privateKeyFromSeedWords', 'CANONICAL_RELAYS', ...Object.keys(sh.nip)];
   const vals = [state, { querySync: relay.querySync, subscribeMany: relay.subscribeMany }, () => (relayUrls || [relayUrl]).slice(), () => (relayUrls || [relayUrl]).slice(),
     { unsettled: () => unproved }, () => authed,
     (p) => { const n = networks.find(x => x.pub === p); if (n) return n.sk; const k = savedKeys.find(x => x.pub === p); if (k) return seedSk(k.mnemonic); return p === church.pub ? church.sk : null; },   // skFor: a configured network, or one this console saved (createNetwork)
@@ -120,7 +122,7 @@ export function bootConsole({ relay, church, networks = [], nameKey = null, foun
     (x) => { const s = String(x || ''); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch (e) { return null; } },
     queryAsKey || fakeQueryAsKey(relay), ...variants(all, 'getPublicKey').map(() => getPublicKey), (k) => ls.has(k) ? ls.get(k) : null, (k, v) => ls.set(k, v),
     (fn) => { ringListeners.add(fn); return () => ringListeners.delete(fn); }, { getItem: (k) => null }, win, class { constructor(t) { this.type = t; } }, fetchImpl || defaultFetch,
-    ...variants(all, 'npubEncode').map(() => npubEncode), (rec) => { savedKeys.push(rec); }, () => 'w' + Math.random().toString(36).slice(2), seedSk,
+    ...variants(all, 'npubEncode').map(() => npubEncode), (rec) => { savedKeys.push(rec); }, () => 'w' + Math.random().toString(36).slice(2), seedSk, SHIPPED_RELAYS,
     ...Object.values(sh.nip)];
   const make = new Function(...names, prelude + src);
   // the lifted engine reads churchSk etc. as bare names; `set` re-runs the assignment so a test can move the console's state
