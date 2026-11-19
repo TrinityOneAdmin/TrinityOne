@@ -52,8 +52,8 @@ function PlanReadBar({ ctx, loc }) {
 function nextDay(plan, doneSet) { return plan.days.find(d => !doneSet.has(d.d)) || plan.days[plan.days.length - 1]; }
 
 // a church devotional rendered with the SAME card dimensions as a PlanCard (for the 2-col grid)
-function DevoCard({ d, onClick }) {
-  const accent = d.accent || 'var(--sage)';
+function DevoCard({ d, onClick, cardColor }) {
+  const accent = d.accent || cardColor || 'var(--sage)';
   return (
     <div onClick={onClick} style={{
       borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
@@ -80,12 +80,13 @@ function DevoSeriesCard({ group, ctx }) {
   const read = (d) => !!(prog[d.id] && prog[d.id].length);
   const next = group.items.find(d => !read(d)) || group.items[0];
   const started = group.items.some(read);
+  const cardC = (typeof churchCardColor === 'function') ? churchCardColor(ctx.church) : null;
   return (
     <div onClick={() => ctx.openChurchDevo(next)} style={{
       borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
       background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)',
     }}>
-      <div style={{ height: 80, background: 'var(--sage)', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ height: 80, background: cardC || 'var(--sage)', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 0%, rgba(255,255,255,.3), transparent 55%)' }} />
         <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color="#fff" /></div>
         <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: '#fff',
@@ -118,19 +119,21 @@ function DevoSeriesHero({ group, ctx }) {
   const read = (d) => !!(prog[d.id] && prog[d.id].length);
   const next = group.items.find(d => !read(d)) || group.items[0];
   const started = group.items.some(read);
+  const cardC = (typeof churchCardColor === 'function') ? churchCardColor(ctx.church) : null;
+  const onCard = cardC ? churchOnColor(cardC) : '#fff';
   return (
     <div style={{ marginBottom: 16, animation: 'trinityFade .5s ease .06s both' }}>
       <div onClick={() => ctx.openChurchDevo(next)} style={{
         borderRadius: 24, padding: 20, cursor: 'pointer', position: 'relative', overflow: 'hidden',
-        background: 'linear-gradient(150deg, var(--sage), #2f5640)', color: '#fff', boxShadow: 'var(--shadow-lg)',
+        background: cardC ? churchCardGradient(cardC, 150) : 'linear-gradient(150deg, var(--sage), #2f5640)', color: onCard, boxShadow: 'var(--shadow-lg)',
       }}>
-        <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color="#fff" /></div>
+        <div style={{ position: 'absolute', right: -30, top: -30, opacity: .16 }}><Icon name="read" size={170} stroke={1.2} color={onCard} /></div>
         <div style={{ position: 'relative' }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>Devotional series</div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '6px 0 2px', lineHeight: 1.1 }}>{group.name}</div>
           <div style={{ fontSize: 13.5, opacity: .92, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.items.length} devotionals · {next.title}</div>
           <button onClick={(e) => { e.stopPropagation(); ctx.openChurchDevo(next); }} style={{ marginTop: 16, width: '100%', padding: '12px', borderRadius: 14, border: 'none',
-            background: '#fff', color: '#2f5640', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            background: '#fff', color: cardC || '#2f5640', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {started ? 'Continue' : 'Begin'} · {next.title}
           </button>
         </div>
@@ -209,6 +212,7 @@ function PlansScreen({ ctx }) {
   const [discoverOpen, setDiscoverOpen] = useP(false);   // collapse the Discover-plans grid in Browse
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
+  const cardC = (typeof churchCardColor === 'function') ? churchCardColor(ctx.church) : null;
   // owner 2026-10-19: the built-in plans (D.PLANS) are steward-pushed only; a member is offered just what the church shared.
   // (A built-in the member already has progress on still resolves via PlanDetail/Today, which read D.PLANS directly.)
   // A built-in the member ALREADY follows stays in My Plans (nothing they had is taken away); none is offered fresh.
@@ -315,7 +319,7 @@ function PlansScreen({ ctx }) {
                 <SectionLabel>{groups[0] ? 'More' : 'Devotionals'}</SectionLabel>
                 <div style={grid}>
                   {groups.slice(1).map(g => <DevoSeriesCard key={g.name} group={g} ctx={ctx} />)}
-                  {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} />)}
+                  {singles.map(d => <DevoCard key={d.id} d={d} onClick={() => ctx.openChurchDevo(d)} cardColor={cardC} />)}
                 </div>
               </React.Fragment>
             ) : null}

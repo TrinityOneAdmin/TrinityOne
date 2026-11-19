@@ -2569,6 +2569,8 @@ function TodayScreen({ ctx }) {
   // each card keeps its exact clay gradient and white ink.
   const mainC = (typeof churchMainColor === 'function') ? churchMainColor(ctx.church) : null;
   const onMain = mainC ? churchOnColor(mainC) : '#fff';
+  const cardC = (typeof churchCardColor === 'function') ? churchCardColor(ctx.church) : null;
+  const onCard = cardC ? churchOnColor(cardC) : '#fff';
 
   // church verse prompt — a steward pushed a specific verse for all members
   const [versePrompt, setVersePrompt] = React.useState(null);
@@ -3019,10 +3021,10 @@ function TodayScreen({ ctx }) {
           2026-10-27: the "Your church is reading" card is part of the resources feature). The built-in Verse
           of the Day below is NOT gated — it is a reader feature that works with no church at all. */}
       {resourcesOn && vpPage && vpVisible && churchReadingFolded ? (
-        <button type="button" onClick={toggleChurchReading} aria-expanded={false} aria-label="Expand Your church is reading" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 16, cursor: 'pointer', background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
-          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+        <button type="button" onClick={toggleChurchReading} aria-expanded={false} aria-label="Expand Your church is reading" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 16, cursor: 'pointer', background: cardC ? churchCardGradient(cardC, 155) : 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)', color: onCard, boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+          <Icon name="sparkle" size={15} color={onCard} style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Your church is reading · {vpPage.ref}</div>
-          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+          <Icon name="chevD" size={18} color={onCard} style={{ flexShrink: 0, opacity: .92 }} />
         </button>
       ) : null}
       {resourcesOn && vpPage && vpVisible && !churchReadingFolded ? (
@@ -3039,16 +3041,16 @@ function TodayScreen({ ctx }) {
           }}
           style={{
           position: 'relative', borderRadius: 22, overflow: 'hidden',
-          background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)',
-          padding: '20px 20px 16px', color: '#fff', marginBottom: 16, boxShadow: 'var(--shadow-lg)',
+          background: cardC ? churchCardGradient(cardC, 155) : 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)',
+          padding: '20px 20px 16px', color: onCard, marginBottom: 16, boxShadow: 'var(--shadow-lg)',
           animation: 'trinityFade .5s ease both',
         }}>
           <div style={{ position: 'absolute', inset: 0, opacity: .4,
             background: 'radial-gradient(circle at 80% 15%, rgba(255,255,255,.3), transparent 45%)' }} />
           <div style={{ position: 'absolute', right: -20, bottom: -28, opacity: .12 }}>
-            <Icon name="book" size={150} stroke={1.2} color="#fff" />
+            <Icon name="book" size={150} stroke={1.2} color={onCard} />
           </div>
-          <button type="button" onClick={(e) => { e.stopPropagation(); toggleChurchReading(); }} aria-expanded={true} aria-label="Collapse Your church is reading" title="Collapse" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1, border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevU" size={16} color="#fff" /></button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); toggleChurchReading(); }} aria-expanded={true} aria-label="Collapse Your church is reading" title="Collapse" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1, border: 'none', background: 'rgba(255,255,255,.18)', color: onCard, width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevU" size={16} color={onCard} /></button>
           <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => { const vl = Bible.parseRef(vpPage.ref); if (vl) ctx.gotoRef(vl.book, vl.chap, vl.verse); }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .88 }}>
               <Icon name="sparkle" size={14} stroke={2} /> Your church is reading
@@ -3063,13 +3065,13 @@ function TodayScreen({ ctx }) {
           </div>
           {vpPages.length > 1 ? (
             <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14 }}>
-              <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i > 0 ? i - 1 : vpPages.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0 }}><Icon name="chevL" size={16} color="#fff" /></button>
+              <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i > 0 ? i - 1 : vpPages.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: onCard, flexShrink: 0 }}><Icon name="chevL" size={16} color={onCard} /></button>
               <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
                 {vpPages.map(function(_, i) {
                   return <div key={i} onClick={function(e) { e.stopPropagation(); setVpIdx(i); }} style={{ width: i === vpIdx ? 20 : 8, height: 8, borderRadius: 99, background: i === vpIdx ? '#fff' : 'rgba(255,255,255,.4)', cursor: 'pointer', transition: 'all .2s ease' }} />;
                 })}
               </div>
-              <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i < vpPages.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0 }}><Icon name="chevR" size={16} color="#fff" /></button>
+              <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i < vpPages.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: onCard, flexShrink: 0 }}><Icon name="chevR" size={16} color={onCard} /></button>
             </div>
           ) : null}
         </div>
@@ -3210,12 +3212,12 @@ function TodayScreen({ ctx }) {
         </div> : null}
         {churchDevo ? (
           <div onClick={() => ctx.openChurchDevo(churchDevo)} style={{
-            flex: 1, padding: 16, borderRadius: 20, background: 'var(--sage)', cursor: 'pointer',
-            color: '#fff', position: 'relative', overflow: 'hidden', boxShadow: 'var(--shadow)',
+            flex: 1, padding: 16, borderRadius: 20, background: cardC || 'var(--sage)', cursor: 'pointer',
+            color: onCard, position: 'relative', overflow: 'hidden', boxShadow: 'var(--shadow)',
           }}>
-            <div style={{ position: 'absolute', right: -20, top: -16, opacity: .18 }}><Icon name="sun" size={110} stroke={1.4} color="#fff" /></div>
+            <div style={{ position: 'absolute', right: -20, top: -16, opacity: .18 }}><Icon name="sun" size={110} stroke={1.4} color={onCard} /></div>
             <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name="sun" size={22} stroke={2} color="#fff" />
+              <Icon name="sun" size={22} stroke={2} color={onCard} />
             </div>
             <div style={{ fontSize: 12, fontWeight: 600, marginTop: 10, opacity: .9 }}>Devotional{churchDevo.ref ? ' · ' + churchDevo.ref : ''}</div>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2, position: 'relative' }}>{churchDevo.title}</div>

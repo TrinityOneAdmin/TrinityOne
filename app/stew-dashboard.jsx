@@ -13462,6 +13462,36 @@ function DashBrandingPanel({ church }) {
   const mainStart = mainCol || '#C25A38';
   const onMainPick = (v) => { if (!mainCol && String(v).toLowerCase() === mainStart.toLowerCase()) return; onMain(v); };
   const NOT_SET = 'repeating-linear-gradient(45deg, var(--surface-2) 0 6px, var(--line) 6px 8px)';
+  // THE CHURCH'S CARD COLOUR (owner 2026-11-19) — a third colour that paints the devotional, reading plan
+  // and verse-prompt cards. Same opt-in pattern as mainColor. Unset ('') until the steward picks one.
+  const [cardCol, setCardState] = React.useState(church.cardColor || '');
+  const cardTimer = React.useRef(null);
+  React.useEffect(() => { if (church.cardColor !== undefined) setCardState(church.cardColor || ''); }, [church.cardColor]);
+  const [useCard, setUseCard] = React.useState(!!church.cardColor);
+  React.useEffect(() => { if (church.cardColor) setUseCard(true); }, [church.cardColor]);
+  const onCard = (v) => {
+    setCardState(v);
+    if (cardTimer.current) clearTimeout(cardTimer.current);
+    cardTimer.current = setTimeout(() => window.Steward.publishProfile({ cardColor: v }), 400);
+  };
+  const [cardHex, setCardHex] = React.useState((church.cardColor || '').toUpperCase());
+  React.useEffect(() => { setCardHex(cardCol ? cardCol.toUpperCase() : ''); }, [cardCol]);
+  const resetCard = () => { if (cardTimer.current) clearTimeout(cardTimer.current); setCardState(''); setCardHex(''); window.Steward.publishProfile({ cardColor: '' }); };
+  const setCardOn = (on) => {
+    if (on) { setUseCard(true); return; }
+    const had = !!(cardCol || church.cardColor || cardTimer.current);
+    if (had) resetCard(); else { setCardState(''); setCardHex(''); }
+    setUseCard(false);
+  };
+  const onCardHex = (v) => {
+    let s = v.trim(); if (s && s[0] !== '#') s = '#' + s;
+    setCardHex(s.toUpperCase());
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) onCard(s.toLowerCase());
+  };
+  const onCardHexBlur = () => { if (!/^#[0-9a-fA-F]{6}$/.test(cardHex)) setCardHex(cardCol ? cardCol.toUpperCase() : ''); };
+  const cardStart = cardCol || '#5E8C6A';
+  const onCardPick = (v) => { if (!cardCol && String(v).toLowerCase() === cardStart.toLowerCase()) return; onCard(v); };
+  const cardSwatches = ['#5E8C6A', '#C25A38', '#3B6FB0', '#7A4FA3', '#B0853B', '#1F2A37'];
   // THE PREVIEW SHOWS WHAT MEMBERS' PHONES PAINT (app/screens-church.jsx ChurchPill / ChurchBadge): with a banner,
   // the banner over the main colour; without one, the compact header — filled with the main colour, else PLAIN.
   // The badge is main, else the accent.
@@ -13566,6 +13596,37 @@ function DashBrandingPanel({ church }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 18 }}>
         {swatches.map(s => (
           <button key={s} onClick={() => onMain(s.toLowerCase())} title={s} aria-label={'Main colour ' + s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (mainCol.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
+        ))}
+      </div>
+      </> : null}
+
+      <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
+
+      <div style={lbl}>Devotional &amp; plan colour</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills the devotional, reading plan and verse prompt cards in your members' app.</div>
+      <button type="button" role="switch" aria-checked={useCard} aria-label="Use a different devotional colour" onClick={() => setCardOn(!useCard)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: 'none', background: 'none', padding: '4px 0', marginBottom: useCard ? 12 : 6, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', textAlign: 'left' }}>
+        <span style={{ position: 'relative', width: 40, height: 24, borderRadius: 999, flexShrink: 0, background: useCard ? 'var(--clay)' : 'var(--line)', transition: 'background .15s' }}>
+          <span style={{ position: 'absolute', top: 3, left: useCard ? 19 : 3, width: 18, height: 18, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,.3)', transition: 'left .15s' }} />
+        </span>
+        Use a different devotional colour
+      </button>
+      {!useCard ? <div data-card-off-note="1" style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: 18 }}>Devotional and plan cards use the default sage green.</div> : null}
+      {useCard ? <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: cardCol || NOT_SET, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
+          <input type="color" value={cardStart.toLowerCase()} onChange={e => onCardPick(e.target.value)} aria-label="Devotional colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+        </label>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
+          <input value={cardHex.replace(/^#/, '')} onChange={e => onCardHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onCardHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Devotional colour hex code" placeholder="5E8C6A"
+            style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
+          {cardCol ? <button onClick={resetCard} title="Reset to default" aria-label="Reset devotional colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>not set</span>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 18 }}>
+        {cardSwatches.map(s => (
+          <button key={s} onClick={() => onCard(s.toLowerCase())} title={s} aria-label={'Devotional colour ' + s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (cardCol.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
         ))}
       </div>
       </> : null}
