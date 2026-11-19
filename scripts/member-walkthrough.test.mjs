@@ -1,0 +1,1114 @@
+// THE MEMBER APP HAS A FIRST-RUN TOUR (A BIBLE PART AND A COMMUNITY PART) AND READER TIPS.
+//   Run: node --test scripts/member-walkthrough.test.mjs
+//
+// app/member-tour.jsx (steps, start rules, host) on app/tour-kit.jsx (the bubble, shared with the console's tour).
+//
+// CLAUDE.md rule 1 — every start is tested AT THE POINT OF USE, through the screen that really triggers it:
+//   · the REAL App (app/app.jsx, every script index.html lists, loaded by scripts/app-screens.mjs): the setup
+//     screen is finished by calling the onSkip / onSave App really gave it; a church is joined by calling the
+//     ctx.followChurch App really hands its screens; Help's replay is the ctx.replayTour App really hands them.
+//     What is asserted is the MemberTourBubble the host App mounted put up.
+//   · the REAL ReadScreen (app/screens-read.jsx): drawing it is what asks for the reader tips, and the tip
+//     points at the verse anchor that ReadScreen itself drew.
+//   · the REAL ChatScreen / TodayScreen / TabBar / DesktopNav / HelpIndex, drawn through the miniature React in
+//     scripts/render-jsx-screen.mjs, for the anchors and the words the tour reads from them.
+// Rule 3 — nothing here matches text in an app/*.jsx file. The pure functions are RUN.
+//
+// ANCHORS IN THE APP-LEVEL TESTS. The App harness (fakeReact) draws App only, not its children, so the anchors
+// TabBar / TodayScreen / ChatScreen draw are not in that tree. Those tests answer document.querySelector from a
+// list of anchors stated per test; the screen-level tests below prove each anchor really is drawn, by the screen
+// that owns it, and the host-over-screen tests answer querySelector from the drawn screen itself.
+// EXCEPT the admission tests (audit M1, 2026-11-19): await h.screens() draws the REAL ChatScreen with the ctx App really
+// hands it (App's own joinState) and the REAL TabBar with App's props, and the host answers from those trees — so
+// "Waiting for approval" draws no groups anchor because ChatScreen draws none, not because a test said so.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fakeReact, appBrowser, loadApp, nodes } from './app-screens.mjs';
+import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+
+const ROOT = new URL('../', import.meta.url).pathname;
+const read = (f) => readFileSync(join(ROOT, f), 'utf8');
+const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+const NPUB = 'npub1' + '0'.repeat(58);
+const NPUB2 = 'npub1' + '2'.repeat(58);
+const BIBLE_TITLES = ['Welcome', 'Verse of the day', 'Read', 'Library', 'You'];
+
+// ── a document whose querySelector('[data-tour="x"]') answers from what a screen drew ──────────────────────
+// `source()` returns either a Set of anchor names (App-level tests) or a list of drawn trees.
+function tourDoc(source) {
+  const el = (props) => ({
+    getClientRects: () => [1], scrollIntoView() {},
+    getBoundingClientRect: () => ({ left: 20, top: 30, right: 140, bottom: 74, width: 120, height: 44 }),
+    getAttribute: (k) => (props && props[k] != null ? String(props[k]) : null),
+  });
+  return (sel) => {
+    const m = /^\[data-tour="([^"]+)"\]$/.exec(sel);
+    if (!m) return null;
+    const src = source();
+    if (src instanceof Set) return src.has(m[1]) ? el(src.facts && src.facts[m[1]]) : null;
+    // Only an element the browser would really have (a host element, type a string): a component's props are not in
+    // the DOM, so an anchor passed to a component that drops it must not be found (audit T2).
+    for (const t of src) { const n = find(t, x => typeof x.type === 'string' && x.props && x.props['data-tour'] === m[1])[0]; if (n) return el(n.props); }
+    return null;
+  };
+}
+const anchors = (names, facts) => { const s = new Set(names); s.facts = facts || {}; return s; };
+
+// ══════════════ THE REAL APP ════════════════════════════════════════════════════════════════════════════
+// opts: { onboarded, church (follow one at boot), store (Map shared across boots), anchors (Set), search (the page's
+//         location.search), setup(window) (run after the app's scripts load, before its first frame) }
+function bootApp(opts = {}) {
+  const r = fakeReact();
+  const env = appBrowser();
+  const window = env.window;
+  if (opts.store) for (const [k, v] of opts.store) window.localStorage.setItem(k, v);
+  if (opts.search) window.location.search = opts.search;
+  window.Bible = { loaded: true, activeVersion: 'KJV', subscribe: () => () => {}, books: () => ['John'], maxChapter: () => 21, defaultLoc: () => ({ book: 'John', chap: 1 }) };
+  window.MyData = { seedIfEmpty() {}, on: () => () => {}, list: () => [], settings: { get: () => ({}) }, count: () => 0, set: () => {} };
+  window.TrinityData = {};
+  const mod = loadApp({ React: r.React, window, expr: '({ App, MemberTourHost, MemberTourBubble, Splash, IdentityOnboarding, ChurchSwitcher, TabBar, HelpCenter, ProfileSheet, memberTourStore, memberTourStart, memberTourJoined })' });
+  for (const k of Object.keys(mod)) assert.ok(mod[k], k + ' is not in the member app scope — re-anchor this test');
+  window.TrinityData.CHURCHES = [];
+  if (opts.onboarded !== false) window.localStorage.setItem('trinityone.onboarded', 'true');
+  if (opts.church) {
+    window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church' }];
+    window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(NPUB));
+  }
+  // The church's join answer (App's subscribeChurchJoin effect, app/app.jsx): the latest subscriber is kept, and
+  // h.join(state) answers it as the engine does ({ approval, isAdmitted, isPending, authFailed, openKnown }).
+  let joinCb = null, joinLast = null;
+  window.Fellowship = new Proxy({
+    myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x,
+    isBlockedChurch: () => false, checkChurch: async () => 'church', ready: Promise.resolve(),
+    subscribeChurchJoin: (_np, cb) => { joinCb = cb; if (joinLast) cb(joinLast); return () => { if (joinCb === cb) joinCb = null; }; },
+    ...(opts.fellowship || {}),
+  }, { get: (t, k) => (k in t ? t[k] : (k === 'then' || typeof k === 'symbol') ? undefined : () => () => {}) });
+  let anc = opts.anchors || anchors(['tab-today', 'tab-read', 'tab-chat', 'tab-library', 'tab-you', 'votd']);
+  window.document.querySelector = tourDoc(() => anc);
+  // One frame: App, then the host App mounted (fakeReact draws one component; the host's hooks follow App's in
+  // the same, stable order), then effects. The host's output is the bubble element it put up, or null.
+  const frame = () => {
+    r.reset();
+    const tree = App();
+    const hostEl = nodes(tree).find(n => n.type === mod.MemberTourHost);
+    const out = hostEl ? hostEl.type(hostEl.props) : null;
+    r.flush();
+    return { tree, hostEl, out };
+  };
+  const { App } = mod;
+  const show = () => { frame(); frame(); return frame(); };
+  const el = (tree, type) => nodes(tree).find(n => n.type === type);
+  const ctxOf = (tree) => { const n = nodes(tree).find(x => x.props && x.props.ctx && 'followChurch' in x.props.ctx); assert.ok(n, 'no screen received a ctx — re-anchor'); return n.props.ctx; };
+  // the splash ends by calling the onDone App gave it
+  const endSplash = () => { const s = el(frame().tree, mod.Splash); if (s) s.props.onDone(); };
+  const join = (state) => { joinLast = state; if (joinCb) joinCb(state); };
+  // The REAL ChatScreen and the REAL TabBar, drawn (full miniature React) from what App hands them in its current
+  // frame — ChatScreen gets App's own ctx (its joinState, its church) — and made the page the host looks at.
+  // rooms: what the church's group subscription answers ChatScreen with (null: not delivered yet).
+  let mini = null;
+  // Async: ChatScreen's own effect asks the engine who the reader is (assumeMinor), which answers on a later tick.
+  const screens = async (rooms) => {
+    if (!mini) {
+      const { React, draw } = miniReact();
+      const groups = { rooms: null };
+      const chat = chatScreen(React, draw, { groups });
+      const ui = loadScreen('app/ui.jsx', ['TabBar'], {
+        React, window: {}, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({}) },
+        navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, localStorage: { getItem: () => null, setItem() {} },
+        setTimeout, clearTimeout, console, Icon: () => null, UserAvatar: () => null, Halo: () => null,
+      });
+      mini = { draw, groups, chat, TabBar: ui.TabBar };
+    }
+    if (rooms !== undefined) mini.groups.deliver(rooms);
+    frame();
+    const f = frame();
+    const tab = el(f.tree, mod.TabBar);
+    assert.ok(tab, 'App drew no TabBar — re-anchor');
+    const ctx = ctxOf(f.tree);
+    mini.chat(ctx);
+    await settle();
+    mini.chat(ctx);
+    const chatTree = mini.chat(ctx);
+    const tabTree = mini.draw(mini.TabBar, tab.props);
+    anc = [chatTree, tabTree];
+    return { chatTree, tabTree, said: texts(chatTree).join(' | ') };
+  };
+  if (opts.setup) opts.setup(window);
+  return { mod, window, store: window.localStorage, frame, show, el, ctxOf, endSplash, join, screens, setAnchors: (a) => { anc = a; } };
+}
+const bubbleOf = (f, h) => (f.out && f.out.type === h.mod.MemberTourBubble && f.out.props.variant !== 'tip') ? f.out.props : null;
+// Walk the tour with the bubble's own Next, collecting titles, checking `each` after every frame.
+function walkApp(h, each) {
+  const seen = [];
+  for (let g = 0; g < 20; g++) {
+    const f = h.show();
+    if (each) each(f);
+    const b = bubbleOf(f, h);
+    if (!b) return seen;
+    seen.push(b.step.title);
+    b.onNext();
+  }
+  throw new Error('the tour never ended');
+}
+const settle = () => new Promise(r => setTimeout(r, 30));
+// The church's join answers, as src/fellowship.src.js subscribeChurchJoin emits them.
+const PENDING = { approval: true, isAdmitted: false, isPending: true, openKnown: false };
+const ADMITTED = { approval: true, isAdmitted: true, isPending: false, openKnown: false };
+const OPEN = { approval: false, isAdmitted: false, isPending: false, openKnown: true };
+// Walk with the bubble's own Next, recording what each step SAID.
+function walkSaid(h) { const said = []; walkApp(h, (f) => { const b = bubbleOf(f, h); if (b) said.push([b.step.title, b.step.text]); }); return said; }
+const groupsAnchor = (tree) => find(tree, n => n.props && n.props['data-tour'] === 'groups');
+// Every key this App's store holds — to boot the same phone again.
+const storeOf = (h) => { const m = new Map(); for (let i = 0; i < h.store.length; i++) { const k = h.store.key(i); m.set(k, h.store.getItem(k)); } return m; };
+
+test('CONTROL: App mounts the tour host, and an already set-up member with no request sees nothing', () => {
+  const h = bootApp();
+  h.endSplash();
+  const f = h.show();
+  assert.ok(f.hostEl, 'App does not mount MemberTourHost');
+  assert.equal(f.out, null, 'something showed with nothing asking for it');
+});
+
+test('POINT OF USE: skipping the setup screen starts the Bible tour — not over the setup screen, not over the follow sheet', () => {
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  let f = h.show();
+  const ob = h.el(f.tree, h.mod.IdentityOnboarding);
+  assert.ok(ob, 'the setup screen did not open on a first run — re-anchor this test');
+  assert.equal(bubbleOf(f, h), null, 'the tour showed over the setup screen');
+  ob.props.onSkip();                                   // the handler App really gave it
+  f = h.show();
+  const sw = h.el(f.tree, h.mod.ChurchSwitcher);
+  assert.equal(sw.props.open, true, 'premise: skipping setup opens the follow-a-church sheet');
+  assert.equal(bubbleOf(f, h), null, 'the tour showed over the follow-a-church sheet');
+  sw.props.onClose();
+  f = h.show();
+  const b = bubbleOf(f, h);
+  assert.ok(b, 'closing the follow sheet after setup did not start the tour');
+  assert.equal(b.step.title, 'Welcome');
+  assert.equal(b.pos + ' of ' + b.count, '1 of 5');
+  assert.equal(h.store.getItem('trinityone.tour.bible'), '1', 'the Bible part was not recorded as seen on this device');
+  assert.deepEqual(walkApp(h), BIBLE_TITLES);
+});
+
+test('POINT OF USE: the verse-of-the-day step says what the card itself offers (owner, 2026-11-19: option a)', () => {
+  // Journal is not on the card and Share only shows once it is opened up, so the step says just that.
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  let f = h.show();
+  h.el(f.tree, h.mod.IdentityOnboarding).props.onSkip();
+  f = h.show();
+  h.el(f.tree, h.mod.ChurchSwitcher).props.onClose();
+  const said = {};
+  walkApp(h, (fr) => { const b = bubbleOf(fr, h); if (b) said[b.step.title] = b.step.text; });
+  assert.equal(said['Verse of the day'], 'A verse for each day. Tap it to open it up and share it.');
+});
+
+test('POINT OF USE: finishing the setup screen (onSave) starts it too', () => {
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  const ob = h.el(h.show().tree, h.mod.IdentityOnboarding);
+  ob.props.onSave({ name: 'Sam' });
+  h.el(h.show().tree, h.mod.ChurchSwitcher).props.onClose();
+  const b = bubbleOf(h.show(), h);
+  assert.ok(b, 'finishing setup did not start the tour');
+  assert.equal(b.step.title, 'Welcome');
+});
+
+test('POINT OF USE (M1-d): joining an OPEN church runs the Community part once the person is on Community; once only', async () => {
+  const h = bootApp({ anchors: anchors(['tab-today', 'tab-read', 'tab-chat', 'tab-library', 'tab-you', 'votd', 'happening']) });
+  h.store.setItem('trinityone.tour.bible', '1');      // they had the Bible part already
+  h.endSplash();
+  let f = h.show();
+  assert.equal(bubbleOf(f, h), null);
+  h.ctxOf(f.tree).followChurch(NPUB);                  // what the follow sheet calls (screens-church.jsx)
+  await settle();                                      // checkChurch answers "church"
+  h.join(OPEN);                                        // the church's trusted policy: no approval needed
+  // on Today (plan §12.1): an automatic Community start waits for the Community page, and spends nothing
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part started on Today, where its groups list is not');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent while it waited for the Community page');
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');   // the person taps Community
+  const s = await h.screens([ADULT_ROOM]);
+  assert.equal(groupsAnchor(s.chatTree).length, 1, 'premise: the open church\'s ChatScreen draws no groups anchor');
+  assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'joining an open church did not run the Community part with its Groups step');
+  assert.equal(h.store.getItem('trinityone.tour.community'), '1');
+  // a second church joined later does not run it again
+  h.ctxOf(h.show().tree).followChurch(NPUB2);
+  await settle();
+  await h.screens();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part ran a second time');
+});
+
+test('POINT OF USE (M1-a): joining an approval church — nothing on "Waiting for approval"; once let in, Community runs WITH the Groups step', async () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');     // the person is on Community
+  h.ctxOf(h.show().tree).followChurch(NPUB);                    // what the follow sheet calls
+  await settle();                                               // checkChurch answers "church"
+  h.join(PENDING);
+  let s = await h.screens();
+  assert.match(s.said, /Waiting for approval/, 'premise: the real ChatScreen is not showing "Waiting for approval"');
+  assert.equal(find(s.chatTree, n => n.props && n.props['data-tour'] === 'groups').length, 0, 'premise: the groups anchor is drawn while pending');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part showed while the person was still waiting for approval');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent before the person was let in');
+  // a steward lets them in
+  h.join(ADMITTED);
+  h.show();
+  s = await h.screens([ADULT_ROOM]);
+  assert.equal(find(s.chatTree, n => n.props && n.props['data-tour'] === 'groups').length, 1, 'premise: the admitted ChatScreen draws no groups anchor');
+  const said = walkSaid(h);
+  assert.deepEqual(said.map(x => x[0]), ['Community', 'Groups and teams'], 'admission did not run the Community part with its Groups step');
+  assert.equal(said[0][1], 'Your church is here: announcements, events, groups and teams.', 'the Community step does not say the owner\'s words (2026-11-19)');
+  assert.equal(said[1][1], 'Groups you can join.');
+  assert.equal(h.store.getItem('trinityone.tour.community'), '1');
+});
+
+test('M1-b: closed and reopened while still waiting — nothing on boot, nothing while pending; let in later, Community runs', async () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.ctxOf(h.show().tree).followChurch(NPUB);
+  // recorded at once, before the church check answers: an app closed in that gap still has it to come (§12.7)
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1', 'following did not record at once that the Community part is to come');
+  await settle();
+  h.join(PENDING);
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null);
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1', 'joining did not record that the Community part is to come');
+  // A start with NO cached join answer (wiped, or never written) — only the wait flag says Community is to come:
+  // boot must not mark it seen (the host's `!memberTourWaiting()` term).
+  const bare = storeOf(h);
+  bare.delete('trinityone.joinstate.' + NPUB);
+  assert.equal(bare.get('trinityone.tour.community.wait'), '1');
+  const nocache = bootApp({ church: true, store: bare });
+  nocache.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(nocache.show(), nocache), null);
+  assert.equal(nocache.store.getItem('trinityone.tour.community'), null, 'boot marked Community seen for a member whose join is still waiting (wait flag, no cached answer)');
+  nocache.join(ADMITTED);
+  nocache.el(nocache.show().tree, nocache.mod.TabBar).props.onChange('chat');
+  await nocache.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(nocache).map(x => x[0]), ['Community', 'Groups and teams'], 'with only the wait flag, admission did not run the Community part');
+  // the phone is closed; the app starts again, still following the church
+  const again = bootApp({ church: true, store: storeOf(h) });
+  again.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(again.show(), again), null, 'the tour started on boot');
+  again.join(PENDING);
+  again.el(again.show().tree, again.mod.TabBar).props.onChange('chat');
+  assert.match((await again.screens()).said, /Waiting for approval/, 'premise: still waiting for approval');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(again.show(), again), null, 'the Community part showed while still pending');
+  assert.equal(again.store.getItem('trinityone.tour.community'), null, 'the boot rule spent the Community part of a member still waiting to be let in');
+  again.join(ADMITTED);
+  again.show();
+  await again.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(again).map(x => x[0]), ['Community', 'Groups and teams'], 'being let in after a restart did not run the Community part');
+});
+
+test('M1-c: waiting for approval on a build from before this fix (no wait flag) — boot does not spend Community; admission runs it', async () => {
+  // what an older build left on the phone: the church followed, its cached join answer "pending", no wait flag
+  const store = new Map([['trinityone.tour.bible', '1'], ['trinityone.joinstate.' + NPUB, JSON.stringify({ approval: true, isAdmitted: false, isPending: true, removed: false })]]);
+  const h = bootApp({ church: true, store });
+  h.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null);
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'boot marked the Community part seen for someone still waiting to be let in');
+  h.join(ADMITTED);
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  await h.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'admission did not run the Community part');
+});
+
+test('M1-f: first run — setup, then an OPEN church joined from the follow sheet: the Bible part on Today has no Community; Community runs on the Community page', async () => {
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  h.el(h.show().tree, h.mod.IdentityOnboarding).props.onSkip();     // the setup screen asks for the tour (bible + community)
+  let f = h.show();
+  assert.equal(h.el(f.tree, h.mod.ChurchSwitcher).props.open, true, 'premise: the follow sheet opened after setup');
+  h.ctxOf(f.tree).followChurch(NPUB);                               // what the follow sheet calls
+  await settle();
+  h.join(OPEN);                                                      // let in at once (no approval needed)
+  h.show();
+  h.el(h.show().tree, h.mod.ChurchSwitcher).props.onClose();
+  assert.deepEqual(walkApp(h), BIBLE_TITLES, 'the first-run tour on Today ran the Community part away from its groups list');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent on Today');
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  await h.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'the Community part did not run on the Community page');
+});
+
+test('M1-e: never let in — nothing runs and nothing is spent; removed — nothing; Help replay while pending is the Bible part only', async () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.ctxOf(h.show().tree).followChurch(NPUB);
+  await settle();
+  h.join(PENDING);
+  await h.screens();
+  for (let i = 0; i < 5; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part showed for someone never let in');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null);
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1');
+  h.ctxOf(h.show().tree).replayTour();                   // Help → Take the tour again, still pending
+  const titles = walkApp(h);
+  assert.deepEqual(titles, ['Welcome', 'Read', 'Library', 'You'], 'replay while pending was not the Bible part only (the verse card is on Today)');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'replay while pending spent the Community part');
+  // removed: this phone once saw itself admitted, and the church now says pending (app.jsx: removed)
+  const r = bootApp();
+  r.store.setItem('trinityone.tour.bible', '1');
+  r.endSplash();
+  r.el(r.show().tree, r.mod.TabBar).props.onChange('chat');
+  r.ctxOf(r.show().tree).followChurch(NPUB);
+  await settle();
+  r.store.setItem('trinityone.wasadmitted.' + NPUB, JSON.stringify('1'));   // as App's lsSet writes it
+  r.join(PENDING);
+  assert.match((await r.screens([ADULT_ROOM])).said, /no longer in this church/, 'premise: ChatScreen is not showing the removed state');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(r.show(), r), null, 'the Community part showed to someone removed from the church');
+  assert.equal(r.store.getItem('trinityone.tour.community'), null);
+});
+
+test('POINT OF USE (L4): on a thin link (church check never answers), the Community part never pops up over someone typing; it shows once they stop', async () => {
+  const held = [];   // the church check's 10 s retries, released by hand
+  let announced = 0, looks = 0;   // looks: the host's 700 ms look-again
+  const h = bootApp({
+    fellowship: { checkChurch: async () => 'unknown', announceMembership: () => { announced++; } },
+    setup: (w) => { const st = w.setTimeout; w.setTimeout = (fn, ms, ...a) => { if (ms === 700) looks++; return ms === 10000 ? (held.push(fn), 0) : st(fn, ms, ...a); }; },
+  });
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.ctxOf(h.show().tree).followChurch(NPUB);
+  for (let i = 0; i < 3; i++) { await settle(); assert.equal(held.length, 1, 'premise: the church check did not schedule retry ' + (i + 1)); held.shift()(); }
+  await settle();
+  assert.equal(announced, 1, 'premise: the third retry did not send the join (app.jsx: the retry else-branch)');
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part showed before the church let them in');
+  // they are typing a message when the church's answer finally comes in
+  h.window.document.activeElement = { tagName: 'TEXTAREA', closest: () => null };
+  h.join(OPEN);
+  h.show();
+  await h.screens([ADULT_ROOM]);
+  looks = 0;
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part popped up over someone typing');
+  // a blur sends no event the host hears, so while it holds a start back it must look again by itself
+  assert.ok(looks > 0, 'the host held the start back for typing but never looks again, so nothing would show until something else re-rendered');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent while held back for typing');
+  h.window.document.activeElement = { tagName: 'BODY', closest: () => null };   // they finish: focus leaves the box
+  const b = bubbleOf(h.show(), h);
+  assert.ok(b, 'the Community part did not show once they stopped typing');
+  assert.equal(b.step.title, 'Community');
+});
+
+test('L4: a Help replay is NOT held back while typing (only automatic starts are)', () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.show();
+  h.window.document.activeElement = { tagName: 'TEXTAREA', closest: () => null };
+  h.ctxOf(h.show().tree).replayTour();
+  const b = bubbleOf(h.show(), h);
+  assert.ok(b, 'Help → Take the tour again was held back because focus was in a text box');
+  assert.equal(b.step.title, 'Welcome');
+});
+
+test('L4: what counts as typing — text boxes, text-like inputs, selects, editable areas; not a checkbox, and not the tour itself', () => {
+  const { React } = miniReact();
+  const doc = { querySelector: () => null, activeElement: null };
+  const K = loadScreen('app/tour-kit.jsx', ['tourKitFlag', 'tourKitFlagSet', 'tourKitFind', 'tourKitWalk', 'tourKitInsets', 'TourKitBubble'], { React, window: {}, document: doc, localStorage: { getItem: () => null, setItem() {} }, console });
+  const { memberTourTyping } = loadScreen('app/member-tour.jsx', ['memberTourTyping'], { React, window: {}, document: doc, console, ...K, Event: class {} });
+  const at = (el) => { doc.activeElement = el; return memberTourTyping(); };
+  const el = (tagName, extra) => ({ tagName, closest: () => null, ...extra });
+  assert.equal(at(null), false);
+  assert.equal(at(el('BODY')), false);
+  assert.equal(at(el('TEXTAREA')), true);
+  assert.equal(at(el('INPUT', { type: 'text' })), true);
+  assert.equal(at(el('INPUT', { type: 'search' })), true);
+  assert.equal(at(el('INPUT', {})), true, 'an input with no type is a text box');
+  assert.equal(at(el('INPUT', { type: 'checkbox' })), false);
+  assert.equal(at(el('INPUT', { type: 'button' })), false);
+  assert.equal(at(el('SELECT')), true);
+  assert.equal(at(el('DIV', { isContentEditable: true })), true);
+  assert.equal(at(el('BUTTON')), false);
+  assert.equal(at(el('TEXTAREA', { closest: (sel) => (sel === '[data-member-tour]' ? {} : null) })), false, 'focus inside the tour counted as typing');
+});
+
+test('an upgrading member (set up on an earlier version, already in a church) gets no tour, and no Community part on a later join', async () => {
+  const h = bootApp({ church: true });
+  h.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the tour started on boot for an existing member');
+  h.join(ADMITTED);                                    // their church answers: they are in
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  await h.screens([ADULT_ROOM]);
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'admission ran the Community part for an existing member');
+  assert.equal(h.store.getItem('trinityone.tour.community'), '1', 'an existing member was not recorded as having joined before');
+  assert.equal(h.mod.memberTourJoined(), false);
+  h.ctxOf(h.show().tree).followChurch(NPUB2);
+  await settle();
+  assert.equal(bubbleOf(h.show(), h), null, 'joining a second church ran the Community part for an existing member');
+});
+
+test('seen-state: a second first-run start on the same device does nothing; a second boot shows nothing', () => {
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  h.el(h.show().tree, h.mod.IdentityOnboarding).props.onSkip();
+  h.el(h.show().tree, h.mod.ChurchSwitcher).props.onClose();
+  walkApp(h);
+  assert.equal(h.mod.memberTourStart('onboarding'), false, 'an automatic start ran a second time');
+  const store = new Map([['trinityone.tour.bible', '1']]);
+  const again = bootApp({ store });
+  again.endSplash();
+  assert.equal(bubbleOf(again.show(), again), null);
+  assert.equal(again.mod.memberTourStart('invite'), false);
+});
+
+test('landing on Community in a church: Community part first, then the Bible part — and the tab never changes', () => {
+  const facts = { groups: { 'data-tour-minor': '0', 'data-tour-count': '2' } };
+  const h = bootApp({ church: true, anchors: anchors(['tab-today', 'tab-read', 'tab-chat', 'tab-library', 'tab-you', 'groups'], facts) });
+  h.endSplash();
+  let f = h.show();
+  h.el(f.tree, h.mod.TabBar).props.onChange('chat');   // the person taps Community
+  h.join(ADMITTED);                                      // their church has them on its admitted list
+  f = h.show();
+  assert.equal(h.el(f.tree, h.mod.TabBar).props.active, 'chat');
+  h.ctxOf(f.tree).replayTour();                          // Help → Take the tour again
+  const titles = walkApp(h, (fr) => {
+    assert.equal(h.el(fr.tree, h.mod.TabBar).props.active, 'chat', 'the tour moved the person off the page they were on');
+    for (const [k, v] of Object.entries(fr.hostEl.props)) assert.notEqual(typeof v, 'function', 'the tour host was handed a function (' + k + ') — it must not be able to change the page');
+  });
+  // the verse card is on Today, so it is skipped here rather than navigated to
+  assert.deepEqual(titles, ['Community', 'Groups and teams', 'Welcome', 'Read', 'Library', 'You']);
+});
+
+test('POINT OF USE: Help → "Take the tour again" closes Help and the profile hub, then replays', () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  let f = h.show();
+  const ctx = h.ctxOf(f.tree);
+  assert.equal(typeof ctx.replayTour, 'function', 'App hands its screens no replayTour');
+  ctx.openProfile(); ctx.openHelp('index');
+  f = h.show();
+  assert.equal(h.el(f.tree, h.mod.HelpCenter).props.open, true, 'premise: Help is open');
+  assert.equal(bubbleOf(f, h), null, 'the tour showed over Help');
+  h.ctxOf(f.tree).replayTour();
+  f = h.show();
+  assert.equal(h.el(f.tree, h.mod.HelpCenter).props.open, false, 'Help stayed open');
+  assert.equal(h.el(f.tree, h.mod.ProfileSheet).props.open, false, 'the profile hub stayed open over the tour');
+  assert.ok(bubbleOf(f, h), 'the tour did not replay');
+});
+
+test('the tour waits behind any open sheet on the back stack, then shows', () => {
+  const h = bootApp();
+  h.endSplash();
+  h.show();
+  h.window.__trinityBackStack.push({ close() {} });   // what every open BottomSheet / Overlay does (ui.jsx useBackLayer)
+  h.mod.memberTourStart('replay');
+  assert.equal(bubbleOf(h.show(), h), null, 'the tour showed over an open sheet');
+  h.window.__trinityBackStack.length = 0;
+  assert.ok(bubbleOf(h.show(), h), 'the tour did not show once the sheet closed');
+});
+
+// ── 2026-11-19 audit fixes, through the real App ────────────────────────────────────────────────────────────
+test('POINT OF USE: an invite link adopted on a never-set-up phone starts the tour (App\'s invite effect)', async () => {
+  const seed = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const run = async (onboarded) => {
+    const h = bootApp({ onboarded, search: '?invite=' + encodeURIComponent(seed),
+      setup: (w) => { w.confirm = () => true; w.TrinityIdentity = { importMnemonic: async () => {} }; } });
+    h.endSplash();
+    h.show();
+    await settle();                                     // the confirm, then importMnemonic
+    return { h, b: bubbleOf(h.show(), h) };
+  };
+  const fresh = await run(false);
+  assert.ok(fresh.b, 'adopting an invite on a phone that was never set up did not start the tour');
+  assert.equal(fresh.b.step.title, 'Welcome');
+  // CONTROL: the same link on a phone already set up is not a first run, and starts nothing
+  const used = await run(true);
+  assert.equal(used.b, null, 'an invite adopted on an already set-up phone started the tour');
+});
+
+test('POINT OF USE: the tour never shows over the PIN gate; it shows once the person goes past it', () => {
+  const h = bootApp({ setup: (w) => { w.TrinityIdentity = { isLocked: () => true }; } });
+  h.endSplash();
+  let f = h.show();
+  const gate = nodes(f.tree).find(n => n.type && n.type.name === 'PinUnlockGate');
+  assert.ok(gate, 'premise: the PIN gate is not up for a locked identity');
+  h.mod.memberTourStart('replay');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the tour showed over the PIN gate');
+  gate.props.onReadBible();                             // "read the Bible without unlocking": the gate goes
+  assert.ok(bubbleOf(h.show(), h), 'the tour did not show once the gate had gone');
+});
+
+test('the tour hides when a sheet or the PIN lock comes up mid-run, and resumes at the same step', () => {
+  const h = bootApp();
+  h.endSplash();
+  h.show();
+  h.mod.memberTourStart('replay');
+  bubbleOf(h.show(), h).onNext();
+  const at = bubbleOf(h.show(), h).step.title;
+  assert.equal(at, 'Verse of the day', 'premise: Next did not move to step 2');
+  h.window.__trinityBackStack.push({ close() {} });   // a sheet opens over the tour
+  for (let i = 0; i < 2; i++) assert.equal(bubbleOf(h.show(), h), null, 'the tour stayed up over a sheet that opened while it ran');
+  h.window.__trinityBackStack.length = 0;
+  const resumed = bubbleOf(h.show(), h);
+  assert.ok(resumed, 'the tour did not come back once the sheet closed');
+  assert.equal(resumed.step.title, at, 'the tour did not come back at the step it was on');
+  h.window.TrinityIdentity = { isLocked: () => true };   // the PIN idle-lock
+  h.window.dispatch('trinity-identity-lock', {});
+  assert.ok(nodes(h.show().tree).some(n => n.type && n.type.name === 'PinUnlockGate'), 'premise: the idle-lock did not put the PIN gate up');
+  assert.equal(bubbleOf(h.show(), h), null, 'the tour stayed up over the PIN gate');
+  h.window.TrinityIdentity = { isLocked: () => false };
+  h.window.dispatch('trinity-identity-lock', {});
+  const back = bubbleOf(h.show(), h);
+  assert.ok(back, 'the tour did not come back after unlocking');
+  assert.equal(back.step.title, at, 'the tour came back at a different step');
+});
+
+// ══════════════ THE HOST OVER REAL SCREENS (the full miniature React: the bubble is drawn) ══════════════════
+// o: { failWrites (localStorage.setItem throws, as a full or blocked store does), setTimeout (to record timers),
+//      clock ({ t }: Date.now() in the tour files answers clock.t) }
+function kit(React, win, doc, store, o = {}) {
+  const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), removeItem: (k) => { store.delete(k); },
+    setItem: (k, v) => { if (o.failWrites) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; } store.set(k, String(v)); } };
+  const FakeDate = o.clock ? class extends Date { static now() { return o.clock.t; } } : Date;
+  const base = { React, window: win, document: doc, localStorage: ls, getComputedStyle: () => ({}), console, setTimeout: o.setTimeout || (() => 0), clearTimeout() {}, Event: class { constructor(t) { this.type = t; } }, Date: FakeDate };
+  const K = loadScreen('app/tour-kit.jsx', ['tourKitFind', 'tourKitWalk', 'tourKitPlace', 'tourKitInsets', 'tourKitFlag', 'tourKitFlagSet', 'TourKitBubble'], base);
+  const M = loadScreen('app/member-tour.jsx', ['MemberTourHost', 'memberTourPlan', 'memberTourGroupsText', 'memberTourNextTip', 'memberTourReader', 'memberTourStart'],
+    { ...base, ...K, useDialogA11y: () => {} });
+  return { K, M, ls };
+}
+const drawnBubble = (tree, which) => find(tree, n => n.props && n.props['data-member-tour'] === which)[0] || null;
+const titleOf = (b) => { const h2 = find(b, n => n.type === 'h2')[0]; return h2 ? texts(h2.kids || []).join('') : null; };
+
+function readerScreen(React, win) {
+  const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
+  // The REAL IconBtn (app/ui.jsx): the Listen anchor is handed to it as a prop, and only reaches the page if it
+  // passes it on to its <button> (audit T2).
+  const { IconBtn } = loadScreen('app/ui.jsx', ['IconBtn'], {
+    React, window: {}, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({}) },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, localStorage: { getItem: () => null, setItem() {} },
+    setTimeout, clearTimeout, console, Icon, UserAvatar: () => null, Halo: () => null,
+  });
+  const BOOKS = [43];
+  win.Bible = {
+    loaded: true, activeVersion: 'WEB', books: () => BOOKS, maxChapter: () => 21, bookName: () => 'John', versions: () => [{ abbr: 'WEB' }],
+    getVerses: () => [{ v: 1, text: 'In the beginning', html: 'In the beginning' }, { v: 2, text: 'The same', html: 'The same' }],
+    bookMeta: () => [{ num: 43, name: 'John', abbr: 'Joh', group: 'g', ch: 21 }],
+    getCommentary: () => [], commentaryList: () => [], searchDict: () => [], subscribe: () => () => {}, defaultLoc: () => ({ book: 43, chap: 1 }),
+    refLabel: (l, v) => 'John ' + l.chap + (v != null ? ':' + v : ''), refKey: (l, v) => l.book + '.' + l.chap + '.' + v, step: () => null,
+  };
+  Object.assign(win, { speechSynthesis: null, innerWidth: 360, sanitizeHtml: h => h, getSelection: () => ({ toString: () => '' }), TrinityData: { CROSSREFS: {} } });
+  const { ReadScreen } = loadScreen('app/screens-read.jsx', ['ReadScreen'], {
+    React, window: win, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    navigator: { userAgent: '', clipboard: null }, location: { search: '' },
+    setTimeout, clearTimeout, setInterval, clearInterval, console, URLSearchParams, SpeechSynthesisUtterance: class {},
+    Icon, cx: (...a) => a.filter(Boolean).join(' '), lsGet: (k, d) => d, lsSet: () => {},
+    useTrinityAudio: () => ({ track: null, playing: false }),
+    Overlay: Stub('Overlay'), ReadPlansTabs: Stub('ReadPlansTabs'), BottomSheet: Stub('BottomSheet'), useBackLayer: () => {},
+    Sheet: Stub('Sheet'), Modal: Stub('Modal'), Pill: Stub('Pill'), Row: Stub('Row'), IconBtn, Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
+  });
+  const ctx = { loc: { book: 43, chap: 1 }, version: 'WEB', setLoc() {}, toast() {}, highlights: {}, notes: {}, bookmarks: [], toggleBookmark() {}, setHighlight() {}, setNote() {},
+    openShareSheet() {}, desktop: false, readScale: 1, removeTranslation() {}, addModule() {}, setVersion() {} };
+  return { ReadScreen, ctx };
+}
+
+test('POINT OF USE: opening the reader shows "Tap a verse" on the first verse ReadScreen drew; then the header tips, one at a time', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  let screens = [];
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  win.memberTourReader = M.memberTourReader;            // as member-tour.jsx puts it on window
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  // CONTROL: the host alone, with no reader drawn, offers nothing
+  assert.equal(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card'), null, 'a reader tip showed with no reader on screen');
+  const reader = draw(ReadScreen, { ctx });              // its effect asks for the reader tips
+  screens = [reader];
+  const verseAnchors = find(reader, n => n.props && n.props['data-tour'] === 'verse');
+  assert.equal(verseAnchors.length, 1, 'ReadScreen does not mark exactly one verse (the first) as the tour anchor');
+  assert.equal(verseAnchors[0].props.id, 'rv-1', 'the anchor is not on the first verse');
+  draw(M.MemberTourHost, { page: 'read' });
+  let tree = draw(M.MemberTourHost, { page: 'read' });
+  let tip = drawnBubble(tree, 'tip-card');
+  assert.ok(tip, 'drawing the reader did not bring up the "Tap a verse" tip');
+  assert.equal(titleOf(tip), 'Tap a verse');
+  assert.equal(drawnBubble(tree, 'bubble'), null, 'a tip came up as a tour dialog');
+  const order = [titleOf(tip)];
+  for (let g = 0; g < 6; g++) {
+    const got = find(tip, n => n.type === 'button' && texts(n.kids || []).join('').trim() === 'Got it')[0];
+    assert.ok(got, 'the tip has no Got it'); got.props.onClick();
+    draw(M.MemberTourHost, { page: 'read' });
+    tree = draw(M.MemberTourHost, { page: 'read' });
+    tip = drawnBubble(tree, 'tip-card');
+    if (!tip) break;
+    assert.equal(find(tree, n => n.props && n.props['data-member-tour'] === 'tip-card').length, 1, 'two tips stacked');
+    order.push(titleOf(tip));
+  }
+  // no audio Bible on this phone: no Listen tip
+  assert.deepEqual(order, ['Tap a verse', 'Translation', 'Study']);
+  assert.equal(store.get('trinityone.tour.tip.verse'), '1');
+});
+
+test('POINT OF USE (P1): a reader tip is NOT on the back stack — the first Back on Read leaves Read, it does not just close the tip', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, __trinityBackStack: [] };
+  let screens = [];
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, new Map());
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  draw(M.MemberTourHost, { page: 'read' });
+  const tree = draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(titleOf(drawnBubble(tree, 'tip-card')), 'Tap a verse', 'premise: the reader tip is not up');
+  assert.equal(win.__trinityBackStack.filter(e => e && e.memberTour).length, 0,
+    'the reader tip put itself on the back stack, so Android Back / Escape close the tip instead of leaving Read');
+});
+
+test('a reader tip never shows over an open sheet, and gives way when one opens (it counts as seen)', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, __trinityBackStack: [] };
+  let screens = [];
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  const sheet = { close() {} };
+  win.__trinityBackStack.push(sheet);                  // a sheet is open (the verse card, a picker…)
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card'), null, 'a tip showed over an open sheet');
+  win.__trinityBackStack.length = 0;
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card')), 'Tap a verse');
+  win.__trinityBackStack.push(sheet);                 // the person taps a verse: its card opens (a tip has no back-stack entry, triage P1)
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card'), null, 'the tip stayed up over the sheet that opened');
+  assert.equal(store.get('trinityone.tour.tip.verse'), '1');
+  win.__trinityBackStack.splice(win.__trinityBackStack.indexOf(sheet), 1);   // the verse card closes
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card')), 'Translation', 'the tip a sheet interrupted came back instead of giving way');
+});
+
+test('M1: a member let in but still owed the Community part, on the Read page, still gets the reader tips', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  let screens = [];
+  const store = new Map([['trinityone.tour.bible', '1'], ['trinityone.tour.community.wait', '1']]);
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  const props = { page: 'read', inChurch: true, admitted: true };
+  draw(M.MemberTourHost, props);
+  draw(M.MemberTourHost, props);
+  const tip = drawnBubble(draw(M.MemberTourHost, props), 'tip-card');
+  assert.ok(tip, 'a member owed the Community part got no reader tip on the Read page');
+  assert.equal(titleOf(tip), 'Tap a verse');
+  assert.equal(store.get('trinityone.tour.community') || null, null, 'the Community part was spent on the Read page');
+});
+
+test('POINT OF USE (T2): with an audio Bible on the phone, the reader tips include Listen, on the button the real IconBtn drew', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, TrinityAudioStore: { readySets: () => ['WEB'] } };
+  let screens = [];
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  draw(M.MemberTourHost, { page: 'read' });
+  let tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  const order = [];
+  for (let g = 0; g < 8 && tip; g++) {
+    order.push(titleOf(tip));
+    find(tip, n => n.type === 'button' && texts(n.kids || []).join('').trim() === 'Got it')[0].props.onClick();
+    draw(M.MemberTourHost, { page: 'read' });
+    tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  }
+  assert.deepEqual(order, ['Tap a verse', 'Translation', 'Listen', 'Study']);
+});
+
+// ── 2026-11-19 audit fixes, over the real reader ───────────────────────────────────────────────────────────
+test('POINT OF USE: with a store that refuses writes, "Got it" still moves the reader tips on — no tip comes back', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  let screens = [];
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store, { failWrites: true });
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  draw(M.MemberTourHost, { page: 'read' });
+  let tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  const order = [];
+  for (let g = 0; g < 8 && tip; g++) {
+    order.push(titleOf(tip));
+    find(tip, n => n.type === 'button' && texts(n.kids || []).join('').trim() === 'Got it')[0].props.onClick();
+    draw(M.MemberTourHost, { page: 'read' });
+    tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  }
+  assert.equal(store.size, 0, 'premise: the store took a write it was meant to refuse');
+  assert.deepEqual(order, ['Tap a verse', 'Translation', 'Study'], 'a tip came back after Got it because its seen-flag could not be stored');
+});
+
+test('with every reader tip seen, an open sheet no longer makes the host look again every 700ms', () => {
+  const { React, draw } = miniReact();
+  const timers = [];
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, __trinityBackStack: [{ close() {} }] };
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: () => null }, store, { setTimeout: (f, ms) => { timers.push(ms); return 0; } });
+  M.memberTourReader();
+  const polls = () => timers.filter(ms => ms === 700).length;
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.ok(polls() > 0, 'CONTROL: with tips still to show and a sheet open, the host does not look again');
+  for (const id of ['verse', 'version', 'listen', 'study']) store.set('trinityone.tour.tip.' + id, '1');
+  timers.length = 0;
+  draw(M.MemberTourHost, { page: 'read' });
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(polls(), 0, 'the host kept re-rendering every 700ms with nothing left to show');
+});
+
+// groups (optional): { rooms } — the subscription answers with groups.rooms when it is not null, and
+// groups.deliver(rooms) answers it later, as the relay does. The returned draw takes a ctx (App's own) or uses its
+// stand-in.
+// minorFor (optional): (npub) => the engine's assumeMinor answer (a promise; one that never settles = not heard yet).
+function chatScreen(React, draw, { rooms = [], isMinor = false, groups = null, minorFor = null } = {}) {
+  const g = groups || { rooms };
+  let roomsCb = null;
+  g.deliver = (r) => { g.rooms = r; if (roomsCb) roomsCb(r); };
+  const win = {
+    Fellowship: { myPubkey: 'mehex', relays: [], subscribeChurchGroups: (_np, cb) => { roomsCb = cb; if (g.rooms) cb(g.rooms); return () => {}; }, subscribeChurchCategories: (_np, cb) => { cb([]); return () => {}; },
+      subscribeGroups: () => () => {}, displayFor: () => ({ handle: 'sam', color: '#888' }), assumeMinor: minorFor || (async () => isMinor) },
+    TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
+    TrinityIdentity: { current: { handle: 'me', color: '#123456' } },
+    addEventListener: () => {}, removeEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  };
+  const mod = loadScreen('app/screens-chat.jsx', ['ChatScreen'], {
+    React, window: win,
+    document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
+    location: { search: '', href: 'https://app.example/' }, setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    lsGet: (_k, d) => d, lsSet: () => {}, todayISO: () => '2026-11-18', Icon: () => null,
+    IconBtn: ({ name }) => React.createElement('button', { title: name }),
+    Overlay: ({ open, children }) => (open ? children : null), ScreenScroll: ({ children }) => children, ChurchPill: () => null, UserAvatar: () => null,
+    SectionLabel: ({ children }) => children, BottomSheet: ({ open, children }) => (open ? children : null), safeCssColor: (c) => c, relTime: () => 'now', D: { GROUPS: [], RELAYS: [] },
+  });
+  const ctx = { toast: () => {}, church: { npub: 'npub1church', name: 'St Aidan’s', id: 'c1' },
+    joinState: { loaded: true, isPending: false, removed: false, offline: false, unknown: false },
+    myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor, clearanceKnown: true },
+    openPeople: () => {}, openDM: () => {}, openDMInbox: () => {}, openGroup: () => {} };
+  return (appCtx) => draw(mod.ChatScreen, { ctx: appCtx || ctx });
+}
+const ADULT_ROOM = { id: 'g1', name: 'Whole Church', kind: 'group', visibility: 'open', childsafe: false };
+const KIDS_ROOM = { id: 'g2', name: 'Youth', kind: 'group', visibility: 'open', childsafe: true };
+
+// The groups step's words, read by the host from the groups anchor the REAL ChatScreen drew for this reader.
+// Help's replay, on Community. o: { minorFor (see chatScreen), safeguardMinor (ctx.safeguard.isMinor; default isMinor) }
+// rooms null: the church's group list has not been delivered.
+async function groupsStepOver(rooms, isMinor, o = {}) {
+  const { React, draw } = miniReact();
+  const store = new Map();
+  let screens = [];
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  const chat = chatScreen(React, draw, { rooms, isMinor: o.safeguardMinor != null ? o.safeguardMinor : isMinor, minorFor: o.minorFor || (async () => isMinor) });
+  chat();
+  await settle();                                      // the engine's assumeMinor answers (or does not)
+  chat();
+  const tree = chat();
+  screens = [tree];
+  const anchor = find(tree, n => n.props && n.props['data-tour'] === 'groups')[0];
+  M.memberTourStart('replay');
+  draw(M.MemberTourHost, { page: 'chat', inChurch: true, admitted: true });
+  const host = draw(M.MemberTourHost, { page: 'chat', inChurch: true, admitted: true });
+  const b = drawnBubble(host, 'bubble');
+  return { anchor, title: b && titleOf(b), text: b && texts(find(b, n => n.type === 'p')[0].kids || []).join(''), shown: texts(tree).join(' | ') };
+}
+
+test('POINT OF USE: the Groups step uses the young-person words for a child, read from the list ChatScreen drew', async () => {
+  const adult = await groupsStepOver([ADULT_ROOM, KIDS_ROOM], false);
+  assert.ok(adult.anchor, 'ChatScreen does not draw the groups anchor');
+  assert.equal(adult.title, 'Groups and teams', 'the groups step was not the first one shown on Community (tab-chat is not drawn here)');
+  assert.equal(adult.text, 'Groups you can join.');
+  const child = await groupsStepOver([ADULT_ROOM, KIDS_ROOM], true);
+  assert.equal(child.anchor.props['data-tour-minor'], '1');
+  assert.equal(child.anchor.props['data-tour-count'], '1', 'the count is not the list the child was shown');
+  assert.doesNotMatch(child.shown, /Whole Church/, 'premise: the adults-only group is hidden from the child');
+  assert.equal(child.text, 'The groups your church has opened for you.');
+});
+
+test('POINT OF USE: a young person whose church opened NO groups for them gets the ordinary "none yet" words', async () => {
+  const none = await groupsStepOver([ADULT_ROOM], true);
+  assert.equal(none.anchor.props['data-tour-count'], '0');
+  assert.equal(none.text, 'Your church hasn’t opened any groups for you yet.');
+  assert.doesNotMatch(none.text, /ask|leader|steward/i, 'the none-yet words tell a child to go and ask someone (DOMAIN.md: no fault to report)');
+});
+
+// ── L3 (audit 2026-11-19): the Groups step never guesses ─────────────────────────────────────────────────────
+test('L3-a: Help replay SKIPS a Groups step it cannot word truthfully — adult with no groups, a possible child, a child whose groups have not come', async () => {
+  const empty = await groupsStepOver([], false);
+  assert.equal(empty.anchor.props['data-tour-count'], '0');
+  assert.equal(empty.title, 'Welcome', 'an adult with no groups was shown a Groups step (the ring circles "No groups yet")');
+  // assumeMinor has not answered and the church has not said they are a child: they may be one
+  const maybe = await groupsStepOver([ADULT_ROOM, KIDS_ROOM], false, { minorFor: () => new Promise(() => {}) });
+  assert.equal(maybe.anchor.props['data-tour-minor'], '?', 'ChatScreen claims to know this reader is an adult before the engine has answered');
+  assert.notEqual(maybe.text, 'Groups you can join.', 'a possible child was told the adult words');
+  assert.equal(maybe.title, 'Welcome', 'the Groups step was not skipped for a reader who may be a child');
+  const waiting = await groupsStepOver(null, true);
+  assert.equal(waiting.anchor.props['data-tour-loaded'], '0');
+  assert.equal(waiting.title, 'Welcome', 'a child whose group list has not arrived was told "none yet"');
+});
+
+// The AUTOMATIC start (admission, M1), over the real ChatScreen. A tab bar anchor so the Community step can show.
+async function admittedOnCommunity(rooms, clock, timers) {
+  const { React, draw } = miniReact();
+  const store = new Map([['trinityone.tour.bible', '1'], ['trinityone.tour.community.wait', '1']]);
+  let screens = [];
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store, { clock, setTimeout: timers ? (f, ms) => { timers.push(ms); return 0; } : undefined });
+  const groups = { rooms };
+  const chat = chatScreen(React, draw, { groups, isMinor: false });
+  const tabChat = { type: 'button', props: { 'data-tour': 'tab-chat' }, kids: [] };
+  const redraw = async () => { chat(); await settle(); chat(); screens = [chat(), tabChat]; return screens[0]; };
+  await redraw();
+  const props = { page: 'chat', inChurch: true, admitted: true };
+  const host = () => { draw(M.MemberTourHost, props); return drawnBubble(draw(M.MemberTourHost, props), 'bubble'); };
+  return { groups, redraw, host, store };
+}
+const walkHost = (t) => { const seen = []; let b = t.host(); for (let g = 0; g < 10 && b; g++) { seen.push([titleOf(b), texts(find(b, n => n.type === 'p')[0].kids || []).join('')]); find(b, n => n.type === 'button' && /^(Next|Done|Finish)/.test(texts(n.kids || []).join('').trim()))[0].props.onClick(); b = t.host(); } return seen; };
+
+test('L3-b: on admission, the start waits for the group list (up to 10 s), then words it truthfully — or starts without it', async () => {
+  const clock = { t: 1000 };
+  const timers = [];
+  const t = await admittedOnCommunity(null, clock, timers);
+  assert.equal(t.host(), null, 'the Community part started before the group list arrived');
+  // the list arriving sends the host nothing; while it waits it must look again by itself
+  assert.ok(timers.includes(700), 'the host waits for the group list but never looks again');
+  assert.equal(t.store.get('trinityone.tour.community') || null, null, 'the Community part was spent while it waited for the group list');
+  clock.t += 4000;
+  t.groups.deliver([ADULT_ROOM]);
+  await t.redraw();
+  assert.deepEqual(walkHost(t), [['Community', 'Your church is here: announcements, events, groups and teams.'], ['Groups and teams', 'Groups you can join.']]);
+  // never delivered: after 10 s it starts anyway, without the Groups step
+  const clock2 = { t: 1000 };
+  const u = await admittedOnCommunity(null, clock2);
+  assert.equal(u.host(), null);
+  clock2.t += 9999;
+  assert.equal(u.host(), null, 'the wait ended early');
+  clock2.t += 2;
+  assert.deepEqual(walkHost(u).map(x => x[0]), ['Community'], 'after 10 s the Community part did not start without the Groups step');
+});
+
+test('L3 (§12.2): ChatScreen forgets what it knew about the reader when the church changes', async () => {
+  const { React, draw } = miniReact();
+  const chat = chatScreen(React, draw, { rooms: [ADULT_ROOM], minorFor: (np) => (np === 'npub1church' ? Promise.resolve(false) : new Promise(() => {})) });
+  chat(); await settle();
+  const base = { toast: () => {}, joinState: { loaded: true, isPending: false, removed: false }, myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor: false, clearanceKnown: true }, openPeople() {}, openDM() {}, openDMInbox() {}, openGroup() {} };
+  const a = chat({ ...base, church: { npub: 'npub1church', name: 'A', id: 'c1' } });
+  assert.equal(find(a, n => n.props && n.props['data-tour'] === 'groups')[0].props['data-tour-minor'], '0', 'premise: church A answered "not a child"');
+  // ONE draw after the switch: the miniature React renders first and only then runs effects, so this tree is the
+  // first commit for church B — before any effect of B's could reset anything (§13).
+  const first = chat({ ...base, church: { npub: 'npub1other', name: 'B', id: 'c2' } });
+  assert.equal(find(first, n => n.props && n.props['data-tour'] === 'groups')[0].props['data-tour-minor'], '?', 'the first frame after switching to church B showed church A\'s "not a child"');
+  const b = chat({ ...base, church: { npub: 'npub1other', name: 'B', id: 'c2' } });
+  assert.equal(find(b, n => n.props && n.props['data-tour'] === 'groups')[0].props['data-tour-minor'], '?', 'church A\'s answer was carried over to church B, which has not answered');
+});
+
+test('L3: when the engine cannot say who the reader is (assumeMinor fails), the Groups anchor treats them as a possible child', async () => {
+  const { React, draw } = miniReact();
+  const chat = chatScreen(React, draw, { rooms: [ADULT_ROOM, KIDS_ROOM], isMinor: false, minorFor: () => Promise.reject(new Error('relay refused')) });
+  chat(); await settle(); chat();
+  const a = find(chat(), n => n.props && n.props['data-tour'] === 'groups')[0];
+  assert.equal(a.props['data-tour-minor'], '1', 'a failed answer was read as "not a child"');
+  assert.equal(a.props['data-tour-count'], '1', 'premise: the list was filtered as for a child');
+});
+
+test('L3 (§12.5): a Groups step whose words become unknown while it is up is passed over, never drawn empty', async () => {
+  const { React, draw } = miniReact();
+  let screens = [];
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, new Map());
+  const groups = { rooms: [ADULT_ROOM] };
+  const chat = chatScreen(React, draw, { groups });
+  chat(); await settle(); chat();
+  screens = [chat()];
+  M.memberTourStart('replay');
+  const props = { page: 'chat', inChurch: true, admitted: true };
+  draw(M.MemberTourHost, props);
+  assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, props), 'bubble')), 'Groups and teams', 'premise: the Groups step is up');
+  groups.deliver([]);                                   // the list empties under it
+  chat();
+  screens = [chat()];
+  for (let i = 0; i < 2; i++) {
+    const b = drawnBubble(draw(M.MemberTourHost, props), 'bubble');
+    if (b) assert.notEqual(titleOf(b), 'Groups and teams', 'the Groups step stayed up with nothing true to say');
+  }
+  assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, props), 'bubble')), 'Welcome', 'the tour did not move on past the Groups step');
+});
+
+test('Android Back / Escape skip the tour: the drawn bubble puts itself on the back stack that both go through', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  const { M } = kit(React, win, { querySelector: () => null }, new Map());
+  M.memberTourStart('replay');
+  draw(M.MemberTourHost, { page: 'today' });
+  const tree = draw(M.MemberTourHost, { page: 'today' });
+  const b = drawnBubble(tree, 'bubble');
+  assert.ok(b, 'premise: the tour is up');
+  assert.equal(b.props.role, 'dialog');
+  assert.equal(b.props['aria-modal'], 'true');
+  const entry = (win.__trinityBackStack || []).filter(e => e.memberTour).pop();
+  assert.ok(entry, 'the tour is not on the back stack, so Back and Escape (window.trinityGoBack) cannot close it');
+  entry.close();                                       // what window.trinityGoBack does with the top entry
+  assert.equal(drawnBubble(draw(M.MemberTourHost, { page: 'today' }), 'bubble'), null, 'Back did not skip the tour');
+});
+
+// ══════════════ THE ANCHORS, DRAWN BY THE SCREENS THAT OWN THEM ═════════════════════════════════════════
+test('the tab bar (phone) and the sidebar (desktop) both draw an anchor for every tab and for You', () => {
+  const { React, draw } = miniReact();
+  const ui = loadScreen('app/ui.jsx', ['TabBar', 'DesktopNav'], {
+    React, window: {}, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({}) },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, localStorage: { getItem: () => null, setItem() {} },
+    setTimeout, clearTimeout, console, Icon: () => null, UserAvatar: () => null, Halo: () => null,
+  });
+  for (const C of [ui.TabBar, ui.DesktopNav]) {
+    const tree = draw(C, { active: 'today', onChange() {}, onProfile() {} });
+    const got = find(tree, n => n.type === 'button' && n.props['data-tour']).map(n => n.props['data-tour']);
+    assert.deepEqual(got, ['tab-today', 'tab-read', 'tab-chat', 'tab-library', 'tab-you'], C.name + ' anchors');
+  }
+});
+
+function todayScreen(min, church) {
+  const { React, draw } = miniReact();
+  const h = loadScreen('app/ui.jsx', ['churchMainColor', 'churchOnColor', 'churchMainGradient'], {
+    React, window: {}, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({}) },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, console, Icon: () => null,
+  });
+  const store = new Map([['trinityone.votd-min', min]]);
+  const localStorage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem(k, v) { store.set(k, String(v)); }, removeItem(k) { store.delete(k); } };
+  const win = { addEventListener() {}, removeEventListener() {}, innerWidth: 360, localStorage,
+    Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] }, ChurchBadge: Stub('ChurchBadge'),
+    TrinityData: { NOTIFICATIONS: [], PLANS: [], VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world.' }] },
+    Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1, activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) } };
+  const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], {
+    React, window: win, localStorage, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, setTimeout, clearTimeout, setInterval, clearInterval, console,
+    Icon: () => null, ChurchBadge: Stub('ChurchBadge'), churchMainColor: h.churchMainColor, churchOnColor: h.churchOnColor, churchMainGradient: h.churchMainGradient,
+    lsGet: (k, d) => d, lsSet: () => {}, cx: (...a) => a.filter(Boolean).join(' '),
+    SectionLabel: Stub('SectionLabel'), Halo: Stub('Halo'), Sheet: Stub('Sheet'), IconBtn: Stub('IconBtn'),
+    useTrinityAudio: () => ({ track: null, playing: false }), todayISO: () => '2026-11-18', fetch: async () => ({ ok: false, json: async () => ({}) }),
+  });
+  const ctx = { church: church ? { name: 'Grace', initials: 'GC', npub: 'np1' } : null, openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
+    toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {}, planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {}, newJournal() {} };
+  draw(TodayScreen, { ctx });
+  return draw(TodayScreen, { ctx });
+}
+const tourAnchors = (tree) => find(tree, n => n.props && n.props['data-tour']).map(n => n.props['data-tour']);
+
+test('Today: the verse card is an anchor minimised and expanded; What’s happening is one for a member; there is NO Listen on Today', () => {
+  for (const min of ['1', '0']) {
+    const a = tourAnchors(todayScreen(min, true));
+    assert.equal(a.filter(x => x === 'votd').length, 1, 'the verse of the day is not exactly one anchor (votd-min ' + min + ')');
+    assert.ok(a.includes('happening'), 'What’s happening is not an anchor for a church member');
+    assert.ok(!a.includes('listen'), 'Today draws a Listen anchor — owner: there is no Listen on the verse of the day');
+  }
+  assert.ok(!tourAnchors(todayScreen('1', false)).includes('happening'), 'What’s happening is an anchor with no church');
+  // and the plan never asks for one
+  const { React } = miniReact();
+  const { M } = kit(React, {}, { querySelector: () => null }, new Map());
+  const plan = M.memberTourPlan({ parts: { bible: true, community: true }, page: 'today' });
+  assert.ok(!plan.some(s => s.id === 'listen' || s.targets.includes('listen')), 'the tour has a Listen step');
+  assert.deepEqual(plan.find(s => s.id === 'votd').targets, ['votd']);
+});
+
+test('the reader draws the Translation, Listen and Study anchors', () => {
+  const { React, draw } = miniReact();
+  const win = {};
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  const tree = draw(ReadScreen, { ctx });
+  const host = find(tree, n => typeof n.type === 'string' && n.props && n.props['data-tour']).map(n => n.props['data-tour']);
+  for (const t of ['verse', 'version', 'listen', 'study']) assert.equal(host.filter(x => x === t).length, 1, t + ' is not exactly one anchor ON THE PAGE in the reader');
+  assert.equal(find(tree, n => n.type === 'button' && n.props['data-tour'] === 'listen').length, 1, 'the Listen anchor is not on a real <button> (IconBtn did not pass it on)');
+});
+
+test('POINT OF USE: the Help index draws "Take the tour again" only when App hands it ctx.replayTour, and it calls it', () => {
+  const { React, draw } = miniReact();
+  const { HelpIndex } = loadScreen('app/screens-help-main.jsx', ['HelpIndex'], {
+    React, window: {}, localStorage: { getItem: () => null, setItem() {} }, document: { addEventListener() {}, removeEventListener() {} },
+    Icon: () => null, IconBtn: Stub('IconBtn'), Overlay: Stub('Overlay'), HelpIllo: () => null, TextSizeStepper: Stub('TextSizeStepper'), useReadAloud: () => ({ stop() {} }),
+    console, setTimeout, clearTimeout, speechSynthesis: null,
+  });
+  const D = { intro: 'Help', articles: [{ id: 'words', title: 'Words', summary: '' }, { id: 'a', title: 'A', summary: 's', illo: 'x' }] };
+  let n = 0;
+  const tree = draw(HelpIndex, { D, fs: 1, onOpen() {}, onBackup() {}, ctx: { replayTour: () => { n++; }, toast() {} } });
+  const b = find(tree, x => x.type === 'button' && x.props['data-help-tour'] === 'replay');
+  assert.equal(b.length, 1, 'the member Help has no "Take the tour again"');
+  assert.match(texts(b[0]).join(' '), /Take the tour again/);
+  b[0].props.onClick();
+  assert.equal(n, 1);
+  assert.equal(find(draw(HelpIndex, { D, fs: 1, onOpen() {}, onBackup() {}, ctx: { toast() {} } }), x => x.props && x.props['data-help-tour']).length, 0);
+});
+
+// ══════════════ THE PURE PARTS ══════════════════════════════════════════════════════════════════════════
+test('plan order: Bible first on Today; Community first on Community; each part only when asked for', () => {
+  const { React } = miniReact();
+  const { M } = kit(React, {}, { querySelector: () => null }, new Map());
+  const ids = (o) => M.memberTourPlan(o).map(s => s.id);
+  assert.deepEqual(ids({ parts: { bible: true, community: true }, page: 'today' }), ['welcome', 'votd', 'read', 'library', 'you', 'community', 'groups', 'happening']);
+  assert.deepEqual(ids({ parts: { bible: true, community: true }, page: 'chat' }), ['community', 'groups', 'happening', 'welcome', 'votd', 'read', 'library', 'you']);
+  assert.deepEqual(ids({ parts: { bible: true }, page: 'chat' }), ['welcome', 'votd', 'read', 'library', 'you']);
+  assert.deepEqual(ids({ parts: { community: true }, page: 'today' }), ['community', 'groups', 'happening']);
+  assert.equal(M.memberTourGroupsText({ minor: true, count: 0, loaded: true }), 'Your church hasn’t opened any groups for you yet.');
+  assert.equal(M.memberTourGroupsText({ minor: true, count: 0, loaded: false }), null, 'a child whose groups have not come was told "none yet"');
+  assert.equal(M.memberTourGroupsText({ minor: true, count: 2, loaded: true }), 'The groups your church has opened for you.');
+  assert.equal(M.memberTourGroupsText({ minor: false, count: 2, loaded: true }), 'Groups you can join.');
+  assert.equal(M.memberTourGroupsText({ minor: false, count: 0, loaded: true }), null, 'an adult with no groups was told "Groups you can join."');
+  assert.equal(M.memberTourGroupsText({ minor: null, count: 2, loaded: true }), null, 'a reader who may be a child was worded as an adult');
+  assert.equal(M.memberTourGroupsText(null), null);
+  // the Community words never say "rooms" (owner: groups or teams)
+  for (const s of M.memberTourPlan({ parts: { community: true } })) assert.doesNotMatch(s.title + ' ' + s.text, /\brooms?\b/i);
+});
+
+test('reader tips: one at a time, in order; Listen only with an audio Bible on the phone', () => {
+  const { React } = miniReact();
+  const { M } = kit(React, {}, { querySelector: () => null }, new Map());
+  const all = () => true;
+  const next = (seen, audio, present = all) => { const t = M.memberTourNextTip({ seen: (k) => seen.includes(k), present, audio }); return t && t.id; };
+  assert.equal(next([], false), 'verse');
+  assert.equal(next(['tip.verse'], false), 'version');
+  assert.equal(next(['tip.verse', 'tip.version'], false), 'study', 'Listen was offered with no audio Bible');
+  assert.equal(next(['tip.verse', 'tip.version'], true), 'listen');
+  assert.equal(next(['tip.verse', 'tip.version', 'tip.listen', 'tip.study'], true), null);
+  assert.equal(next(['tip.verse'], false, (a) => a !== 'version'), 'study', 'a tip whose button is not on screen was not passed over');
+});
+
+test('the bubble stays inside a 16px gutter and clear of the safe areas at phone width', () => {
+  const { React } = miniReact();
+  const { K } = kit(React, {}, { querySelector: () => null }, new Map());
+  const vp = { w: 390, h: 844, t: 47, b: 34 }, size = { w: 320, h: 190 };
+  for (const rect of [null, { left: 4, top: 4, right: 48, bottom: 48, width: 44, height: 44 }, { left: 300, top: 770, right: 380, bottom: 830, width: 80, height: 60 }]) {
+    const p = K.tourKitPlace(rect, size, vp);
+    assert.ok(p.left >= 16 && p.left + size.w <= vp.w - 16, 'left out of the gutter for ' + JSON.stringify(rect));
+    assert.ok(p.top >= 16 + vp.t && p.top + size.h <= vp.h - 16 - vp.b, 'top ' + p.top + ' under a safe area for ' + JSON.stringify(rect));
+  }
+});
+
+// ══════════════ THE SHELLS ══════════════════════════════════════════════════════════════════════════════
+test('both pages load tour-kit.jsx, before their own tour; neither tour file is one the member build strips', () => {
+  const tags = (f) => [...read(f).matchAll(/<script[^>]*src="([^"]+)"/g)].map(m => m[1]);
+  const idx = tags('index.html'), stw = tags('steward.html');
+  assert.ok(idx.indexOf('app/tour-kit.jsx') >= 0 && idx.indexOf('app/tour-kit.jsx') < idx.indexOf('app/member-tour.jsx') && idx.indexOf('app/member-tour.jsx') < idx.indexOf('app/app.jsx'),
+    'index.html must load tour-kit.jsx, then member-tour.jsx, then app.jsx');
+  assert.ok(stw.indexOf('app/tour-kit.jsx') >= 0 && stw.indexOf('app/tour-kit.jsx') < stw.indexOf('app/stew-tour.jsx'), 'steward.html must load tour-kit.jsx before stew-tour.jsx');
+  // The member build (scripts/sync-web.sh, READ AS IT IS — audit T1): every `rm -f "$WWW"/app/<glob>` in the real build script, as a regex over the compiled file's path.
+  const globs = [];
+  for (const line of read('scripts/sync-web.sh').split('\n')) {
+    if (!/\brm -f\b/.test(line.replace(/#.*$/, ''))) continue;
+    for (const m of line.matchAll(/"\$WWW"\/(app\/[^\s"]+)/g)) globs.push(m[1]);
+  }
+  assert.ok(globs.length >= 1, 'found no rm -f of app/ files in scripts/sync-web.sh — re-anchor this test');
+  const toRe = (g) => new RegExp('^' + g.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '.') + '$');
+  const stripped = (f) => globs.some(g => toRe(g).test(f));
+  // CONTROL: the console's tour IS stripped, so the reading of the script is live
+  assert.ok(stripped('app/stew-tour.js'), 'the console\'s tour is not stripped by these globs (' + globs.join(', ') + ') — the test is not reading the build script');
+  for (const f of ['app/tour-kit.js', 'app/member-tour.js']) assert.ok(!stripped(f), f + ' is deleted from the member build by ' + globs.join(', '));
+});

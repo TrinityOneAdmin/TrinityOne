@@ -72,11 +72,11 @@ function splitVerseLead(html) {
   return sawHead ? [s.slice(0, i), s.slice(i)] : ['', s];
 }
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
-function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, onWord }) {
+function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, onWord, tour }) {
   // a heading the verse opens with is drawn BEFORE its number (see splitVerseLead), still inside this verse's row
   const [lead, body] = splitVerseLead(html);
   return (
-    <span id={'rv-' + n} style={{ position: 'relative' }}>
+    <span id={'rv-' + n} data-tour={tour} style={{ position: 'relative' }}>
       <span
         onClick={(e) => {
           const sup = e.target.closest && e.target.closest('sup.st');
@@ -121,7 +121,7 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px 0' }}>
         <div style={{ flex: 1, minWidth: 0 }}><ReadPlansTabs ctx={ctx} /></div>
         <IconBtn name="search" size={18} onClick={() => ctx.openSearch()} style={{ width: 36, height: 36 }} />
-        {canListen ? <IconBtn name="headphones" size={18} onClick={onListen} style={narrating ? { width: 36, height: 36, background: 'var(--clay)', color: 'var(--on-clay)', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} /> : null}
+        {canListen ? <IconBtn name="headphones" data-tour="listen" size={18} onClick={onListen} style={narrating ? { width: 36, height: 36, background: 'var(--clay)', color: 'var(--on-clay)', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} /> : null}
         <IconBtn name="compare" size={18} onClick={onCompare} style={compare ? { width: 36, height: 36, background: 'var(--clay)', color: 'var(--on-clay)', borderColor: 'var(--clay)' } : { width: 36, height: 36 }} />
         <IconBtn name="sliders" size={18} onClick={onSettings} style={{ width: 36, height: 36 }} />
       </div>
@@ -137,7 +137,7 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
           background: 'var(--surface)', boxShadow: 'var(--shadow)', borderRadius: 12, padding: '9px 13px',
           fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)', whiteSpace: 'nowrap',
         }}>{loc.ch}<Icon name="chevD" size={14} stroke={2.2} color="var(--ink-3)" /></button>
-        <button onClick={onVersion} style={{
+        <button data-tour="version" onClick={onVersion} style={{
           display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', flexShrink: 1, minWidth: 0,
           borderRadius: 12, padding: '9px 12px', fontWeight: 700, fontSize: 13, color: 'var(--clay)',
           boxShadow: 'var(--shadow)', maxWidth: 150, whiteSpace: 'nowrap',
@@ -1009,7 +1009,7 @@ function ChapterVerseMenu({ open, onClose, anchor, loc, version, onPick }) {
 function CommentaryEdge({ open, onToggle }) {
   if (open) return null;
   return (
-    <button onClick={onToggle} aria-label="Open study panel" style={{
+    <button data-tour="study" onClick={onToggle} aria-label="Open study panel" style={{
       position: 'absolute', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
       background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
       boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
@@ -1788,6 +1788,9 @@ function ReadScreen({ ctx }) {
   };
   // a fresh passage cancels any in-progress narration
   useE(() => { stopNarration(); }, [loc.book, loc.chap, version]);
+  // THE READER TIPS (app/member-tour.jsx): a chapter is on screen, so "Tap a verse" and the header tips may be
+  // offered. The tips themselves only ever appear for an anchor this screen really drew.
+  useE(() => { try { if (window.memberTourReader) window.memberTourReader(); } catch (e) {} }, [loc.book, loc.chap, version, verses.length]);
 
   const prev = Bible.step(loc, -1), next = Bible.step(loc, 1);
 
@@ -1876,10 +1879,10 @@ function ReadScreen({ ctx }) {
           : !compare ? (
             <p className={cx('reader-body', !showStrongs && 'hide-strong')}
               style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
-              {verses.map((row) => {
+              {verses.map((row, i) => {
                 const k = keyOf(row.v);
                 return (
-                  <VerseRow key={row.v} n={row.v} html={row.html}
+                  <VerseRow key={row.v} n={row.v} html={row.html} tour={i === 0 ? 'verse' : undefined}
                     hl={ctx.highlights[k]} note={notes[k]} bookmarked={ctx.bookmarks.includes(k)}
                     selected={selSorted.some(v => String(v) === String(row.v))} reading={(narrateState !== 'idle' && String(narrateV) === String(row.v)) || inArrived(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );

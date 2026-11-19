@@ -32,9 +32,6 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
-import androidx.media.AudioAttributesCompat;
-import androidx.media.AudioFocusRequestCompat;
-import androidx.media.AudioManagerCompat;
 import androidx.media.session.MediaButtonReceiver;
 import androidx.media.app.NotificationCompat.MediaStyle;
 
@@ -79,7 +76,6 @@ public class MediaSessionService extends Service {
     // TrinityOne: what this service holds, so destroy() can let go of all of it, once.
     private boolean foreground = false;
     private boolean noisyRegistered = false;
-    private AudioFocusRequestCompat focusRequest = null;
     // TrinityOne (build audit #7): a started service that no plugin ever connects to (a 'playing' then 'none' faster
     // than the bind, or bindService() failing) would sit in the foreground with the minimal notification. Stopping it
     // BEFORE startForeground is itself a crash, so onStartCommand checks again later, after startForeground has run.
@@ -122,23 +118,12 @@ public class MediaSessionService extends Service {
         }
     };
 
-    // TrinityOne patch 8: a phone call or another app taking the sound → pause. Regaining focus after a transient loss
-    // does NOT resume (simple and predictable). A "duck" request lowers nothing: a no-op.
-    // Mechanism (audit B6): pause → actionCallback("pause") → the JS pause handler → el.pause(); the WebView keeps
-    // running in the background (Capacitor's shouldKeepRunning() defaults to true).
-    private final AudioManager.OnAudioFocusChangeListener focusListener = new AudioManager.OnAudioFocusChangeListener() {
-        @Override
-        public void onAudioFocusChange(int change) {
-            try { // TrinityOne (B1)
-                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                    if (change == AudioManager.AUDIOFOCUS_LOSS) focusRequest = null;
-                    if (plugin != null) plugin.actionCallback("pause");
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "focus listener failed", e);
-            }
-        }
-    };
+    // TrinityOne (2026-11-19, PLAN-audio-focus-single-owner): this service does NOT request audio focus. Patch 8 made
+    // it request AUDIOFOCUS_GAIN and pause on loss, but the WebView's <audio> requests focus itself (Chromium's
+    // AudioFocusDelegate) every time it starts playing. Two clients in one process knocked each other out, and every
+    // play paused itself a split second later (device log LOG-audio-focus-fight-oppo-2026-11-19). The WebView is the
+    // one focus owner: a call pauses it (and it may resume after), another app's music pauses it, a notification ducks
+    // it. The JS engine follows those pauses and resumes from the element's own events.
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -245,7 +230,7 @@ public class MediaSessionService extends Service {
     }
 
     // TrinityOne patch 3: release the session (upstream never did, and every start made a new one, so sessions leaked
-    // and stayed active), drop the noisy receiver and audio focus, then leave the foreground and stop. Idempotent:
+    // and stayed active), drop the noisy receiver, then leave the foreground and stop. Idempotent:
     // it runs from 'none', from onUnbind, from a MEDIA_BUTTON with no plugin, and from onDestroy.
     public void destroy() {
         releaseAll();
@@ -254,7 +239,6 @@ public class MediaSessionService extends Service {
 
     private void releaseAll() {
         try { unregisterNoisy(); } catch (Exception e) { Log.e(TAG, "unregister noisy failed", e); }
-        try { abandonFocus(); } catch (Exception e) { Log.e(TAG, "abandon focus failed", e); }
         try {
             if (mediaSession != null) {
                 mediaSession.setActive(false);
@@ -339,52 +323,21 @@ public class MediaSessionService extends Service {
         unregisterReceiver(noisyReceiver);
     }
 
-    // TrinityOne patch 8 (audit B6): the Compat classes, because minSdk is 22. A DENIED request (a call is in
-    // progress) pauses.
-    private void requestFocus() {
-        if (focusRequest != null) return;
-        AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (audioManager == null) return;
-        AudioFocusRequestCompat request = new AudioFocusRequestCompat.Builder(AudioManagerCompat.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(new AudioAttributesCompat.Builder()
-                        .setUsage(AudioAttributesCompat.USAGE_MEDIA)
-                        .setContentType(AudioAttributesCompat.CONTENT_TYPE_SPEECH)
-                        .build())
-                .setWillPauseWhenDucked(false)
-                .setOnAudioFocusChangeListener(focusListener)
-                .build();
-        int result = AudioManagerCompat.requestAudioFocus(audioManager, request);
-        if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            focusRequest = request;
-        } else if (plugin != null) {
-            plugin.actionCallback("pause");
-        }
-    }
-
-    private void abandonFocus() {
-        if (focusRequest == null) return;
-        AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (audioManager != null) AudioManagerCompat.abandonAudioFocusRequest(audioManager, focusRequest);
-        focusRequest = null;
-    }
-
     public void setPlaybackState(int playbackState) {
         if (this.playbackState != playbackState) {
             this.playbackState = playbackState;
             playbackStateUpdate = true;
             possibleActionsUpdate = true;
         }
-        // TrinityOne patches 7 + 8: hold the noisy receiver and audio focus only while playing.
+        // TrinityOne patch 7: hold the noisy receiver only while playing. (No audio focus here: see the note above.)
         try {
             if (playbackState == PlaybackStateCompat.STATE_PLAYING) {
                 registerNoisy();
-                requestFocus();
             } else {
                 unregisterNoisy();
-                abandonFocus();
             }
         } catch (Exception e) {
-            Log.e(TAG, "noisy/focus update failed", e);
+            Log.e(TAG, "noisy receiver update failed", e);
         }
     }
 

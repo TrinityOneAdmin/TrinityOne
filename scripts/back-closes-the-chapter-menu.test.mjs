@@ -110,7 +110,13 @@ test('Back with the chapter menu open closes the menu and leaves the reader wher
     'THE FINDING: Back with the chapter menu open left Read (the phone jumped to Today) instead of closing the menu');
   assert.equal(await onToday(), false, 'Back with the chapter menu open showed Today');
 
-  // CONTROL: the Back door is live in this rig — with nothing open, Back from Read goes to Today, as it always has.
+  // CONTROL: a first-run reader tip IS up here (triage P1) — the case where the first Back used to close the tip
+  // instead of leaving Read. Polled: the tip on screen by now is the next one, offered after the host's 700 ms look.
+  let tipUp = false;
+  for (let i = 0; i < 14 && !tipUp; i++) { tipUp = await evalIn(`!!document.querySelector('[data-member-tour="tip-card"]')`); if (!tipUp) await sleep(150); }
+  assert.ok(tipUp, 'CONTROL: no reader tip is up before the second Back — this would not test Back past a tip');
+  // CONTROL: the Back door is live in this rig — with nothing open (a tip is not a sheet), Back from Read goes to
+  // Today, as it always has.
   await pressBack();
   assert.equal(await where(), null, 'CONTROL: Back from Read with nothing open did not leave Read — the rig is not pressing Back at all');
   assert.equal(await onToday(), true, 'CONTROL: Back from Read with nothing open did not land on Today');

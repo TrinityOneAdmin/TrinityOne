@@ -116,6 +116,7 @@ return {
   // merges (an audit of the two found this file red 3/3 the moment they met); an entry for a component that is
   // not in the tree is simply never looked up.
   StewSectionsMenu: { nav: [{ key: 'overview', label: 'Overview', ic: 'today' }], tab: 'overview', onPick() {}, onHelp() {}, onClose },
+  StewTourBubble: { step: { id: 'welcome', title: 'Welcome', text: 'x', targets: [] }, pos: 1, count: 1, first: true, last: true, onNext() {}, onBack() {}, onSkip: onClose },
   StewMemberSheet: { label: 'Ivy Whitlock', initials: 'IW', av: null, pubkey: 'ab'.repeat(32), accent: '#000', facts: [], actions: [{ key: 'child', icon: 'pray', label: 'Mark as child', onPick() {} }], onClose },
   TaxScriptureModal: { onClose },   // the 1 Samuel 8:10–18 moment popped by DashFeaturesPanel on the Tax-tools OFF→ON flip
 };

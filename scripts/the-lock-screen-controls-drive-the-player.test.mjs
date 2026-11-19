@@ -162,9 +162,9 @@ test('the FIRST "playing" is sent synchronously inside the tap; a media event ne
   await w.clock.advance(10 * 60000);
   assert.equal(f.states().pop(), 'none');
   const before = f.states().length;
-  w.el.play(); w.el.emit('playing'); await settle();      // the element starts by itself (an OS resume, say)
+  w.el.play().catch(() => {}); w.el.emit('playing'); await settle();      // the element starts by itself (an OS resume, say); since 2026-11-19 the engine pauses it again (AbortError)
   assert.equal(f.states().length, before, 'A MEDIA EVENT SENT A STATE OUT OF "none" — that would start the service from the background');
-  w.el.pause();
+  w.el.pause(); await settle();                             // `pause` is a queued event (faithful fake, 2026-11-19)
   press(w.player(), 'Play');
   assert.equal(f.states().pop(), 'playing', 'Play from "none" did not send "playing" in the tap');
 });
@@ -259,7 +259,7 @@ test('setPositionState is sent on play / pause / duration, never on every timeup
   assert.ok(n >= 1, 'no position was ever sent');
   for (let i = 0; i < 20; i++) w.el.tick(0.25);
   assert.equal(f.count('pos'), n, 'POSITION SENT ON timeupdate — 4 Hz over the bridge');
-  press(w.player(), 'Pause');
+  press(w.player(), 'Pause'); await settle();               // `pause` is a queued event (faithful fake, 2026-11-19)
   assert.ok(f.count('pos') > n, 'no position on pause');
 });
 

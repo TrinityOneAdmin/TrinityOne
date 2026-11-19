@@ -107,6 +107,14 @@ function StewardHelp({ onClose, initialId }) {
                   <Icon name="chevR" size={16} color="var(--ink-3)" />
                 </button>
               ))}
+              {/* REPLAY THE CONSOLE TOUR (app/stew-tour.jsx). Closes Help first; the tour waits for this dialog
+                  to be gone before it shows. Absent where the tour file is not loaded. */}
+              {typeof window.stewTourStart === 'function' ? (
+                <button onClick={() => { onClose(); try { window.stewTourStart('replay'); } catch (e) {} }} data-help-tour="replay"
+                  style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 6, padding: '9px 13px', minHeight: 40, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5 * fs, cursor: 'pointer' }}>
+                  <Icon name="play" size={14} color="currentColor" /> Take the tour again
+                </button>
+              ) : null}
             </div>
           )}
         </div>
@@ -144,7 +152,7 @@ function StewHelpButton({ compact = false }) {
             className="sk-btn sk-btn--ghost" style={{ padding: '8px 10px', fontSize: 13, minHeight: 44, minWidth: 44 }}>
             <Icon name="book" size={15} color="currentColor" />
           </button>
-        : <button onClick={() => setOpen(true)} aria-label="Help" title="Guides to running your church on TrinityOne" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', textAlign: 'left', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 14 }}>
+        : <button data-tour="help" onClick={() => setOpen(true)} aria-label="Help" title="Guides to running your church on TrinityOne" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', textAlign: 'left', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 14 }}>
             <Icon name="book" size={16} color="var(--ink-3)" /> Help
           </button>}
       {open ? <StewardHelp onClose={() => setOpen(false)} /> : null}

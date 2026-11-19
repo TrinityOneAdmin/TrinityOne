@@ -24,7 +24,8 @@ public class TrinityWidgetProvider extends AppWidgetProvider {
     public void onUpdate(final Context c, final AppWidgetManager m, int[] ids) {
         long now = System.currentTimeMillis();
         drawAll(host(c, m), ids, orderNow(c, now));
-        afterDraw(c, now);
+        // A receiver that throws kills the process on every redraw; the alarm and the job are best-effort (2026-11-19).
+        try { afterDraw(c, now); } catch (RuntimeException ignored) {}
     }
 
     /** The tap-to-flip strip's broadcast (trinity_widget_flip; explicit, to this receiver only). */

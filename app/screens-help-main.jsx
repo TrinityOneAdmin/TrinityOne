@@ -271,6 +271,13 @@ function HelpIndex({ D, fs, onOpen, onBackup, ctx }) {
         ))}
       </div>
 
+      {/* REPLAY THE FIRST-RUN TOUR (app/member-tour.jsx, via App's ctx.replayTour): closes Help and the profile hub,
+          then the tour runs where the person is. Absent where the tour file did not load. */}
+      {ctx && typeof ctx.replayTour === 'function' ? (
+        <button onClick={() => ctx.replayTour()} data-help-tour="replay" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center', marginTop: 16, padding: '13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5 * fs, fontFamily: 'var(--font-ui)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
+          <Icon name="play" size={16} color="var(--clay)" /> Take the tour again</button>
+      ) : null}
+
       {/* printable card */}
       <div style={{ marginTop: 24, borderRadius: 18, border: '1px dashed var(--line)', background: 'var(--surface-2)', padding: 16, display: 'flex', alignItems: 'center', gap: 13 }}>
         <Icon name="receipt" size={26} color="var(--ink-2)" />

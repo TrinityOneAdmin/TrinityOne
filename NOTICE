@@ -18,7 +18,7 @@ native/trinity-media-session/
             the service and releases the media session; the service makes its notification channel in onCreate
             and always calls startForeground in onStartCommand; the service is not exported; a refused foreground
             start is a reject; separate Play/Pause notification intents; 10-second seek labels; pause on
-            headphones unplugged (BECOMING_NOISY) and on audio-focus loss; the service stops when the activity is
+            headphones unplugged (BECOMING_NOISY) (no audio-focus request: the WebView owns focus, 2026-11-19); the service stops when the activity is
             destroyed. The plan: TrinityOne-internal/PLAN-AUDIO-PLAYBACK-FIXES-2026-11-18.html (not in this repo).
 
 native/trinity-media-session/android/src/main/res/drawable/ic_trinity_replay_10_24.xml

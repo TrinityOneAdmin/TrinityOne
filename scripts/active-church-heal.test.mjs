@@ -155,8 +155,15 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // features default to on (the safe direction — a row shows rather than silently hiding), and the heal puts it
   // right on the same pass as everything else. Confirmed it is the ONLY canonical site f22e7881 added (git show
   // f22e7881: +1, -0), not a differently-shaped bypass.
-  assert.equal(sites.length, 47,
-    `the active-church resolution sites changed (${sites.length} vs 47) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 47 → 48 (b6e3ecfb, 2026-11-19, the member walkthrough): App's <MemberTourHost inChurch={…}> reads whether the
+  // active church has an npub. With a stale id it resolves to {} and inChurch is false — the tour's Community part
+  // waits (the safe direction) — and the heal puts it right on the same pass as everything else.
+  // 48 → 49 (be291200, 2026-11-19, audit M1): App's tourAdmitted reads the active church's npub before trusting the
+  // join answer. With a stale id np is undefined and tourAdmitted is false — the Community part is not queued (the
+  // safe direction) — and the heal corrects it. Measured by this test's own method at 7ccd7a76 (47), b6e3ecfb (48),
+  // be291200 (49) and fix/walkthrough-audit-2026-11-19 @ 13047889 (49); each of those commits added exactly one.
+  assert.equal(sites.length, 49,
+    `the active-church resolution sites changed (${sites.length} vs 49) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

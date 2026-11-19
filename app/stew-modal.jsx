@@ -88,6 +88,9 @@ function useStewModalOpen(active) {
 }
 window.useStewModalOpen = useStewModalOpen;
 window.stewModalOpen = () => _stewModals.length > 0;
+// HOW MANY, for the one caller that is itself counted: the tour bubble (app/stew-tour.jsx stewTourBlocked) has to
+// tell "only me" from "me and a dialog that opened over me", which a yes/no cannot.
+window.stewModalCount = () => _stewModals.length;
 
 function useStewDialog(onClose, active) {
   useStewModalOpen(active);   // every console dialog registers itself by coming through here
