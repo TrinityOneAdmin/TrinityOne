@@ -454,7 +454,7 @@ async function shareCardRender(verse, st, probe, comment) {
   await shareCardFonts();
   const fontsOk = shareCardFontsIn();
   const G = SHARECARD_GEOM;
-  const quote = '”' + String(verse.text || '').trim() + '”';
+  const quote = '“' + String(verse.text || '').trim() + '”';
   const ref = String(verse.ref || '').trim() + ' · ' + (verse.version || 'WEB');
   const cv = document.createElement('canvas');
   const cx = cv.getContext('2d');

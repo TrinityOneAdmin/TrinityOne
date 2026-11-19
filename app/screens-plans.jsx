@@ -133,7 +133,7 @@ function DevoSeriesHero({ group, ctx }) {
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700, margin: '6px 0 2px', lineHeight: 1.1 }}>{group.name}</div>
           <div style={{ fontSize: 13.5, opacity: .92, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.items.length} devotionals · {next.title}</div>
           <button onClick={(e) => { e.stopPropagation(); ctx.openChurchDevo(next); }} style={{ marginTop: 16, width: '100%', padding: '12px', borderRadius: 14, border: 'none',
-            background: '#fff', color: cardC || '#2f5640', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            background: onCard, color: cardC || '#2f5640', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {started ? 'Continue' : 'Begin'} · {next.title}
           </button>
         </div>
