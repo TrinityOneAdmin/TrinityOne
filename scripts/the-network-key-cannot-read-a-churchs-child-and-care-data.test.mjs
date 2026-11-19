@@ -32,7 +32,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8796;
+const PORT = 8878;   // was 8796, which open-sleep-settings-linux (older) holds
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Math.floor(Date.now() / 1000);

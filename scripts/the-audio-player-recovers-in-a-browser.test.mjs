@@ -75,7 +75,9 @@ before(async () => {
   });
   await new Promise(r => srv.listen(0, '127.0.0.1', r));
   const CDP = await freePort();
-  chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu', '--no-first-run', '--mute-audio',
+  // The production hosts go to the discard port, as in every other browser test (no-browser-reaches-production).
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
+  chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD, '--no-first-run', '--mute-audio',
     '--autoplay-policy=no-user-gesture-required', `--user-data-dir=${join(dir, 'prof')}`, 'about:blank'], { stdio: 'ignore' });
   let targets = null;
   for (let i = 0; i < 60 && !(targets && targets.length); i++) { await sleep(300); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
