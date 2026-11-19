@@ -977,7 +977,7 @@ function App() {
     }
     // NETWORKS SWITCH: a code that is a network this phone already knows (a stored entry tagged kind 'network') is refused.
     // An unknown network npub is not recognisable here; it falls to checkChurch below, which finds no church for it.
-    if (churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('That code is for a network of churches, not a church'); return false; }
+    if (churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast(window.NETWORKS_ENABLED === true ? 'That code is for a network of churches, not a church' : 'Networks aren’t available yet'); return false; }   /* switch off: the message it always gave */
     // UX #1: validate the bech32 CHECKSUM before following. The regex matches shape only, so a mistyped code (one
     // wrong char) previously passed and we'd follow a phantom church stuck showing the placeholder name "Church".
     // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
