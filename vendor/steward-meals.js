@@ -132,7 +132,6 @@
     }
     const DEFAULTS = { enabled: false, visibility: "all", openedBy: "steward", adminGroupId: "" };
     let _careTeamSeen = "";
-    let _careTeamReadFor = "";
     function subscribeSettings(cb) {
       if (!S() || !S().subscribeMany || !activeChurch()) {
         cb({ ...DEFAULTS });
@@ -166,13 +165,11 @@
                 adminGroupId: String(doc.adminGroupId || "")
               };
               _careTeamSeen = seen.doc.adminGroupId;
-              _careTeamReadFor = cp;
               emit();
             } catch (err) {
             }
           },
           oneose() {
-            _careTeamReadFor = cp;
             emit();
           }
         }
@@ -894,8 +891,6 @@
       // so its refusal to delete the care team does not depend on a caller passing the id in (owner,
       // 2026-10-13, "CARE TEAM CANNOT BE DELETED"). '' until subscribeSettings has had an answer.
       careTeamId: () => _careTeamSeen,
-      // has the settings read for the church this console is on answered yet? (see _careTeamReadFor)
-      careTeamKnown: () => !!_careTeamReadFor && _careTeamReadFor === activeChurch(),
       // care-team recipient roster (for the "ask for help" seal)
       publishCareTeam,
       refreshCareTeam,

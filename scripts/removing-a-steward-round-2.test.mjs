@@ -277,31 +277,43 @@ test('F3 — CONTROL: a helper who HELD Care keeps both the care team’s roster
 });
 
 // ══ AUDIT OF 1fc01a16 (2026-11-19): the care guard, settled ═══════════════════════════════════════════════════════════
-// HIGH 1 — an empty care team list is two things: the church has NO care team (settings read: every other team list is an
-// ordinary one and IS carried), or the console has not read the settings yet (conservative, and said as exactly that).
-async function scopedHelperCase({ known }) {
+// HIGH 1 — an empty care team list is two things: the church has NO care team (every other team list is an ordinary one
+// and IS carried), or nobody can say. RE-AUDIT OF aa495a0f (MED): the carry decides which from ITS OWN read — its first
+// slice always asks for meals-settings, and the care team counts as known only if every relay answered that completely.
+// What StewardMeals read at console start is never enough: its EOSE also fires when every relay connection failed.
+async function scopedHelperCase({ meals, extraRelay, careRoster }) {
   const C = await churchOn(1, 'f3-none');
-  const eng = owner(C);
-  eng.window.StewardMeals = { careTeamId: () => '', careTeamKnown: () => known };
+  const extra = extraRelay ? { relays: () => [C.relays[0].wsUrl, extraRelay] } : {};
+  const eng = owner(C, extra);
+  // THE CONSOLE AS A FAILED START LEAVES IT: no care team read (''), and "known" claimed by an EOSE that was a failure
+  eng.window.StewardMeals = { careTeamId: () => '', careTeamKnown: () => true };
   const sam = await newSteward(C);
   await setRoster(eng, [sam.pub], { [sam.pub]: ['content', 'members'] });   // never held Care
-  const worship = C.cp.slice(0, 16) + '-worship';
-  await mustPut(C, raw(C, sam, ROSTER_D + worship, { pubs: [H.key().pub] }));
-  const r = await eng._removeStewardKeeping(sam.pub);
+  const team = C.cp.slice(0, 16) + (careRoster ? '-care' : '-worship');
+  if (meals) await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: team }, { tagChurch: false }));   // the church's care team IS this team
+  await mustPut(C, raw(C, sam, ROSTER_D + team, { pubs: [H.key().pub] }));   // the only thing they changed
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
   assert.ok(r.wrote, 'the removal did not land');
-  return { C, eng, r, d: ROSTER_D + worship };
+  return { C, eng, r, d: ROSTER_D + team };
 }
-test('HIGH 1 — a church with NO care team: a helper who never had Care keeps their worship team list (as on b98fc937)', async () => {
-  const { C, eng, r, d } = await scopedHelperCase({ known: true });
+test('HIGH 1 — a church with NO care team (the carry’s own read answered): a helper who never had Care keeps their team list', async () => {
+  const { C, eng, r, d } = await scopedHelperCase({});
   assert.equal(churchSent(eng, C, d).length, 1, 'AN ORDINARY TEAM LIST WAS TREATED AS THE CARE TEAM’S: ' + JSON.stringify(r.carry.notCarried));
   assert.equal(why(r, d).length, 0);
 });
-test('HIGH 1 — the care team NOT READ YET: the team list is not carried, and is listed as exactly that', async () => {
-  const { C, eng, r, d } = await scopedHelperCase({ known: false });
-  assert.equal(churchSent(eng, C, d).length, 0, 'carried although which team is the care team was not known');
-  assert.deepEqual(why(r, d).map(n => n.why), ['no-care']);
-  assert.match(why(r, d)[0].label, /^a team list \(they no longer had the Care permission, and this console had not yet read which team is the care team\)$/);
-  assert.doesNotMatch(why(r, d)[0].label, /the care team list/, 'an ordinary team list was called "the care team list"');
+test('MED (re-audit) — console started with every relay failing ("known", careTeamId \'\'), relays answer at removal: the care roster is NOT carried, and is listed', async () => {
+  // the church's care team is named only by its own meals-settings, which this console never read
+  const { C, eng, r, d } = await scopedHelperCase({ careRoster: true, meals: true });
+  assert.equal(churchSent(eng, C, d).length, 0, 'A HELPER WITHOUT CARE HAD THE CARE TEAM’S ROSTER CARRIED (F3 again, via a failed console start)');
+  assert.deepEqual(why(r, d).map(n => n.why), ['no-care'], JSON.stringify(r.carry.notCarried));
+  assert.match(why(r, d)[0].label, /^the care team list \(they no longer had the Care permission\)$/);
+});
+test('HIGH 1 — the carry’s own care-team read NOT complete (a second relay never answers): the team list is not carried, and is listed', async () => {
+  const { C, eng, r, d } = await scopedHelperCase({ extraRelay: 'ws://127.0.0.1:9/relay' });
+  assert.equal(churchSent(eng, C, d).length, 0, 'carried although no complete read said which team is the care team');
+  // under today's strict rule (until F1) an incomplete slice lists every document as 'incomplete'; once F1 carries from a
+  // partial answer, this roster must be listed with the "had not yet read which team is the care team" label instead
+  assert.equal(why(r, d).length, 1, JSON.stringify(r.carry.notCarried));
 });
 
 // LOW 5 — meals-settings is decided FIRST. Her OWN meals-settings is known from phase A already; what only phase B can show
@@ -370,9 +382,12 @@ test('answer (t) — the church’s care team is gone from the loaded group list
   assert.equal(notes.length, 1, 'nothing says the kept setting names a team that no longer exists');
   assert.match(notes[0], GONE);
 });
-test('answer (t) — the church’s choice names no team at all (\'\'): the carry says so', async () => {
-  const notes = await teamGoneCase({ churchAid: '', groups: null });
-  assert.equal(notes.length, 1); assert.match(notes[0], GONE);
+test('answer (t) — the church never chose a care team (\'\'): the carry says THAT, not "no longer exists"', async () => {
+  for (const groups of [null, ['other-team']]) {
+    const notes = await teamGoneCase({ churchAid: '', groups });
+    assert.equal(notes.length, 1, 'nothing said (group list ' + (groups ? 'loaded' : 'not loaded') + ')');
+    assert.match(notes[0], /^Their care setting was kept, but your church hasn’t chosen a care team — help requests go only to you\.$/);
+  }
 });
 test('answer (t) — CONTROLS: the team exists → nothing said; the group list not loaded → nothing said (never a guess)', async () => {
   assert.deepEqual(await teamGoneCase({ churchAid: 'care-team', groups: ['care-team'] }), []);

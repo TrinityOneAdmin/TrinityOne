@@ -8143,12 +8143,15 @@ async function _carryOverStewardDocs(pk, opts) {
   try { const ct = window.StewardMeals && window.StewardMeals.careTeamId ? window.StewardMeals.careTeamId() : ''; if (ct) careIds.add(String(ct)); } catch (e) {}
   const noteCareIds = (content) => { try { const g = JSON.parse(content || ''); if (g && typeof g.adminGroupId === 'string' && g.adminGroupId) careIds.add(g.adminGroupId); } catch (e) {} };
   let churchMeals = null;   // the newest church-signed meals-settings copy seen: { at, adminGroupId }
-  // AN EMPTY careIds IS TWO DIFFERENT THINGS (audit of 1fc01a16, HIGH): the church has NO care team (the settings read has
-  // answered — StewardMeals.careTeamKnown — or a meals-settings copy was seen), so every other team list is an ordinary
-  // one and IS carried; or this console has not read the settings yet, so any team list might be the care team's and none
-  // is carried (conservative, and said as exactly that).
-  let sawMeals = false;
-  const careKnown = () => { if (sawMeals) return true; try { return !!(window.StewardMeals && window.StewardMeals.careTeamKnown && window.StewardMeals.careTeamKnown()); } catch (e) { return false; } };
+  // AN EMPTY careIds IS TWO DIFFERENT THINGS (audit of 1fc01a16, HIGH; re-audit of aa495a0f, MED): the church has NO care
+  // team, so every other team list is an ordinary one and IS carried; or nobody can say, so any team list might be the care
+  // team's and none is carried (said as exactly that). Decided HERE, from the carry's own read: the first phase-B slice
+  // ALWAYS asks for meals-settings (the church's copy too, whether or not they wrote one), and the care team counts as
+  // known only if EVERY relay in relays() answered that slice completely. Nothing the console read earlier is enough on
+  // its own: StewardMeals' settings read reports "done" on an EOSE that nostr-tools also fires when every relay connection
+  // FAILED, and then answers careTeamId() '' — "no care team" — for a read that never happened.
+  let mealsReadWhole = false;
+  const careKnown = () => mealsReadWhole;
   // 'care' (the care team's own list or careteam:), 'unknown' (a team list while the care team is not known), or ''
   const careDoc = (d) => {
     if (d.startsWith('trinityone/careteam:')) return 'care';
@@ -8190,18 +8193,20 @@ async function _carryOverStewardDocs(pk, opts) {
   // PHASE B, per slice of 60 — every copy at those addresses, any author, no trust predicate — then the rule, then the
   // publish, so the check is as close to the write as it can be.
   const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));   // meals-settings first — see careIds
-  if (mine.has(MEALS_D_)) { sawMeals = true; noteCareIds(mine.get(MEALS_D_).content); }
+  if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
     if (left() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
-    const answers = await Promise.all(urls.map(u => ask(u, { kinds: [30078], '#d': slice, limit: slice.length * 50 })));
+    // the first slice always carries the meals-settings question — see careKnown
+    const asked = (i === 0 && slice.indexOf(MEALS_D_) === -1) ? [...slice, MEALS_D_] : slice;
+    const answers = await Promise.all(urls.map(u => ask(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 })));
     const whole = answers.every(a => a.complete);   // H1 wording: EVERY relay in relays() answered this slice completely
+    if (i === 0) mealsReadWhole = whole;
     const others = new Map();                       // d -> [{ at, church }]
     for (const a of answers) for (const e of a.evs) {
       const d = dOf(e);
-      if (!e || e.kind !== 30078 || slice.indexOf(d) === -1) continue;
+      if (!e || e.kind !== 30078) continue;
       if (d === MEALS_D_ && (chOf(e) ? chOf(e) === pub : e.pubkey === pub)) {   // this church's copy, by anyone
-        sawMeals = true;
         if (!heldCare) noteCareIds(e.content);
         // the church's NEWEST copy decides; a withdrawn (or unreadable) one means the church has no setting to put back
         if (e.pubkey === pub && (!churchMeals || (e.created_at || 0) > churchMeals.at)) {
@@ -8209,6 +8214,7 @@ async function _carryOverStewardDocs(pk, opts) {
           churchMeals = { at: e.created_at || 0, adminGroupId: (g && typeof g === 'object') ? String(g.adminGroupId || '') : null };
         }
       }
+      if (slice.indexOf(d) === -1) continue;   // meals-settings asked for only to learn the care team: noted above, nothing more
       if (String(e.pubkey).toLowerCase() === who) { keepMine(e); continue; }
       const ch = chOf(e);
       if (ch && ch !== pub) continue;                                                  // tagged for another church
@@ -8245,7 +8251,7 @@ async function _carryOverStewardDocs(pk, opts) {
         // said with the carry. List not loaded: nothing said (never a guess).
         const aid = churchMeals.adminGroupId;
         let gl = null; try { gl = (_lastGroups.cp === pub && _listIsFresh(_lastGroups.list)) ? _lastGroups.list : null; } catch (e) { gl = null; }
-        teamGone = !aid || (!!gl && !gl.some(x => x && x.id === aid));
+        teamGone = !aid ? 'none' : (!!gl && !gl.some(x => x && x.id === aid)) ? 'gone' : false;   // 'none': the church never chose one
       }
       jobs.push((async () => {
         let tmpl = null;
@@ -8273,7 +8279,9 @@ async function _carryOverStewardDocs(pk, opts) {
         } catch (e) { ok = false; }
         if (ok && ok !== 'time') {
           out.carried.push({ d, label, ev: signedEv });
-          if (teamGone) (out.notes = out.notes || []).push('Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team.');
+          if (teamGone) (out.notes = out.notes || []).push(teamGone === 'none'
+            ? 'Their care setting was kept, but your church hasn’t chosen a care team — help requests go only to you.'
+            : 'Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team.');
         } else notC(d, ok === 'time' ? 'time' : 'refused', label);
       })());
     }

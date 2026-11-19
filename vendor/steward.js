@@ -21478,15 +21478,8 @@ zoo`.split("\n");
       }
     };
     let churchMeals = null;
-    let sawMeals = false;
-    const careKnown = () => {
-      if (sawMeals) return true;
-      try {
-        return !!(window.StewardMeals && window.StewardMeals.careTeamKnown && window.StewardMeals.careTeamKnown());
-      } catch (e) {
-        return false;
-      }
-    };
+    let mealsReadWhole = false;
+    const careKnown = () => mealsReadWhole;
     const careDoc = (d) => {
       if (d.startsWith("trinityone/careteam:")) return "care";
       if (!d.startsWith("trinityone/roster:")) return "";
@@ -21531,24 +21524,22 @@ zoo`.split("\n");
     }));
     if (!readAll) notC("", "incomplete", "anything else they set up that a relay did not show in time");
     const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));
-    if (mine.has(MEALS_D_)) {
-      sawMeals = true;
-      noteCareIds(mine.get(MEALS_D_).content);
-    }
+    if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
     for (let i3 = 0; i3 < ds.length; i3 += 60) {
       const slice = ds.slice(i3, i3 + 60);
       if (left() <= 0) {
         for (const d of slice) notC(d, "time", _carryLabel(d, mine.get(d).content));
         continue;
       }
-      const answers = await Promise.all(urls.map((u) => ask(u, { kinds: [30078], "#d": slice, limit: slice.length * 50 })));
+      const asked = i3 === 0 && slice.indexOf(MEALS_D_) === -1 ? [...slice, MEALS_D_] : slice;
+      const answers = await Promise.all(urls.map((u) => ask(u, { kinds: [30078], "#d": asked, limit: asked.length * 50 })));
       const whole = answers.every((a) => a.complete);
+      if (i3 === 0) mealsReadWhole = whole;
       const others = /* @__PURE__ */ new Map();
       for (const a of answers) for (const e of a.evs) {
         const d = dOf(e);
-        if (!e || e.kind !== 30078 || slice.indexOf(d) === -1) continue;
+        if (!e || e.kind !== 30078) continue;
         if (d === MEALS_D_ && (chOf(e) ? chOf(e) === pub : e.pubkey === pub)) {
-          sawMeals = true;
           if (!heldCare) noteCareIds(e.content);
           if (e.pubkey === pub && (!churchMeals || (e.created_at || 0) > churchMeals.at)) {
             let g = null;
@@ -21559,6 +21550,7 @@ zoo`.split("\n");
             churchMeals = { at: e.created_at || 0, adminGroupId: g && typeof g === "object" ? String(g.adminGroupId || "") : null };
           }
         }
+        if (slice.indexOf(d) === -1) continue;
         if (String(e.pubkey).toLowerCase() === who) {
           keepMine(e);
           continue;
@@ -21620,7 +21612,7 @@ zoo`.split("\n");
           } catch (e) {
             gl = null;
           }
-          teamGone = !aid || !!gl && !gl.some((x) => x && x.id === aid);
+          teamGone = !aid ? "none" : !!gl && !gl.some((x) => x && x.id === aid) ? "gone" : false;
         }
         jobs.push((async () => {
           let tmpl = null;
@@ -21659,7 +21651,7 @@ zoo`.split("\n");
           }
           if (ok && ok !== "time") {
             out.carried.push({ d, label, ev: signedEv });
-            if (teamGone) (out.notes = out.notes || []).push("Their care setting was kept, but it names a care team that no longer exists \u2014 help requests go only to you until you choose a team.");
+            if (teamGone) (out.notes = out.notes || []).push(teamGone === "none" ? "Their care setting was kept, but your church hasn\u2019t chosen a care team \u2014 help requests go only to you." : "Their care setting was kept, but it names a care team that no longer exists \u2014 help requests go only to you until you choose a team.");
           } else notC(d, ok === "time" ? "time" : "refused", label);
         })());
       }
