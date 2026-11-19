@@ -40,9 +40,13 @@ function boot({ flag = 'on', features, standing = 'unmarked', assumeChild = fals
   const calls = [];
   // standing: what Fellowship.minorStanding answers -- 'unmarked' | 'marked' | 'unknown', or 'never' (never settles) / 'throw' (rejects).
   // assumeChild: what assumeMinor answers (true = the feed's assume-a-child policy); the network gate must NOT follow it.
-  const minorStanding = standing === 'never' ? () => new Promise(() => {}) : standing === 'throw' ? () => Promise.reject(new Error('relay down')) : () => Promise.resolve(standing);
+  // standing may also be a function (churchNpub, myPubkey, callNo) -> one of the above, for per-church / per-identity / retry cases
+  let standingCalls = 0;
+  const one = (v) => v === 'never' ? new Promise(() => {}) : v === 'throw' ? Promise.reject(new Error('relay down')) : Promise.resolve(v);
+  const minorStanding = (np) => one(typeof standing === 'function' ? standing(np, fake.myPubkey, ++standingCalls) : standing);
   const assumeMinor = () => Promise.resolve(!!assumeChild);
-  window.Fellowship = new Proxy({ myPubkey: 'ee'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, assumeMinor, minorStanding },
+  const fake = { myPubkey: 'ee'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, assumeMinor, minorStanding };
+  window.Fellowship = new Proxy(fake,
     { get: (t, k) => {
       if (k in t) return t[k];
       if (k === 'then' || typeof k === 'symbol') return undefined;
@@ -66,7 +70,7 @@ function boot({ flag = 'on', features, standing = 'unmarked', assumeChild = fals
     const p = last('subscribeNetworkProfile'); assert.ok(p, 'the App never read the network\'s profile');
     p[2]({ kind: 0, pubkey, created_at: at, content: JSON.stringify(content) }); draw(); await tick(); draw();
   };
-  return { window, calls, last, draw, ctx, settle, join, deliver, profile, tick };
+  return { window, calls, last, draw, ctx, settle, join, deliver, profile, tick, fake };
 }
 
 test('SWITCH OFF (shipped default): no network is looked up and nothing reaches the screens', async () => {
@@ -244,5 +248,59 @@ test('SHORT NAME: zero-width and bidi characters are dropped and the cap counts 
   assert.equal(m.ctx().netTabs[0].name, 'Nevil');
   const fam = '\u{1F468}‍\u{1F469}‍\u{1F467}';
   await m.profile(NETHEX, { name: 'N', short_name: fam.repeat(20) }, NOW + 1);
-  assert.equal(m.ctx().netTabs[0].title, fam.repeat(16), 'the cap did not count whole grapheme clusters');
+  // CHANGED ON PURPOSE (audit of 131b7e4f): the 64-code-unit ceiling now applies too. A family emoji is 8 units, so 8 whole families fit;
+  // the point of the test -- a cluster is never split -- is unchanged.
+  assert.equal(m.ctx().netTabs[0].title, fam.repeat(8), 'the cap split a grapheme cluster or ignored the code-unit ceiling');
+});
+
+// ── audit of 131b7e4f ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+test('F3: church A answers "unmarked"; switching to B, whose lookup never settles, shows NOTHING for B even though B is in a network', async () => {
+  const m = boot({ second: true, standing: (np) => (np === CHURCH ? 'unmarked' : 'never') });
+  await m.settle(); await m.join(); await m.deliver();
+  assert.equal(m.ctx().netTabs.length, 1, 'CONTROL: church A was cleared and its network shows');
+  m.ctx().setActiveChurch(CHURCH2); m.draw(); await m.tick(); m.draw(); await m.tick(); m.draw();
+  assert.equal(m.ctx().activeChurch, CHURCH2, 're-anchor: the switch did not happen');
+  const nets = m.last('subscribeChurchNetworks'); assert.equal(nets[1][0], CHURCH2, 're-anchor: B\'s networks were not asked for');
+  nets[2]([{ networkPub: NETHEX, npub: NETNPUB }]); m.draw(); await m.tick(); m.draw(); await m.tick(); m.draw();
+  assert.ok(!m.calls.some(x => x[0] === 'subscribeNetworkContent' && x[1][1] === CHURCH2), 'network content was subscribed for B before B answered');
+  const c = m.ctx();
+  assert.equal(c.netTabs.length, 0, 'A\'s "unmarked" cleared B'); assert.equal(c.churchNetworks.length, 0); assert.equal(c.netLine, null);
+});
+
+test('F2: the answer belongs to WHO is holding the phone -- a new identity without a reload starts uncleared', async () => {
+  const OTHER = 'ff'.repeat(32);
+  const m = boot({ standing: (np, me) => (me === OTHER ? 'never' : 'unmarked') });
+  await m.settle(); await m.join(); await m.deliver();
+  assert.equal(m.ctx().netTabs.length, 1, 'CONTROL: the first identity was cleared');
+  m.fake.myPubkey = OTHER; m.draw(); await m.tick(); m.draw(); await m.tick(); m.draw();
+  const c = m.ctx();
+  assert.equal(c.netTabs.length, 0, 'the previous person\'s "unmarked" was carried over to a new identity');
+  assert.equal(c.netLine, null);
+});
+
+test('F2: an "unknown" answer is asked again on a short backoff -- nothing shown meanwhile, the tab once the church answers', async () => {
+  const m = boot({ standing: (np, me, n) => (n === 1 ? 'unknown' : 'unmarked') });
+  await m.settle(); await m.join();
+  assert.equal(m.ctx().netTabs.length, 0, 'something was shown on an "unknown" answer');
+  assert.ok(!m.last('subscribeNetworkContent'), 'content was subscribed on an "unknown" answer');
+  await m.tick(3300); m.draw(); await m.tick(); m.draw(); await m.deliver();
+  assert.equal(m.ctx().netTabs.length, 1, 'the "unknown" answer was never asked again, so an adult stays blank until the next reconnect');
+});
+
+test('RULE 4: opening the bell (markNetSeen) does NOT mark the network tab read -- the Today line stays until the tab is opened', async () => {
+  const m = boot(); await m.settle(); await m.join(); await m.deliver();
+  m.ctx().markNetSeen(); m.draw(); await m.tick(); m.draw();
+  assert.equal(m.ctx().netUnread, 0, 're-anchor: opening the bell did not clear its own count');
+  assert.ok(m.ctx().netLine, 'opening the bell removed the network line');
+});
+
+test('NAMES: controls, soft hyphen, combining grapheme joiner, Arabic letter mark, Mongolian separator, Hangul fillers, variation selectors and tag characters are dropped (U+FE0F emoji form kept); a zalgo name is clipped at 64 code units', async () => {
+  const m = boot(); await m.settle(); await m.join(); await m.deliver();
+  await m.profile(NETHEX, { name: 'N', short_name: 'B\u00ADB\u034F\u061C&\u180ER\u115F\u1160\u3164\uFFA0B\u{E0041}\u{E007F}\u0001\u0085\uFE00\uFE0E' }, NOW);
+  assert.equal(m.ctx().netTabs[0].title, 'BB&RB');
+  const g = 'Z' + '\u0301'.repeat(30);   // one grapheme, 31 code units
+  await m.profile(NETHEX, { name: 'N', short_name: g.repeat(5) }, NOW + 1);
+  assert.equal(m.ctx().netTabs[0].title, g.repeat(2), 'a zalgo short name was not clipped at 64 code units (whole graphemes only)');
+  await m.profile(NETHEX, { name: 'N', short_name: '\u2764\uFE0F' }, NOW + 2);
+  assert.equal(m.ctx().netTabs[0].title, '\u2764\uFE0F', 'the emoji presentation selector was stripped, breaking the emoji');
 });

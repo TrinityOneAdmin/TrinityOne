@@ -2410,14 +2410,18 @@ async function _assumeMinor(cp) {
   if (audience === null) return true;
   return audience.length > 0;
 }
-// HAS THIS CHURCH MARKED ME A CHILD? -- answered by MARKING only (Networks member step 1; audit of 590fa968). 'marked' | 'unmarked' | 'unknown'.
+// HAS THIS CHURCH MARKED ME A CHILD? -- 'marked' | 'unmarked' | 'unknown' (Networks member step 1; audits of 590fa968 and 131b7e4f).
 // Not _assumeMinor: that answers "true" for three different things -- marked, could-not-ask, and "this church uses safeguarding and has not
-// cleared me" (an assume-a-child POLICY) -- and network content must follow the owner's 2026-10-21 rule instead: trust the church's markings,
-// an unmarked member is an adult and is served (the relay's netReader does the same, by minorOf). So:
-//   my own sealed clearance has arrived            -> marked / unmarked, as it says
-//   a remembered answer for (church, me)           -> marked / unmarked (written only from that clearance, by _assumeMinor above)
-//   the church answered "who does it clear?"       -> unmarked: nothing marks me, whether or not the church uses safeguarding
-//   it could not be asked (null), or no key yet    -> unknown, and the caller shows nothing
+// cleared me" (an assume-a-child POLICY). Network content follows the owner's 2026-10-21 rule instead: trust the church's markings, an
+// unmarked member is an adult and is served (the relay's netReader does the same, by minorOf). And the answer must be about THIS MEMBER:
+// the church's list of who it clears (_fetchChildCareAudience) says nothing about whether I am marked, so it is never consulted here --
+// a marked child whose own clearance had not arrived yet read as 'unmarked' through it (audit of 131b7e4f, F1).
+//   my own sealed clearance has arrived (the subscription)   -> marked / unmarked, as it says
+//   a remembered answer for (church, me)                     -> marked / unmarked (written only from that clearance, by _assumeMinor)
+//   my clearance record, FETCHED (_fetchMyClearance):
+//       { found:true }   -> as the record says
+//       { found:false }  -> unmarked: authenticated, and this church has published no marking about me
+//       null / a throw   -> unknown, and the caller shows nothing
 // Callers: Fellowship.minorStanding (app/app.jsx's network child gate only).
 async function _minorStanding(cp) {
   if (!cp) return 'unknown';
@@ -2426,9 +2430,11 @@ async function _minorStanding(cp) {
   const mine = _sgMine(cp);
   if (mine && mine.known) return mine.isMinor ? 'marked' : 'unmarked';
   try { const v = localStorage.getItem(SG_ASSUME_KEY + cp + '|' + me); if (v === '1') return 'marked'; if (v === '0') return 'unmarked'; } catch (e) {}
-  const audience = await _fetchChildCareAudience(cp);
-  if (audience === null || audience === undefined) return 'unknown';
-  return 'unmarked';
+  const rec = await _fetchMyClearance(cp);
+  if (!rec) return 'unknown';
+  if (rec.found === true) return rec.minor ? 'marked' : 'unmarked';
+  if (rec.found === false) return 'unmarked';
+  return 'unknown';
 }
 // MAY THIS PERSON OPEN A PUBLIC NEED? Module scope, not a method, so publishCareNeed reaches the real rule
 // rather than whatever `window.Fellowship` happens to be — and so a test that lifts the publisher lifts this

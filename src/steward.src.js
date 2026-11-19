@@ -5967,14 +5967,17 @@ function _subscribeMany(filters, handlers) {
 // A network's SHORT NAME: the title of the tab its members see inside What's happening (owner 2026-11-19). One line, at most 16 characters
 // (code points, so an emoji is one). '' = not set. Callers: publishProfile (the kind-0 it writes); the console's Short name field
 // (app/stew-dashboard.jsx NetShortNameField) caps with the same rule through window.Steward.netShortName.
-// Zero-width and bidi-control characters are removed first (U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+FEFF; U+200C/200D are KEPT: they join emoji sequences and some scripts: they let a name look like another,
+// Zero-width and bidi-control characters are removed first (C0/C1 controls (except tab/newline, which become a space), U+00AD, U+034F, U+061C, U+115F, U+1160, U+180E, U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+3164, U+FE00-FE0E (variation selectors; U+FE0F is KEPT, it is the emoji form), U+FEFF, U+FFA0 and the tag block U+E0000-E007F, U+E0100-E01EF (which also drops the subdivision-flag emoji); U+200C/200D are KEPT: they join emoji sequences and some scripts: they let a name look like another,
 // or reverse the text around it), and the cap counts grapheme clusters where Intl.Segmenter exists, else code points. The member app applies
 // the same rule on read (app/app.jsx netClipText).
 function netShortName(v) {
-  const s = String(v == null ? '' : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\u3164\uFE00-\uFE0E\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu, '').replace(/\s+/g, ' ').trim();
   let parts = null;
   try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
-  return (parts || Array.from(s)).slice(0, 16).join('').trim();
+  // and a CODE-UNIT ceiling of 64: one grapheme can be any length (zalgo, a long ZWJ chain), so 16 graphemes alone bound nothing
+  let out = '';
+  for (const g of (parts || Array.from(s)).slice(0, 16)) { if (out.length + g.length > 64) break; out += g; }
+  return out.trim();
 }
 
 // one-shot read of the single NEWEST event matching `filters` (or null), bounded by a short timeout.

@@ -420,21 +420,28 @@ function featuredSermonNow(pin, sermons) {
 // something a stranger (or a relay answering with somebody else's kind-0) can choose. `short_name` is the tab title the network steward set
 // (console: Network identity -> Short name); it is capped here as well as where it is written, at 16 characters.
 // Callers: App's network-profile effect only.
+// How long the network child gate waits before asking again after an 'unknown' (see App's minorStanding effect). Two retries, then the
+// next reconnect (connTick) asks again.
+const NET_STANDING_RETRY_MS = [3000, 12000];
+
 function netProfileOf(e, networkPub) {
   if (!e || e.kind !== 0 || !networkPub || e.pubkey !== networkPub) return null;
   let c = null; try { c = JSON.parse(e.content || ''); } catch { return null; }
   if (!c || typeof c !== 'object') return null;
-  return { name: netClipText(c.name, 80), shortName: netClipText(c.short_name, 16), at: e.created_at || 0 };
+  return { name: netClipText(c.name, 80, 240), shortName: netClipText(c.short_name, 16, 64), at: e.created_at || 0 };
 }
 // A network-chosen string made safe to show as one short line: zero-width and bidi-control characters removed (they let a name look like
-// another, or reverse the text around it -- U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+FEFF; U+200C/200D are KEPT: they join emoji sequences and some scripts), whitespace collapsed, then capped at `n`
+// another, or reverse the text around it -- C0/C1 controls (except tab/newline, which become a space), U+00AD, U+034F, U+061C, U+115F, U+1160, U+180E, U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+3164, U+FE00-FE0E (variation selectors; U+FE0F is KEPT, it is the emoji form), U+FEFF, U+FFA0 and the tag block U+E0000-E007F, U+E0100-E01EF (which also drops the subdivision-flag emoji); U+200C/200D are KEPT: they join emoji sequences and some scripts), whitespace collapsed, then capped at `n`
 // user-perceived characters (grapheme clusters via Intl.Segmenter where the WebView has it, else code points). The same rule as the console's
 // Steward.netShortName. Callers: netProfileOf.
-function netClipText(v, n) {
-  const s = String(v == null ? '' : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+function netClipText(v, n, units) {
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\u3164\uFE00-\uFE0E\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu, '').replace(/\s+/g, ' ').trim();
   let parts = null;
   try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
-  return (parts || Array.from(s)).slice(0, n).join('').trim();
+  // and a CODE-UNIT ceiling as well: one grapheme can be any length (zalgo, a long ZWJ chain), so `n` graphemes alone bound nothing
+  let out = '';
+  for (const g of (parts || Array.from(s)).slice(0, n)) { if (out.length + g.length > (units || 64)) break; out += g; }
+  return out.trim();
 }
 
 function App() {
@@ -1822,18 +1829,28 @@ function App() {
   // painted); settled 'unmarked' -> cleared; 'marked' or the church's own clearance saying child (safeguard.isMinor) -> never.
   // STEP-2 SEAM (child-friendly posts, DOMAIN.md 2026-11-18): when a church opts in, a marked child will be served only posts tagged
   // "Suitable for children". That changes THIS line (and filters the posts by their tag) -- nothing on the screens decides it.
-  const [netStanding, setNetStanding] = useA({ cp: '', v: 'unknown' });
+  // The answer is KEYED BY CHURCH AND BY WHO IS HOLDING THE PHONE (audit of 131b7e4f, F2): an identity swapped without a reload must never
+  // inherit the last person's 'unmarked'. 'unknown' is RETRIED on a short backoff (NET_STANDING_RETRY_MS), still fail-closed in between,
+  // so an adult is not left blank until the next reconnect on a cold boot where the relay had not authenticated yet.
+  const _netMe = (window.Fellowship && window.Fellowship.myPubkey) || '';
+  const _netStandKey = _netNp && _netMe ? _netNp + '|' + _netMe : '';
+  const [netStanding, setNetStanding] = useA({ key: '', v: 'unknown' });
   useAE(() => {
-    let live = true;
-    const np = _netNp, F = window.Fellowship;
-    if (window.NETWORKS_ENABLED !== true || !np || !F || typeof F.minorStanding !== 'function') { setNetStanding({ cp: np, v: 'unknown' }); return; }
-    let q; try { q = F.minorStanding(np); } catch (e) { q = Promise.reject(e); }
-    Promise.resolve(q)
-      .then(v => { if (live) setNetStanding({ cp: np, v: (v === 'marked' || v === 'unmarked') ? v : 'unknown' }); })
-      .catch(() => { if (live) setNetStanding({ cp: np, v: 'unknown' }); });
-    return () => { live = false; };
-  }, [_netNp, safeguard.isMinor, connTick]);
-  const netCleared = window.NETWORKS_ENABLED === true && !!_netNp && netStanding.cp === _netNp && netStanding.v === 'unmarked' && !safeguard.isMinor;
+    let live = true, timer = null;
+    const key = _netStandKey, np = _netNp, F = window.Fellowship;
+    if (window.NETWORKS_ENABLED !== true || !key || !F || typeof F.minorStanding !== 'function') { setNetStanding({ key, v: 'unknown' }); return; }
+    const ask = (attempt) => {
+      let q; try { q = F.minorStanding(np); } catch (e) { q = Promise.reject(e); }
+      Promise.resolve(q).then(v => (v === 'marked' || v === 'unmarked') ? v : 'unknown', () => 'unknown').then(v => {
+        if (!live) return;
+        setNetStanding({ key, v });
+        if (v === 'unknown' && attempt < NET_STANDING_RETRY_MS.length) timer = setTimeout(() => { if (live) ask(attempt + 1); }, NET_STANDING_RETRY_MS[attempt]);
+      });
+    };
+    ask(0);
+    return () => { live = false; if (timer) clearTimeout(timer); };
+  }, [_netStandKey, safeguard.isMinor, connTick]);
+  const netCleared = window.NETWORKS_ENABLED === true && !!_netStandKey && netStanding.key === _netStandKey && netStanding.v === 'unmarked' && !safeguard.isMinor;
   // The network's PUBLIC profile (kind-0): its name and the short name its steward chose for the members' tab. Only a profile SIGNED BY THE
   // NETWORK KEY counts (netProfileOf): a name is the one thing a stranger could try to put on this tab.
   const [netProfiles, setNetProfiles] = useA({});   // networkPub -> { name, shortName, at }

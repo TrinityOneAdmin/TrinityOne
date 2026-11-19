@@ -175,10 +175,11 @@ function NetShortNameField({ church }) {
   // WHILE TYPING: invisible / bidi characters out and at most 16 characters, but NOT trimmed -- trimming each keystroke ate the space between
   // two words as it was typed. The full rule (trim, collapse) is applied by `cap` on Save.
   const live = (v) => {
-    const s = String(v == null ? '' : v).replace(/[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '');
+    const s = String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\u3164\uFE00-\uFE0E\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu, '');
     let parts = null;
     try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
-    return (parts || Array.from(s)).slice(0, 16).join('');
+    let out = ''; for (const g of (parts || Array.from(s)).slice(0, 16)) { if (out.length + g.length > 64) break; out += g; }
+    return out;
   };
   const saved = (church && church.short_name) || '';
   const [val, setVal] = React.useState(saved);

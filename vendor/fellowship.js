@@ -8641,9 +8641,11 @@
       if (v === "0") return "unmarked";
     } catch (e) {
     }
-    const audience = await _fetchChildCareAudience(cp);
-    if (audience === null || audience === void 0) return "unknown";
-    return "unmarked";
+    const rec = await _fetchMyClearance(cp);
+    if (!rec) return "unknown";
+    if (rec.found === true) return rec.minor ? "marked" : "unmarked";
+    if (rec.found === false) return "unmarked";
+    return "unknown";
   }
   async function _careNeedRefusal(cp) {
     const mine = _sgMine(cp);

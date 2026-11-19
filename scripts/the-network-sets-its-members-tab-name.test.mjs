@@ -149,8 +149,16 @@ test('SHIPPED publishProfile: the kind-0 carries short_name, capped at 16; a pro
 test('SHIPPED netShortName: drops zero-width / bidi characters, keeps emoji joiners, and caps by grapheme', () => {
   assert.equal(netShortName('‮BB​&⁦RB﻿‎'), 'BB&RB');
   const fam = '\u{1F468}‍\u{1F469}‍\u{1F467}';
-  assert.equal(netShortName(fam.repeat(20)), fam.repeat(16), 'a family emoji was split or the cap counted code points');
+  // CHANGED ON PURPOSE (audit of 131b7e4f): the 64-code-unit ceiling now applies as well; a family emoji is 8 units, so 8 whole families fit.
+  assert.equal(netShortName(fam.repeat(20)), fam.repeat(8), 'a family emoji was split or the code-unit ceiling was ignored');
   assert.equal(netShortName('  Bed   Bath  '), 'Bed Bath');
+});
+
+test('SHIPPED netShortName: controls, soft hyphen, U+034F, fillers, variation selectors, tag characters out; U+FE0F kept; zalgo clipped at 64 code units', () => {
+  assert.equal(netShortName('B\u00ADB\u034F\u061C&\u180ER\u115F\u1160\u3164\uFFA0B\u{E0041}\u0001\u0085\uFE00\uFE0E'), 'BB&RB');
+  assert.equal(netShortName('\u2764\uFE0F'), '\u2764\uFE0F', 'the emoji selector was stripped');
+  const g = 'Z' + '\u0301'.repeat(30);
+  assert.equal(netShortName(g.repeat(5)), g.repeat(2), 'a zalgo name was not clipped at 64 code units');
 });
 
 test('the field keeps a space typed between two words (it is trimmed on Save, not per keystroke), and strips a bidi override as typed', async () => {

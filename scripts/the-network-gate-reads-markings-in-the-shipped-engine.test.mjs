@@ -2,8 +2,9 @@
 //   Run: node --test scripts/the-network-gate-reads-markings-in-the-shipped-engine.test.mjs
 //
 // The REAL code, lifted out of vendor/fellowship.js and run with only its surroundings supplied (rule 3: no text assertion):
-//   1. _minorStanding / Fellowship.minorStanding answer by the church's MARKING (owner 2026-10-21: an unmarked member is an adult and is
-//      served), never by the feed's assume-a-child policy, and a lookup that cannot be made -- or throws -- is 'unknown', never an answer.
+//   1. _minorStanding / Fellowship.minorStanding answer by THIS MEMBER's marking -- their own clearance record (owner 2026-10-21: an
+//      unmarked member is an adult and is served), never by the church's cleared-adults list or the feed's assume-a-child policy, and a
+//      lookup that cannot be made -- or throws -- is 'unknown', never an answer.
 //   2. subscribeNetworkProfile drops any kind-0 whose author is not the network key, even if a relay hands one over, and keeps the newest.
 // How App uses both is proved in a-network-reaches-members-only-through-whats-happening.test.mjs.
 import { test } from 'node:test';
@@ -31,32 +32,39 @@ function grabMethod(sig) {
 }
 
 const CP = 'aa'.repeat(32), ME = 'ee'.repeat(32), KEY = 'trinityone.sg-assume.';
-function standing({ mine = null, stored = null, audience = [], me = ME, audienceThrows = false } = {}) {
+// clearance: what _fetchMyClearance answers -- { found:true, minor } | { found:false } | null | 'throw'.
+// audience: what the church's cleared-adults lookup would answer. It says nothing about THIS member and must never decide (audit of 131b7e4f).
+function standing({ mine = null, stored = null, clearance = { found: false }, audience = [], me = ME } = {}) {
   const store = new Map(); if (stored != null) store.set(KEY + CP + '|' + ME, stored);
   const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null) };
-  const fn = new Function('_mePub', '_sgMine', 'SG_ASSUME_KEY', 'localStorage', '_fetchChildCareAudience',
+  const fn = new Function('_mePub', '_sgMine', 'SG_ASSUME_KEY', 'localStorage', '_fetchMyClearance', '_fetchChildCareAudience',
     topFn('_minorStanding') + '\nreturn _minorStanding;')(() => me, () => mine, KEY, localStorage,
-    async () => { if (audienceThrows) throw new Error('relay down'); return audience; });
+    async () => { if (clearance === 'throw') throw new Error('relay down'); return clearance; }, async () => audience);
   const method = new Function('toPub', '_minorStanding', 'return {' + grabMethod('    async minorStanding(churchNpub) {') + '};')((x) => x, fn);
   return { fn, method };
 }
 
-test('MARKED / UNMARKED by the member\'s own sealed clearance', async () => {
+test('MARKED / UNMARKED by the member\'s own sealed clearance, when the subscription has delivered it', async () => {
   assert.equal(await standing({ mine: { known: true, isMinor: true } }).fn(CP), 'marked');
   assert.equal(await standing({ mine: { known: true, isMinor: false } }).fn(CP), 'unmarked');
 });
-test('a remembered answer for (church, me) is used before asking the church', async () => {
-  assert.equal(await standing({ stored: '1', audience: null }).fn(CP), 'marked');
-  assert.equal(await standing({ stored: '0', audience: null }).fn(CP), 'unmarked');
+test('a remembered answer for (church, me) is used before fetching', async () => {
+  assert.equal(await standing({ stored: '1', clearance: null }).fn(CP), 'marked');
+  assert.equal(await standing({ stored: '0', clearance: null }).fn(CP), 'unmarked');
 });
-test('ASSUME-A-CHILD CHURCH: safeguarding in use, this member not cleared and not marked -> UNMARKED (served), not "assume child"', async () => {
-  assert.equal(await standing({ audience: ['cc'.repeat(32)] }).fn(CP), 'unmarked');
-  assert.equal(await standing({ audience: [] }).fn(CP), 'unmarked');
+test('BEFORE THE SUBSCRIPTION DELIVERS: a MARKED child whose clearance record is on the relay is "marked" -- even in a church whose cleared list answers', async () => {
+  // the case audited wrong in 131b7e4f: the church's cleared-adults list answered (here, non-empty and empty) and was read as "unmarked"
+  assert.equal(await standing({ clearance: { found: true, minor: true }, audience: ['cc'.repeat(32)] }).fn(CP), 'marked');
+  assert.equal(await standing({ clearance: { found: true, minor: true }, audience: [] }).fn(CP), 'marked');
 });
-test('COULD NOT ASK (null), no key yet, or a THROW -> unknown, never an answer', async () => {
-  assert.equal(await standing({ audience: null }).fn(CP), 'unknown');
+test('FETCHED clearance: found adult -> unmarked; found:false (no marking published) -> unmarked, even in an assume-a-child church', async () => {
+  assert.equal(await standing({ clearance: { found: true, minor: false } }).fn(CP), 'unmarked');
+  assert.equal(await standing({ clearance: { found: false }, audience: ['cc'.repeat(32)] }).fn(CP), 'unmarked');
+});
+test('COULD NOT ESTABLISH (null), no key yet, or a THROW -> unknown, never an answer -- even when the cleared list would answer', async () => {
+  assert.equal(await standing({ clearance: null, audience: [] }).fn(CP), 'unknown');
   assert.equal(await standing({ me: '' }).fn(CP), 'unknown');
-  assert.equal(await standing({ audienceThrows: true }).method.minorStanding(CP), 'unknown', 'a failed lookup was turned into an answer');
+  assert.equal(await standing({ clearance: 'throw' }).method.minorStanding(CP), 'unknown', 'a failed lookup was turned into an answer');
   assert.equal(await standing({}).method.minorStanding(''), 'unknown');
 });
 
