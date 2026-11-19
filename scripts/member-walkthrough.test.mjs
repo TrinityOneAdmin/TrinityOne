@@ -18,6 +18,9 @@
 // TabBar / TodayScreen / ChatScreen draw are not in that tree. Those tests answer document.querySelector from a
 // list of anchors stated per test; the screen-level tests below prove each anchor really is drawn, by the screen
 // that owns it, and the host-over-screen tests answer querySelector from the drawn screen itself.
+// EXCEPT the admission tests (audit M1, 2026-11-19): h.screens() draws the REAL ChatScreen with the ctx App really
+// hands it (App's own joinState) and the REAL TabBar with App's props, and the host answers from those trees — so
+// "Waiting for approval" draws no groups anchor because ChatScreen draws none, not because a test said so.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -71,9 +74,14 @@ function bootApp(opts = {}) {
     window.TrinityData.CHURCHES = [{ id: NPUB, npub: NPUB, name: 'Test Church' }];
     window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(NPUB));
   }
+  // The church's join answer (App's subscribeChurchJoin effect, app/app.jsx): the latest subscriber is kept, and
+  // h.join(state) answers it as the engine does ({ approval, isAdmitted, isPending, authFailed, openKnown }).
+  let joinCb = null, joinLast = null;
   window.Fellowship = new Proxy({
     myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x,
     isBlockedChurch: () => false, checkChurch: async () => 'church', ready: Promise.resolve(),
+    subscribeChurchJoin: (_np, cb) => { joinCb = cb; if (joinLast) cb(joinLast); return () => { if (joinCb === cb) joinCb = null; }; },
+    ...(opts.fellowship || {}),
   }, { get: (t, k) => (k in t ? t[k] : (k === 'then' || typeof k === 'symbol') ? undefined : () => () => {}) });
   let anc = opts.anchors || anchors(['tab-today', 'tab-read', 'tab-chat', 'tab-library', 'tab-you', 'votd']);
   window.document.querySelector = tourDoc(() => anc);
@@ -93,8 +101,37 @@ function bootApp(opts = {}) {
   const ctxOf = (tree) => { const n = nodes(tree).find(x => x.props && x.props.ctx && 'followChurch' in x.props.ctx); assert.ok(n, 'no screen received a ctx — re-anchor'); return n.props.ctx; };
   // the splash ends by calling the onDone App gave it
   const endSplash = () => { const s = el(frame().tree, mod.Splash); if (s) s.props.onDone(); };
+  const join = (state) => { joinLast = state; if (joinCb) joinCb(state); };
+  // The REAL ChatScreen and the REAL TabBar, drawn (full miniature React) from what App hands them in its current
+  // frame — ChatScreen gets App's own ctx (its joinState, its church) — and made the page the host looks at.
+  // rooms: what the church's group subscription answers ChatScreen with (null: not delivered yet).
+  let mini = null;
+  const screens = (rooms) => {
+    if (!mini) {
+      const { React, draw } = miniReact();
+      const groups = { rooms: null };
+      const chat = chatScreen(React, draw, { groups });
+      const ui = loadScreen('app/ui.jsx', ['TabBar'], {
+        React, window: {}, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({}) },
+        navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, localStorage: { getItem: () => null, setItem() {} },
+        setTimeout, clearTimeout, console, Icon: () => null, UserAvatar: () => null, Halo: () => null,
+      });
+      mini = { draw, groups, chat, TabBar: ui.TabBar };
+    }
+    if (rooms !== undefined) mini.groups.deliver(rooms);
+    frame();
+    const f = frame();
+    const tab = el(f.tree, mod.TabBar);
+    assert.ok(tab, 'App drew no TabBar — re-anchor');
+    const ctx = ctxOf(f.tree);
+    mini.chat(ctx);
+    const chatTree = mini.chat(ctx);
+    const tabTree = mini.draw(mini.TabBar, tab.props);
+    anc = [chatTree, tabTree];
+    return { chatTree, tabTree, said: texts(chatTree).join(' | ') };
+  };
   if (opts.setup) opts.setup(window);
-  return { mod, window, store: window.localStorage, frame, show, el, ctxOf, endSplash, setAnchors: (a) => { anc = a; } };
+  return { mod, window, store: window.localStorage, frame, show, el, ctxOf, endSplash, join, screens, setAnchors: (a) => { anc = a; } };
 }
 const bubbleOf = (f, h) => (f.out && f.out.type === h.mod.MemberTourBubble && f.out.props.variant !== 'tip') ? f.out.props : null;
 // Walk the tour with the bubble's own Next, collecting titles, checking `each` after every frame.
@@ -111,6 +148,15 @@ function walkApp(h, each) {
   throw new Error('the tour never ended');
 }
 const settle = () => new Promise(r => setTimeout(r, 30));
+// The church's join answers, as src/fellowship.src.js subscribeChurchJoin emits them.
+const PENDING = { approval: true, isAdmitted: false, isPending: true, openKnown: false };
+const ADMITTED = { approval: true, isAdmitted: true, isPending: false, openKnown: false };
+const OPEN = { approval: false, isAdmitted: false, isPending: false, openKnown: true };
+// Walk with the bubble's own Next, recording what each step SAID.
+function walkSaid(h) { const said = []; walkApp(h, (f) => { const b = bubbleOf(f, h); if (b) said.push([b.step.title, b.step.text]); }); return said; }
+const groupsAnchor = (tree) => find(tree, n => n.props && n.props['data-tour'] === 'groups');
+// Every key this App's store holds — to boot the same phone again.
+const storeOf = (h) => { const m = new Map(); for (let i = 0; i < h.store.length; i++) { const k = h.store.key(i); m.set(k, h.store.getItem(k)); } return m; };
 
 test('CONTROL: App mounts the tour host, and an already set-up member with no request sees nothing', () => {
   const h = bootApp();
@@ -166,7 +212,7 @@ test('POINT OF USE: finishing the setup screen (onSave) starts it too', () => {
   assert.equal(b.step.title, 'Welcome');
 });
 
-test('POINT OF USE: joining a church runs the Community part, once, where the person is', async () => {
+test('POINT OF USE (M1-d): joining an OPEN church runs the Community part once the person is on Community; once only', async () => {
   const h = bootApp({ anchors: anchors(['tab-today', 'tab-read', 'tab-chat', 'tab-library', 'tab-you', 'votd', 'happening']) });
   h.store.setItem('trinityone.tour.bible', '1');      // they had the Bible part already
   h.endSplash();
@@ -174,20 +220,122 @@ test('POINT OF USE: joining a church runs the Community part, once, where the pe
   assert.equal(bubbleOf(f, h), null);
   h.ctxOf(f.tree).followChurch(NPUB);                  // what the follow sheet calls (screens-church.jsx)
   await settle();                                      // checkChurch answers "church"
-  const titles = walkApp(h);
-  // on Today: the groups list is on Community, so that step is skipped — the tour does not go there
-  assert.deepEqual(titles, ['Community', 'What’s happening'], 'joining a church did not run the Community part');
+  h.join(OPEN);                                        // the church's trusted policy: no approval needed
+  // on Today (plan §12.1): an automatic Community start waits for the Community page, and spends nothing
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part started on Today, where its groups list is not');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent while it waited for the Community page');
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');   // the person taps Community
+  const s = h.screens([ADULT_ROOM]);
+  assert.equal(groupsAnchor(s.chatTree).length, 1, 'premise: the open church\'s ChatScreen draws no groups anchor');
+  assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'joining an open church did not run the Community part with its Groups step');
   assert.equal(h.store.getItem('trinityone.tour.community'), '1');
   // a second church joined later does not run it again
   h.ctxOf(h.show().tree).followChurch(NPUB2);
   await settle();
-  assert.equal(bubbleOf(h.show(), h), null, 'the Community part ran a second time');
+  h.screens();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part ran a second time');
+});
+
+test('POINT OF USE (M1-a): joining an approval church — nothing on "Waiting for approval"; once let in, Community runs WITH the Groups step', async () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');     // the person is on Community
+  h.ctxOf(h.show().tree).followChurch(NPUB);                    // what the follow sheet calls
+  await settle();                                               // checkChurch answers "church"
+  h.join(PENDING);
+  let s = h.screens();
+  assert.match(s.said, /Waiting for approval/, 'premise: the real ChatScreen is not showing "Waiting for approval"');
+  assert.equal(find(s.chatTree, n => n.props && n.props['data-tour'] === 'groups').length, 0, 'premise: the groups anchor is drawn while pending');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part showed while the person was still waiting for approval');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent before the person was let in');
+  // a steward lets them in
+  h.join(ADMITTED);
+  h.show();
+  s = h.screens([ADULT_ROOM]);
+  assert.equal(find(s.chatTree, n => n.props && n.props['data-tour'] === 'groups').length, 1, 'premise: the admitted ChatScreen draws no groups anchor');
+  const said = walkSaid(h);
+  assert.deepEqual(said.map(x => x[0]), ['Community', 'Groups and teams'], 'admission did not run the Community part with its Groups step');
+  assert.equal(said[0][1], 'Your church is here: announcements, events, groups and teams.', 'the Community step does not say the owner\'s words (2026-11-19)');
+  assert.equal(said[1][1], 'Groups you can join.');
+  assert.equal(h.store.getItem('trinityone.tour.community'), '1');
+});
+
+test('M1-b: closed and reopened while still waiting — nothing on boot, nothing while pending; let in later, Community runs', async () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.ctxOf(h.show().tree).followChurch(NPUB);
+  await settle();
+  h.join(PENDING);
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null);
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1', 'joining did not record that the Community part is to come');
+  // the phone is closed; the app starts again, still following the church
+  const again = bootApp({ church: true, store: storeOf(h) });
+  again.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(again.show(), again), null, 'the tour started on boot');
+  again.join(PENDING);
+  again.el(again.show().tree, again.mod.TabBar).props.onChange('chat');
+  assert.match(again.screens().said, /Waiting for approval/, 'premise: still waiting for approval');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(again.show(), again), null, 'the Community part showed while still pending');
+  assert.equal(again.store.getItem('trinityone.tour.community'), null, 'the boot rule spent the Community part of a member still waiting to be let in');
+  again.join(ADMITTED);
+  again.show();
+  again.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(again).map(x => x[0]), ['Community', 'Groups and teams'], 'being let in after a restart did not run the Community part');
+});
+
+test('M1-c: waiting for approval on a build from before this fix (no wait flag) — boot does not spend Community; admission runs it', () => {
+  // what an older build left on the phone: the church followed, its cached join answer "pending", no wait flag
+  const store = new Map([['trinityone.tour.bible', '1'], ['trinityone.joinstate.' + NPUB, JSON.stringify({ approval: true, isAdmitted: false, isPending: true, removed: false })]]);
+  const h = bootApp({ church: true, store });
+  h.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null);
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'boot marked the Community part seen for someone still waiting to be let in');
+  h.join(ADMITTED);
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'admission did not run the Community part');
+});
+
+test('M1-e: never let in — nothing runs and nothing is spent; removed — nothing; Help replay while pending is the Bible part only', async () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.ctxOf(h.show().tree).followChurch(NPUB);
+  await settle();
+  h.join(PENDING);
+  h.screens();
+  for (let i = 0; i < 5; i++) assert.equal(bubbleOf(h.show(), h), null, 'the Community part showed for someone never let in');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null);
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1');
+  h.ctxOf(h.show().tree).replayTour();                   // Help → Take the tour again, still pending
+  const titles = walkApp(h);
+  assert.deepEqual(titles, ['Welcome', 'Read', 'Library', 'You'], 'replay while pending was not the Bible part only (the verse card is on Today)');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'replay while pending spent the Community part');
+  // removed: this phone once saw itself admitted, and the church now says pending (app.jsx: removed)
+  const r = bootApp();
+  r.store.setItem('trinityone.tour.bible', '1');
+  r.endSplash();
+  r.el(r.show().tree, r.mod.TabBar).props.onChange('chat');
+  r.ctxOf(r.show().tree).followChurch(NPUB);
+  await settle();
+  r.store.setItem('trinityone.wasadmitted.' + NPUB, JSON.stringify('1'));   // as App's lsSet writes it
+  r.join(PENDING);
+  assert.match(r.screens([ADULT_ROOM]).said, /no longer in this church/, 'premise: ChatScreen is not showing the removed state');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(r.show(), r), null, 'the Community part showed to someone removed from the church');
+  assert.equal(r.store.getItem('trinityone.tour.community'), null);
 });
 
 test('an upgrading member (set up on an earlier version, already in a church) gets no tour, and no Community part on a later join', async () => {
   const h = bootApp({ church: true });
   h.endSplash();
   for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the tour started on boot for an existing member');
+  h.join(ADMITTED);                                    // their church answers: they are in
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.screens([ADULT_ROOM]);
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'admission ran the Community part for an existing member');
   assert.equal(h.store.getItem('trinityone.tour.community'), '1', 'an existing member was not recorded as having joined before');
   assert.equal(h.mod.memberTourJoined(), false);
   h.ctxOf(h.show().tree).followChurch(NPUB2);
@@ -215,6 +363,7 @@ test('landing on Community in a church: Community part first, then the Bible par
   h.endSplash();
   let f = h.show();
   h.el(f.tree, h.mod.TabBar).props.onChange('chat');   // the person taps Community
+  h.join(ADMITTED);                                      // their church has them on its admitted list
   f = h.show();
   assert.equal(h.el(f.tree, h.mod.TabBar).props.active, 'chat');
   h.ctxOf(f.tree).replayTour();                          // Help → Take the tour again
@@ -453,9 +602,15 @@ test('with every reader tip seen, an open sheet no longer makes the host look ag
   assert.equal(polls(), 0, 'the host kept re-rendering every 700ms with nothing left to show');
 });
 
-function chatScreen(React, draw, { rooms = [], isMinor = false } = {}) {
+// groups (optional): { rooms } — the subscription answers with groups.rooms when it is not null, and
+// groups.deliver(rooms) answers it later, as the relay does. The returned draw takes a ctx (App's own) or uses its
+// stand-in.
+function chatScreen(React, draw, { rooms = [], isMinor = false, groups = null } = {}) {
+  const g = groups || { rooms };
+  let roomsCb = null;
+  g.deliver = (r) => { g.rooms = r; if (roomsCb) roomsCb(r); };
   const win = {
-    Fellowship: { myPubkey: 'mehex', relays: [], subscribeChurchGroups: (_np, cb) => { cb(rooms); return () => {}; }, subscribeChurchCategories: (_np, cb) => { cb([]); return () => {}; },
+    Fellowship: { myPubkey: 'mehex', relays: [], subscribeChurchGroups: (_np, cb) => { roomsCb = cb; if (g.rooms) cb(g.rooms); return () => {}; }, subscribeChurchCategories: (_np, cb) => { cb([]); return () => {}; },
       subscribeGroups: () => () => {}, displayFor: () => ({ handle: 'sam', color: '#888' }), assumeMinor: async () => isMinor },
     TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
     TrinityIdentity: { current: { handle: 'me', color: '#123456' } },
@@ -474,7 +629,7 @@ function chatScreen(React, draw, { rooms = [], isMinor = false } = {}) {
     joinState: { loaded: true, isPending: false, removed: false, offline: false, unknown: false },
     myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor, clearanceKnown: true },
     openPeople: () => {}, openDM: () => {}, openDMInbox: () => {}, openGroup: () => {} };
-  return () => draw(mod.ChatScreen, { ctx });
+  return (appCtx) => draw(mod.ChatScreen, { ctx: appCtx || ctx });
 }
 const ADULT_ROOM = { id: 'g1', name: 'Whole Church', kind: 'group', visibility: 'open', childsafe: false };
 const KIDS_ROOM = { id: 'g2', name: 'Youth', kind: 'group', visibility: 'open', childsafe: true };
@@ -492,8 +647,8 @@ function groupsStepOver(rooms, isMinor) {
   screens = [tree];
   const anchor = find(tree, n => n.props && n.props['data-tour'] === 'groups')[0];
   M.memberTourStart('replay');
-  draw(M.MemberTourHost, { page: 'chat', inChurch: true });
-  const host = draw(M.MemberTourHost, { page: 'chat', inChurch: true });
+  draw(M.MemberTourHost, { page: 'chat', inChurch: true, admitted: true });
+  const host = draw(M.MemberTourHost, { page: 'chat', inChurch: true, admitted: true });
   const b = drawnBubble(host, 'bubble');
   return { anchor, title: b && titleOf(b), text: b && texts(find(b, n => n.type === 'p')[0].kids || []).join(''), shown: texts(tree).join(' | ') };
 }

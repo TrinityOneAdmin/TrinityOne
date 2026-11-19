@@ -15,6 +15,14 @@
 // follows a church when the app starts has Community marked as seen (the host's boot effect) — so nobody
 // upgrading is ambushed. Help → "Take the tour again" (app/screens-help-main.jsx → ctx.replayTour) replays it.
 //
+// THE COMMUNITY PART WAITS UNTIL THE CHURCH HAS LET THE PERSON IN (owner, 2026-11-19; audit M1). Joining only
+// records that it is wanted (the `community.wait` flag); App says when the person is admitted (`admitted`: their
+// key is on the church's admitted list, or the church's trusted policy needs no approval) and the host queues it
+// then. An automatic Community start also waits until the person is ON the Community page (plan §12.1), so the
+// Groups step has its list to point at. Nothing is spent while waiting: "seen" is written only when it starts.
+// Someone still waiting for approval when the app starts (`pendingAtBoot`, App's cached join answer) is not an
+// upgrading member, so the boot rule leaves their Community part to come.
+//
 // WHERE IT RUNS. Wherever the person is when it can start: it never changes the tab. A step whose anchor is not
 // on screen is skipped (the verse card is on Today, the groups list on Community); the tab bar is always there.
 // Landing on Community in a church runs the Community part first, then the Bible part.
@@ -38,9 +46,10 @@
 // Top-level names DECLARED here — unique across the member app's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): MEMBER_TOUR_BIBLE, MEMBER_TOUR_COMMUNITY,
 // MEMBER_TOUR_GROUPS, MEMBER_TOUR_TIPS, memberTourStore, memberTourKey, memberTourSeen, memberTourSeenSet,
-// memberTourStart, memberTourJoined, memberTourReader, memberTourPlan, memberTourGroupsText, memberTourGroupFacts,
-// memberTourPing, memberTourNextTip, memberTourHasAudio, memberTourBlocked, useMemberTourLayer, memberTourPrimary,
-// MemberTourBubble, MemberTourHost.
+// memberTourWaiting, memberTourWaitSet, memberTourStart, memberTourJoined, memberTourReader, memberTourPlan,
+// memberTourGroupsText, memberTourGroupFacts, memberTourPing, memberTourNextTip, memberTourHasAudio,
+// memberTourBlocked, useMemberTourLayer, memberTourPrimary, MemberTourBubble, MemberTourHost.
+// (member-tour.jsx is loaded by index.html only; steward.html does not load it.)
 
 // ── the words (approved by the owner, 2026-11-18 — MEMBER-WALKTHROUGH-COPY-2026-11-18.html) ─────────────────
 // Three sentences of the approved draft are NOT here because they are not true of the app today (rule: never
@@ -63,7 +72,7 @@ const MEMBER_TOUR_BIBLE = [
 ];
 const MEMBER_TOUR_COMMUNITY = [
   { id: 'community', title: 'Community', targets: ['tab-chat'],
-    text: 'Your church is here: announcements, events, and the groups and teams you’re in.' },
+    text: 'Your church is here: announcements, events, groups and teams.' },   // owner, 2026-11-19
   { id: 'groups', title: 'Groups and teams', targets: ['groups'] },   // text: memberTourGroupsText
   { id: 'happening', title: 'What’s happening', targets: ['happening'],
     text: 'What’s on at your church this week shows up here on Today too.' },
@@ -89,6 +98,10 @@ function memberTourKey(what) { return 'trinityone.tour.' + what; }
 function memberTourSeen(what) { return tourKitFlag(memberTourKey(what)); }
 function memberTourSeenSet(what) { tourKitFlagSet(memberTourKey(what)); }
 function memberTourPing() { try { window.dispatchEvent(new Event('member-tour')); } catch (e) {} }
+// The Community part is wanted and has not run: set on joining, read by the host on admission. Never cleared —
+// every reader also asks memberTourSeen('community'). No identifier in the key, so the PIN-lock wipe leaves it.
+function memberTourWaiting() { return tourKitFlag(memberTourKey('community.wait')); }
+function memberTourWaitSet() { tourKitFlagSet(memberTourKey('community.wait')); }
 
 // Ask for the tour. 'onboarding' and 'invite' are first-run starts and happen once per device; 'replay' (Help)
 // always starts it. Returns whether a start was queued.
@@ -101,11 +114,11 @@ function memberTourStart(reason) {
   memberTourPing();
   return true;
 }
-// The person has just joined a church (App → followChurch). The Community part, once per device.
+// The person has just joined a church (App → followChurch). The Community part, once per device — queued by the
+// host when the church lets them in, not now. Returns whether it is (still) to come.
 function memberTourJoined() {
   if (memberTourSeen('community')) return false;
-  const p = memberTourStore.pending || {};
-  memberTourStore.pending = { ...p, community: true };
+  memberTourWaitSet();
   memberTourPing();
   return true;
 }
@@ -205,16 +218,22 @@ function MemberTourBubble(props) {
 }
 
 // ── the host ────────────────────────────────────────────────────────────────────────────────────────────────
-// Mounted once by App. page: the open tab. inChurch: following a real church. hold: App's own reasons to wait
-// (splash, setup screen, PIN gate, the follow-a-church sheet). It is never handed a way to change the tab.
-function MemberTourHost({ page, inChurch, hold }) {
+// Mounted once by App. page: the open tab. inChurch: following a real church. admitted: the church has let this
+// person in (App's tourAdmitted). pendingAtBoot: App's cached join answer said "waiting for approval" when the
+// app started. hold: App's own reasons to wait (splash, setup screen, PIN gate, the follow-a-church sheet). It is
+// never handed a way to change the tab.
+function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
   const [, force] = React.useState(0);
   const [run, setRun] = React.useState(null);   // { plan, i } while the tour is showing
   const [tip, setTip] = React.useState(null);   // the reader tip on screen
   React.useEffect(() => {
     // Boot: someone who already follows a church when the app starts has joined before — the Community part is
-    // for the first join, so an upgrading member is not shown it.
-    if (inChurch && !memberTourStore.pending) memberTourSeenSet('community');
+    // for the first join, so an upgrading member is not shown it. Unless they are still waiting to be let in (or
+    // their join is already waiting for that): then it is still to come.
+    if (inChurch && !memberTourStore.pending) {
+      if (pendingAtBoot) memberTourWaitSet();
+      else if (!memberTourWaiting()) memberTourSeenSet('community');
+    }
     const f = () => force(x => x + 1);
     try { window.addEventListener('member-tour', f); } catch (e) {}
     return () => { try { window.removeEventListener('member-tour', f); } catch (e) {} };
@@ -222,15 +241,21 @@ function MemberTourHost({ page, inChurch, hold }) {
   // While the tour runs, anything that comes up over it (the PIN idle-lock, a sheet, an aria-modal dialog) hides
   // the bubble; the run and its step are kept, and it comes back at the same step once that has gone.
   const blocked = !!hold || memberTourBlocked();
-  const pending = memberTourStore.pending;
   const present = (t) => !!tourKitFind(t);
   const wantTip = () => memberTourStore.reader && memberTourNextTip({ seen: memberTourSeen, present, audio: memberTourHasAudio() });
   // Is any reader tip still unseen, whatever is on screen? When none is, there is nothing to wait for.
   const tipsLeft = () => memberTourStore.reader && !!memberTourNextTip({ seen: memberTourSeen, present: () => true, audio: memberTourHasAudio() });
+  // Let in, on the Community page, and the Community part still to come: ask for it now (M1).
+  if (admitted && page === 'chat' && memberTourWaiting() && !memberTourSeen('community') && !(memberTourStore.pending && memberTourStore.pending.community)) {
+    memberTourStore.pending = { ...(memberTourStore.pending || {}), community: true, at: Date.now() };
+  }
+  const pending = memberTourStore.pending;
   React.useEffect(() => {
     if (pending && !run && !blocked) {
       memberTourStore.pending = null;
-      const parts = { bible: !!pending.bible, community: !!pending.community && !!inChurch && (pending.replay || !memberTourSeen('community')) };
+      // Community only for someone the church has let in; an automatic start only on the Community page. Left
+      // out here, nothing is spent: the wait flag asks again on the next admission / visit.
+      const parts = { bible: !!pending.bible, community: !!pending.community && !!admitted && (pending.replay || (!memberTourSeen('community') && page === 'chat')) };
       if (!pending.replay && memberTourSeen('bible')) parts.bible = false;
       if (parts.bible) memberTourSeenSet('bible');
       if (parts.community) memberTourSeenSet('community');
