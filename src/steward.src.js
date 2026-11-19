@@ -8143,7 +8143,19 @@ async function _carryOverStewardDocs(pk, opts) {
   try { const ct = window.StewardMeals && window.StewardMeals.careTeamId ? window.StewardMeals.careTeamId() : ''; if (ct) careIds.add(String(ct)); } catch (e) {}
   const noteCareIds = (content) => { try { const g = JSON.parse(content || ''); if (g && typeof g.adminGroupId === 'string' && g.adminGroupId) careIds.add(g.adminGroupId); } catch (e) {} };
   let churchMeals = null;   // the newest church-signed meals-settings copy seen: { at, adminGroupId }
-  const careDoc = (d) => d.startsWith('trinityone/careteam:') || (d.startsWith('trinityone/roster:') && (!careIds.size || careIds.has(d.slice('trinityone/roster:'.length))));
+  // AN EMPTY careIds IS TWO DIFFERENT THINGS (audit of 1fc01a16, HIGH): the church has NO care team (the settings read has
+  // answered — StewardMeals.careTeamKnown — or a meals-settings copy was seen), so every other team list is an ordinary
+  // one and IS carried; or this console has not read the settings yet, so any team list might be the care team's and none
+  // is carried (conservative, and said as exactly that).
+  let sawMeals = false;
+  const careKnown = () => { if (sawMeals) return true; try { return !!(window.StewardMeals && window.StewardMeals.careTeamKnown && window.StewardMeals.careTeamKnown()); } catch (e) { return false; } };
+  // 'care' (the care team's own list or careteam:), 'unknown' (a team list while the care team is not known), or ''
+  const careDoc = (d) => {
+    if (d.startsWith('trinityone/careteam:')) return 'care';
+    if (!d.startsWith('trinityone/roster:')) return '';
+    if (careIds.has(d.slice('trinityone/roster:'.length))) return 'care';
+    return (!careIds.size && !careKnown()) ? 'unknown' : '';
+  };
   // their newest copy of each carryable address of THIS church (feChurch stamps ['church', <cp>] on every steward write)
   const mine = new Map();
   const keepMine = (e) => {
@@ -8178,7 +8190,7 @@ async function _carryOverStewardDocs(pk, opts) {
   // PHASE B, per slice of 60 — every copy at those addresses, any author, no trust predicate — then the rule, then the
   // publish, so the check is as close to the write as it can be.
   const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));   // meals-settings first — see careIds
-  if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
+  if (mine.has(MEALS_D_)) { sawMeals = true; noteCareIds(mine.get(MEALS_D_).content); }
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
     if (left() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
@@ -8189,6 +8201,7 @@ async function _carryOverStewardDocs(pk, opts) {
       const d = dOf(e);
       if (!e || e.kind !== 30078 || slice.indexOf(d) === -1) continue;
       if (d === MEALS_D_ && (chOf(e) ? chOf(e) === pub : e.pubkey === pub)) {   // this church's copy, by anyone
+        sawMeals = true;
         if (!heldCare) noteCareIds(e.content);
         // the church's NEWEST copy decides; a withdrawn (or unreadable) one means the church has no setting to put back
         if (e.pubkey === pub && (!churchMeals || (e.created_at || 0) > churchMeals.at)) {
@@ -8215,13 +8228,24 @@ async function _carryOverStewardDocs(pk, opts) {
         else notC(d, rivals.some(x => x.at === (S.created_at || 0)) ? 'tie' : 'newer', label);
         continue;
       }
-      if (!heldCare && careDoc(d)) { notC(d, 'no-care', 'the care team list (they no longer had the Care permission)'); continue; }
-      let from = S;
+      const cd = heldCare ? '' : careDoc(d);
+      if (cd === 'care') { notC(d, 'no-care', 'the care team list (they no longer had the Care permission)'); continue; }
+      if (cd === 'unknown') { notC(d, 'no-care', 'a team list (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
+      let from = S, teamGone = false;
       if (!heldCare && d === MEALS_D_) {
         if (!churchMeals || churchMeals.adminGroupId == null) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission)'); continue; }
+        // THEIR WITHDRAWN SETTING (tombstone / empty) is not carried, and listed as no-care (audit of 1fc01a16, LOW 6): a
+        // church copy of the withdrawal would withdraw the church's own setting too — and with it the church's care team
+        // choice, which answer (m) says a helper without Care does not decide. There is no pointer in it to put back (q).
+        if (!S.content || (S.tags || []).some(t => t[0] === 'deleted')) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission)'); continue; }
         let g = null; try { g = JSON.parse(S.content || ''); } catch (e) {}
         if (!g || typeof g !== 'object') { notC(d, 'unreadable', label); continue; }
         from = { ...S, content: JSON.stringify({ ...g, adminGroupId: churchMeals.adminGroupId }) };
+        // OWNER ANSWER (t): the church's own choice names no team, or a team this console's FRESH group list no longer has —
+        // said with the carry. List not loaded: nothing said (never a guess).
+        const aid = churchMeals.adminGroupId;
+        let gl = null; try { gl = (_lastGroups.cp === pub && _listIsFresh(_lastGroups.list)) ? _lastGroups.list : null; } catch (e) { gl = null; }
+        teamGone = !aid || (!!gl && !gl.some(x => x && x.id === aid));
       }
       jobs.push((async () => {
         let tmpl = null;
@@ -8247,7 +8271,10 @@ async function _carryOverStewardDocs(pk, opts) {
           ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
           if (tm) clearTimeout(tm);
         } catch (e) { ok = false; }
-        if (ok && ok !== 'time') out.carried.push({ d, label, ev: signedEv }); else notC(d, ok === 'time' ? 'time' : 'refused', label);
+        if (ok && ok !== 'time') {
+          out.carried.push({ d, label, ev: signedEv });
+          if (teamGone) (out.notes = out.notes || []).push('Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team.');
+        } else notC(d, ok === 'time' ? 'time' : 'refused', label);
       })());
     }
     await Promise.all(jobs);
@@ -8357,7 +8384,7 @@ function _dropJustRemoved(list, rosterAt) {
 //      put ON the roster (the roster document's own record, read before the write).
 //   · OK LOST IS NOT "REFUSED": a falsy `wrote` is checked against what the relays hold (stewardRemovalOutcome) —
 //     'landed' | 'not-landed' | 'unknown'. Not for capsOnly: they stay on the roster, there is nothing to look for.
-//   · a write that answered: the engine's own roster and permissions follow it at once, the removal is remembered
+//   · a write that landed (answered, or confirmed by the re-read): the engine's own roster and permissions follow it at once, the removal is remembered
 //     (_rememberExStewards) and a stale copy of the old roster cannot put them back before the echo (_justRemoved);
 //   · a removal that LANDED (not capsOnly): their console is told (publishStewardRevoke — the one document a removed
 //     helper can still read) and their old request to help is recorded as answered at `since`, through the engine
@@ -8370,7 +8397,9 @@ async function _settleStewardRemoval(who, o) {
     try { outcome = (window.Steward && window.Steward.stewardRemovalOutcome) ? await window.Steward.stewardRemovalOutcome(who) : 'unknown'; }
     catch (e) { outcome = 'unknown'; }
   }
-  if (o.wrote) {
+  // the engine's maps follow a write that LANDED — acknowledged, or confirmed by the re-read when the OK was lost (audit of
+  // 1fc01a16, LOW 4: they were left stale until the relay's echo)
+  if (outcome === 'landed') {
     const at = (o.wrote && typeof o.wrote === 'object' && Number(o.wrote.created_at)) || now();
     const kept = {};
     for (const p of o.next) if (Array.isArray(o.caps[p])) kept[p] = o.caps[p].filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());

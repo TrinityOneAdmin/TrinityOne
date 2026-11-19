@@ -9161,10 +9161,14 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         if (ok == null) { setBlockWarn('Couldn’t block ' + who + ' — this console isn’t signed in to your church, so nothing was changed. Try again.'); return; }
         // OFF THE HELPER LIST (owner answer l): the engine took them off after the block. If that write did not land, or the
         // roster had not been read yet, they are blocked but still listed — said, with what to do.
-        const stillListed = !!given && (given.onRoster ? given.outcome !== 'landed' : (!!given.rosterUnknown && onRosterHere));
+        // A LOST OK IS NOT "STILL LISTED" (audit of 1fc01a16, MED): 'unknown' means the relays could not say, so it is said
+        // as exactly that; 'not-landed', or a roster write never made (roster unread), is "still listed".
+        const rosterLine = !given ? ''
+          : given.onRoster ? (given.outcome === 'landed' ? '' : given.outcome === 'unknown' ? 'Couldn’t confirm they were taken off the helper list — check Helpers.' : 'Blocked, but still listed as a helper — remove them from Helpers.')
+          : (given.rosterUnknown && onRosterHere ? 'Blocked, but still listed as a helper — remove them from Helpers.' : '');
         const saveNote = [ok === false
           ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
-          : '', stillListed ? 'Blocked, but still listed as a helper — remove them from Helpers.' : ''].filter(Boolean).join(' ');
+          : '', rosterLine].filter(Boolean).join(' ');
         if (saveNote) setBlockWarn(saveNote);
         // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
         // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
@@ -11331,14 +11335,21 @@ function useHelperRequests() {
 // lands, those documents are hidden even from the church (owner answer b).
 // Callers: DashStewardsPanel.remove and .setCaps, DashMembers.block, ReseatModal. A list of what was NOT kept is shown
 // whatever happened to the removal or the block itself (owner answer a; sim F2) — the carry already ran.
+// `carry.notes` (owner answer t, 2026-11-19): something that WAS kept but needs the owner — said after the rest, and the
+// line then stays until dismissed, like a not-kept list.
 function stewCarryNote(carry) {
   if (!carry || carry.refused) return null;
   const n = Array.isArray(carry.carried) ? carry.carried.length : 0;
   const lost = [...new Set((Array.isArray(carry.notCarried) ? carry.notCarried : []).map(x => x && x.label).filter(Boolean))];
-  if (!lost.length) return n > 0 ? { tone: 'ok', text: 'Everything they set up stays as they left it, now saved under the church.' } : null;
+  const notes = [...new Set((Array.isArray(carry.notes) ? carry.notes : []).filter(x => typeof x === 'string' && x))];
+  const tail = notes.length ? ' ' + notes.join(' ') : '';
+  if (!lost.length) {
+    if (notes.length) return { tone: 'fail', text: (n > 0 ? 'Everything they set up stays as they left it, now saved under the church.' : '').concat(tail).trim() };
+    return n > 0 ? { tone: 'ok', text: 'Everything they set up stays as they left it, now saved under the church.' } : null;
+  }
   const shown = lost.slice(0, 6), more = lost.length - shown.length;
   return { tone: 'fail', text: (n > 0 ? 'The rest of what they set up stays as they left it, now saved under the church. ' : '')
-    + 'These couldn’t be kept and may change back: ' + shown.join(', ') + (more > 0 ? ' and ' + more + ' more' : '') + '.' };
+    + 'These couldn’t be kept and may change back: ' + shown.join(', ') + (more > 0 ? ' and ' + more + ' more' : '') + '.' + tail };
 }
 function DashStewardsPanel({ church }) {
   // OWNER-ONLY, AND SAID SO RATHER THAN DISCOVERED. Only the church key may edit this roster — the relay

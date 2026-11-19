@@ -94,6 +94,42 @@ test('F2 — CONTROL: a block that saved with everything kept says so; a partial
   assert.doesNotMatch(await blockBram(blockRig({ carry: allKept(), blocked: false })), ALL_KEPT, 'a partial block claimed everything was kept (audit 2026-11-18, LOW 4)');
 });
 
+// ══ AUDIT OF 1fc01a16: what Block says about the helper list (owner answer l) ═══════════════════════════════════════
+const STILL = /Blocked, but still listed as a helper — remove them from Helpers\./;
+const UNCONFIRMED = /Couldn’t confirm they were taken off the helper list — check Helpers\./;
+test('MED 2 — Block: the helper-list write did NOT land → "still listed as a helper"', async () => {
+  const said = await blockBram(blockRig({ carry: allKept(), blocked: true, rosterWrote: false, outcome: 'not-landed' }));
+  assert.match(said, STILL, said.slice(0, 500));
+  assert.doesNotMatch(said, UNCONFIRMED);
+});
+test('MED 2 — Block: the helper list was not read yet (no write made) → "still listed as a helper"', async () => {
+  const said = await blockBram(blockRig({ carry: allKept(), blocked: true, rosterUnknown: true }));
+  assert.match(said, STILL, said.slice(0, 500));
+});
+test('MED 3 — Block: the helper-list write’s OK was lost and the re-read could not tell → "couldn’t confirm", never "still listed"', async () => {
+  const said = await blockBram(blockRig({ carry: allKept(), blocked: true, rosterWrote: false, outcome: 'unknown' }));
+  assert.match(said, UNCONFIRMED, said.slice(0, 500));
+  assert.doesNotMatch(said, STILL, 'a lost OK was reported as a write that did not land');
+});
+test('MED 2/3 — CONTROLS: landed (acknowledged, or confirmed by the re-read) → neither line; a FORMER helper → neither', async () => {
+  for (const o of [{ rosterWrote: true, outcome: 'landed' }, { rosterWrote: false, outcome: 'landed' }]) {
+    const said = await blockBram(blockRig({ carry: allKept(), blocked: true, ...o }));
+    assert.doesNotMatch(said, STILL); assert.doesNotMatch(said, UNCONFIRMED);
+  }
+  const r = blockRig({ carry: allKept(), blocked: true, rosterUnknown: true, stewards: [] });
+  r.g.window.Steward.isOrWasSteward = (pk) => pk === BRAM;   // removed earlier: not on the roster this screen holds
+  const said = await blockBram(r);
+  assert.doesNotMatch(said, STILL, 'a former helper was said to be still listed');
+});
+
+// ══ OWNER ANSWER (t): a kept care setting that names a team that no longer exists is said ════════════════════════════
+test('answer (t) — Revoke: the carry note says the kept care setting names a care team that no longer exists, and it stays', async () => {
+  const note = 'Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team.';
+  const r = panelRig(() => ({ wrote: true, carry: { ...allKept(), notes: [note] }, next: [OTHER_STEW], refused: '', outcome: 'landed' }));
+  const said = await revoke(r);
+  assert.ok(said.includes('Tom Ridley: Everything they set up stays as they left it, now saved under the church. ' + note), said.slice(0, 600));
+});
+
 // ══ F2 — Revoke and untick-all ═══════════════════════════════════════════════════════════════════════════════════════
 // removeStewardKeeping answers { wrote, carry, next, refused, outcome }; `outcome` is the engine's own landed check
 // (plan 0b R-M4, after the fix) and window.Steward.stewardRemovalOutcome answers the same for the pre-fix screen.

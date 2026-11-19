@@ -101,6 +101,9 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     _skewGate: (fn) => Promise.resolve(fn()), ensureSkew: () => null, SKEW_WAIT_MS: 6000,
     _stewardCaps: {}, _stewardNames: {}, _stewardSince: {}, _stewardNamesCt: null, _sealChurchDoc: () => null,
     _careRoster: new Set(), _careRosterKnown: true, _rosterTurn: Promise.resolve(), _justRemoved: new Map(),
+    // the console's group list as subscribeGroups last emitted it, and whether that list is a genuine read (2026-11-19: the
+    // carry asks it whether the church's care team still exists). Not loaded unless a test says so.
+    _lastGroups: { cp: '', list: null }, _listIsFresh: (l) => !!(l && l._fresh),
     _reCheckCareKeyPending: () => {}, _webQueueSync: () => {},
     _exStewards: new Set(), _exStewardSet: () => scope._exStewards,
     _exRemembered: [], _rememberExStewards: (before, after, at) => { scope._exRemembered.push({ before: [...before], after: [...after], at }); },

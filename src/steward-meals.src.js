@@ -155,6 +155,10 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   const DEFAULTS = { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
   // THE CARE TEAM AS LAST READ, for publishCareTeam's locked-roster refusal when a caller does not name it.
   let _careTeamSeen = '';
+  // …AND FOR WHICH CHURCH IT HAS BEEN READ AT ALL (2026-11-19). '' from careTeamId() means "no care team" only once the
+  // settings read has answered; before that it means "not known yet". Steward's carry-over (_carryOverStewardDocs) tells
+  // the two apart: it must not treat every team list as the care team's when the church simply has none.
+  let _careTeamReadFor = '';
 
   function subscribeSettings(cb) {
     if (!S() || !S().subscribeMany || !activeChurch()) { cb({ ...DEFAULTS }); return () => {}; }
@@ -179,10 +183,11 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
               adminGroupId: String(doc.adminGroupId || ''),
             };
             _careTeamSeen = seen.doc.adminGroupId;
+            _careTeamReadFor = cp;
             emit();
           } catch (err) {}
         },
-        oneose() { emit(); },
+        oneose() { _careTeamReadFor = cp; emit(); },
       }
     );
     return () => { try { sub.close(); } catch (e) {} };
@@ -785,6 +790,8 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // so its refusal to delete the care team does not depend on a caller passing the id in (owner,
     // 2026-10-13, "CARE TEAM CANNOT BE DELETED"). '' until subscribeSettings has had an answer.
     careTeamId: () => _careTeamSeen,
+    // has the settings read for the church this console is on answered yet? (see _careTeamReadFor)
+    careTeamKnown: () => !!_careTeamReadFor && _careTeamReadFor === activeChurch(),
     // care-team recipient roster (for the "ask for help" seal)
     publishCareTeam, refreshCareTeam, dropPendingCareTeam,
     // "ask for help" requests (console side): triage / approve / decline / thread

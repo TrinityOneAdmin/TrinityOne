@@ -276,6 +276,129 @@ test('F3 — CONTROL: a helper who HELD Care keeps both the care team’s roster
   assert.equal(JSON.parse(churchSent(eng, C, MEALS_D)[0].content).adminGroupId, kimTeam, 'a helper who held Care had her care team pointer changed');
 });
 
+// ══ AUDIT OF 1fc01a16 (2026-11-19): the care guard, settled ═══════════════════════════════════════════════════════════
+// HIGH 1 — an empty care team list is two things: the church has NO care team (settings read: every other team list is an
+// ordinary one and IS carried), or the console has not read the settings yet (conservative, and said as exactly that).
+async function scopedHelperCase({ known }) {
+  const C = await churchOn(1, 'f3-none');
+  const eng = owner(C);
+  eng.window.StewardMeals = { careTeamId: () => '', careTeamKnown: () => known };
+  const sam = await newSteward(C);
+  await setRoster(eng, [sam.pub], { [sam.pub]: ['content', 'members'] });   // never held Care
+  const worship = C.cp.slice(0, 16) + '-worship';
+  await mustPut(C, raw(C, sam, ROSTER_D + worship, { pubs: [H.key().pub] }));
+  const r = await eng._removeStewardKeeping(sam.pub);
+  assert.ok(r.wrote, 'the removal did not land');
+  return { C, eng, r, d: ROSTER_D + worship };
+}
+test('HIGH 1 — a church with NO care team: a helper who never had Care keeps their worship team list (as on b98fc937)', async () => {
+  const { C, eng, r, d } = await scopedHelperCase({ known: true });
+  assert.equal(churchSent(eng, C, d).length, 1, 'AN ORDINARY TEAM LIST WAS TREATED AS THE CARE TEAM’S: ' + JSON.stringify(r.carry.notCarried));
+  assert.equal(why(r, d).length, 0);
+});
+test('HIGH 1 — the care team NOT READ YET: the team list is not carried, and is listed as exactly that', async () => {
+  const { C, eng, r, d } = await scopedHelperCase({ known: false });
+  assert.equal(churchSent(eng, C, d).length, 0, 'carried although which team is the care team was not known');
+  assert.deepEqual(why(r, d).map(n => n.why), ['no-care']);
+  assert.match(why(r, d)[0].label, /^a team list \(they no longer had the Care permission, and this console had not yet read which team is the care team\)$/);
+  assert.doesNotMatch(why(r, d)[0].label, /the care team list/, 'an ordinary team list was called "the care team list"');
+});
+
+// LOW 5 — meals-settings is decided FIRST. More than one slice (60) of her documents: she points Care at her own team in
+// meals-settings (her OLDEST document) and writes that team's roster (her NEWEST); the relay answers newest first, so
+// without the ordering the roster is decided in slice 1, before slice 2 shows which team is the care team.
+test('LOW 5 — over 60 documents: the roster of the team she pointed Care at is still not carried (meals-settings is read first)', async () => {
+  const C = await churchOn(1, 'f3-slices');
+  const eng = owner(C);
+  const careId = C.cp.slice(0, 16) + '-care', kimTeam = C.cp.slice(0, 16) + '-kimteam';
+  eng.window.StewardMeals = { careTeamId: () => careId, careTeamKnown: () => true };
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
+  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: careId }, { tagChurch: false }));
+  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: kimTeam }));
+  for (let i = 0; i < 61; i++) await mustPut(C, raw(C, kim, GROUP_D + C.cp.slice(0, 16) + '-g' + i, { name: 'Group ' + i }));
+  await mustPut(C, raw(C, kim, ROSTER_D + kimTeam, { pubs: [H.key().pub] }));
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
+  const r = await eng._removeStewardKeeping(kim.pub);
+  assert.ok(r.wrote);
+  assert.equal(r.carry.carried.filter(c => c.d.startsWith(GROUP_D)).length, 61, 'FIXTURE: not every group was carried: ' + JSON.stringify(r.carry.notCarried));
+  assert.equal(churchSent(eng, C, ROSTER_D + kimTeam).length, 0, 'THE ROSTER WAS DECIDED BEFORE meals-settings SHOWED IT IS THE CARE TEAM');
+  assert.deepEqual(why(r, ROSTER_D + kimTeam).map(n => n.why), ['no-care']);
+});
+
+// LOW 6 — her WITHDRAWN meals-settings (no Care): not carried, listed as no-care. Carrying it would withdraw the church's own
+// setting, and with it the church's care team choice — which answer (m) says a helper without Care does not decide.
+test('LOW 6 — lost Care, her meals/care setting withdrawn: not carried, listed as no-care, the church’s own setting stands', async () => {
+  const C = await churchOn(1, 'f3-tomb');
+  const [X] = C.relays;
+  const eng = owner(C);
+  const careId = C.cp.slice(0, 16) + '-care';
+  eng.window.StewardMeals = { careTeamId: () => careId, careTeamKnown: () => true };
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
+  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: careId }, { tagChurch: false }));
+  await mustPut(C, raw(C, kim, MEALS_D, '', { tags: [['deleted', '1']] }));
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
+  const r = await eng._removeStewardKeeping(kim.pub);
+  assert.ok(r.wrote);
+  assert.equal(churchSent(eng, C, MEALS_D).length, 0, 'her withdrawal was re-issued under the church');
+  assert.deepEqual(why(r, MEALS_D).map(n => n.why), ['no-care'], 'listed for the wrong reason: ' + JSON.stringify(r.carry.notCarried));
+  assert.equal(JSON.parse((await churchCopy(C, MEALS_D, X)).content).adminGroupId, careId, 'the church’s own setting was withdrawn');
+});
+
+// OWNER ANSWER (t), second case — the church's own care team choice, put back, names a team that no longer exists
+async function teamGoneCase({ churchAid, groups }) {
+  const C = await churchOn(1, 'f3-gone');
+  const eng = owner(C);
+  eng.window.StewardMeals = { careTeamId: () => churchAid, careTeamKnown: () => true };
+  if (groups) eng._lastGroups = { cp: C.cp, list: Object.assign(groups.map(id => ({ id, name: id })), { _fresh: true }) };
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
+  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: churchAid }, { tagChurch: false }));
+  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: C.cp.slice(0, 16) + '-hers' }));
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
+  const r = await eng._removeStewardKeeping(kim.pub);
+  assert.ok(r.wrote && churchSent(eng, C, MEALS_D).length === 1, 'FIXTURE: the setting was not carried: ' + JSON.stringify(r.carry));
+  return r.carry.notes || [];
+}
+const GONE = /^Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team\.$/;
+test('answer (t) — the church’s care team is gone from the loaded group list: the carry says so', async () => {
+  const notes = await teamGoneCase({ churchAid: 'deleted-team', groups: ['other-team'] });
+  assert.equal(notes.length, 1, 'nothing says the kept setting names a team that no longer exists');
+  assert.match(notes[0], GONE);
+});
+test('answer (t) — the church’s choice names no team at all (\'\'): the carry says so', async () => {
+  const notes = await teamGoneCase({ churchAid: '', groups: null });
+  assert.equal(notes.length, 1); assert.match(notes[0], GONE);
+});
+test('answer (t) — CONTROLS: the team exists → nothing said; the group list not loaded → nothing said (never a guess)', async () => {
+  assert.deepEqual(await teamGoneCase({ churchAid: 'care-team', groups: ['care-team'] }), []);
+  assert.deepEqual(await teamGoneCase({ churchAid: 'care-team', groups: null }), []);
+});
+
+// LOW 4 — a lost OK that the re-read confirms LANDED: the engine's own roster follows it at once (not only on an
+// acknowledged write). _settleStewardRemoval lifted out of the bundle and run.
+test('LOW 4 — OK lost, re-read says landed: _careRoster, _stewardCaps, _justRemoved and the ex-helper record are updated', async () => {
+  const body = fnBody(STEWARD, 'async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval');
+  const A = 'a'.repeat(64), Bk = 'b'.repeat(64);
+  const remembered = [];
+  const scope = { now: () => 1_800_000_000, _careRoster: new Set([A, Bk]), _stewardCaps: { [A]: ['care'], [Bk]: ['content'] }, _justRemoved: new Map(),
+    _rememberExStewards: (before, after, at) => remembered.push({ before, after, at }),
+    window: { Steward: { stewardRemovalOutcome: async () => 'landed', publishStewardRevoke: () => Promise.resolve(true), markStewardRequestHandled: () => Promise.resolve(true) } } };
+  const settle = new Function('scope', 'with (scope) { ' + body + '\nreturn _settleStewardRemoval; }')(scope);
+  const out = await settle(A, { wrote: false, before: [A, Bk], next: [Bk], caps: { [Bk]: ['content'] }, capsOnly: false, since: 0 });
+  assert.equal(out, 'landed');
+  assert.deepEqual([...scope._careRoster], [Bk], 'the engine still holds them on the roster after a confirmed removal');
+  assert.deepEqual(scope._stewardCaps, { [Bk]: ['content'] });
+  assert.equal(scope._justRemoved.get(A), 1_800_000_000, 'a stale roster echo could put them back');
+  assert.equal(remembered.length, 1, 'the removal was not remembered (isOrWasSteward)');
+  // CONTROL: 'unknown' changes nothing
+  const scope2 = { ...scope, _careRoster: new Set([A, Bk]), _justRemoved: new Map(), window: { Steward: { ...scope.window.Steward, stewardRemovalOutcome: async () => 'unknown' } } };
+  const settle2 = new Function('scope', 'with (scope) { ' + body + '\nreturn _settleStewardRemoval; }')(scope2);
+  assert.equal(await settle2(A, { wrote: false, before: [A, Bk], next: [Bk], caps: {}, capsOnly: false, since: 0 }), 'unknown');
+  assert.deepEqual([...scope2._careRoster], [A, Bk]);
+});
+
 // ══ F4 — Reconnect of a FORMER helper (owner answer o) ══════════════════════════════════════════════════════════════
 // reseatMember lifted out of the bundle into the same scope as the engine (so its carry and swap are the shipped ones);
 // setBlocked publishes the church's blocklist; the rest of the re-seat's writes are recorded and answered yes (their own
