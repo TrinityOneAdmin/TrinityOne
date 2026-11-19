@@ -941,7 +941,7 @@ function PublishErrorBanner() {
     : { flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240,
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' };
   return (
-    <div style={wrapper}>
+    <div data-stew-overlay="banner" style={wrapper}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
       {/* ABOVE the generic slot: a church that is not where its steward believes it is outranks a write that
           failed once. Both stay until dismissed — this one because nothing clears it but acting on it. */}
@@ -977,7 +977,7 @@ function JoinNotifier() {
   }, []);
   if (!toast) return null;
   return (
-    <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 141, maxWidth: 520, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 15px', borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 42%, transparent)', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
+    <div data-stew-overlay="toast" style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 141, maxWidth: 520, width: 'calc(100% - 32px)', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 15px', borderRadius: 13, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 42%, transparent)', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
       <Icon name="users" size={17} color="var(--sage)" style={{ flexShrink: 0 }} />
       <div style={{ flex: 1, fontSize: 13, color: 'var(--ink)', lineHeight: 1.4, fontWeight: 700 }}>{toast}</div>
       {/* a11y: a 15px icon with no padding is a ~15px target and has no accessible name. Audit #27. */}
@@ -2039,7 +2039,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
             (stewOnSuite: loopback and no Capacitor) — the hosted console and the APK have no launcher. Setup is
             marked done FIRST, the way "Go to dashboard" does, so the launcher's own read of that marker shows
             its doors and never the first-run card again. */}
-        {stewOnSuite() ? <button onClick={() => { onDone(); location.href = '/relay-app/home.html'; }} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="grid2" size={15} color="currentColor" /> Back to the Suite</button> : null}
+        {stewOnSuite() ? <button onClick={() => { onDone({ defer: true }); location.href = '/relay-app/home.html'; }} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="grid2" size={15} color="currentColor" /> Back to the Suite</button> : null}
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (onTab) onTab('overview'); onDone(); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 22px' }}><Icon name="check" size={16} color="var(--on-clay)" /> Go to dashboard</button>
       </React.Fragment>}>
@@ -2049,7 +2049,8 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
           ['send', 'Post a note', 'Reach your whole church from “New post”.', () => { if (onDone) onDone(); if (onNewPost) onNewPost(); }],
           // NAMES A PAGE. It used to call onTab('settings') and land on whichever page Settings opened
           // first, which since 2026-09-09 is Church identity — not what these words promise.
-          ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onSettings) onSettings('relays'); else if (onTab) onTab('settings'); if (onDone) onDone(); }],
+          // The tour starts over the page this opens, not by sending them back to Overview (owner, 2026-11-19).
+          ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onSettings) onSettings('relays'); else if (onTab) onTab('settings'); if (onDone) onDone({ keepTab: true }); }],
         ].map(([ic, t, d, act]) => (
           <button key={t} onClick={act} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: 'var(--font-ui)' }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--clay-ink)' }}><Icon name={ic} size={17} color="currentColor" /></div>
@@ -2432,7 +2433,8 @@ function StewDashboard({ initial = 'overview' }) {
     if (!_delegate) return false;
     try { return !localStorage.getItem(_briefKey); } catch (e) { return false; }
   });
-  const closeBrief = () => { try { localStorage.setItem(_briefKey, '1'); } catch (e) {} setBrief(false); };
+  // …and then the console tour (app/stew-tour.jsx), which waits for this screen to close before it shows.
+  const closeBrief = () => { try { localStorage.setItem(_briefKey, '1'); } catch (e) {} setBrief(false); try { if (window.stewTourStart) window.stewTourStart('brief'); } catch (e) {} };
   const churchName = church.name || 'Your Church';
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
   // KEEP EACH CAPABILITY'S KEY IN STEP WITH THE ROSTER. Only the owner can mint or rotate one, and each must
@@ -2524,6 +2526,15 @@ function StewDashboard({ initial = 'overview' }) {
   // `wizard.done`, so they were already covered; this closes the case where a real church simply loads slowly.
   // The name check and the 1.8s wait are kept as belt-and-braces: never show it over a church that has a name.
   const [wizard, setWizard] = React.useState(false);
+  // FOR THE CONSOLE TOUR (app/stew-tour.jsx, audit L1): true only while the wizard MIGHT still open — the 1.8s
+  // before the decision below. The section tips wait for it, so a new owner's first sight is the wizard, not an
+  // Overview tip. It ends when the decision is made either way: a wizard abandoned after its name step (the name
+  // is published at step 1) is never opened again, and used to hold every tip back for ever on this device.
+  const [wizardDeciding, setWizardDeciding] = React.useState(() => {
+    try {
+      return localStorage.getItem('trinityone.steward.wizard.done') !== '1' && localStorage.getItem('trinityone.steward.newchurch') === '1' && !church.isNetwork;
+    } catch { return false; }
+  });
   const nameRef = React.useRef(church.name);
   nameRef.current = church.name;
   React.useEffect(() => {
@@ -2533,10 +2544,19 @@ function StewDashboard({ initial = 'overview' }) {
       isNew = localStorage.getItem('trinityone.steward.newchurch') === '1';
     } catch {}
     if (done || !isNew || church.isNetwork) return;
-    const t = setTimeout(() => { if (!nameRef.current) setWizard(true); }, 1800);
+    const t = setTimeout(() => { if (!nameRef.current) setWizard(true); setWizardDeciding(false); }, 1800);
     return () => clearTimeout(t);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); } catch {} setWizard(false); };
+  // The console tour (app/stew-tour.jsx) starts here, once — never for a church that passed the wizard earlier.
+  // opts from the wizard's exits (audit L2): { keepTab: true } — "Relays & settings", start the tour where they now
+  // are; { defer: true } — "Back to the Suite", the page is being left, so start it the next time the console
+  // opens. Read strictly (=== true): "Skip setup" hands this its click event.
+  const finishWizard = (opts) => {
+    const keepTab = !!(opts && opts.keepTab === true), defer = !!(opts && opts.defer === true);
+    try { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); } catch {}
+    setWizard(false);
+    try { if (window.stewTourStart) window.stewTourStart('wizard', { keepTab, defer }); } catch (e) {}
+  };
   // AUDIT-2026-07-28 F10 — SELF-HEAL. A church set up on a relay that already hosts a congregation had its
   // "people must be approved before they can join" write REFUSED (the relay does not accept documents from a
   // church it has not been told about), and the wizard swallowed it. Those churches are open-join right now
@@ -2572,6 +2592,7 @@ function StewDashboard({ initial = 'overview' }) {
     <React.Fragment>
       <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
+      {window.StewTourHost ? <window.StewTourHost nav={nav} tab={tab} narrow={narrow} delegate={_delegate} isNetwork={!!church.isNetwork} onTab={setTab} holdTips={wizardDeciding || wizard} /> : null}
       {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
@@ -2641,7 +2662,7 @@ function StewDashboard({ initial = 'overview' }) {
                 so the menu can never open UNDER an open dialog and take Escape from it. `stewModalOpen` is
                 the count every console dialog registers in (app/stew-modal.jsx); absent in the tests that
                 compile this file alone, hence the guard. */}
-            <button onClick={() => { if (typeof window.stewModalOpen === 'function' && window.stewModalOpen()) return; setMenu(true); }}
+            <button data-tour="menu" onClick={() => { if (typeof window.stewModalOpen === 'function' && window.stewModalOpen()) return; setMenu(true); }}
               aria-label="Sections" aria-expanded={menu} aria-controls="stew-sections-menu" title="Sections of the console"
               style={{ minWidth: 44, minHeight: 44, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'none', borderRadius: 11, cursor: 'pointer', color: 'var(--ink)', padding: 0 }}>
               <Icon name="menu" size={22} color="currentColor" />
@@ -2650,14 +2671,14 @@ function StewDashboard({ initial = 'overview' }) {
                 clipped off-screen for readers only while the pills carried the name); the church line under
                 it is the identity switcher, and the whole 44px column is its tap target — the heading lets
                 the press through. */}
-            <div style={{ flex: 1, minWidth: 0, position: 'relative', height: 44 }}>
+            <div data-tour="identity" style={{ flex: 1, minWidth: 0, position: 'relative', height: 44 }}>
               <h1 style={{ position: 'absolute', left: 0, right: 0, top: 3, margin: 0, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15.5, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 1 }}>{(nav.find(n => n.key === tab) || {}).label || 'Console'}</h1>
               <IdentitySwitcher compact church={church} churchName={churchName} initials={initials} onEditName={editName} />
             </div>
             {actions}
           </div>
           <PublishErrorBanner />
-          <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
+          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
           </main>
         </div>
@@ -2687,13 +2708,13 @@ function StewDashboard({ initial = 'overview' }) {
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.5px', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 6px', marginLeft: 'auto' }}>STEWARD</span>
           </div>
-          <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
+          <div data-tour="identity"><IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} /></div>
           <StewHelpButton />
           <nav aria-label="Console sections" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {nav.map(n => {
               const on = n.key === tab;
               return (
-                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => pickTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+                <button key={n.key} data-tour={'nav-' + n.key} title={NAV_TIPS[n.key]} onClick={() => pickTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
                   <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                   {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
                 </button>
@@ -2749,7 +2770,7 @@ function StewDashboard({ initial = 'overview' }) {
           </div>
           <PublishErrorBanner />
           {/* content — the console's MAIN landmark, so a screen reader can jump past the sidebar to it */}
-          <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
+          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
             {content}
           </main>
         </div>
@@ -4022,7 +4043,7 @@ function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
   );
   const joinPanel = (
     <Panel title="Joining code" collapsible open={joinOpen} onToggle={() => setJoinOpen(o => !o)}>
-      <JoinCard qrSize={92} center={stacked} />
+      <div data-tour="joincode"><JoinCard qrSize={92} center={stacked} /></div>
       <div style={{ marginTop: 12 }}><PushEnabler /></div>
     </Panel>
   );

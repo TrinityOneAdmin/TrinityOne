@@ -3217,15 +3217,15 @@ function _noteAdmitted(cp, content) {
     // refetch asks only for the last SINCE_SLOP (3 days) and returns nothing. Proven in audit 2026-07-26:
     // with docs aged 10 days the member stayed at 0 groups through approval AND a restart; with docs aged 0
     // days the same code produced 3 groups. My device test happened to use a church with fresh docs, which is
-    // exactly why it looked fixed. Reset the cursor so this one refetch is a FULL sync.
-    const hub = _docsHubs.get(cp);
-    if (hub) { hub.since = 0; hub.fullAt = 0; }
+    // exactly why it looked fixed. So this one fetch must be a FULL sync — of BOTH hubs: the members hub is gated
+    // the same way, and members who joined more than 3 days before the admission were missing for a day
+    // (an-open-church-joiner-gets-the-older-documents.test.mjs O3b, 2026-11-19). _refullChurchHubs, below.
     // _admittedDone was claimed above, BEFORE this call, so it fires exactly once — which meant that on a
     // PIN-locked boot (the hub is open, this doc can land, there is no key) the announce returned nothing and
     // was never retried. Now a keyless announce records a join intent bound to the locked identity and the
     // unlock keeps it (JOININTENT_KEY); the one-shot claim is safe to leave as it is. 2026-09-06.
     try { window.Fellowship.announceMembership(cp); } catch (e) {}
-    try { refetchChurchDocs(); } catch (e) {}
+    try { _refullChurchHubs(cp); } catch (e) {}
     // AND PUSH OUR OWN DATA UP. accept() refuses a member's personal documents — journal, prayers, notes,
     // highlights, bookmarks — until they are effectively a member, so everything written while waiting for
     // approval was refused and never retried. MyData only re-publishes on its startup kick, so the gap lasted
@@ -3487,6 +3487,32 @@ function refetchChurchDocs() {
     if (!hub.closer) continue;                 // only hubs currently open
     const c = hub.closer; hub.closer = null; try { c(); } catch (e) {}
     _docsHubOpen(hub);
+  }
+}
+// THE RELAY NOW COUNTS US: ask this church's two hubs for everything, once. Until this moment the relay withheld
+// every gated document from us, so the hub's last "full" fetch was a full fetch of the PUBLIC documents only — and
+// stamped as today's (fullAt), so for 24 hours every later fetch asked only for the last 3 days and the church's
+// older plans, devotionals and members never came. Two moments make it true, and they are the only callers:
+//  - an approval church admits us (_noteAdmitted);
+//  - in an open church, a relay accepts this identity's member: doc for the first time (announceMembership,
+//    `!wasSent`). The relay adds us to its member list before it sends that OK (gateway.mjs note() runs before
+//    the OK), but it never re-runs a subscription that is already open, so we must ask again. Sim E2-F1,
+//    2026-11-19: an open-church joiner missed every document older than 3 days for a day, however often they
+//    restarted; an-open-church-joiner-gets-the-older-documents.test.mjs.
+// What it touches, exactly: fullAt (to 0) and dirty, saved AT ONCE, so a kill before the answer still re-fulls on
+// the next boot; then, for a hub that is open, the ordinary close + reopen (_hubSince/_*HubOpen set pendingFull,
+// pendingRefull, gen and closer as on every reopen). NOT `since`: the members hub's kind-1 half reads it
+// (_hubSinceKind1) and must never re-pull the chat history. NOT eosed / eosedAt / fullPreAuth / refullDone: only
+// the reopened sub's own live answer may stamp those (_hubEosed), so no safety gate can pass sooner. It goes
+// through fullAt rather than B's pendingRefull, so B's once-per-session cap can neither block it nor be spent by
+// it; when B is owed too, the same reopen carries both. `.get`, never _docsHub(cp)/_memHub(cp): creating a hub
+// runs its loaders (including _noteAdmitted), and a hub that is not in memory has nothing open to refetch.
+function _refullChurchHubs(cp) {
+  const pairs = [[_docsHubs.get(cp), _docsHubSaveNow, _docsHubOpen], [_memHubs.get(cp), _memHubSaveNow, _memHubOpen]];
+  for (const [hub, saveNow, open] of pairs) {
+    if (!hub) continue;
+    hub.fullAt = 0; hub.dirty = true; saveNow(hub);
+    if (hub.closer) { const c = hub.closer; hub.closer = null; try { c(); } catch (e) {} open(hub); }
   }
 }
 
@@ -5362,6 +5388,10 @@ window.Fellowship = {
         return null;
       }
       ok = true;
+      // FIRST ACCEPTANCE FOR THIS CHURCH AND THIS IDENTITY? Read immediately before the mark, with no await between,
+      // so two announces in flight cannot both see it. joinsent is kept through a PIN lock and cleared only by a
+      // Leave, so this is true once per join: never for the heartbeat, "Check again" or a box re-send.
+      const wasSent = _joinSentFor(cp);
       _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
       _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);   // not awaited; see its note
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
@@ -5374,7 +5404,12 @@ window.Fellowship = {
       // REJOIN: the docs hub may have opened before this event landed, so the
       // relay withheld gated docs (admitted:, groups) because we were not yet
       // effective. Re-open the hub now that the relay holds our member doc.
-      if (!firstJoined) { const _cp = cp; setTimeout(() => { const hub = _docsHubs.get(_cp); if (hub && hub.closer) { const c = hub.closer; hub.closer = null; try { c(); } catch {} _docsHubOpen(hub); } }, 500); }
+      // 2026-11-19: and it must ask for EVERYTHING, on both hubs. Reopened with the cursor it asked only for the last
+      // 3 days, because the hub had just stamped the relay's thin answer (given before it counted us) as today's
+      // full fetch — so in an open church, where no admitted: doc ever triggers _noteAdmitted, the older documents
+      // stayed missing for a day. `!wasSent`, not `!firstJoined`: joinedAt is written BEFORE the publish, so a join
+      // whose first publish failed, or a restore to another identity, never counted as first.
+      if (!wasSent) { const _cp = cp; setTimeout(() => { try { _refullChurchHubs(_cp); } catch (e) {} }, 500); }
     }
     catch (e) { console.warn('[fellowship] membership publish failed — queued for retry', e); }
     return ok ? evt : null;

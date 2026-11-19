@@ -377,13 +377,18 @@ function ChatScreen({ ctx }) {
   // So ask the engine, which distinguishes "this church says they are not a child" from "we have not heard",
   // and remembers the answer. Start from what we already know so nothing flickers.
   const [assumeMinor, setAssumeMinor] = React.useState(false);
+  // WHICH CHURCH has the engine answered for? Only the tour's Groups step reads it (data-tour-minor below): until
+  // THIS church has answered, "not a child" is a guess, and the tour must not word the step on a guess (audit L3).
+  // Keyed by npub, not a yes/no: this screen is not keyed by church, so a yes/no would carry the last church's
+  // answer into the first frame after a switch (plan §12.2, §13).
+  const [minorFor, setMinorFor] = React.useState(null);
   React.useEffect(() => {
     let live = true;
     const np = ctx.church && ctx.church.npub;
     if (!np || !(window.Fellowship && window.Fellowship.assumeMinor)) return;
     Promise.resolve(window.Fellowship.assumeMinor(np))
-      .then(v => { if (live) setAssumeMinor(!!v); })
-      .catch(() => { if (live) setAssumeMinor(true); });
+      .then(v => { if (live) { setAssumeMinor(!!v); setMinorFor(np); } })
+      .catch(() => { if (live) { setAssumeMinor(true); setMinorFor(np); } });
     return () => { live = false; };
   }, [ctx.church && ctx.church.npub, ctx.safeguard && ctx.safeguard.clearanceKnown, ctx.safeguard && ctx.safeguard.isMinor]);
   const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor) || assumeMinor;
@@ -787,6 +792,12 @@ function ChatScreen({ ctx }) {
         </React.Fragment>
       ) : null}
 
+      {/* THE GROUPS STEP OF THE TOUR (app/member-tour.jsx) points here, and reads its words from what this list really
+          holds for THIS reader: whether they are treated as a child ('?' until the engine has answered), how many
+          groups and teams they were shown, and whether the church's list has arrived at all (an empty church and a
+          list still loading look the same otherwise). A plain wrapper: no style, so the sections' margins behave
+          exactly as before. */}
+      <div data-tour="groups" data-tour-minor={iAmMinor ? '1' : (minorFor && minorFor === (ctx.church && ctx.church.npub) ? '0' : '?')} data-tour-count={String(teamGroups.length + plainGroups.length)} data-tour-loaded={realGroups.length ? '1' : '0'}>
       {teamGroups.length ? (
         <React.Fragment>
           <CatLabel label="Teams" ck="teams" />
@@ -829,6 +840,7 @@ function ChatScreen({ ctx }) {
           </React.Fragment>
         );
       })()}
+      </div>
       </React.Fragment>
       )}
       </React.Fragment>

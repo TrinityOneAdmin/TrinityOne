@@ -34,15 +34,53 @@ public class PromptFetchJob extends JobService {
     static final int JOB_ID = 0x7417;   // fixed: one job per app
     static final long PERIOD_MS = 60L * 60L * 1000L;
 
-    static void schedule(Context c) {
-        JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+    /**
+     * Arm the hourly job. NEVER throws: its callers are publishPrompt (a @PluginMethod: a throw there kills the app on
+     * the CapacitorPlugins thread) and TrinityWidgetProvider.afterDraw (a broadcast receiver: a throw kills the
+     * process on every redraw). Device-found 2026-11-19, Pixel 10 Pro / Android 16, versionCode 224: a connectivity
+     * constraint without ACCESS_NETWORK_STATE is a SecurityException from JobScheduler.schedule, a crash loop the
+     * moment the widget was turned on. The manifest now declares the permission; this is the second line.
+     */
+    static void schedule(final Context c) {
+        final JobScheduler js;
+        try { js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE); }
+        catch (RuntimeException e) { logOnce(e); return; }
         if (js == null) return;
-        if (js.getPendingJob(JOB_ID) != null) return;
-        JobInfo info = new JobInfo.Builder(JOB_ID, new ComponentName(c, PromptFetchJob.class))
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPeriodic(PERIOD_MS)
-                .build();
-        js.schedule(info);
+        int r = scheduleSafely(new Scheduler() {
+            @Override public boolean pending() { return js.getPendingJob(JOB_ID) != null; }
+            @Override public void schedule(boolean network) {
+                JobInfo.Builder b = new JobInfo.Builder(JOB_ID, new ComponentName(c, PromptFetchJob.class)).setPeriodic(PERIOD_MS);
+                if (network) b.setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY);
+                if (js.schedule(b.build()) != JobScheduler.RESULT_SUCCESS) throw new IllegalStateException("schedule refused");
+            }
+        });
+        if (r == GAVE_UP || r == SCHEDULED_NO_NETWORK) logOnce(lastFailure);
+    }
+
+    /** What scheduleSafely needs from JobScheduler: an interface so the JVM test (ScheduleFallbackTest) runs it. */
+    interface Scheduler { boolean pending(); void schedule(boolean network); }
+
+    static final int ALREADY_PENDING = 0, SCHEDULED = 1, SCHEDULED_NO_NETWORK = 2, GAVE_UP = -1;
+    static volatile RuntimeException lastFailure;
+    private static volatile boolean logged;
+
+    /**
+     * Pending already → nothing. Else schedule WITH the network constraint; if that throws (SecurityException,
+     * IllegalArgumentException, …) schedule WITHOUT it (onStartJob copes with no network: probe() records the failures
+     * and keeps what it has); if that throws too, give up: the widget still redraws whenever the app opens. Never
+     * throws. A getPendingJob that throws counts as "not pending" (schedule replaces a job with the same id).
+     */
+    static int scheduleSafely(Scheduler s) {
+        try { if (s.pending()) return ALREADY_PENDING; } catch (RuntimeException e) { lastFailure = e; }
+        try { s.schedule(true); return SCHEDULED; } catch (RuntimeException e) { lastFailure = e; }
+        try { s.schedule(false); return SCHEDULED_NO_NETWORK; } catch (RuntimeException e) { lastFailure = e; }
+        return GAVE_UP;
+    }
+
+    private static void logOnce(Throwable e) {
+        if (logged) return;
+        logged = true;
+        try { android.util.Log.w("TrinityWidget", "background refresh not scheduled as asked", e); } catch (RuntimeException ignored) {}
     }
 
     static void cancel(Context c) {

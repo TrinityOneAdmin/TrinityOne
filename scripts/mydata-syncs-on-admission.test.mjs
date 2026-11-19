@@ -34,7 +34,7 @@ test('admission announces itself', () => {
   assert.match(fn, /trinity-admitted/,
     'nothing signals the moment a member is admitted, so no other subsystem can react to it');
   // it must fire alongside the existing recovery, not instead of it
-  assert.match(fn, /refetchChurchDocs\(\)/, 're-anchor: the church-doc recovery has gone');
+  assert.match(fn, /_refullChurchHubs\(cp\)/, 're-anchor: the church-doc recovery has gone (2026-11-19: it is the shared _refullChurchHubs now)');
 });
 
 test('MyData retries its refused publishes when that happens', () => {

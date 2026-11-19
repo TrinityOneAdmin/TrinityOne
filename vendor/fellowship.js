@@ -9222,17 +9222,12 @@
     }
     _admittedDone.add(key);
     setTimeout(() => {
-      const hub = _docsHubs.get(cp);
-      if (hub) {
-        hub.since = 0;
-        hub.fullAt = 0;
-      }
       try {
         window.Fellowship.announceMembership(cp);
       } catch (e) {
       }
       try {
-        refetchChurchDocs();
+        _refullChurchHubs(cp);
       } catch (e) {
       }
       try {
@@ -9570,6 +9565,24 @@
       } catch (e) {
       }
       _docsHubOpen(hub);
+    }
+  }
+  function _refullChurchHubs(cp) {
+    const pairs = [[_docsHubs.get(cp), _docsHubSaveNow, _docsHubOpen], [_memHubs.get(cp), _memHubSaveNow, _memHubOpen]];
+    for (const [hub, saveNow, open] of pairs) {
+      if (!hub) continue;
+      hub.fullAt = 0;
+      hub.dirty = true;
+      saveNow(hub);
+      if (hub.closer) {
+        const c = hub.closer;
+        hub.closer = null;
+        try {
+          c();
+        } catch (e) {
+        }
+        open(hub);
+      }
     }
   }
   var _memHubs = /* @__PURE__ */ new Map();
@@ -11448,22 +11461,17 @@
           return null;
         }
         ok = true;
+        const wasSent = _joinSentFor(cp);
         _markJoinSent(cp, evt);
         _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
-        if (!firstJoined) {
+        if (!wasSent) {
           const _cp = cp;
           setTimeout(() => {
-            const hub = _docsHubs.get(_cp);
-            if (hub && hub.closer) {
-              const c = hub.closer;
-              hub.closer = null;
-              try {
-                c();
-              } catch {
-              }
-              _docsHubOpen(hub);
+            try {
+              _refullChurchHubs(_cp);
+            } catch (e) {
             }
           }, 500);
         }
