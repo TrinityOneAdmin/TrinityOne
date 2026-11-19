@@ -184,13 +184,13 @@
 
      THE BLIND SPOT IS THE POINT: every measurement on this branch is 360x730 or 730x328, so a device run on
      a phone will never find this. */
-  html[data-stew-banner="clamped"] [role="dialog"][aria-modal="true"],
+  html[data-stew-banner="clamped"] [role="dialog"][aria-modal="true"]:not([data-stew-tour]),
   html[data-stew-banner="clamped"] [data-stew-modal-panel] {
     max-height: calc(100vh - min(24vh, 62px) - 28px) !important;
     margin-bottom: min(24vh, 62px) !important;
     overflow-y: auto !important;
   }
-  html[data-stew-banner="open"] [role="dialog"][aria-modal="true"],
+  html[data-stew-banner="open"] [role="dialog"][aria-modal="true"]:not([data-stew-tour]),
   html[data-stew-banner="open"] [data-stew-modal-panel] {
     max-height: calc(100vh - min(40vh, 220px) - 28px) !important;
     margin-bottom: min(40vh, 220px) !important;
@@ -227,11 +227,13 @@
      holding a modal panel, the shape all 37 of them share — gets 16px sides, and the panel fills it.
      Phone widths only: a 520px card on a 730px landscape screen or a desktop keeps the shape it was given.
      The sections drawer is a dialog too and is excluded — it is a left-hand drawer, not a centred card.
-     Measured in scripts/console-phone-layout-batch-a.test.mjs. */
+     Measured in scripts/console-phone-layout-batch-a.test.mjs.
+     The console tour's bubble (app/stew-tour.jsx, data-stew-tour) is excluded from this and from the banner
+     rules above: it is a small card placed beside its target, and a full-width one hid what it pointed at. */
   @media (max-width: 480px) {
-    :is(div, section):has(> [role="dialog"][aria-modal="true"]:not([aria-label="Sections"])),
+    :is(div, section):has(> [role="dialog"][aria-modal="true"]:not([aria-label="Sections"]):not([data-stew-tour])),
     :is(div, section):has(> [data-stew-modal-panel]) { padding-left: 16px !important; padding-right: 16px !important; }
-    [role="dialog"][aria-modal="true"]:not([aria-label="Sections"]),
+    [role="dialog"][aria-modal="true"]:not([aria-label="Sections"]):not([data-stew-tour]),
     [data-stew-modal-panel] { width: 100% !important; max-width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; }
   }
 
@@ -325,6 +327,8 @@
 <!-- shared modal a11y (window.useStewDialog): role=dialog/aria-modal/Escape/focus for the console's dialogs -->
 <script type="text/babel" src="app/stew-modal.jsx"></script>
 <script type="text/babel" src="app/stew-help.jsx"></script>
+<script type="text/babel" src="app/tour-kit.jsx"></script>
+<script type="text/babel" src="app/stew-tour.jsx"></script>
 <!-- steward surfaces (mock SK data + the four surfaces) -->
 <script type="text/babel" src="app/stew-data.jsx"></script>
 <script type="text/babel" src="app/recur.jsx"></script>
