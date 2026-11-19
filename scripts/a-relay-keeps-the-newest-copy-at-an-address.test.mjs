@@ -179,3 +179,14 @@ test('co-tenant — another church’s FAR-FUTURE withdrawal of an id this relay
   await must(relay, doc(A, GROUP_D + gid, { name: 'Youth', childsafe: true }));
   assert.equal(await posts(relay, kid, gid), true, 'THE CO-TENANT’S FUTURE TOMBSTONE KEPT THE OWNER’S ROOM AWAY');
 });
+
+test('co-tenant — another church’s BACK-DATED withdrawal of an unseen id does not claim it either (a tombstone never owns an id)', async () => {
+  const A = H.key(), Bc = H.key(), kid = H.key();
+  const relay = await H.startRelay({ name: 'cotenant-back', churches: [A.pub, Bc.pub] });
+  await must(relay, doc(kid, MEMBER_D + A.pub, { joined: ++clock }));
+  await must(relay, doc(A, MINORS_D + A.pub, { pubkeys: [kid.pub] }));
+  const gid = 'shared-youth-id-2';
+  await must(relay, doc(Bc, GROUP_D + gid, '', { at: Math.floor(Date.now() / 1000) - 86400, tags: [['deleted', '1']] }));   // OLDER than A's copy
+  await must(relay, doc(A, GROUP_D + gid, { name: 'Youth', childsafe: true }));
+  assert.equal(await posts(relay, kid, gid), true, 'THE CO-TENANT’S BACK-DATED TOMBSTONE CLAIMED THE OWNER’S ROOM');
+});

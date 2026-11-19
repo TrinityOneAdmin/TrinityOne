@@ -192,17 +192,31 @@ test('re-add — Hana floored, then re-added: her copy governs again; with the c
   for (const withKept of [false, true]) {
     const W = await church('readd-' + withKept);
     const gid = W.cp.slice(0, 16) + '-ra';
-    const C = doc(W.C, GROUP_D + gid, { name: 'R' }, { at: OLD - 100 });
+    // the floor (V ∩ C = Ann), Hana's own copy (Ann, Ben) and the kept copy (Cal) all give different answers
+    const C = doc(W.C, GROUP_D + gid, { name: 'R', visibility: 'invite', members: [W.ann.pub, W.cal.pub] }, { at: OLD - 100 });
     const V = doc(W.hana, GROUP_D + gid, { name: 'R', visibility: 'invite', members: [W.ann.pub, W.ben.pub] }, { at: OLD, tags: tag(W.cp) });
     const evs = [C, W.roster([W.gus.pub]), V];
-    if (withKept) evs.push(doc(W.C, GROUP_D + gid, { name: 'R kept', visibility: 'invite', members: [W.ann.pub] }, { at: OLD + 1, tags: [['kept', W.hana.pub]] }));
+    if (withKept) evs.push(doc(W.C, GROUP_D + gid, { name: 'R kept', visibility: 'invite', members: [W.cal.pub] }, { at: OLD + 1, tags: [['kept', W.hana.pub]] }));
     await importAs(W, evs);
     await must(W.relay, W.roster([W.gus.pub, W.hana.pub]));   // Hana is added back
     await sleep(250);
-    const expect = withKept ? { ann: true, ben: false } : { ann: true, ben: true };
+    const expect = withKept ? { ann: false, ben: false, cal: true } : { ann: true, ben: true, cal: false };
     for (const when of ['live', 'after a restart']) {
-      assert.deepEqual({ ann: await posts(W.relay, W.ann, gid), ben: await posts(W.relay, W.ben, gid) }, expect, (withKept ? 'kept copy present' : 'no kept copy') + ' (' + when + ')');
+      assert.deepEqual({ ann: await posts(W.relay, W.ann, gid), ben: await posts(W.relay, W.ben, gid), cal: await posts(W.relay, W.cal, gid) }, expect, (withKept ? 'kept copy present' : 'no kept copy') + ' (' + when + ')');
       if (when === 'live') await W.restart();
     }
   }
+});
+
+test('N7 — a void copy tagged for church X claims an id first; co-tenant church Z’s own copy is still accepted and governs', async () => {
+  const Z = H.key();
+  const W = await church('n7-cotenant', { cotenants: [Z.pub] });
+  const zMember = H.key();
+  await must(W.relay, doc(zMember, MEMBER_D + Z.pub, { joined: ++clock }));
+  const gid = 'contested-id';
+  await must(W.relay, W.roster([W.gus.pub]));
+  await importAs(W, [doc(W.hana, GROUP_D + gid, { name: 'X void', visibility: 'invite', members: [W.ann.pub] }, { at: OLD, tags: tag(W.cp) })]);
+  const [ok, why] = await put(W.relay, doc(Z, GROUP_D + gid, { name: 'Z room' }));
+  assert.equal(ok, true, 'A VOID-ONLY CLAIM BLOCKED ANOTHER CHURCH’S VALID COPY AT THE DOOR: ' + why);
+  assert.ok(await posts(W.relay, zMember, gid), 'Z’s member cannot post in Z’s room');
 });
