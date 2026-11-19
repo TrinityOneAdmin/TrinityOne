@@ -48,7 +48,9 @@ function tourDoc(source) {
     if (!m) return null;
     const src = source();
     if (src instanceof Set) return src.has(m[1]) ? el(src.facts && src.facts[m[1]]) : null;
-    for (const t of src) { const n = find(t, x => x.props && x.props['data-tour'] === m[1])[0]; if (n) return el(n.props); }
+    // Only an element the browser would really have (a host element, type a string): a component's props are not in
+    // the DOM, so an anchor passed to a component that drops it must not be found (audit T2).
+    for (const t of src) { const n = find(t, x => typeof x.type === 'string' && x.props && x.props['data-tour'] === m[1])[0]; if (n) return el(n.props); }
     return null;
   };
 }
@@ -579,6 +581,13 @@ const titleOf = (b) => { const h2 = find(b, n => n.type === 'h2')[0]; return h2 
 
 function readerScreen(React, win) {
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
+  // The REAL IconBtn (app/ui.jsx): the Listen anchor is handed to it as a prop, and only reaches the page if it
+  // passes it on to its <button> (audit T2).
+  const { IconBtn } = loadScreen('app/ui.jsx', ['IconBtn'], {
+    React, window: {}, document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, createElement: () => ({}) },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' }, localStorage: { getItem: () => null, setItem() {} },
+    setTimeout, clearTimeout, console, Icon, UserAvatar: () => null, Halo: () => null,
+  });
   const BOOKS = [43];
   win.Bible = {
     loaded: true, activeVersion: 'WEB', books: () => BOOKS, maxChapter: () => 21, bookName: () => 'John', versions: () => [{ abbr: 'WEB' }],
@@ -596,7 +605,7 @@ function readerScreen(React, win) {
     Icon, cx: (...a) => a.filter(Boolean).join(' '), lsGet: (k, d) => d, lsSet: () => {},
     useTrinityAudio: () => ({ track: null, playing: false }),
     Overlay: Stub('Overlay'), ReadPlansTabs: Stub('ReadPlansTabs'), BottomSheet: Stub('BottomSheet'), useBackLayer: () => {},
-    Sheet: Stub('Sheet'), Modal: Stub('Modal'), Pill: Stub('Pill'), Row: Stub('Row'), IconBtn: Stub('IconBtn'), Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
+    Sheet: Stub('Sheet'), Modal: Stub('Modal'), Pill: Stub('Pill'), Row: Stub('Row'), IconBtn, Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
   });
   const ctx = { loc: { book: 43, chap: 1 }, version: 'WEB', setLoc() {}, toast() {}, highlights: {}, notes: {}, bookmarks: [], toggleBookmark() {}, setHighlight() {}, setNote() {},
     openShareSheet() {}, desktop: false, readScale: 1, removeTranslation() {}, addModule() {}, setVersion() {} };
@@ -681,6 +690,27 @@ test('M1: a member let in but still owed the Community part, on the Read page, s
   assert.ok(tip, 'a member owed the Community part got no reader tip on the Read page');
   assert.equal(titleOf(tip), 'Tap a verse');
   assert.equal(store.get('trinityone.tour.community') || null, null, 'the Community part was spent on the Read page');
+});
+
+test('POINT OF USE (T2): with an audio Bible on the phone, the reader tips include Listen, on the button the real IconBtn drew', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, TrinityAudioStore: { readySets: () => ['WEB'] } };
+  let screens = [];
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  draw(M.MemberTourHost, { page: 'read' });
+  let tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  const order = [];
+  for (let g = 0; g < 8 && tip; g++) {
+    order.push(titleOf(tip));
+    find(tip, n => n.type === 'button' && texts(n.kids || []).join('').trim() === 'Got it')[0].props.onClick();
+    draw(M.MemberTourHost, { page: 'read' });
+    tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  }
+  assert.deepEqual(order, ['Tap a verse', 'Translation', 'Listen', 'Study']);
 });
 
 // ── 2026-11-19 audit fixes, over the real reader ───────────────────────────────────────────────────────────
@@ -964,8 +994,10 @@ test('the reader draws the Translation, Listen and Study anchors', () => {
   const { React, draw } = miniReact();
   const win = {};
   const { ReadScreen, ctx } = readerScreen(React, win);
-  const a = tourAnchors(draw(ReadScreen, { ctx }));
-  for (const t of ['verse', 'version', 'listen', 'study']) assert.equal(a.filter(x => x === t).length, 1, t + ' is not exactly one anchor in the reader');
+  const tree = draw(ReadScreen, { ctx });
+  const host = find(tree, n => typeof n.type === 'string' && n.props && n.props['data-tour']).map(n => n.props['data-tour']);
+  for (const t of ['verse', 'version', 'listen', 'study']) assert.equal(host.filter(x => x === t).length, 1, t + ' is not exactly one anchor ON THE PAGE in the reader');
+  assert.equal(find(tree, n => n.type === 'button' && n.props['data-tour'] === 'listen').length, 1, 'the Listen anchor is not on a real <button> (IconBtn did not pass it on)');
 });
 
 test('POINT OF USE: the Help index draws "Take the tour again" only when App hands it ctx.replayTour, and it calls it', () => {
