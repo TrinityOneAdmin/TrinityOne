@@ -98,7 +98,9 @@ test('the owner\'s private labels for stewards are not published to the congrega
   // something nobody consented to. The public by-line is a separate, opt-in field in a separate document.
   // Sliced by braces, not by a fixed 1800 characters — see scripts/test-windows.test.mjs for why a window
   // that no longer reaches the code it names is worse than no test.
-  const setr = stripComments(fnBody(ST_V, 'setStewards(', 'setStewards'));
+  // anchored on the DEFINITION's own signature: since 2026-11-17 _removeStewardKeeping CALLS setStewards earlier in the
+  // bundle, so a bare 'setStewards(' found the call
+  const setr = stripComments(fnBody(ST_V, 'setStewards(pubkeys, caps, names) {', 'setStewards'));
   // SEALED SINCE 2026-09-05 (finding 1). The claim is unchanged — the owner's private labels are carried
   // forward across an unrelated edit — but they now travel in `n`, encrypted under the church name key,
   // because the cleartext map named the church's officers beside their keys on the relay's disk.

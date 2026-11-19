@@ -123,6 +123,7 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },
       nameHandle: () => '', shortNpub: () => 'npub1abc…', ago: () => 'a while ago',
       doCopy: () => {}, copied: null, confirmBlock: null, block: () => {}, setConfirmBlock: () => {},
+      blocking: new Set(), blockingLine: () => '', blockOnce: () => {},   // the row's Block goes through blockOnce since 2026-11-18
       setLinkChild: () => {}, setReseatFor: () => {}, toggleNoPhoto: () => {},
       stewCapState: () => ({ allowed: false }),
       // The phone's one-row card (P12, 2026-09-20): memberRow reads `narrow` and, on a phone, renders Chat + ⋯

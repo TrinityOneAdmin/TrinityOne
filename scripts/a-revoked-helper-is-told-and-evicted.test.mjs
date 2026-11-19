@@ -265,11 +265,15 @@ function ownerStubs(over = {}) {
     clearStewardRevoke: (pk) => { calls.tomb.push(pk); },
     listIsFresh: () => false,
   };
+  // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): the screen asks the engine to carry their settings and write the roster
+  // (removeStewardKeeping answers { wrote, carry, next }). Here it is the roster write above and nothing to carry.
+  Steward.removeStewardKeeping = (pk) => { const next = stubs.stewards.filter(p => p !== pk); return Promise.resolve(Steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next })); };
   const stubs = {
     setConfirmRemove: () => {}, setRemoveNote: () => {}, markHandled: () => {}, answeredAt: () => 0, since: {},
     // optimistic-revoke console-UI (stew-dashboard.jsx DashStewardsPanel, pendingRemoval state): the board hides the row while the write settles.
     // UI-only — no-ops here — but remove() guards on pendingRemoval.has(pk) and calls drop/restoreOptimistic.
     pendingRemoval: new Set(), dropOptimistic: () => {}, restoreOptimistic: () => {},
+    landedRemoval: () => {}, setCarryNote: () => {}, setCarryNoteTimed: () => {}, stewCarryNote: () => null, carryNoteOf: () => null,   // the row leaves on landing; what was kept (2026-11-17; per steward since 2026-11-18)
     setAdding: () => {}, setScanning: () => {}, setQ: () => {}, setCode: () => {}, setAddErr: () => {}, setApproving: () => {},
     setNewLabel: () => {}, setNewCaps: () => {},
     stewards: [PK, 'other-steward'], labels: {}, caps: {}, byPub: new Map(), niceName: () => 'A helper',
