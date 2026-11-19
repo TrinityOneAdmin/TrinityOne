@@ -373,8 +373,9 @@ test('re-seat — the verbatim carry keeps the OLD key on leaders/members; the s
   const before = JSON.parse((await churchCopy(GROUP_D + g)).content);
   assert.deepEqual([before.leaders, before.members], [[oldK.pub, other], [other, oldK.pub]], 'the pre-block carry was not verbatim — a refused block would leave changed groups');
   assert.equal(JSON.stringify(before).includes(newK.pub), false, 'a group names the new key before any block');
+  eng._lastGroups = { cp, list: Object.assign([], { _fresh: true }) };   // a console whose Groups list is loaded (2026-11-19 F4: not loaded = "couldn't check")
   const sw = await eng._swapKeyInChurchGroups(r, oldK.pub, newK.pub);
-  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [], other: [], unchecked: [] });
+  assert.deepEqual(sw, { swapped: ['the group “Re-seat”'], failed: [], other: [], unchecked: [], anyUnanswered: false });
   const after = JSON.parse((await churchCopy(GROUP_D + g)).content);
   assert.deepEqual(after.leaders, [newK.pub, other], 'the new key did not take the old one’s place on leaders');
   assert.deepEqual(after.members, [other, newK.pub], 'the new key did not take the old one’s place on members');
@@ -410,10 +411,11 @@ test('N1 — the swap never re-saves the church’s copy over ANOTHER steward’
   await sleep(1100);
   await mustPut(raw(eve, GROUP_D + g, { name: 'eve, later', leaders: [oldK.pub, eve.pub] }, { at: Math.floor(Date.now() / 1000) + 1 }));
   const sentBefore = eng.sent.length;
+  eng._lastGroups = { cp, list: Object.assign([], { _fresh: true }) };   // a console whose Groups list is loaded (2026-11-19 F4: not loaded = "couldn't check")
   const sw = await eng._swapKeyInChurchGroups(r1, oldK.pub, newK.pub);
   assert.equal(eng.sent.slice(sentBefore).length, 0, 'the church’s older copy was re-saved over another steward’s newer edit');
   // L1 (a): left alone, but SAID — that newer copy still names the old, blocked key
-  assert.deepEqual(sw, { swapped: [], failed: [], other: ['the group “old”'], unchecked: [] }, 'a group another steward changed, still naming the old key, was skipped silently');
+  assert.deepEqual(sw, { swapped: [], failed: [], other: ['the group “old”'], unchecked: [], anyUnanswered: false }, 'a group another steward changed, still naming the old key, was skipped silently');
 });
 
 test('L1 (b) / L2 — a relay that does not answer: the group is listed as UNCHECKED and nothing is re-saved', async () => {
@@ -423,6 +425,7 @@ test('L1 (b) / L2 — a relay that does not answer: the group is listed as UNCHE
   await mustPut(raw(church, GROUP_D + g, { name: 'Half answered', leaders: [oldK.pub] }, { tagChurch: false }));
   for (const urls of [[X.wsUrl, 'ws://127.0.0.1:9/relay'], ['ws://127.0.0.1:9/relay']]) {
     const eng = owner(X, { relays: () => urls });
+    eng._lastGroups = { cp, list: Object.assign([], { _fresh: true }) };   // a console whose Groups list is loaded (2026-11-19 F4: not loaded = "couldn't check")
     const sw = await eng._swapKeyInChurchGroups({ carried: [], superseded: [GROUP_D + g] }, oldK.pub, newK.pub);
     assert.equal(eng.sent.length, 0, 'a swap was published although not every relay answered (' + urls.length + ' relays)');
     assert.equal(sw.unchecked.length, 1, 'a group was skipped SILENTLY when ' + (urls.length === 1 ? 'no relay' : 'one relay') + ' answered: ' + JSON.stringify(sw));
