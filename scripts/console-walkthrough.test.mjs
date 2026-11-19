@@ -209,6 +209,16 @@ test('POINT OF USE (L2-a): leaving the wizard by "Relays & settings" starts the 
   assert.equal(tabOf(g.show(), g), 'overview', 'a plain finish no longer opens Overview for the tour');
 });
 
+test('L2: "Skip setup" (which hands finishWizard its click event) starts the tour now, on Overview — an event is not an option', () => {
+  const h = boot({ church: { name: '' } });
+  const wiz = openWizard(h);
+  wiz.props.onDone({ type: 'click', target: {}, currentTarget: {}, preventDefault() {}, stopPropagation() {} });   // a click event's shape
+  const tree = h.show();
+  assert.ok(bubble(tree), 'a click event passed to finishWizard put the tour off');
+  assert.equal(tabOf(tree, h), 'overview');
+  assert.equal(h.store.get('trinityone.steward.tour.churchpub.tour'), '1');
+});
+
 // The real StewSetupWizard alone, seeded to its last step (scoped as the-suite-first-run-is-one-guided-path.test.mjs
 // seeds it: React.useState(0) occurs exactly once inside the component and it is `step`).
 function wizardLastStep({ hostname }) {
