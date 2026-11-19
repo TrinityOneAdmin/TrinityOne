@@ -1605,6 +1605,7 @@ const NETCONTENT_CAP = 300;          // distinct netann+netevent documents per n
 const NETCONTENT_MAX_BYTES = 16384;  // one sealed announcement / event
 const NETKEY_MAX_BYTES = 262144;     // the hop-1 envelope carries one wrapped ring per joined church
 const NETKEY_MAX_RECIPIENTS = 500;
+const NETDOC_TAGS_MAX_BYTES = 256;   // d (<= ~82 bytes) + t + deleted; anything near this is not a tag the client writes
 const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
 const PINSERMON_D = D.PINSERMON; // the church's currently-featured/pinned sermon — d=pinsermon:<churchpub> (one per church) → member Today card + notification
@@ -4933,6 +4934,9 @@ const _B64 = /^[A-Za-z0-9+/=_-]+$/;
 // October on 3,033 real nostr-tools nip44 encrypt() outputs: decoded length never below 99 bytes, first byte always 0x02. The floor is
 // 97 (two bytes of margin). The relay holds no key, so this RAISES THE BAR -- it refuses base64-wrapped plaintext -- it does not prove
 // the bytes are ciphertext. Used by netDocWriteOk's netann/netevent `e` only (the feed half of c73123db did not come across).
+// WHAT IT DOES NOT BUY (port audit 2026-11-19): base64-wrapped plaintext that happens to start with byte 0x02 and is at least 97 bytes
+// long PASSES. It stops a careless or naive cleartext post, not a deliberate one -- and the only key that can write here is the network
+// itself, which could just as well publish its own words anywhere else. It raises the bar; it is not a proof.
 const NIP44_MIN_BYTES = 97;
 function isNip44Envelope(b64) {
   if (typeof b64 !== 'string' || !_B64.test(b64)) return false;
@@ -4945,13 +4949,20 @@ function netDocWriteOk(e, d) {
   if (!pfx) return false;
   const id = d.slice(pfx.length), isKey = pfx === NETKEY_D;
   if (isKey ? id !== e.pubkey : !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return false;
-  let nd = 0;
+  // EVERY TAG IS EXACTLY [name, value], EACH NAME AT MOST ONCE, AND ALL OF THEM SMALL (port audit 2026-11-19). Checking only t[0]/t[1]
+  // let ['t','trinityone','<30 KB of text>'] through: cleartext riding past the sealed-only rule, and past the 16 KB cap. The shipped
+  // client (October N5b) writes ['d', d], ['t', NET] and, on a retraction, ['deleted', '1'] -- exactly that and nothing more.
+  const seen = new Set(); let tagBytes = 0;
   for (const t of (e.tags || [])) {
-    if (!Array.isArray(t)) return false;
-    if (t[0] === 'd') { if (++nd > 1 || t[1] !== d) return false; }
+    if (!Array.isArray(t) || t.length !== 2 || typeof t[0] !== 'string' || typeof t[1] !== 'string') return false;
+    if (seen.has(t[0])) return false; seen.add(t[0]);
+    tagBytes += Buffer.byteLength(t[0]) + Buffer.byteLength(t[1]);
+    if (t[0] === 'd') { if (t[1] !== d) return false; }
     else if (t[0] === 't') { if (t[1] !== NET) return false; }
-    else if (t[0] !== 'deleted') return false;
+    else if (t[0] === 'deleted') { if (t[1] !== '1') return false; }
+    else return false;
   }
+  if (tagBytes > NETDOC_TAGS_MAX_BYTES) return false;
   const hasDel = (e.tags || []).some(t => t[0] === 'deleted'), content = typeof e.content === 'string' ? e.content : '';
   const tomb = hasDel || !content;
   if (tomb) { if (content) return false; }   // a "tombstone" carrying content would be a way round the shape check
@@ -4969,7 +4980,7 @@ function netDocWriteOk(e, d) {
     } else {
       for (const f of Object.keys(o)) if (f !== 'v' && f !== 'e') return false;   // REJECT any plaintext field
       if ('v' in o && !Number.isFinite(o.v)) return false;
-      if (typeof o.e !== 'string' || !o.e || !_B64.test(o.e) || !isNip44Envelope(o.e)) return false;   // sealed: a real NIP-44 v2 envelope, so neither a sentence nor base64-wrapped plaintext is one
+      if (typeof o.e !== 'string' || !o.e || !_B64.test(o.e) || !isNip44Envelope(o.e)) return false;   // sealed-SHAPED: a NIP-44 v2 fingerprint, so a sentence or ordinary base64-wrapped text is refused (not a proof: see isNip44Envelope)
     }
   }
   if (!isKey && !store.hasDoc(e.pubkey, d) && store.countDocsByAuthor(e.pubkey, [NETANN_D, NETEVENT_D]) >= NETCONTENT_CAP) { _lastRefusalDocCap = true; return false; }
@@ -6208,7 +6219,11 @@ function canRead(e, authed) {
     if (d.startsWith(NETKEY_D)) {
       const np = d.slice(NETKEY_D.length);
       if (!authed || np !== e.pubkey || !NETWORKS.has(np) || CHURCH_PUBS.has(e.pubkey)) return false;
-      return networkOf(np, authed);
+      // AND THE CHURCH MUST BE ONE OF THE ENVELOPE'S RECIPIENTS (port audit 2026-11-19). Joining is one-sided -- any church on the box can
+      // publish network:<np> -- so a joined-church test alone let any self-declared joiner read the RECIPIENT LIST (which churches the
+      // network wrapped its key to). A church not in `keys` has nothing in it to unwrap, so this removes nothing it could use.
+      let _hop1 = null; try { _hop1 = (JSON.parse(e.content || '') || {}).keys; } catch {}
+      return networkOf(np, authed) && !!_hop1 && typeof _hop1 === 'object' && Object.prototype.hasOwnProperty.call(_hop1, authed);
     }
     // N5c / Option A: a church's JOIN DECLARATION (network:<np>, {joined, v, scopes}) is served to the network key it names. THE ONE AND
     // ONLY church document a network key may read (owner, 2026-11-18: the wall is final, with this single exception) -- the join fact and
@@ -6218,7 +6233,7 @@ function canRead(e, authed) {
     // catch-all still have no network term.
     if (d.startsWith(NETWORK_D)) {
       const np = d.slice(NETWORK_D.length);
-      if (authed && authed === np && NETWORKS.has(np) && CHURCH_PUBS.has(e.pubkey) && networkOf(np, e.pubkey)) return true;
+      if (authed && authed === np && NETWORKS.has(np) && !CHURCH_PUBS.has(np) && CHURCH_PUBS.has(e.pubkey) && networkOf(np, e.pubkey)) return true;   // !CHURCH_PUBS.has(np): a church another church names a "network" is still a church, as in every other network check
     }
     const cp = owningChurch(e, d);
     if (!cp) return false;

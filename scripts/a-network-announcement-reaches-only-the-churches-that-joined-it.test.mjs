@@ -142,6 +142,30 @@ test('WRITE shape: the sealed {e} shape only -- every plaintext variant is refus
   assert.equal(await writes(NET1, doc(NET1, P + 'netann:ok1', sealed())), true, 'CONTROL: a clean sealed document was refused -- the refusals above prove nothing');
 });
 
+test('WRITE tags (port audit 2026-11-19): every tag is exactly [name, value], each once, small -- nothing rides in a tag (CONTROLS first)', async () => {
+  // CONTROLS: the exact shapes the client writes -- a sealed post with [d] + [t], and a retraction with [d] + [t] + ['deleted','1'].
+  assert.equal(await writes(NET1, doc(NET1, P + 'netann:tg1', sealed())), true, 'CONTROL: a genuine sealed post was refused -- the refusals below prove nothing');
+  assert.equal(await writes(NET1, tomb(NET1, P + 'netann:tg1')), true, 'CONTROL: a genuine tombstone was refused -- a network could not retract');
+  const big = 'meet at my house tonight '.repeat(1200);   // ~30 KB of cleartext
+  const t = (extra, base) => ev(NET1, 30078, base || [['d', P + 'netann:tg2'], ['t', 'trinityone'], ...extra], JSON.stringify(sealed()));
+  for (const [e, why] of [
+    [t([], [['d', P + 'netann:tg2'], ['t', 'trinityone', big]]), 'a 30 KB cleartext THIRD element on the t tag (the audit probe)'],
+    [t([], [['d', P + 'netann:tg2', 'words in the clear'], ['t', 'trinityone']]), 'a third element on the d tag'],
+    [t([], [['d', P + 'netann:tg2'], ['t']]), 'a one-element t tag'],
+    [t([['t', 'trinityone']]), 'a duplicated t tag'],
+    [t([['deleted', '1', 'x']]), 'a third element on the deleted tag'],
+    [t([['deleted', 'yes']]), 'a deleted tag whose value is not "1"'],
+    [t([['deleted']]), 'a one-element deleted tag'],
+  ]) assert.equal(await writes(NET1, e), false, why + ' was accepted');
+  // tombstones with a malformed deleted tag are refused too; the genuine one above was accepted
+  for (const [tags, why] of [[[['d', P + 'netann:tg1'], ['t', 'trinityone'], ['deleted', '1', big]], 'a tombstone carrying 30 KB in its deleted tag'],
+                             [[['d', P + 'netann:tg1'], ['t', 'trinityone'], ['deleted', '']], 'a tombstone with an empty deleted value (no client writes this)'],
+                             [[['d', P + 'netann:tg1'], ['t', 'trinityone'], ['deleted', '1'], ['deleted', '1']], 'a tombstone with two deleted tags']])
+    assert.equal(await writes(NET1, ev(NET1, 30078, tags, '')), false, why + ' was accepted');
+  // the netkey envelope is held to the same rule
+  assert.equal(await writes(NET1, ev(NET1, 30078, [['d', P + 'netkey:' + NET1.pub], ['t', 'trinityone', big]], JSON.stringify({ v: 1, rev: 1, keys: { [A.pub]: 'QUJD' } }))), false, 'a netkey with cleartext in its t tag was accepted');
+});
+
 test('WRITE tombstones: a network can retract its own document; a "tombstone" that carries content is refused', async () => {
   assert.equal(await writes(NET1, doc(NET1, P + 'netann:t1', sealed())), true, 'setup');
   assert.equal(await writes(NET1, tomb(NET1, P + 'netann:t1')), true, 'the network could not retract its own announcement');
@@ -218,6 +242,9 @@ test('netkey:<np> (hop 1): written by the network key only, for itself; READ by 
   assert.equal(await served(NET1, e.id), true, 'the author cannot read its own netkey');
   assert.equal(await served(A, e.id), true, 'CONTROL: the church that joined was not served the envelope addressed to it');
   assert.equal(await served(C, e.id), true, 'the second joined church was not served');
+  // port audit 2026-11-19: D JOINED NET1 (it is a joined church key) but the envelope has no entry for it. Joining is one-sided, so a
+  // self-declared joiner must not read the network's recipient list; it has nothing in the envelope to unwrap anyway.
+  assert.equal(await served(D, e.id), false, 'a joined church that is NOT a recipient of the envelope was served it (the recipient list leaks)');
   for (const [who, name] of [[mA, 'a MEMBER of the joined church'], [stewardB, 'a steward'], [B, 'a church that did not join'], [NET2, 'another network'], [stranger, 'a stranger'], [null, 'anon']])
     assert.equal(await served(who, e.id), false, `${name} was served the network key envelope`);
 });

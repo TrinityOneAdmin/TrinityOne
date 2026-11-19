@@ -14,6 +14,7 @@
 //   (7) WALL (ported 2026-11-18): against a STRANGER baseline, over every kind -- the network key is served exactly ONE thing a stranger is
 //       not: the join doc naming IT. Not the same church's join doc for another network, not the hop-2 envelope, not children, finance,
 //       roster, chat or member docs; another network key gains exactly its own join doc; after a leave the network gains nothing.
+//   (8) a CHURCH another church names its "network" is not served that join doc (!CHURCH_PUBS.has(np), port audit 2026-11-19)
 //   (6) a church that LEAVES (tombstone) stops being served as a join
 // SABOTAGE record (run by hand, see the commit): widening the branch to serve any church document turns (5) red.
 import test, { before, after } from 'node:test';
@@ -158,6 +159,18 @@ test('(7) WALL: the N5c read is the join doc naming THAT key and nothing else --
   await ok(C, tomb(C, P + 'network:' + NX.pub), 'C leaves NX'); await sleep(300);
   assert.deepEqual(await gained(NX), [], 'after C left, the network key NX still gains something over a stranger');
   assert.deepEqual(await gained(NY), [joinY.id], 'leaving NX changed what NY is served');
+});
+
+test('(8) a CHURCH that another church names as its "network" is not served that join doc (port audit 2026-11-19)', async () => {
+  // A joins B's key as though B were a network. NETWORKS now holds B.pub, but B is a church here, and every other network check refuses a
+  // church key -- so must the N5c read. Control: the N5c read itself is live (N is served A's join to N, test (1)).
+  const w = await connect(A); await sleep(150); const e = joinDoc(A, B.pub); const [ok, why] = await publish(w, e); w.close();
+  assert.equal(ok, true, 'setup: A could not declare B a network: ' + why);
+  await sleep(300);
+  assert.deepEqual(await idsServed(N, [stored.joinA]), [stored.joinA], 'CONTROL: the N5c read is not live, so the refusal below proves nothing');
+  assert.deepEqual(await idsServed(B, [e.id]), [], 'a church key named as a "network" was served the other church\'s join doc');
+  assert.deepEqual(await joinsSeenBy(B, B.pub), [], 'a church key named as a "network" read join docs naming it');
+  const w2 = await connect(A); await sleep(150); await publish(w2, tomb(A, P + 'network:' + B.pub)); w2.close(); await sleep(300);
 });
 
 test('(6) a church that LEAVES (tombstones its join) is no longer served to the network as a join', async () => {
