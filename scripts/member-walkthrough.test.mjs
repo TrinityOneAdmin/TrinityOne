@@ -266,6 +266,8 @@ test('M1-b: closed and reopened while still waiting — nothing on boot, nothing
   h.store.setItem('trinityone.tour.bible', '1');
   h.endSplash();
   h.ctxOf(h.show().tree).followChurch(NPUB);
+  // recorded at once, before the church check answers: an app closed in that gap still has it to come (§12.7)
+  assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1', 'following did not record at once that the Community part is to come');
   await settle();
   h.join(PENDING);
   for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null);
@@ -296,6 +298,24 @@ test('M1-c: waiting for approval on a build from before this fix (no wait flag) 
   h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
   h.screens([ADULT_ROOM]);
   assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'admission did not run the Community part');
+});
+
+test('M1-f: first run — setup, then an OPEN church joined from the follow sheet: the Bible part on Today has no Community; Community runs on the Community page', async () => {
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  h.el(h.show().tree, h.mod.IdentityOnboarding).props.onSkip();     // the setup screen asks for the tour (bible + community)
+  let f = h.show();
+  assert.equal(h.el(f.tree, h.mod.ChurchSwitcher).props.open, true, 'premise: the follow sheet opened after setup');
+  h.ctxOf(f.tree).followChurch(NPUB);                               // what the follow sheet calls
+  await settle();
+  h.join(OPEN);                                                      // let in at once (no approval needed)
+  h.show();
+  h.el(h.show().tree, h.mod.ChurchSwitcher).props.onClose();
+  assert.deepEqual(walkApp(h), BIBLE_TITLES, 'the first-run tour on Today ran the Community part away from its groups list');
+  assert.equal(h.store.getItem('trinityone.tour.community'), null, 'the Community part was spent on Today');
+  h.el(h.show().tree, h.mod.TabBar).props.onChange('chat');
+  h.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(h).map(x => x[0]), ['Community', 'Groups and teams'], 'the Community part did not run on the Community page');
 });
 
 test('M1-e: never let in — nothing runs and nothing is spent; removed — nothing; Help replay while pending is the Bible part only', async () => {
