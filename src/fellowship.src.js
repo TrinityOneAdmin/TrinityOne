@@ -7184,8 +7184,11 @@ window.Fellowship = {
         // carried copy arriving second. Same tie rule as its siblings: same second, the lower event id.
         if (d === 'trinityone/joinpolicy:' + pubk) {
           const at = e.created_at || 0, id = String(e.id || '');
-          if (policyNewest && id !== policyNewest.id && (at < policyNewest.at || (at === policyNewest.at && !(id < policyNewest.id)))) return;
-          policyNewest = { at, id };
+          // VOID: a copy whose author is no longer the church or a roster steward pins nothing (Fable audit LOW — the relay's
+          // own rule since 0c N1): a removed helper's newer copy must not hold back the church's older correction
+          const pv = policyNewest, pvOk = !!pv && (pv.by === pubk || !!(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(pv.by)));
+          if (pvOk && id !== pv.id && (at < pv.at || (at === pv.at && !(id < pv.id)))) return;
+          policyNewest = { at, id, by: e.pubkey };
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit();
         }
       },
@@ -8417,8 +8420,9 @@ window.Fellowship = {
     // Step 0 reader sweep): a removed helper's setting is carried dated one second after theirs (owner answer k), so a later
     // change by someone else can arrive FIRST. Same tie rule as the relay: same second, the lower event id.
     const _newestAt = new Map();   // 'meals' | 'roster:<team>' -> { at, id }
+    // VOID (Fable audit LOW): an entry whose author is no longer the church or a roster steward pins nothing
     const _isNewest = (k, e) => { const p = _newestAt.get(k), at = e.created_at || 0, id = String(e.id || '');
-      if (p && p.id !== id && (at < p.at || (at === p.at && !(id < p.id)))) return false; _newestAt.set(k, { at, id }); return true; };
+      if (p && p.id !== id && _churchVoice(pubk, { _by: p.by }) && (at < p.at || (at === p.at && !(id < p.id)))) return false; _newestAt.set(k, { at, id, by: e.pubkey }); return true; };
     // SECURITY-AUDIT-2026-07-06 M2: a care need renders under the church banner (recipient / notes / label),
     // so DON'T trust any doc merely ['church']-tagged — an ordinary member (or a hostile relay) could forge a
     // phishing "need". Mirror the relay's gate: accept only from the church/steward (_churchVoice), a care-team

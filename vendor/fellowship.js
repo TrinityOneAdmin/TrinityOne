@@ -13308,8 +13308,9 @@
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
           if (d === "trinityone/joinpolicy:" + pubk) {
             const at = e.created_at || 0, id = String(e.id || "");
-            if (policyNewest && id !== policyNewest.id && (at < policyNewest.at || at === policyNewest.at && !(id < policyNewest.id))) return;
-            policyNewest = { at, id };
+            const pv = policyNewest, pvOk = !!pv && (pv.by === pubk || !!(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(pv.by)));
+            if (pvOk && id !== pv.id && (at < pv.at || at === pv.at && !(id < pv.id))) return;
+            policyNewest = { at, id, by: e.pubkey };
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
             else {
               try {
@@ -14643,8 +14644,8 @@
       const _newestAt = /* @__PURE__ */ new Map();
       const _isNewest = (k, e) => {
         const p = _newestAt.get(k), at = e.created_at || 0, id = String(e.id || "");
-        if (p && p.id !== id && (at < p.at || at === p.at && !(id < p.id))) return false;
-        _newestAt.set(k, { at, id });
+        if (p && p.id !== id && _churchVoice(pubk, { _by: p.by }) && (at < p.at || at === p.at && !(id < p.id))) return false;
+        _newestAt.set(k, { at, id, by: e.pubkey });
         return true;
       };
       const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === "member" || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by);

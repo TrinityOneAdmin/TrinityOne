@@ -144,3 +144,36 @@ for (const [label, list] of orders(ev(HELPER, 'trinityone/verse-prompt', { ref: 
     assert.equal(consoleVersePrompt(list) || null, null, 'an older prompt came back after a newer withdrawal');
   });
 }
+
+// ── LOW (Fable audit of the F1 round): the phone's VOID rule — a removed helper's newer copy pins nothing ─────────────
+test('LOW void — joinpolicy: the helper’s newer copy, then the helper is REMOVED, then the church’s older correction: the church’s governs', () => {
+  let h = null, state = null;
+  const rost = roster();
+  const stubs = { toPub: () => CP, pub: MEMBER, _churchRoster: rost, window: { Fellowship: { myPubkey: MEMBER } }, authState: () => ({ failed: false }), _onChurchDocs: (_cp, x) => { h = x; return () => {}; } };
+  const built = new Function(...Object.keys(stubs), `return ({ ${B('subscribeChurchJoin(churchNpub, onState) {', 'subscribeChurchJoin')} });`)(...Object.values(stubs));
+  built.subscribeChurchJoin('npub', (s2) => { state = s2; });
+  const d = 'trinityone/joinpolicy:' + CP;
+  h.onevent(ev(HELPER, d, { approval: false }, S + 2), d);
+  assert.equal(state.approval, false, 'CONTROL');
+  rost.set(CP, new Set());   // the helper leaves the roster
+  h.onevent(ev(CP, d, { approval: true }, S + 1), d);
+  assert.equal(state.approval, true, 'A REMOVED HELPER’S NEWER COPY STILL PINS approval against the church');
+});
+test('LOW void — care needs: the helper’s newer meals-settings, then the helper is REMOVED, then the church’s older one: the church’s governs', () => {
+  let h = null, out = [];
+  const rost = roster();
+  const store2 = ['function _pickWinner(', 'function _reduceVersions(', 'function _absorbById(', 'function _reduceAll(', 'function _tombstoneTargets(', 'function _forgetById(']
+    .map(sig => B(sig, sig)).join('\n');
+  const stubs = { toPub: (x) => (/^[0-9a-f]{64}$/.test(String(x || '')) ? x : CP), _churchRoster: rost, _coalesce: (fn) => fn, _careOpen: () => null,
+    _onChurchDocs: (_cp, x) => { h = x; return () => {}; }, ROSTER_PFX: 'trinityone/roster:', CARE_D: 'trinityone/care:', MEALS_SETTINGS_D: 'trinityone/meals-settings',
+    CAREREQ_D: 'trinityone/carereq:', CAREREQSTATUS_D: 'trinityone/carereqstatus:' };
+  const built = new Function(...Object.keys(stubs), `${store2}\n${B('function _churchVoice(cp, doc) {', '_churchVoice')}\nreturn ({ ${B('subscribeCareNeeds(churchNpub, cb) {', 'subscribeCareNeeds')} });`)(...Object.values(stubs));
+  built.subscribeCareNeeds('npub', (v) => { out = v; });
+  const feed = (e) => h.onevent(e, (e.tags.find(t => t[0] === 'd') || [])[1]);
+  feed(ev(HELPER, 'trinityone/meals-settings', { enabled: true, openedBy: 'member' }, S + 2));
+  feed(memberNeed()); h.oneose();
+  assert.equal(out.length, 1, 'CONTROL: members may open needs under the helper’s setting');
+  rost.set(CP, new Set());
+  feed(ev(CP, 'trinityone/meals-settings', { enabled: true, openedBy: 'steward' }, S + 1));
+  assert.equal(out.length, 0, 'A REMOVED HELPER’S NEWER SETTING STILL GOVERNS who may open a need');
+});
