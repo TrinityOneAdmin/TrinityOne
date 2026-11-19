@@ -102,6 +102,13 @@ async function revokeWhenOkIsLost(w, urls, { roster: rosterNow = [STEW, OTHER], 
     await revokes()[0].props.onClick();
     tree = draw(C, { church: { name: 'St Aidan' } });
     await press(tree, /Confirm — revoke this helper/);
+    // WAIT FOR THE REMOVAL TO SETTLE, NOT A FIXED NUMBER OF TICKS (2026-11-19; Fable audit NIT): the outcome is re-read
+    // inside the stand-in engine (as _settleStewardRemoval does), behind this world's setTimeout(0) pool, which raced
+    // press()'s six setImmediate turns. Settled = the row no longer reads "Removing…" (bounded at 2 s)
+    for (let t0 = Date.now(); Date.now() - t0 < 2000; await new Promise(r => setTimeout(r, 5))) {
+      tree = draw(C, { church: { name: 'St Aidan' } });
+      if (!/Removing… keeping what they set up/.test(reads(tree))) break;
+    }
     tree = draw(C, { church: { name: 'St Aidan' } });
   }
   return { calls, said: reads(tree), revokeControls: revokes().length };

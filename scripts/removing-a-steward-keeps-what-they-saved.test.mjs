@@ -470,7 +470,10 @@ test('never a child — a carried care-team list loses anyone the children list 
   const eng = owner(); const dana = await newSteward(); const x = H.key().pub, kid = H.key().pub;
   await setRoster(eng, [dana.pub], { [dana.pub]: ['care'] });
   await sleep(1100);
-  await mustPut(raw(dana, CARETEAM_D + cp, { pubs: [x, kid] }, { at: Math.floor(Date.now() / 1000) }));
+  // newer than any church copy of careteam:<cp> an earlier test left (the carried copy is dated now, so "now" could tie)
+  const prior = await churchCopy(CARETEAM_D + cp);
+  const danaAt = Math.max(Math.floor(Date.now() / 1000), prior ? prior.created_at + 2 : 0);
+  await mustPut(raw(dana, CARETEAM_D + cp, { pubs: [x, kid] }, { at: danaAt }));
   eng.window.Steward.readMinors = async () => ({ known: true, list: [kid] });
   const r = await eng._carryOverStewardDocs(dana.pub);
   const sent = churchSent(eng, CARETEAM_D + cp);
@@ -479,7 +482,9 @@ test('never a child — a carried care-team list loses anyone the children list 
   const eng2 = owner(); const eve = await newSteward();
   await setRoster(eng2, [eve.pub], { [eve.pub]: ['care'] });
   await sleep(1100);
-  await mustPut(raw(eve, CARETEAM_D + cp, { pubs: [x, kid] }, { at: Math.floor(Date.now() / 1000) }));
+  // newer than the church's carried copy of Dana's list, which can be dated up to a second after danaAt
+  const prior2 = await churchCopy(CARETEAM_D + cp);
+  await mustPut(raw(eve, CARETEAM_D + cp, { pubs: [x, kid] }, { at: Math.max(Math.floor(Date.now() / 1000), danaAt + 2, prior2 ? prior2.created_at + 1 : 0) }));
   eng2.window.Steward.readMinors = async () => ({ known: false, list: [] });
   const r2 = await eng2._carryOverStewardDocs(eve.pub);
   assert.equal(churchSent(eng2, CARETEAM_D + cp).length, 0, 'carried although the children list could not be read');
