@@ -7060,6 +7060,7 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onState({ approval: false, isAdmitted: true, isPending: false }); return () => {}; }
     let approval = false;
+    let policyNewest = null;   // { at, id } of the trusted joinpolicy copy `approval` came from — newest wins (R-M1)
     // THE ADMITTED LIST IS A UNION OF EVERY AUTHOR'S NEWEST COPY, NOT WHICHEVER DOCUMENT ARRIVED LAST. `admitted:` is
     // one replaceable document PER AUTHOR (the church, and each steward who approves people), the relay's gate
     // unions them (scripts/gateway.mjs rebuildAdmitted), and so does the console (subscribeAdmitted). This kept one
@@ -7089,9 +7090,9 @@ window.Fellowship = {
     // renders this then tells an admitted member their request is still waiting. Emit the raw signal and let
     // the app decide what to say — this file must not own that copy.
     // ── openKnown: "this church is KNOWN to let people join without approval" (PLAN-member-invite-open-church
-    // 2026-11-17, audit amendment H1). It is a SEPARATE answer from `approval`, on purpose. `approval` above is
-    // last-arrival-wins and drops a steward's copy that arrives before the roster; it drives the pending/removed
-    // screens and is deliberately left as it is in this change. `openKnown` gates something a member can DO
+    // 2026-11-17, audit amendment H1). It is a SEPARATE answer from `approval`, on purpose. `approval` above is the
+    // newest TRUSTED copy (since 2026-11-19, plan R-M1; it was last-arrival-wins) and drops a steward's copy that arrives
+    // before the roster; it drives the pending/removed screens. `openKnown` gates something a member can DO
     // (share the church's join link from the community menu), so it is default-deny and order-independent:
     //   · each author's NEWEST joinpolicy copy is kept, whoever they are (like admittedByAuthor) — a copy that
     //     arrives before the roster is not thrown away;
@@ -7142,7 +7143,16 @@ window.Fellowship = {
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) { emit(); return; }
         }
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
-        if (d === 'trinityone/joinpolicy:' + pubk) { if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit(); }
+        // NEWEST TRUSTED COPY WINS, NOT THE LAST TO ARRIVE (plan PLAN-removed-steward-fixes-F1-F4 §0b R-M1; memory
+        // member-join-approval-is-last-arrival-wins). A removed helper's setting is carried dated one second after
+        // theirs (owner answer k), so a later change by someone else can arrive FIRST and must not be overwritten by the
+        // carried copy arriving second. Same tie rule as its siblings: same second, the lower event id.
+        if (d === 'trinityone/joinpolicy:' + pubk) {
+          const at = e.created_at || 0, id = String(e.id || '');
+          if (policyNewest && id !== policyNewest.id && (at < policyNewest.at || (at === policyNewest.at && !(id < policyNewest.id)))) return;
+          policyNewest = { at, id };
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit();
+        }
       },
       onroster() { emit(); },
       oneose() { emit(); },
@@ -7214,16 +7224,19 @@ window.Fellowship = {
   subscribeChurchVersePrompt(churchNpub, cb) {
     const pubk = toPub(churchNpub);
     if (!pubk) { cb(null); return () => {}; }
-    let current = null;
+    let current = null, newest = null;   // newest: { ts, id } of the newest copy seen, live or withdrawn
     const _trust = (e) => _churchVoice(pubk, { _by: e.pubkey });
     const stop = _onChurchDocs(pubk, {
       want: ['trinityone/verse-prompt'],
       onevent(e, d) {
         if (d !== 'trinityone/verse-prompt') return;
         if (!_trust(e)) return;
+        // NEWEST WINS, TOMBSTONES INCLUDED (plan PLAN-removed-steward-fixes-F1-F4 §0b R-M1). A withdrawal cleared the prompt
+        // whatever its date, and once cleared an OLDER live copy came back. Every copy — live or withdrawn — is now compared
+        // with the newest seen; on an exact same-second tie the RELAY keeps the lowest event id, so do the same.
+        if (newest && (newest.ts > e.created_at || (newest.ts === e.created_at && String(newest.id || '') <= String(e.id || '')))) return;
+        newest = { ts: e.created_at, id: e.id };
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
-        // Never let an OLDER copy overwrite a newer one; on an exact same-second tie the RELAY keeps the lowest event id, so do the same.
-        if (current && (current.ts > e.created_at || (current.ts === e.created_at && String(current.id || '') <= String(e.id || '')))) return;
         try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); } catch {}
       },
       oneose() { cb(current); },
@@ -8365,6 +8378,12 @@ window.Fellowship = {
     // family. A rota mix-up means somebody does not turn up; a dietary note mix-up is a nut allergy.
     const rosterPeople = new Map();         // teamId -> Set(pubkey), from church-signed rosters only
     let openedBy = 'steward', adminGroupId = '', eosed = false;
+    // NEWEST TRUSTED COPY OF EACH, NOT THE LAST TO ARRIVE (plan PLAN-removed-steward-fixes-F1-F4 §0b R-M1, found by its
+    // Step 0 reader sweep): a removed helper's setting is carried dated one second after theirs (owner answer k), so a later
+    // change by someone else can arrive FIRST. Same tie rule as the relay: same second, the lower event id.
+    const _newestAt = new Map();   // 'meals' | 'roster:<team>' -> { at, id }
+    const _isNewest = (k, e) => { const p = _newestAt.get(k), at = e.created_at || 0, id = String(e.id || '');
+      if (p && p.id !== id && (at < p.at || (at === p.at && !(id < p.id)))) return false; _newestAt.set(k, { at, id }); return true; };
     // SECURITY-AUDIT-2026-07-06 M2: a care need renders under the church banner (recipient / notes / label),
     // so DON'T trust any doc merely ['church']-tagged — an ordinary member (or a hostile relay) could forge a
     // phishing "need". Mirror the relay's gate: accept only from the church/steward (_churchVoice), a care-team
@@ -8406,8 +8425,8 @@ window.Fellowship = {
         // prevent — the admin's "Thursday, severe nut allergy" sitting unused while every phone showed
         // "Tuesday, no nuts" — with the fix installed. The comment below still promised "so ordering never
         // hides a legitimate need"; that promise was true before the migration and false after it.
-        if (d === MEALS_SETTINGS_D) { if (_churchVoice(pubk, { _by: e.pubkey })) { try { const c = JSON.parse(e.content || '{}'); openedBy = c.openedBy === 'member' ? 'member' : 'steward'; adminGroupId = String(c.adminGroupId || ''); } catch {} _reduceAll(versions, byId, _trust); emit(); } return; }
-        if (d.startsWith(ROSTER_PFX)) { if (_churchVoice(pubk, { _by: e.pubkey })) { const team = d.slice(ROSTER_PFX.length); const set = new Set(); try { (JSON.parse(e.content || '{}').people || []).forEach(p => { const h = toPub(p && p.pub); if (h) set.add(h); }); } catch {} rosterPeople.set(team, set); _reduceAll(versions, byId, _trust); emit(); } return; }
+        if (d === MEALS_SETTINGS_D) { if (_churchVoice(pubk, { _by: e.pubkey }) && _isNewest('meals', e)) { try { const c = JSON.parse(e.content || '{}'); openedBy = c.openedBy === 'member' ? 'member' : 'steward'; adminGroupId = String(c.adminGroupId || ''); } catch {} _reduceAll(versions, byId, _trust); emit(); } return; }
+        if (d.startsWith(ROSTER_PFX)) { if (_churchVoice(pubk, { _by: e.pubkey }) && _isNewest('roster:' + d.slice(ROSTER_PFX.length), e)) { const team = d.slice(ROSTER_PFX.length); const set = new Set(); try { (JSON.parse(e.content || '{}').people || []).forEach(p => { const h = toPub(p && p.pub); if (h) set.add(h); }); } catch {} rosterPeople.set(team, set); _reduceAll(versions, byId, _trust); emit(); } return; }
         if (!d.startsWith(CARE_D)) return;
         const id = d.slice(CARE_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { const s = tombs.get(id) || new Set(); s.add(e.pubkey); tombs.set(id, s); emit(); return; }
