@@ -8,6 +8,10 @@
   Home screen only: widgetCategory is home_screen, never keyguard (reference/PLAN-phone-widget-2026-11-16.html §2).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- PromptFetchJob's connectivity constraint (setRequiredNetworkType). Android 16 refuses that job without this
+         permission (SecurityException from JobScheduler.schedule: a crash loop on the Pixel, 2026-11-19). A normal
+         permission: granted at install, no prompt. Test: ManifestPermissionTest. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application>
         <receiver
             android:name="church.trinityone.widget.TrinityWidgetProvider"

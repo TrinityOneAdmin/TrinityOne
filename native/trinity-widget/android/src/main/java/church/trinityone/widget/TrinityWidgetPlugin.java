@@ -35,17 +35,21 @@ public class TrinityWidgetPlugin extends Plugin {
     @PluginMethod
     public void status(PluginCall call) {
         JSObject r = new JSObject();
-        r.put("supported", true);
-        r.put("enabled", WidgetStore.enabled(ctx()));
-        r.put("pinSupported", Build.VERSION.SDK_INT >= 26 && AppWidgetManager.getInstance(ctx()).isRequestPinAppWidgetSupported());
+        try {
+            r.put("supported", true);
+            r.put("enabled", WidgetStore.enabled(ctx()));
+            r.put("pinSupported", Build.VERSION.SDK_INT >= 26 && AppWidgetManager.getInstance(ctx()).isRequestPinAppWidgetSupported());
+        } catch (RuntimeException e) { call.reject("widget status failed"); return; }
         call.resolve(r);
     }
 
     @PluginMethod
     public void setEnabled(PluginCall call) {
         boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
-        if (!on) { forget(); }
-        WidgetStore.setEnabled(ctx(), on);
+        try {
+            if (!on) { forget(); }
+            WidgetStore.setEnabled(ctx(), on);
+        } catch (RuntimeException e) { call.reject("widget switch failed"); return; }
         call.resolve();
     }
 
@@ -56,8 +60,8 @@ public class TrinityWidgetPlugin extends Plugin {
         try {
             JSONObject v = new JSONObject(); v.put("days", days); v.put("written", System.currentTimeMillis());
             WidgetStore.write(ctx(), WidgetStore.K_VOTD, v);
+            WidgetStore.refresh(ctx());
         } catch (Exception e) { call.reject("bad days"); return; }
-        WidgetStore.refresh(ctx());
         call.resolve();
     }
 
@@ -67,10 +71,14 @@ public class TrinityWidgetPlugin extends Plugin {
         try { p = promptArgs(call, nowMs()); }
         catch (IllegalArgumentException e) { call.reject(e.getMessage()); return; }
         catch (Exception e) { call.reject("bad prompt"); return; }
-        PromptStore st = promptStore();
-        synchronized (WidgetStore.PROMPT_LOCK) { st.write(p); }
-        st.schedule();
-        st.refresh();
+        // Native failures reject, never throw: a throw from a @PluginMethod is FATAL on the CapacitorPlugins thread
+        // (the Android 16 JobScheduler crash, 2026-11-19). schedule() itself never throws; this is for the rest.
+        try {
+            PromptStore st = promptStore();
+            synchronized (WidgetStore.PROMPT_LOCK) { st.write(p); }
+            st.schedule();
+            st.refresh();
+        } catch (RuntimeException e) { call.reject("widget update failed"); return; }
         call.resolve();
     }
 
@@ -189,23 +197,30 @@ public class TrinityWidgetPlugin extends Plugin {
 
     @PluginMethod
     public void clearPrompt(PluginCall call) {
-        synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
-        PromptFetchJob.cancel(ctx());
-        WidgetStore.refresh(ctx());
+        try {
+            synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
+            PromptFetchJob.cancel(ctx());
+            WidgetStore.refresh(ctx());
+        } catch (RuntimeException e) { call.reject("widget clear failed"); return; }
         call.resolve();
     }
 
     @PluginMethod
-    public void clear(PluginCall call) { forget(); call.resolve(); }
+    public void clear(PluginCall call) {
+        try { forget(); } catch (RuntimeException e) { call.reject("widget clear failed"); return; }
+        call.resolve();
+    }
 
     @PluginMethod
     public void requestPin(PluginCall call) {
         JSObject r = new JSObject();
         boolean ok = false;
-        if (Build.VERSION.SDK_INT >= 26) {
-            AppWidgetManager m = AppWidgetManager.getInstance(ctx());
-            if (m.isRequestPinAppWidgetSupported()) ok = m.requestPinAppWidget(WidgetStore.provider(ctx()), null, null);
-        }
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                AppWidgetManager m = AppWidgetManager.getInstance(ctx());
+                if (m.isRequestPinAppWidgetSupported()) ok = m.requestPinAppWidget(WidgetStore.provider(ctx()), null, null);
+            }
+        } catch (RuntimeException e) { call.reject("widget pin failed"); return; }
         r.put("requested", ok);
         call.resolve(r);
     }
