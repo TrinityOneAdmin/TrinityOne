@@ -53,7 +53,7 @@ const MEMBER_TOUR_BIBLE = [
   { id: 'welcome', title: 'Welcome', targets: [],
     text: 'Welcome to TrinityOne. Here’s a quick look at your Bible. It takes under a minute, and you can skip it.' },
   { id: 'votd', title: 'Verse of the day', targets: ['votd'],
-    text: 'A verse for each day. Tap Journal to write down a thought, or share it.' },
+    text: 'A verse for each day. Tap it to open it up and share it.' },
   { id: 'read', title: 'Read', targets: ['tab-read'],
     text: 'The whole Bible. It opens where you left off.' },
   { id: 'library', title: 'Library', targets: ['tab-library'],

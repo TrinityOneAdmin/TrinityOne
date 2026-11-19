@@ -142,6 +142,19 @@ test('POINT OF USE: skipping the setup screen starts the Bible tour — not over
   assert.deepEqual(walkApp(h), BIBLE_TITLES);
 });
 
+test('POINT OF USE: the verse-of-the-day step says what the card itself offers (owner, 2026-11-19: option a)', () => {
+  // Journal is not on the card and Share only shows once it is opened up, so the step says just that.
+  const h = bootApp({ onboarded: false });
+  h.endSplash();
+  let f = h.show();
+  h.el(f.tree, h.mod.IdentityOnboarding).props.onSkip();
+  f = h.show();
+  h.el(f.tree, h.mod.ChurchSwitcher).props.onClose();
+  const said = {};
+  walkApp(h, (fr) => { const b = bubbleOf(fr, h); if (b) said[b.step.title] = b.step.text; });
+  assert.equal(said['Verse of the day'], 'A verse for each day. Tap it to open it up and share it.');
+});
+
 test('POINT OF USE: finishing the setup screen (onSave) starts it too', () => {
   const h = bootApp({ onboarded: false });
   h.endSplash();

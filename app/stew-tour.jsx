@@ -244,7 +244,9 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab }) {
     if (tip && tip.section !== tab) { setTip(null); return; }
     if (tip || blocked || stewTourHoldTips()) return;
     const c = tipFor();
-    if (c) { stewTourSeenSet(church, c.key); setTip({ ...c, section: tab }); }
+    // NOT marked seen here: the tip is drawn in-flow at the top of <main>, and <main> keeps its scroll across
+    // sections, so a steward scrolled down can open a section with its tip above the fold. Seen = "Got it".
+    if (c) setTip({ ...c, section: tab });
   });
   // Waiting behind something that sends no event (the error banner, a join toast): look again shortly.
   React.useEffect(() => {
@@ -265,7 +267,7 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab }) {
     return <StewTourBubble step={step} pos={live.indexOf(step) + 1} count={live.length} first={prev < 0} last={next < 0}
       onSkip={end} onNext={() => { if (next < 0) end(); else setRun({ i: next }); }} onBack={() => { if (prev >= 0) setRun({ i: prev }); }} />;
   }
-  if (tip && tip.section === tab && !blocked) return <StewTourTip tip={tip} onDone={() => setTip(null)} />;
+  if (tip && tip.section === tab && !blocked) return <StewTourTip tip={tip} onDone={() => { stewTourSeenSet(church, tip.key); setTip(null); }} />;
   return null;
 }
 

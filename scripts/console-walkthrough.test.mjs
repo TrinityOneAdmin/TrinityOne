@@ -263,6 +263,15 @@ test('POINT OF USE: the first visit to a section shows its tip once; Got it dism
   assert.equal(tipOf(again.show()), null, 'the Overview tip came back on a second boot of the same device');
 });
 
+test('POINT OF USE: a section tip that was drawn but never dismissed comes back next time (seen = Got it, not shown)', () => {
+  // The tip is in-flow at the top of <main>, and <main> keeps its scroll across sections, so a steward scrolled
+  // down can open a section with its tip above the fold. Marking it seen when DRAWN would lose it unread.
+  const h = boot();
+  assert.ok(tipOf(h.show()), 'premise: Overview opened for the first time with no tip');
+  const again = boot({ store: h.store });
+  assert.ok(tipOf(again.show()), 'a tip drawn but never dismissed was spent: it did not come back');
+});
+
 test('no section tip while the tour is up, nor while a dialog is open', () => {
   const h = boot();
   h.mod.stewTourStart('replay');
