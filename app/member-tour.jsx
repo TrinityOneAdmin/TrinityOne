@@ -32,9 +32,12 @@
 // dialog) — it waits. An automatic start also waits while the person is typing (memberTourTyping, audit L4): the
 // Community part can come long after the join, and a dialog taking focus would drop the keyboard mid-message. It writes nothing to a relay: "seen" is per device, in localStorage.
 //
-// YOUNG PEOPLE. The Groups step reads what the Community screen itself drew (data-tour-minor / data-tour-count on
-// its groups anchor, app/screens-chat.jsx), so it can only ever point at the list that young person really has.
-// With no groups opened for them it says so in ordinary words (reference/DOMAIN.md: a church may have none).
+// YOUNG PEOPLE. The Groups step reads what the Community screen itself drew (data-tour-minor / data-tour-count /
+// data-tour-loaded on its groups anchor, app/screens-chat.jsx), so it can only ever point at the list that young
+// person really has. With no groups opened for them it says so in ordinary words (reference/DOMAIN.md: a church may
+// have none). It NEVER GUESSES (audit L3): while it is not known whether the reader is a child, or a child's list
+// has not arrived, or an adult has no groups to point at, the step is left out. An automatic start on Community
+// first waits up to MEMBER_TOUR_GROUPS_WAIT for that to be known; a Help replay does not wait.
 //
 // Anchors: `data-tour="…"` in app/ui.jsx (tab-today, tab-read, tab-chat, tab-library, tab-you — TabBar and
 // DesktopNav), app/screens-today.jsx (votd, happening), app/screens-chat.jsx (groups), app/screens-read.jsx
@@ -46,9 +49,9 @@
 // window.__trinityBackStack (app/ui.jsx), window.TrinityAudioStore (app/audio-store.jsx, optional).
 // Top-level names DECLARED here — unique across the member app's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): MEMBER_TOUR_BIBLE, MEMBER_TOUR_COMMUNITY,
-// MEMBER_TOUR_GROUPS, MEMBER_TOUR_TIPS, MEMBER_TOUR_NOT_TEXT, memberTourStore, memberTourKey, memberTourSeen,
+// MEMBER_TOUR_GROUPS, MEMBER_TOUR_GROUPS_WAIT, MEMBER_TOUR_TIPS, MEMBER_TOUR_NOT_TEXT, memberTourStore, memberTourKey, memberTourSeen,
 // memberTourSeenSet, memberTourWaiting, memberTourWaitSet, memberTourTyping, memberTourStart, memberTourJoined,
-// memberTourReader, memberTourPlan, memberTourGroupsText, memberTourGroupFacts, memberTourPing, memberTourNextTip,
+// memberTourReader, memberTourPlan, memberTourGroupsText, memberTourGroupsUnknown, memberTourGroupFacts, memberTourPing, memberTourNextTip,
 // memberTourHasAudio, memberTourBlocked, useMemberTourLayer, memberTourPrimary, MemberTourBubble, MemberTourHost.
 // (member-tour.jsx is loaded by index.html only; steward.html does not load it.)
 
@@ -83,6 +86,7 @@ const MEMBER_TOUR_GROUPS = {
   child: 'The groups your church has opened for you.',
   none: 'Your church hasn’t opened any groups for you yet.',
 };
+const MEMBER_TOUR_GROUPS_WAIT = 10000;   // ms an automatic Community start waits for the Groups facts to be known
 // In the order they are offered. `audio`: only when an audio Bible is on this phone.
 const MEMBER_TOUR_TIPS = [
   { id: 'verse', anchor: 'verse', title: 'Tap a verse', text: 'Tap any verse to highlight it, add a note, bookmark it, share it, or look up a word.' },
@@ -141,18 +145,26 @@ function memberTourPlan(opts) {
   const order = o.page === 'chat' ? comm.concat(bible) : bible.concat(comm);
   return order.map(s => ({ id: s.id, title: s.title, text: s.id === 'groups' ? memberTourGroupsText(o.groups) : s.text, targets: s.targets.slice() }));
 }
-// The Groups step's words. facts: { minor, count } as the Community screen drew them; unknown reads as an adult
-// with groups (the anchor is only drawn where there is a list to point at).
+// The Groups step's words, or null when there is nothing TRUE to say yet (the step is then left out). facts:
+// { minor: true | false | null (not known), count, loaded (the church's list has arrived) } as the Community
+// screen drew them.
 function memberTourGroupsText(facts) {
-  const f = facts || {};
-  if (!f.minor) return MEMBER_TOUR_GROUPS.adult;
-  return (f.count || 0) > 0 ? MEMBER_TOUR_GROUPS.child : MEMBER_TOUR_GROUPS.none;
+  if (!facts || facts.minor == null) return null;
+  const n = facts.count || 0;
+  if (facts.minor) return n > 0 ? MEMBER_TOUR_GROUPS.child : (facts.loaded ? MEMBER_TOUR_GROUPS.none : null);
+  return n > 0 ? MEMBER_TOUR_GROUPS.adult : null;
+}
+// Not known YET — worth waiting for on an automatic start: who the reader is, or (with nothing listed) whether the
+// church's list has arrived. An adult whose church's list arrived with nothing for them is known: nothing to say.
+function memberTourGroupsUnknown(facts) {
+  return !facts || facts.minor == null || ((facts.count || 0) === 0 && !facts.loaded);
 }
 // What the Community screen drew on its groups anchor, or null when it is not on screen.
 function memberTourGroupFacts() {
   const el = tourKitFind('groups');
   if (!el || !el.getAttribute) return null;
-  return { minor: el.getAttribute('data-tour-minor') === '1', count: parseInt(el.getAttribute('data-tour-count'), 10) || 0 };
+  const m = el.getAttribute('data-tour-minor');
+  return { minor: m === '1' ? true : m === '0' ? false : null, count: parseInt(el.getAttribute('data-tour-count'), 10) || 0, loaded: el.getAttribute('data-tour-loaded') === '1' };
 }
 // The next reader tip to offer, or null. seen(id) answers from storage, present(anchor) from the screen, audio
 // says whether an audio Bible is on the phone. One at a time: the first unseen tip whose button is on screen.
@@ -256,7 +268,8 @@ function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
   // While the tour runs, anything that comes up over it (the PIN idle-lock, a sheet, an aria-modal dialog) hides
   // the bubble; the run and its step are kept, and it comes back at the same step once that has gone.
   const blocked = !!hold || memberTourBlocked();
-  const present = (t) => !!tourKitFind(t);
+  // The Groups step counts as on screen only with something true to say (L3).
+  const present = (t) => !!tourKitFind(t) && (t !== 'groups' || memberTourGroupsText(memberTourGroupFacts()) != null);
   const wantTip = () => memberTourStore.reader && memberTourNextTip({ seen: memberTourSeen, present, audio: memberTourHasAudio() });
   // Is any reader tip still unseen, whatever is on screen? When none is, there is nothing to wait for.
   const tipsLeft = () => memberTourStore.reader && !!memberTourNextTip({ seen: memberTourSeen, present: () => true, audio: memberTourHasAudio() });
@@ -266,8 +279,26 @@ function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
   }
   const pending = memberTourStore.pending;
   const typing = !!(pending && !pending.replay) && memberTourTyping();   // an automatic start waits; nothing is consumed
+  // An automatic Community start on Community waits (up to MEMBER_TOUR_GROUPS_WAIT from its request) while the Groups
+  // facts are not known yet — group documents arrive a few seconds after admission. A replay never waits (§12.3).
+  let groupsWait = false;
+  if (pending && pending.community && !pending.replay && page === 'chat' && !!tourKitFind('groups') && memberTourGroupsUnknown(memberTourGroupFacts())) {
+    if (!pending.at) pending.at = Date.now();
+    groupsWait = Date.now() - pending.at < MEMBER_TOUR_GROUPS_WAIT;
+  }
   React.useEffect(() => {
-    if (pending && !run && !blocked && !typing) {
+    // The Groups step is up and its words have just become unknown (the list changed under it): move on, never
+    // draw an empty bubble (§12.5).
+    if (run && !blocked) {
+      const st = run.plan[run.i];
+      if (st && st.id === 'groups' && !present('groups')) {
+        const n = tourKitWalk(run.plan, run.i + 1, 1, present);
+        setRun(n < 0 ? null : { plan: run.plan, i: n });
+        force(x => x + 1);
+        return;
+      }
+    }
+    if (pending && !run && !blocked && !typing && !groupsWait) {
       memberTourStore.pending = null;
       // Community only for someone the church has let in; an automatic start only on the Community page. Left
       // out here, nothing is spent: the wait flag asks again on the next admission / visit.
@@ -289,7 +320,7 @@ function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
   });
   // Waiting behind something that sends no event (a sheet closing, the keyboard closing): look again shortly.
   React.useEffect(() => {
-    if (!(typing && pending) && (!blocked || !(pending || run || (!tip && tipsLeft())))) return undefined;
+    if (!((typing || groupsWait) && pending) && (!blocked || !(pending || run || (!tip && tipsLeft())))) return undefined;
     const t = setTimeout(() => force(x => x + 1), 700);
     return () => clearTimeout(t);
   });
@@ -298,6 +329,7 @@ function MemberTourHost({ page, inChurch, admitted, pendingAtBoot, hold }) {
     const step = run.plan[run.i];
     if (!step) return null;
     const shown = step.id === 'groups' ? { ...step, text: memberTourGroupsText(memberTourGroupFacts()) } : step;
+    if (shown.text == null) return null;   // its words became unknown: the effect moves on (§12.5)
     const live = run.plan.filter(s => !s.targets.length || present(s.targets[0]) || s === step);
     const next = tourKitWalk(run.plan, run.i + 1, 1, present);
     const prev = tourKitWalk(run.plan, run.i - 1, -1, present);

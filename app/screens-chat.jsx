@@ -377,13 +377,18 @@ function ChatScreen({ ctx }) {
   // So ask the engine, which distinguishes "this church says they are not a child" from "we have not heard",
   // and remembers the answer. Start from what we already know so nothing flickers.
   const [assumeMinor, setAssumeMinor] = React.useState(false);
+  // Has the engine ANSWERED for this church? Only the tour's Groups step reads it (data-tour-minor below): until it
+  // has, "not a child" is a guess, and the tour must not word the step on a guess (audit L3). Reset on every run:
+  // this screen is not keyed by church, so the last church's answer would otherwise carry over (plan §12.2).
+  const [minorKnown, setMinorKnown] = React.useState(false);
   React.useEffect(() => {
     let live = true;
+    setMinorKnown(false);
     const np = ctx.church && ctx.church.npub;
     if (!np || !(window.Fellowship && window.Fellowship.assumeMinor)) return;
     Promise.resolve(window.Fellowship.assumeMinor(np))
-      .then(v => { if (live) setAssumeMinor(!!v); })
-      .catch(() => { if (live) setAssumeMinor(true); });
+      .then(v => { if (live) { setAssumeMinor(!!v); setMinorKnown(true); } })
+      .catch(() => { if (live) { setAssumeMinor(true); setMinorKnown(true); } });
     return () => { live = false; };
   }, [ctx.church && ctx.church.npub, ctx.safeguard && ctx.safeguard.clearanceKnown, ctx.safeguard && ctx.safeguard.isMinor]);
   const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor) || assumeMinor;
@@ -788,9 +793,11 @@ function ChatScreen({ ctx }) {
       ) : null}
 
       {/* THE GROUPS STEP OF THE TOUR (app/member-tour.jsx) points here, and reads its words from what this list really
-          holds for THIS reader: whether they are treated as a child, and how many groups and teams they were shown.
-          A plain wrapper: no style, so the sections' margins behave exactly as before. */}
-      <div data-tour="groups" data-tour-minor={iAmMinor ? '1' : '0'} data-tour-count={String(teamGroups.length + plainGroups.length)}>
+          holds for THIS reader: whether they are treated as a child ('?' until the engine has answered), how many
+          groups and teams they were shown, and whether the church's list has arrived at all (an empty church and a
+          list still loading look the same otherwise). A plain wrapper: no style, so the sections' margins behave
+          exactly as before. */}
+      <div data-tour="groups" data-tour-minor={iAmMinor ? '1' : (minorKnown ? '0' : '?')} data-tour-count={String(teamGroups.length + plainGroups.length)} data-tour-loaded={realGroups.length ? '1' : '0'}>
       {teamGroups.length ? (
         <React.Fragment>
           <CatLabel label="Teams" ck="teams" />
