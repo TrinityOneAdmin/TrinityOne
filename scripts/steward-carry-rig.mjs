@@ -139,7 +139,7 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   const ssSigner = (/publish\((finalizeEvent\w*)\(/.exec(ssBody) || [])[1];
   assert.ok(ssSigner, 'setStewards no longer publishes finalizeEvent(...) — re-anchor this rig');
   scope[ssSigner] = finalizeEvent;
-  const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who) {',
+  const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who, pre) {',
     'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {', 'function _dropJustRemoved(list, rosterAt) {', 'async function _swapKeyInChurchGroups(carry, oldPk, newPk) {'].map(a => fnBody(STEWARD, a, a));
   // ROUND 2 (2026-11-19, plan PLAN-removed-steward-fixes-F1-F4): Block of a current helper (owner answer l) and the
   // landed side effects Remove and Block share. Lifted WHEN THE BUNDLE HAS THEM, so the Step 0 tests run on the tree

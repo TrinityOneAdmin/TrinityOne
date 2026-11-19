@@ -135,6 +135,25 @@ test('F1 (ee) — r2 OFF: the removal goes ahead, NOTHING is kept, and what was 
 test('F1 (ee) — r2 ASLEEP: the removal finishes inside its limit, NOTHING is kept, and it is listed', () => f1Case('frozen'));
 test('F1 (ee) — every relay up: the helper’s 12-day-old group is kept, dated NOW, and reported carried', () => f1Case('all-up'));
 
+// the children list (for a carried care-team list) must not hold the removal past its limit when it never answers
+test('children list never answers: the removal finishes inside its limit; the group is kept, the care-team list listed', async () => {
+  const C = await churchOn(1, 'f1-minors');
+  const eng = owner(C);
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
+  eng.window.Steward.readMinors = () => new Promise(() => {});   // a frozen box: the read never comes back
+  const gid = C.cp.slice(0, 16) + '-kg';
+  await mustPut(C, raw(C, kim, GROUP_D + gid, { name: 'Kim’s group' }));
+  await mustPut(C, raw(C, kim, CARETEAM_D + C.cp, { pubs: [H.key().pub] }));
+  const t0 = Date.now();
+  const r = await Promise.race([eng._removeStewardKeeping(kim.pub, { limitMs: 8000 }), sleep(20000).then(() => 'HUNG')]);
+  assert.notEqual(r, 'HUNG', 'THE REMOVAL HUNG ON A CHILDREN-LIST READ THAT NEVER ANSWERS');
+  assert.ok(Date.now() - t0 < 11000, 'not bounded by the limit: ' + (Date.now() - t0));
+  assert.ok(r.wrote, 'the removal did not go ahead');
+  assert.ok(r.carry.carried.some(c => c.d === GROUP_D + gid), 'the group was not kept: ' + JSON.stringify(r.carry.notCarried));
+  assert.ok(r.carry.notCarried.some(n => n.d === CARETEAM_D + C.cp), 'the care-team list is not listed as not kept');
+});
+
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════
 // The real DashMembers, its Block pressed, over the engine lifted from the bundle. setBlocked is a stand-in that
 // publishes the church-signed blocklist to the relay (its own tests are elsewhere); everything else is shipped code.

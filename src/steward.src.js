@@ -8037,7 +8037,7 @@ function _carryLabel(d, content) {
 //       RE-SEAT carries verbatim instead and swaps the key after its block lands (_swapKeyInChurchGroups);
 //   (g) a care need's skip part is re-made: a new secret sealed to the recipient BY THE CHURCH, new per-day hashes.
 // Answers { skip: reason } when it cannot make a faithful copy.
-async function _carryTemplate(S, blocked, who) {
+async function _carryTemplate(S, blocked, who, pre) {
   let tags = (S.tags || []).filter(t => Array.isArray(t) && t[0] !== 'for');
   let content = typeof S.content === 'string' ? S.content : '';
   const d = (tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -8056,7 +8056,8 @@ async function _carryTemplate(S, blocked, who) {
   if (!dead && d.startsWith('trinityone/careteam:')) {
     let body; try { body = JSON.parse(content); } catch (e) { return { skip: 'unreadable' }; }
     if (!body || typeof body !== 'object' || !Array.isArray(body.pubs)) return { skip: 'unreadable' };
-    const m = (window.Steward && window.Steward.readMinors) ? await window.Steward.readMinors() : null;
+    // read ONCE by the carry, bounded inside its limit (pre.minors) — a read that never answers must not hold the removal
+    const m = (pre && 'minors' in pre) ? pre.minors : ((window.Steward && window.Steward.readMinors) ? await window.Steward.readMinors() : null);
     if (!m || !m.known) return { skip: 'children-unread' };
     const minors = new Set((m.list || []).map(p => String(p || '').toLowerCase()));
     content = JSON.stringify({ ...body, pubs: body.pubs.filter(p => !minors.has(String(p || '').toLowerCase())) });
@@ -8195,6 +8196,12 @@ async function _carryOverStewardDocs(pk, opts) {
   // PHASE B, per slice of 60 — every copy at those addresses, any author, no trust predicate — then the rule, then the
   // publish, so the check is as close to the write as it can be.
   const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));   // meals-settings first — see careIds
+  // THE CHILDREN LIST a carried care-team list is filtered by: read ONCE, only if a careteam: document is there, and bounded
+  // by half the time left — its own read waits on a frozen box, and unbounded it held the whole removal (found 2026-11-19)
+  const pre = {};
+  if (ds.some(d => d.startsWith('trinityone/careteam:')) && window.Steward && window.Steward.readMinors) {
+    pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
+  }
   if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
@@ -8257,7 +8264,7 @@ async function _carryOverStewardDocs(pk, opts) {
       }
       jobs.push((async () => {
         let tmpl = null;
-        try { tmpl = await _carryTemplate(from, !!o.blocked, who); } catch (e) { tmpl = { skip: 'error' }; }
+        try { tmpl = await _carryTemplate(from, !!o.blocked, who, pre); } catch (e) { tmpl = { skip: 'error' }; }
         if (!tmpl || tmpl.skip) { notC(d, (tmpl && tmpl.skip) || 'error', label); return; }
         if (left() <= 0) { notC(d, 'time', label); return; }   // at the limit nothing more is published
         let ok = false, signedEv = null;

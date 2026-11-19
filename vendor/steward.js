@@ -21332,7 +21332,7 @@ zoo`.split("\n");
     }
     return _CARRY_WORDS[p] || "a church setting";
   }
-  async function _carryTemplate(S, blocked, who) {
+  async function _carryTemplate(S, blocked, who, pre) {
     let tags = (S.tags || []).filter((t) => Array.isArray(t) && t[0] !== "for");
     let content = typeof S.content === "string" ? S.content : "";
     const d = (tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -21359,7 +21359,7 @@ zoo`.split("\n");
         return { skip: "unreadable" };
       }
       if (!body || typeof body !== "object" || !Array.isArray(body.pubs)) return { skip: "unreadable" };
-      const m = window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
+      const m = pre && "minors" in pre ? pre.minors : window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
       if (!m || !m.known) return { skip: "children-unread" };
       const minors = new Set((m.list || []).map((p) => String(p || "").toLowerCase()));
       content = JSON.stringify({ ...body, pubs: body.pubs.filter((p) => !minors.has(String(p || "").toLowerCase())) });
@@ -21524,6 +21524,10 @@ zoo`.split("\n");
     }));
     if (!readAll) notC("", "incomplete", "anything else they set up that a relay did not show in time");
     const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));
+    const pre = {};
+    if (ds.some((d) => d.startsWith("trinityone/careteam:")) && window.Steward && window.Steward.readMinors) {
+      pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise((r) => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
+    }
     if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
     for (let i3 = 0; i3 < ds.length; i3 += 60) {
       const slice = ds.slice(i3, i3 + 60);
@@ -21617,7 +21621,7 @@ zoo`.split("\n");
         jobs.push((async () => {
           let tmpl = null;
           try {
-            tmpl = await _carryTemplate(from, !!o.blocked, who);
+            tmpl = await _carryTemplate(from, !!o.blocked, who, pre);
           } catch (e) {
             tmpl = { skip: "error" };
           }
