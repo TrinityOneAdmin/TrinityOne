@@ -3759,6 +3759,32 @@ const GROUP_CHILDSAFE = new Set();   // groupIds a church explicitly marked chil
 // GROUP_GONE records the id so canRead() and accept() can refuse outsiders and new posts. Undo (a non-tombstone
 // re-publish of the group doc) clears it.
 const GROUP_GONE = new Set();        // groupIds whose definition has been tombstoned (removed)
+// NEWEST WINS AT AN ADDRESS, WHOEVER WROTE IT (owner answer p, 2026-11-19; plan PLAN-removed-steward-fixes-F1-F4 §0b R-H1,
+// §0c N1/N3, §0d). A group definition, a team roster and meals-settings are each held by the store PER AUTHOR (have-newer
+// is per replaceable key), so a church copy and a helper's copy of one address live side by side — and the maps note()
+// derives (who may read/post, childsafe, leaders, invite members, the team's people, the care team) used to follow the last
+// ARRIVAL. A late OLDER copy (peer sync, a woken box) then overrode a newer one until the next restart. Now each of those
+// branches applies an incoming copy only if it is not older than the copy it last applied at that address:
+//   key   group|<id>, roster|<id>, meals|<resolved owner church>   (never the bare meals address)
+//   entry { at, id, by, cp } — created_at, event id, author, the church it was applied for
+//   order created_at, then the LOWER event id on a same-second tie (the store's own tie rule, event-store.mjs); the same
+//         event again (hydrate's two passes) is applied again
+//   VOID  an entry whose author no longer passes the branch's OWN authority test (CHURCH_PUBS.has(by) || stewardCan(by,
+//         cp,'any')) blocks nothing: a removed helper's newer copy never pins the church's later correction (0c N1)
+//   no clock cap (0d M-cap): raw created_at, exactly as phones (_pickWinner) and the store compare.
+// Checked and written AFTER each branch's authority/ownership checks and BEFORE its tombstone early return. Rebuilt from
+// scratch by hydrateMaps (clearDerivedMaps), replayed oldest-first.
+const LIVE_AT = new Map();
+const _liveAuthor = (by, cp) => CHURCH_PUBS.has(by) || stewardCan(by, cp, 'any');
+function liveNewest(key, e, cp) {
+  const cur = LIVE_AT.get(key), at = e.created_at || 0;
+  if (cur && cur.id !== e.id && _liveAuthor(cur.by, cur.cp)) {
+    if (at < cur.at) return false;
+    if (at === cur.at && !(String(e.id) < String(cur.id))) return false;
+  }
+  LIVE_AT.set(key, { at, id: e.id, by: e.pubkey, cp });
+  return true;
+}
 
 // WHO WAS A CANCELLED EVENT FOR? Cancelling an event is the only shape this product has ever had for "it is
 // not happening": removeEvent() publishes a TOMBSTONE at the same d-tag — empty content, ['deleted','1'] —
@@ -4155,7 +4181,8 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS, PUBVERSE]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS, PUBVERSE,
+                   LIVE_AT]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -4332,6 +4359,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // R-7: keep GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS so canRead()/accept() still know the ownership and
     // visibility of a deleted room — clearing them made the room fall through to the default-allow path.
     // GROUP_GONE marks it as tombstoned; canRead() and accept() check it.
+    if (!liveNewest('group|' + id, e, namedChurch(e) || e.pubkey)) return;   // owner answer (p): an older copy changes nothing — see LIVE_AT
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); GROUP_GONE.add(id); return; }
     GROUP_GONE.delete(id);   // R-7: undo — a non-tombstone re-publish restores the room
     if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
@@ -4525,6 +4553,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     { const prev = ROSTER_BY.get(id);
       if (prev && (prev.by === prev.cp || stewardCan(prev.by, prev.cp, 'any'))
           && e.pubkey !== prev.cp && !stewardCan(e.pubkey, prev.cp, 'any')) return; }
+    if (!liveNewest('roster|' + id, e, namedChurch(e) || e.pubkey)) return;   // owner answer (p) — see LIVE_AT
     if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); return; }
     // READ `pubs` FIRST, FALL BACK TO `people`. From 2026-09-05 the console seals the roster's NAMES under
     // the church name key and publishes the keys alongside in the clear, as `{ pubs: [...], e: "<sealed>" }`.
@@ -4581,6 +4610,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // asked for 'care' here, so a care steward's write was taken and then ignored.
     const owner = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (stewardCan(e.pubkey, cp = namedChurch(e), 'any') ? cp : '');
     if (!owner) return;
+    if (!liveNewest('meals|' + owner, e, owner)) return;   // owner answer (p), keyed by the RESOLVED church — see LIVE_AT
     if (removed) { MEALS_ADMIN_GROUP.delete(owner); MEALS_OPEN_MEMBER.delete(owner); return; }
     try { const c = JSON.parse(e.content); MEALS_ADMIN_GROUP.set(owner, String(c.adminGroupId || '')); if (c.openedBy === 'member') MEALS_OPEN_MEMBER.add(owner); else MEALS_OPEN_MEMBER.delete(owner); } catch {}
   }
@@ -8443,6 +8473,11 @@ function serveStatic(req, res) {
         // trivially copied onto another host. Counting with it is safe; deciding with it is not. The
         // provable form is /relay-identity, which signs a caller-chosen nonce with this key.
         relayPub: RELAY_PUB,
+        // NEWEST-WINS LIVE MAPS (owner answers p and s, 2026-11-19): this build applies only the newest copy at a group,
+        // roster or meals-settings address (LIVE_AT). An owner console carries a removed helper's settings from a partial
+        // answer only once EVERY relay it uses has said this; until then it keeps the strict rule. An unauthenticated
+        // claim: it decides how cautious that console is, never admission (CLAUDE.md rule 10).
+        liveNewest: 1,
         media: !MEDIA_OFF,                    // does this relay host self-hosted media (blobs)? — the client hides the upload UI when false
         // OFFER fields (Phase 3a) appear ONLY when the operator opted in via RELAY_OPEN — a private relay omits
         // them entirely, so discovery/auto-pick never surfaces it. `full` lets a busy relay decline new churches
