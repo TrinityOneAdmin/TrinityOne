@@ -42,7 +42,7 @@ function boot(opts = {}) {
   // a scroll is dispatched to its listeners by h.scrollMain(y).
   const mainListeners = [];
   const state = { tree: null, modal: false, mainTop: 0 };
-  const fakeMain = { get scrollTop() { return state.mainTop; },
+  const fakeMain = { get scrollTop() { return state.mainTop; }, set scrollTop(v) { state.mainTop = Number(v) || 0; },
     addEventListener(t, f) { if (t === 'scroll') mainListeners.push(f); },
     removeEventListener(t, f) { const i = mainListeners.indexOf(f); if (i >= 0) mainListeners.splice(i, 1); } };
   const winListeners = {}, docListeners = {};
@@ -607,6 +607,36 @@ test('POINT OF USE (P2): a section opened with <main> already scrolled gets a FL
   const t0 = g.show();
   assert.ok(tipOf(t0), 'premise: no Overview tip');
   assert.equal(find(t0, n => n.props && n.props['data-stew-tour-float'] === '1').length, 0, 'a tip floated with <main> at its top');
+});
+
+test('POINT OF USE (P2, stage-4 audit): a tip never floats over the section\'s own top — a small offset docks it and puts <main> at its top', () => {
+  // The card cannot be measured here (no layout), so the room is STEW_TOUR_TIP_ROOM (160px); in a browser it is the
+  // card's measured height + 22px. The miniature React runs layout effects as ordinary effects, so ONE draw shows
+  // the float before it docks; a browser docks before it paints (a-settings-page-opens-at-its-top proves that).
+  const h = boot();
+  h.store.set('trinityone.steward.tour.churchpub.tip.overview', '1');
+  h.show();
+  h.state.mainTop = 20;                                   // a section opened just below its top
+  find(h.state.tree, n => n.type === 'button' && n.props['data-tour'] === 'nav-groups')[0].props.onClick();
+  h.show();
+  let tree = h.show();
+  assert.ok(tipOf(tree), 'premise: no Groups tip');
+  assert.equal(find(tree, n => n.props && n.props['data-stew-tour-float'] === '1').length, 0, 'at a 20px offset the tip floats over the top of the section');
+  assert.equal(h.state.mainTop, 0, 'docking at a small offset did not put <main> at its top');
+  // floating at 300, then a scroll back up that stops short of 0 (touch momentum) — still within the card's room
+  const g = boot();
+  g.store.set('trinityone.steward.tour.churchpub.tip.overview', '1');
+  g.show();
+  g.state.mainTop = 300;
+  find(g.state.tree, n => n.type === 'button' && n.props['data-tour'] === 'nav-groups')[0].props.onClick();
+  tree = g.show();
+  assert.ok(find(tree, n => n.props && n.props['data-stew-tour-float'] === '1').length, 'premise: at 300px the tip does not float');
+  g.scrollMain(200);                                      // still well down: stays floating
+  assert.ok(find(g.show(), n => n.props && n.props['data-stew-tour-float'] === '1').length, 'a scroll that stayed well down docked the tip');
+  g.scrollMain(50);                                       // stopped 50px short of the top
+  tree = g.show();
+  assert.equal(find(tree, n => n.props && n.props['data-stew-tour-float'] === '1').length, 0, 'stopping 50px from the top left the tip floating over the section\'s first cards');
+  assert.equal(g.state.mainTop, 0, 'docking did not put <main> at its top');
 });
 
 // ── the shell ──────────────────────────────────────────────────────────────────────────────────────────────

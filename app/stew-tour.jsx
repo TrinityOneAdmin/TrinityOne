@@ -34,7 +34,7 @@
 // Top-level names DECLARED here — unique across the console's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): STEW_TOUR_STEPS, STEW_TOUR_TIPS, STEW_TOUR_LOCKED,
 // stewTourStore, stewTourChurch, stewTourKey, stewTourSeen, stewTourSeenSet, stewTourStart, stewTourPlan,
-// stewTourSectionTip, stewTourBlocked, stewTourMainTop, stewTourLater, StewTourBubble, StewTourTip, StewTourHost.
+// stewTourSectionTip, stewTourBlocked, stewTourMainTop, stewTourLater, STEW_TOUR_TIP_ROOM, StewTourBubble, StewTourTip, StewTourHost.
 
 // ── the words (approved by the owner, 2026-11-18 — CONSOLE-WALKTHROUGH-COPY-2026-11-18.html) ────────────────
 // `nav` names a console section the step points at; `targets` names any other anchor. A step with neither is
@@ -201,27 +201,51 @@ function stewTourLater(fn) {
 // above what is in view makes Chromium's scroll anchoring push the view down by the tip's height. So when <main> is
 // scrolled at the moment the tip is decided (after the section's own effects: the host decides a frame later),
 // the tip FLOATS: the same card in a zero-height sticky holder at the top of what is in view. It adds no height,
-// so nothing moves, but it DOES cover the top ~100px of what is in view until "Got it". As soon as <main> is back at
-// its top the tip drops into the flow (onDock), so it never sits over sign-ups or Approve at the top of a section.
+// so nothing moves, but it DOES cover the top ~100px of what is in view until "Got it".
+// IT NEVER FLOATS OVER THE SECTION'S OWN TOP (stage-4 audit). While <main> is scrolled by less than the room the
+// floating card takes (its measured height + its 14px margin + the 8px sticky offset), the section's first cards —
+// sign-ups on Overview, Approve on Members — are still in view under where it would sit. So then, and the moment a
+// scroll back up comes within that distance (touch momentum often stops a little short of 0), the tip DOCKS: <main>
+// is set to its top and the tip drops into the flow, both before the browser paints (a layout effect, re-rendered
+// synchronously). Setting 0 first is what keeps the in-flow insert from being scroll-anchored: Chromium does not
+// anchor at scrollTop 0. The small move up is the price of never covering Approve; the section's top was in view.
+const STEW_TOUR_TIP_ROOM = 160;   // px; the room a floating tip takes, used only when the card cannot be measured
 function StewTourTip({ tip, onDone, onDock }) {
+  const cardRef = React.useRef(null);
   const reduced = tourKitReducedMotion();
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !(typeof window.stewModalOpen === 'function' && window.stewModalOpen())) onDone(); };
     try { document.addEventListener('keydown', onKey); } catch (e) {}
     return () => { try { document.removeEventListener('keydown', onKey); } catch (e) {} };
   }, [tip.key, tip.title]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // Floating: watch <main> and drop into the flow once it is back at its top. The listener goes with the tip.
+  // The room the floating card takes: its own height, its margin and the sticky offset.
+  const room = () => {
+    let h = 0;
+    try { const r = cardRef.current && cardRef.current.getBoundingClientRect ? cardRef.current.getBoundingClientRect() : null; h = r ? Number(r.height) || 0 : 0; } catch (e) {}
+    return h > 0 ? h + 14 + 8 : STEW_TOUR_TIP_ROOM;
+  };
+  // Dock: <main> to its top FIRST (no scroll anchoring at 0), then the tip into the flow.
+  const dock = () => {
+    try { const el = document.querySelector('main[data-tour="main"]'); if (el) el.scrollTop = 0; } catch (e) {}
+    if (onDock) onDock();
+  };
+  // Decided as floating, but <main> is scrolled by less than the card's room: dock before the browser paints.
+  (React.useLayoutEffect || React.useEffect)(() => {
+    if (tip.float && stewTourMainTop() < room()) dock();
+  }, [tip.float, tip.key]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Floating: watch <main> and dock once a scroll back up comes within the card's room of the top. The listener
+  // goes with the tip.
   React.useEffect(() => {
     if (!tip.float) return undefined;
     let el = null;
     try { el = document.querySelector('main[data-tour="main"]'); } catch (e) {}
     if (!el || !el.addEventListener) return undefined;
-    const onScroll = () => { if (stewTourMainTop() <= 0 && onDock) onDock(); };
+    const onScroll = () => { if (stewTourMainTop() < room()) dock(); };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => { try { el.removeEventListener('scroll', onScroll); } catch (e) {} };
   }, [tip.float, tip.key]);   // eslint-disable-line react-hooks/exhaustive-deps
   const card = (
-    <div data-stew-tour="tip" role="status" aria-live="polite" aria-label={'Tip: ' + tip.title}
+    <div ref={cardRef} data-stew-tour="tip" role="status" aria-live="polite" aria-label={'Tip: ' + tip.title}
       style={{ position: 'relative', maxWidth: 520, margin: '0 auto 14px', boxSizing: 'border-box',
         display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 12px 12px 14px', borderRadius: 14,
         background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--line)', borderLeft: '4px solid var(--clay)',
@@ -254,6 +278,8 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
   const deciding = React.useRef(null);
   const tabNow = React.useRef(tab);
   tabNow.current = tab;
+  const runNow = React.useRef(false);   // for the late decision: the tour is up, or tips are held, as of the latest draw
+  const holdNow = React.useRef(false);
   React.useEffect(() => {
     const f = () => force(x => x + 1);
     try { window.addEventListener('stew-tour', f); window.addEventListener('stew-modals', f); } catch (e) {}
@@ -272,6 +298,8 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
   // While the tour runs, something opening over it (another dialog, the error banner, a join toast) hides the
   // bubble; the run and its step are kept, and it comes back at the same step once that has gone.
   const blocked = stewTourBlocked();
+  runNow.current = !!run;
+  holdNow.current = !!holdTips;
   const pending = stewTourStore.pending;
   const navItem = (Array.isArray(nav) ? nav : []).find(n => n && n.key === tab);
   // Only a section that is IN the nav: one the church switched off is still `tab` for the one render before
@@ -300,6 +328,7 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
       stewTourLater(() => {
         deciding.current = null;
         if (tabNow.current !== sec) return;   // they moved on; the next section decides its own
+        if (stewTourStore.pending || runNow.current || holdNow.current) return;   // the tour came, or tips are held: not now
         setTip(t => t || { ...c, section: sec, float: stewTourMainTop() > 0 });
         force(x => x + 1);
       });

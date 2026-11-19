@@ -293,12 +293,29 @@ test('desktop 900x600: after a sidebar re-pick, leaving Settings and ARRIVING ag
   const up = await tipNow(v => v.tip);
   assert.ok(up.tip, 'CONTROL: no section tip on arriving at Settings — the tip check below would prove nothing');
   assert.ok(up.inMain, 'the section tip is not inside the visible console: ' + JSON.stringify(up));
+  // The floating card's room (its height + 14px margin + 8px sticky offset) is below the 120px this arrival is at,
+  // so this is a real float, not the small-offset dock checked below.
+  const room = up.bottom - up.top + 22;
+  assert.ok(room < y, 'precondition: the tip\'s room (' + room + 'px) is not below the ' + y + 'px arrival, so this would dock, not float: ' + JSON.stringify(up));
   assert.equal(up.float, true, 'arriving scrolled, the tip is not floating: ' + JSON.stringify(up));
   // Back at the top: the tip drops into the flow, above the section — not over its first card.
   await scrollMainTo(0);
   const docked = await tipNow(v => v.tip && !v.float);
   assert.equal(docked.float, false, 'back at the top of <main>, the tip still floats over the section: ' + JSON.stringify(docked));
   assert.ok(docked.nextTop != null && docked.bottom <= docked.nextTop, 'the docked tip overlaps the section under it: ' + JSON.stringify(docked));
+  // ARRIVING JUST BELOW THE TOP (stage-4 audit): at a 20px offset the section's first cards are in view under where a
+  // floating tip would sit. The tip docks — <main> to its top, the tip in the flow — and covers none of the section.
+  assert.equal(await side('Overview'), 'ok', 're-anchor: the sidebar "Overview" row went missing');
+  await sleep(1200);
+  const small = await scrollMainTo(20);
+  await sleep(200);
+  assert.ok(small > 0 && small < room, 'precondition: could not put the Overview at a small offset (got ' + small + ', room ' + room + ')');
+  assert.equal(await side('Settings'), 'ok', 're-anchor: the sidebar "Settings" row went missing');
+  const near = await tipNow(v => v.tip && !v.float && v.nextTop != null, 3000);
+  assert.ok(near.tip, 'CONTROL: no section tip on arriving at Settings just below the top');
+  assert.equal(near.float, false, 'arriving ' + small + 'px down, the tip floats over the top of the section: ' + JSON.stringify(near));
+  assert.ok(near.bottom <= near.nextTop, 'arriving ' + small + 'px down, the tip covers the top of the section: ' + JSON.stringify(near));
+  assert.equal(near.scrollTop, 0, 'docking did not put the console at its top: ' + JSON.stringify(near));
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
