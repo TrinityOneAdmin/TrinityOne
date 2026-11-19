@@ -8157,7 +8157,9 @@ async function _carryOverStewardDocs(pk, opts) {
     if (d.startsWith('trinityone/careteam:')) return 'care';
     if (!d.startsWith('trinityone/roster:')) return '';
     if (careIds.has(d.slice('trinityone/roster:'.length))) return 'care';
-    return (!careIds.size && !careKnown()) ? 'unknown' : '';
+    // NOT KNOWN IS NOT KNOWN, WHATEVER careIds HOLDS (audit LOW, 2026-11-19): with the first slice incomplete, careIds may
+    // hold only their own pointer or a stale id while the church's real care team went unseen — any roster is held back
+    return !careKnown() ? 'unknown' : '';
   };
   // their newest copy of each carryable address of THIS church (feChurch stamps ['church', <cp>] on every steward write)
   const mine = new Map();

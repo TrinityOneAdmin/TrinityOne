@@ -285,8 +285,9 @@ async function scopedHelperCase({ meals, extraRelay, careRoster }) {
   const C = await churchOn(1, 'f3-none');
   const extra = extraRelay ? { relays: () => [C.relays[0].wsUrl, extraRelay] } : {};
   const eng = owner(C, extra);
-  // THE CONSOLE AS A FAILED START LEAVES IT: no care team read (''), and "known" claimed by an EOSE that was a failure
-  eng.window.StewardMeals = { careTeamId: () => '', careTeamKnown: () => true };
+  // THE CONSOLE AS A FAILED START LEAVES IT: no care team read (''). (It also used to claim "known" from an EOSE that was a
+  // failure — StewardMeals.careTeamKnown, removed in 3b1392a6; nothing reads such a flag now.)
+  eng.window.StewardMeals = { careTeamId: () => '' };
   const sam = await newSteward(C);
   await setRoster(eng, [sam.pub], { [sam.pub]: ['content', 'members'] });   // never held Care
   const team = C.cp.slice(0, 16) + (careRoster ? '-care' : '-worship');
@@ -316,6 +317,45 @@ test('HIGH 1 — the carry’s own care-team read NOT complete (a second relay n
   assert.equal(why(r, d).length, 1, JSON.stringify(r.carry.notCarried));
 });
 
+// AUDIT LOW (2026-11-19, branch fix/removed-steward-care-batch-gate) — the care team is NOT known when the first slice (the
+// one that asks for meals-settings) came back incomplete, even if careIds is not empty. Here careIds holds only HER pointer
+// (her own meals-settings, read in phase A); the church's meals-settings — naming the real care team — is in the first slice,
+// whose answer is cut off (no events, not complete: what a relay that drops the login mid-read gives). The church's care
+// roster she changed is her NEWEST document, so it lands in slice 2, which answers whole.
+test('LOW (batch gate) — slice 1 incomplete, slice 2 whole, careIds = only her pointer: the church’s care roster is NOT carried, and is listed', async () => {
+  const C = await churchOn(1, 'f3-gate');
+  const eng = owner(C);
+  const careTeam = C.cp.slice(0, 16) + '-care', hers = C.cp.slice(0, 16) + '-hers';
+  eng.window.StewardMeals = { careTeamId: () => '' };
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
+  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: careTeam }, { tagChurch: false }));
+  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, adminGroupId: hers }));
+  for (let i = 0; i < 61; i++) await mustPut(C, raw(C, kim, GROUP_D + C.cp.slice(0, 16) + '-g' + i, { name: 'Group ' + i }));
+  await mustPut(C, raw(C, kim, ROSTER_D + careTeam, { pubs: [H.key().pub] }));
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
+  // THE STUB: the first phase-B question (the one carrying meals-settings) is answered with nothing and not complete
+  const realSub = eng.pool.subscribeMany.bind(eng.pool), realAuthed = eng._keyReadAuthedOn;
+  let cut = 0, cutting = false;
+  eng.pool.subscribeMany = (urls, filters, h) => {
+    const f = filters[0] || {};
+    if (!cut && Array.isArray(f['#d']) && f['#d'].includes(MEALS_D)) {
+      cut++; cutting = true;
+      return realSub(urls, filters, { ...h, onevent() {}, oneose() { h.oneose && h.oneose(); } });
+    }
+    return realSub(urls, filters, h);
+  };
+  eng._keyReadAuthedOn = (u) => { if (cutting) { cutting = false; return false; } return realAuthed(u); };
+  const r = await eng._removeStewardKeeping(kim.pub);
+  assert.ok(r.wrote);
+  assert.equal(cut, 1, 'FIXTURE: the first slice was not the one cut');
+  assert.ok(why(r, MEALS_D).some(n => n.why === 'incomplete'), 'FIXTURE: slice 1 was not incomplete: ' + JSON.stringify(r.carry.notCarried.slice(0, 3)));
+  assert.equal(r.carry.carried.filter(c => c.d.startsWith(GROUP_D)).length >= 1, true, 'FIXTURE: slice 2 did not answer whole');
+  assert.equal(churchSent(eng, C, ROSTER_D + careTeam).length, 0, 'THE CHURCH’S CARE ROSTER WAS CARRIED WHILE THE CARE TEAM WAS NOT KNOWN (F3 again)');
+  assert.deepEqual(why(r, ROSTER_D + careTeam).map(n => n.why), ['no-care']);
+  assert.match(why(r, ROSTER_D + careTeam)[0].label, /^a team list \(they no longer had the Care permission, and this console had not yet read which team is the care team\)$/);
+});
+
 // LOW 5 — meals-settings is decided FIRST. Her OWN meals-settings is known from phase A already; what only phase B can show
 // is ANOTHER author's copy — here the church's, naming team `churchTeam`, which this console's StewardMeals has not caught up
 // with (careTeamId() still answers an older team). She has more than one slice (60) of documents: the church's care team
@@ -326,7 +366,7 @@ test('LOW 5 — over 60 documents: the care team named only by the CHURCH’s me
   const C = await churchOn(1, 'f3-slices');
   const eng = owner(C);
   const stale = C.cp.slice(0, 16) + '-oldcare', churchTeam = C.cp.slice(0, 16) + '-care', hers = C.cp.slice(0, 16) + '-hers';
-  eng.window.StewardMeals = { careTeamId: () => stale, careTeamKnown: () => true };
+  eng.window.StewardMeals = { careTeamId: () => stale };
   const kim = await newSteward(C);
   await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
   await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: churchTeam }, { tagChurch: false }));
@@ -348,7 +388,7 @@ test('LOW 6 — lost Care, her meals/care setting withdrawn: not carried, listed
   const [X] = C.relays;
   const eng = owner(C);
   const careId = C.cp.slice(0, 16) + '-care';
-  eng.window.StewardMeals = { careTeamId: () => careId, careTeamKnown: () => true };
+  eng.window.StewardMeals = { careTeamId: () => careId };
   const kim = await newSteward(C);
   await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
   await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: careId }, { tagChurch: false }));
@@ -365,7 +405,7 @@ test('LOW 6 — lost Care, her meals/care setting withdrawn: not carried, listed
 async function teamGoneCase({ churchAid, groups }) {
   const C = await churchOn(1, 'f3-gone');
   const eng = owner(C);
-  eng.window.StewardMeals = { careTeamId: () => churchAid, careTeamKnown: () => true };
+  eng.window.StewardMeals = { careTeamId: () => churchAid };
   if (groups) eng._lastGroups = { cp: C.cp, list: Object.assign(groups.map(id => ({ id, name: id })), { _fresh: true }) };
   const kim = await newSteward(C);
   await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });

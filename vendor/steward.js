@@ -21484,7 +21484,7 @@ zoo`.split("\n");
       if (d.startsWith("trinityone/careteam:")) return "care";
       if (!d.startsWith("trinityone/roster:")) return "";
       if (careIds.has(d.slice("trinityone/roster:".length))) return "care";
-      return !careIds.size && !careKnown() ? "unknown" : "";
+      return !careKnown() ? "unknown" : "";
     };
     const mine = /* @__PURE__ */ new Map();
     const keepMine = (e) => {
