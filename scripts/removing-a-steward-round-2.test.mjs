@@ -761,6 +761,31 @@ test('AUDIT 5 — a relay that says NOTHING is given up on, inside the cap, and 
     assert.deepEqual(go.swapped, []);
   } finally { if (frozen.has(r2)) { try { r2.proc.kill('SIGCONT'); } catch {} frozen.delete(r2); } g.stop(); }
 });
+test('AUDIT 5 — a relay that sends FOR EVER (never an end) is given up on at the overall cap, and said', async () => {
+  const { C, eng, tess, g } = await formerHelperWithOrdinaryGroup('a5-cap');
+  try {
+    blockApi(eng, C);
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 6000 });
+    // from here on r2 answers every read with an event a second and never an end; the cap is shortened to keep this quick
+    // (it is the shipped constant, lifted into the rig's scope)
+    assert.equal(typeof eng.SWAP_READ_CAP_MS, 'number', 'FIXTURE: the cap is not a lifted constant any more — re-anchor');
+    eng.SWAP_READ_CAP_MS = 5000;
+    void b;
+    const url = C.relays[1].wsUrl, real = eng.pool.subscribeMany;
+    eng.pool.subscribeMany = (urls, filters, h) => {
+      if (!urls.includes(url)) return real(urls, filters, h);
+      const fake = { kind: 30078, pubkey: C.cp, created_at: 1, tags: [['d', 'trinityone/x'], ['t', NET]], content: '' };
+      const iv = setInterval(() => { try { h.onevent && h.onevent(fake); } catch {} }, 1000);
+      return { close() { clearInterval(iv); } };
+    };
+    const t0 = Date.now();
+    const go = await Promise.race([eng._swapKeyInChurchGroups({ carried: [], superseded: [] }, tess.pub, ''), sleep(30000).then(() => 'HUNG')]);
+    assert.notEqual(go, 'HUNG', 'A RELAY THAT NEVER ENDS HELD THE TAKE-OFF PAST ANY CAP (audit 5)');
+    assert.ok(Date.now() - t0 < 15000, 'not ended at the cap: ' + (Date.now() - t0) + ' ms');
+    assert.ok(go.anyUnanswered && go.unchecked.includes('the groups they may have been on'), JSON.stringify(go));
+    assert.deepEqual(go.swapped, []);
+  } finally { g.stop(); }
+});
 // AUDIT 6: "Another helper has changed …" only when the newest copy's author IS a helper on this console's roster
 test('AUDIT 6 — the newest copy is by someone NOT on the helper list: listed apart from "another helper"', async () => {
   const C = await churchOn(1, 'a6-who');
