@@ -138,15 +138,24 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   scope[ssSigner] = finalizeEvent;
   const tops = ['function _carryPrefix(d, list) {', 'function _carryLabel(d, content) {', 'async function _carryTemplate(S, blocked, who) {',
     'async function _carryOverStewardDocs(pk, opts) {', 'function _removeStewardKeeping(pk, opts) {', 'function _dropJustRemoved(list, rosterAt) {', 'async function _swapKeyInChurchGroups(carry, oldPk, newPk) {'].map(a => fnBody(STEWARD, a, a));
+  // ROUND 2 (2026-11-19, plan PLAN-removed-steward-fixes-F1-F4): Block of a current helper (owner answer l) and the
+  // landed side effects Remove and Block share. Lifted WHEN THE BUNDLE HAS THEM, so the Step 0 tests run on the tree
+  // before the fix (where the screen still calls carryOverStewardDocs + setBlocked) and on the fixed one alike.
+  const OPT_TOPS = [['async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval'], ['function _blockStewardKeeping(pk, blockedList, opts) {', '_blockStewardKeeping']]
+    .filter(([a]) => STEWARD.includes(a));
+  for (const [a] of OPT_TOPS) tops.push(fnBody(STEWARD, a, a));
+  const optNames = OPT_TOPS.map(([, n]) => n);
   const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = '].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
-  const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {'].map(a => fnBody(STEWARD, '    ' + a, a).trim());
+  const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {', 'blockStewardKeeping(pk, blockedList, opts) {']
+    .filter(a => a !== 'blockStewardKeeping(pk, blockedList, opts) {' || STEWARD.includes('    ' + a)).map(a => fnBody(STEWARD, '    ' + a, a).trim());
   const api = new Function('scope', `${vars.join('\n')}\nwith (scope) { ${feBody}\n${ingBody}\n${tops.join('\n')}\n`
-    + ` return { feChurch, stewIngestKey, _carryTemplate, _carryOverStewardDocs, _removeStewardKeeping, _swapKeyInChurchGroups, methods: ({ ${methods.join(',\n')} }), pub: ({ ${pub3.join(',\n')} }) }; }`)(scope);
+    + ` return { feChurch, stewIngestKey, _carryTemplate, _carryOverStewardDocs, _removeStewardKeeping, _swapKeyInChurchGroups, ${optNames.map(n => n + ', ').join('')}methods: ({ ${methods.join(',\n')} }), pub: ({ ${pub3.join(',\n')} }) }; }`)(scope);
   Object.assign(scope, api.methods);
   scope.feChurch = api.feChurch; scope.stewIngestKey = api.stewIngestKey;
   scope._carryOverStewardDocs = api._carryOverStewardDocs; scope._removeStewardKeeping = api._removeStewardKeeping; scope._carryTemplate = api._carryTemplate; scope._swapKeyInChurchGroups = api._swapKeyInChurchGroups;
+  for (const n of optNames) scope[n] = api[n];
   scope.window.Steward.setStewards = (...a) => scope.setStewards(...a);
   Object.assign(scope.window.Steward, api.pub);
   return scope;
