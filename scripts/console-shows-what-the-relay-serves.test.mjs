@@ -103,14 +103,12 @@ function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGro
     // is about what the screens DISPLAY, so the narrow read opens nothing here and `opened` still counts the streams.
     _freshTok: () => ({ live: true, genuine: false, at: 0 }), _keysReadSignal: () => {},
     _freshDocRead: (cp, ds, onevent, onFresh) => { const r = { ds, onevent, onFresh, closed: false }; freshReads.push(r); return () => { r.closed = true; }; },
-    // who this console just took off the roster (2026-11-18): subscribeStewards drops them from an older roster (_dropJustRemoved, lifted below)
-    _justRemoved: new Map(),
   };
   const body = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets',
     // `_capsOf` is how both predicates read the capability list — it normalises it the way the relay does
     // (gateway.mjs:1611: non-empty strings, lower-cased) instead of counting the raw length. Lift it with
     // them, or they call a function that is not there.
-    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice', '_listTag', '_stampFor', '_dropJustRemoved'].map(n => lift(STEWARD, n)).join('\n');
+    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice', '_listTag', '_stampFor'].map(n => lift(STEWARD, n)).join('\n');
   const args = Object.keys(scope);
   const api = new Function(...args, `${body}\nreturn ({\n${grabMethod(STEWARD, 'subscribeStewards(onList)')},\n${grabMethod(STEWARD, 'subscribeGroups(onGroups)')}\n});`)
     (...args.map(k => scope[k]));

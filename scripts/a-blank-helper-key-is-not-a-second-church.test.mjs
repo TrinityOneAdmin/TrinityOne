@@ -80,7 +80,6 @@ function build({ ownName = '', registered = false, stewarded = [], active = '', 
     // caches (preload Finding 6). No-op stubs — without them the sweep throws inside setActiveIdentity and the
     // outer catch silently kills the auto-land this file asserts.
     _sgClearClear: () => {}, _finBookClear: () => {}, _seedSweep: () => {},
-    _justRemoved: new Map(),   // who this console just took off the roster (2026-11-18): setActiveIdentity clears it
     netKeys: () => [],
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),

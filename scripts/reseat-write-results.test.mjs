@@ -45,7 +45,7 @@ function grab(src, sig) {
 
 // Drive the real function. `refuse` names the setters that every relay rejects — i.e. that return false,
 // which is exactly what publish() does when the church is offline or every relay refuses the write.
-function reseater(refuse = [], { steward = false } = {}) {
+function reseater(refuse = []) {
   const body = grab(STEWARD, 'async reseatMember(oldPub, newPub, o) {');
   const calls = [];
   const setter = (name) => async (...args) => {
@@ -65,13 +65,7 @@ function reseater(refuse = [], { steward = false } = {}) {
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : null),
     now: () => Math.floor(Date.now() / 1000),
     window: { Steward },
-    // an old key that is or was a steward's: the carry-over (_carryOverStewardDocs, the engine's own top-level function) is
-    // recorded in call order with the setters, so its place before the block is measured, not assumed (2026-11-18)
-    _carryOverStewardDocs: async (pk, o) => { calls.push({ name: 'carry', args: [pk, o] }); return { carried: [{ d: 'trinityone/group:g', label: 'a group', ev: { content: '{}', tags: [] } }], notCarried: [], superseded: [], refused: '' }; },
-    // the re-seat's second half: the new key takes the old one's place in the carried group definitions — after the block
-    _swapKeyInChurchGroups: async (carry, from, to) => { calls.push({ name: 'swap', args: [carry, from, to] }); return { swapped: ['a group'], failed: ['a failed group'], other: ['a group another steward changed'], unchecked: ['a group no relay showed'] }; },
   };
-  Steward.isOrWasSteward = (pk) => steward && String(pk).toLowerCase() === String(oldK).toLowerCase();
   const names = Object.keys(scope);
   const obj = new Function(...names, 'return ({ ' + body + ' });')(...names.map(n => scope[n]));
   return { run: (a, b, o) => obj.reseatMember(a, b, o), calls, called: (n) => calls.some(c => c.name === n) };
@@ -189,42 +183,4 @@ test('a write refused on a same-second tie is retried, not surfaced as a failure
   const out = await obj.reseatMember(oldK, newK, minorOpts());
   assert.equal(tries.setMinors, 2, 'the refused write was never retried — a clock collision becomes a hard failure');
   assert.equal(out.minorCarried, true, 'the retry landed but the re-seat still reported the marking as not carried');
-});
-
-// ── RE-SEATING A STEWARD'S KEY (2026-11-18 audit LOW 1; ORDER per audit round 2, MED) ────────────────────────────────
-// The carry runs VERBATIM before the block (afterwards the relay hides what the old key wrote, from the church too); the
-// new key replaces the old one on group leaders/members only AFTER the block lands — so a refused block leaves no group
-// naming a key that was never re-seated.
-test('block-old on a STEWARD’s key: verbatim carry BEFORE the block, the key swap only AFTER it lands', async () => {
-  const r = reseater([], { steward: true });
-  const out = await r.run(oldK, newK, { ...minorOpts(), blockOld: true });
-  const order = r.calls.map(c => c.name);
-  assert.ok(order.includes('carry'), 'THE CARRY DID NOT RUN on a steward’s old key: ' + order.join(' → '));
-  assert.ok(order.indexOf('carry') < order.indexOf('setBlocked'), 'the block was published before the carry: ' + order.join(' → '));
-  assert.ok(order.indexOf('swap') > order.indexOf('setBlocked'), 'the new key was swapped in BEFORE the block landed: ' + order.join(' → '));
-  const c = r.calls.find(x => x.name === 'carry');
-  assert.equal(c.args[0], oldK);
-  assert.deepEqual(c.args[1], {}, 'the pre-block carry must be verbatim — no filter, no swap');
-  const sw = r.calls.find(x => x.name === 'swap');
-  assert.deepEqual([sw.args[1], sw.args[2]], [oldK, newK]);
-  assert.ok(out.carry && out.carry.carried.length === 1, 'the result does not report what the carry kept, so the screen cannot say it');
-  // every list the swap answers reaches the screen (round 6: swapOther had no test)
-  assert.deepEqual([out.carry.swapped, out.carry.swapFailed, out.carry.swapOther, out.carry.swapUnchecked],
-    [['a group'], ['a failed group'], ['a group another steward changed'], ['a group no relay showed']], 'a swap result did not reach carry: ' + JSON.stringify(out.carry));
-});
-test('a REFUSED block on a steward’s key: no key swap at all, and the error is the honest "nothing was changed"', async () => {
-  const r = reseater(['setBlocked'], { steward: true });
-  let threw = null;
-  try { await r.run(oldK, newK, { ...minorOpts(), blockOld: true }); } catch (e) { threw = e; }
-  assert.ok(threw, 'a refused block did not stop the re-seat');
-  assert.match(String(threw.message), /Couldn’t block the old phone, so nothing was changed/);
-  assert.equal(r.called('swap'), false, 'THE NEW KEY WAS PUT ON GROUPS although the re-seat never happened');
-  assert.equal(r.called('setReseats'), false, 'the seat moved although the block failed');
-});
-test('CONTROL: block-old on an ordinary member’s key does not carry, and reports no carry', async () => {
-  const r = reseater([], { steward: false });
-  const out = await r.run(oldK, newK, { ...minorOpts(), blockOld: true });
-  assert.equal(r.called('carry'), false);
-  assert.equal(r.called('swap'), false);
-  assert.equal(out.carry, null);
 });

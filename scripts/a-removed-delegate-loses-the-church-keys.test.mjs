@@ -29,8 +29,6 @@ function setup({ setStewardsResult = true, careResult = true, delegateIsMember =
     pubkey: CHURCH, actingChurch: '',
     joinPolicyFresh: () => false, listIsFresh: () => true,   // an open-join church whose lists have been read (round 3a's shared filter)
     setStewards: (list) => { calls.setStewards.push(list); return Promise.resolve(setStewardsResult); },
-    // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
-    removeStewardKeeping: (pk) => { const next = [DELEGATE, OTHER_STEW].filter(p => p !== pk); return Promise.resolve(steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next })); },
     stewardRemovalOutcome: () => Promise.resolve(outcome),   // only asked when setStewards answered false
     rotateCareKey: (m, s) => { calls.care.push({ m, s }); return Promise.resolve(careResult); },
     rotateMediaKey: (m, s) => { calls.media.push({ m, s }); return Promise.resolve(true); },

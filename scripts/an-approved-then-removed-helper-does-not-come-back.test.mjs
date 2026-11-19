@@ -54,8 +54,6 @@ function setup({ reqList = [], roster = [], since = {}, setStewardsResult = true
     stewardLabels: () => ({}), stewardCaps: () => ({}), stewardSince: () => ({ ...since }),
     subscribeStewardRequests: (cb) => { reqCb = cb; cb(state.reqList); return () => {}; },
     setStewards: (pubkeys, caps, names) => { wrote.push({ pubkeys, caps, names }); return Promise.resolve(setStewardsResult); },
-    // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
-    removeStewardKeeping: (pk) => { const next = state.roster.filter(p => p !== pk); wrote.push({ pubkeys: next }); return Promise.resolve(setStewardsResult).then(w => ({ wrote: w, carry: null, next })); },
     stewardRemovalOutcome: () => outcome,
   });
   const { window, localStorage } = fakeBrowser({ Steward });
