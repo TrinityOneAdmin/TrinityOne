@@ -20169,7 +20169,17 @@ zoo`.split("\n");
     return pool.subscribeMany(relays(), filters, handlers);
   }
   function netShortName(v) {
-    const s = String(v == null ? "" : v).replace(/(\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,7}\u{E007F})|(?![\u200C\u200D\uFE0F])[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2800\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, (m, flag) => flag || "").replace(/\s+/g, " ").trim();
+    function netCleanRe() {
+      if (netShortName._re) return netShortName._re;
+      let re;
+      try {
+        re = new RegExp("(\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F})|(?![\\u200C\\u200D\\uFE0F])[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u2800\\p{Default_Ignorable_Code_Point}\\p{Cf}]", "gu");
+      } catch (e) {
+        re = new RegExp("(\\uD83C\\uDFF4\\uDB40\\uDC67\\uDB40\\uDC62(?:\\uDB40\\uDC65\\uDB40\\uDC6E\\uDB40\\uDC67|\\uDB40\\uDC73\\uDB40\\uDC63\\uDB40\\uDC74|\\uDB40\\uDC77\\uDB40\\uDC6C\\uDB40\\uDC73)\\uDB40\\uDC7F)|(?![\\u200C\\u200D\\uFE0F])(?:[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890\\u0891\\u08E2\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFFB]|\\uD804[\\uDCBD\\uDCCD]|\\uD82F[\\uDCA0-\\uDCA3]|\\uD834[\\uDD73-\\uDD7A]|\\uD80D[\\uDC30-\\uDC3F]|[\\uDB40-\\uDB43][\\uDC00-\\uDFFF])", "g");
+      }
+      return netShortName._re = re;
+    }
+    const s = String(v == null ? "" : v).replace(netCleanRe(), (m, flag) => flag || "").replace(/\s+/g, " ").trim();
     let parts = null;
     try {
       if (typeof Intl !== "undefined" && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(void 0, { granularity: "grapheme" }).segment(s), (x) => x.segment);

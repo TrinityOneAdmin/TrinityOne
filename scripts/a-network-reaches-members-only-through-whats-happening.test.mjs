@@ -27,12 +27,13 @@ const NOW = Math.floor(Date.now() / 1000);
 const POSTS = [{ id: 'a1', text: 'Older news', ts: NOW - 3 * 86400 }, { id: 'a2', text: 'Regional youth weekend: booking opens Monday\nLeaders, see the pack.', ts: NOW - 3600 }];
 const EVENTS = [{ id: 'ev1', title: 'Advent prayer evening', date: iso(10), time: '19:00', where: 'Bath Abbey' }];
 
-function boot({ flag = 'on', features, standing = 'unmarked', assumeChild = false, seedNetwork = false, second = false } = {}) {
+function boot({ flag = 'on', features, standing = 'unmarked', assumeChild = false, seedNetwork = false, second = false, RegExpImpl } = {}) {
   const r = fakeReact(); const env = appBrowser(); const window = env.window;
   if (flag === 'on') window.NETWORKS_ENABLED = true;   // 'default' leaves app/data.jsx to give the switch its shipped value
   window.Bible = { loaded: true, activeVersion: 'KJV', subscribe: () => () => {}, books: () => ['John'], maxChapter: () => 21, defaultLoc: () => ({ book: 'John', chap: 1 }) };
   window.MyData = { seedIfEmpty() {}, on: () => () => {}, list: () => [], settings: { get: () => ({}) }, count: () => 0, set: () => {} };
   window.TrinityData = {};
+  if (RegExpImpl) window.RegExp = RegExpImpl;   // the app's scope sees this RegExp (loadApp runs every script in a context built on `window`)
   const App = loadApp({ React: r.React, window, expr: 'App' });
   window.TrinityData.CHURCHES = [{ id: CHURCH, npub: CHURCH, name: 'St Bede', ...(features ? { features } : {}) }, ...(second ? [{ id: CHURCH2, npub: CHURCH2, name: 'St Aidan' }] : [])];
   window.localStorage.setItem('trinityone.activeChurch', JSON.stringify(CHURCH));
@@ -342,7 +343,7 @@ test('F2c: after the backoff is spent ("unknown" three times) NOTHING asks again
 const ENG = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}', SCT = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}', WLS = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}';
 const KEEP = ['café é', 'שלום', 'مرحبا', '\u{1F44D}\u{1F3FD}', '\u{1F468}‍\u{1F469}‍\u{1F467}', '1️⃣', '❤️', ENG, SCT, WLS, 'a‌b'];
 const STRIP = [['a⠀b', 'ab'], ['a⁪b⁯c', 'abc'], ['a᠋b᠍c', 'abc'], ['a឴b឵c', 'abc'], ['a￹b￻c', 'abc'], ['a\u{1D173}b\u{1D17A}c', 'abc'], ['a\u{13430}b\u{1343F}c', 'abc'],
-  ['a\u{E0041}b', 'ab'], ['a\u{E007F}b', 'ab'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}', '\u{1F3F4}'], ['x\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}y', 'xy']];
+  ['a\u{E0041}b', 'ab'], ['a\u{E007F}b', 'ab'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}', '\u{1F3F4}'], ['x\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}y', 'xy'], ['\u{1F3F4}\u{E0068}\u{E0065}\u{E006C}\u{E006C}\u{E006F}\u{E007F}', '\u{1F3F4}'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0078}\u{E0079}\u{E007A}\u{E007F}', '\u{1F3F4}'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E0078}\u{E007F}', '\u{1F3F4}'], ['B\u00ADB\u034F\u061C&\u180ER\u115F\u1160\u3164\uFFA0B\u{E0041}\u0001\u0085\uFE00\uFE0E\u202E\u200B\uFEFF', 'BB&RB'], ['a\u{110BD}\u{110CD}b\u{1BCA0}c\u0600d\u2065e\uFFF0f', 'abcdef']];
 test('NAMES round 2: member app keeps accents, Hebrew, Arabic, skin tones, family, keycap, heart, England/Scotland/Wales flags; drops braille blank, U+206A-F, U+180B-D, U+17B4/5, U+FFF9-B, U+1D173-A, U+13430-F and stray tag characters', async () => {
   const m = boot(); await m.settle(); await m.join(); await m.deliver();
   let at = NOW + 10;
@@ -351,4 +352,21 @@ test('NAMES round 2: member app keeps accents, Hebrew, Arabic, skin tones, famil
   // blank after cleaning -> falls back to the network's name, as before
   await m.profile(NETHEX, { name: 'Real Name', short_name: '⠀⁪\u{E0041}' }, at++);
   assert.equal(m.ctx().netTabs[0].title, 'Real Name', 'a name that cleans to nothing did not fall back');
+});
+
+test('NAMES, FALLBACK (point of use): with Unicode property escapes refused by the WebView, the member app still keeps the keep list, strips the attack list and flag smuggling, and falls back to the network name when nothing is left', async () => {
+  const calls = [];
+  const impl = new Proxy(RegExp, { construct(t, args, nt) {
+    const src = String(args[0]), hasP = /\\[pP]\{/.test(src);
+    calls.push({ flags: String(args[1] || ''), hasP });
+    if (hasP) throw new SyntaxError('Invalid regular expression: invalid property name');
+    return Reflect.construct(t, args, nt);
+  } });
+  const m = boot({ RegExpImpl: impl }); await m.settle(); await m.join(); await m.deliver();
+  let at = NOW + 10;
+  for (const k of KEEP) { await m.profile(NETHEX, { name: 'N', short_name: k }, at++); assert.equal(m.ctx().netTabs[0].title, k, 'fallback wrongly changed: ' + JSON.stringify(k)); }
+  for (const [raw, want] of STRIP) { await m.profile(NETHEX, { name: 'N', short_name: raw }, at++); assert.equal(m.ctx().netTabs[0].title, want, 'fallback did not clean: ' + JSON.stringify(raw)); }
+  await m.profile(NETHEX, { name: 'Real Name', short_name: '\u2800\u206A\u{E0041}' }, at++);
+  assert.equal(m.ctx().netTabs[0].title, 'Real Name');
+  assert.ok(calls.some(c => c.flags === 'gu' && c.hasP) && calls.some(c => c.flags === 'g' && !c.hasP), 'the app never went through the refused-then-fallback construction: ' + JSON.stringify(calls));
 });

@@ -166,6 +166,20 @@ const NETWORK_NAV = [
 const NETWORK_SETTINGS_PAGES = new Set(['identity', 'networds']);
 // The networds page is NOT in SETTINGS_GROUPS (the church console's page table): DashSettings adds it to the first group in the network view only.
 const NETWORK_WORDS_PAGE = { k: 'networds', n: 'Network recovery words', d: 'The network’s own 12 words' };
+// The name-cleaning regex used by NetShortNameField's `live`, built once. Same text as Steward.netShortName and the member app's netClipText.
+function netFieldRe() {
+  if (netFieldRe._re) return netFieldRe._re;
+  let re;
+  try {
+    // Unicode property escapes need Chrome 64+. Built from a STRING inside try, never written as a regex literal: a literal the engine cannot
+    // parse is a SyntaxError for the WHOLE file (the packaged builds ship this text as-is), a string just throws here and we fall back.
+    re = new RegExp('(\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F})|(?![\\u200C\\u200D\\uFE0F])[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u2800\\p{Default_Ignorable_Code_Point}\\p{Cf}]', 'gu');
+  } catch (e) {
+    // the same sets as explicit ranges, no \p and no u flag (astral ranges as surrogate pairs)
+    re = new RegExp('(\\uD83C\\uDFF4\\uDB40\\uDC67\\uDB40\\uDC62(?:\\uDB40\\uDC65\\uDB40\\uDC6E\\uDB40\\uDC67|\\uDB40\\uDC73\\uDB40\\uDC63\\uDB40\\uDC74|\\uDB40\\uDC77\\uDB40\\uDC6C\\uDB40\\uDC73)\\uDB40\\uDC7F)|(?![\\u200C\\u200D\\uFE0F])(?:[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890\\u0891\\u08E2\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFFB]|\\uD804[\\uDCBD\\uDCCD]|\\uD82F[\\uDCA0-\\uDCA3]|\\uD834[\\uDD73-\\uDD7A]|\\uD80D[\\uDC30-\\uDC3F]|[\\uDB40-\\uDB43][\\uDC00-\\uDFFF])', 'g');
+  }
+  return (netFieldRe._re = re);
+}
 // THE NETWORK'S SHORT NAME (Networks member step 1, owner 2026-11-19): the title of the tab its members see inside What's happening, in place of
 // the word "Network". Network view only (Network identity). Published in the network's kind-0 as `short_name` by Steward.publishProfile, which
 // caps it (netShortName: one line, 16 characters); the field caps with the same rule so what is typed is what is saved. Empty = members see
@@ -175,7 +189,7 @@ function NetShortNameField({ church }) {
   // WHILE TYPING: invisible / bidi characters out and at most 16 characters, but NOT trimmed -- trimming each keystroke ate the space between
   // two words as it was typed. The full rule (trim, collapse) is applied by `cap` on Save.
   const live = (v) => {
-    const s = String(v == null ? '' : v).replace(/(\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,7}\u{E007F})|(?![\u200C\u200D\uFE0F])[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2800\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, (m, flag) => flag || '');
+    const s = String(v == null ? '' : v).replace(netFieldRe(), (m, flag) => flag || '');
     let parts = null;
     try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
     let out = ''; for (const g of (parts || Array.from(s)).slice(0, 16)) { if (out.length + g.length > 64) break; out += g; }

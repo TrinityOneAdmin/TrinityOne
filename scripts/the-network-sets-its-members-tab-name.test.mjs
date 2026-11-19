@@ -25,7 +25,7 @@ function topFn(bundle, name) {
 }
 const netShortName = new Function(topFn(STEWARD, 'netShortName') + '\nreturn netShortName;')();
 
-function consoleWith(React, { network, published, short_name = '' }) {
+function consoleWith(React, { network, published, short_name = '', RegExpImpl }) {
   const win = {
     NETWORKS_ENABLED: true,
     useStewardChurch: () => ({ name: network ? 'Bed, Bath & Regions Beyond' : 'Grace Church', npub: network ? 'npub1net' : 'npub1grace', isNetwork: network, features: {}, rules: {}, short_name }),
@@ -62,13 +62,14 @@ function consoleWith(React, { network, published, short_name = '' }) {
     WizMeetings: Stub('WizMeetings'), _wizMeetingId: () => 'evt1', useStewDialog: () => ({ current: null }), churchHandle: () => 'grace',
     stewCapState: () => ({ allowed: false }),
   };
+  if (RegExpImpl) globals.RegExp = RegExpImpl;
   const names = Object.keys(globals);
   return new Function(...names, JS + '\nreturn { DashSettings };')(...names.map(k => globals[k]));
 }
-function identityPage({ network, short_name } = {}) {
+function identityPage({ network, short_name, RegExpImpl } = {}) {
   const { React, draw } = miniReact();
   const published = [];
-  const mod = consoleWith(React, { network, published, short_name });
+  const mod = consoleWith(React, { network, published, short_name, RegExpImpl });
   const render = () => draw(mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} });
   render();
   return { render, published };
@@ -178,7 +179,7 @@ test('the field keeps a space typed between two words (it is trimmed on Save, no
 const ENG = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}', SCT = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}', WLS = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}';
 const KEEP = ['café é', 'שלום', 'مرحبا', '\u{1F44D}\u{1F3FD}', '\u{1F468}‍\u{1F469}‍\u{1F467}', '1️⃣', '❤️', ENG, SCT, WLS, 'a‌b'];
 const STRIP = [['a⠀b', 'ab'], ['a⁪b⁯c', 'abc'], ['a᠋b᠍c', 'abc'], ['a឴b឵c', 'abc'], ['a￹b￻c', 'abc'], ['a\u{1D173}b\u{1D17A}c', 'abc'], ['a\u{13430}b\u{1343F}c', 'abc'],
-  ['a\u{E0041}b', 'ab'], ['a\u{E007F}b', 'ab'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}', '\u{1F3F4}'], ['x\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}y', 'xy']];
+  ['a\u{E0041}b', 'ab'], ['a\u{E007F}b', 'ab'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}', '\u{1F3F4}'], ['x\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}y', 'xy'], ['\u{1F3F4}\u{E0068}\u{E0065}\u{E006C}\u{E006C}\u{E006F}\u{E007F}', '\u{1F3F4}'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0078}\u{E0079}\u{E007A}\u{E007F}', '\u{1F3F4}'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E0078}\u{E007F}', '\u{1F3F4}'], ['B\u00ADB\u034F\u061C&\u180ER\u115F\u1160\u3164\uFFA0B\u{E0041}\u0001\u0085\uFE00\uFE0E\u202E\u200B\uFEFF', 'BB&RB'], ['a\u{110BD}\u{110CD}b\u{1BCA0}c\u0600d\u2065e\uFFF0f', 'abcdef']];
 
 test('SHIPPED netShortName: keeps accents, Hebrew, Arabic, skin tone, family, keycap, heart and the England/Scotland/Wales flags; drops the newly-found invisibles and stray tags', () => {
   for (const k of KEEP) assert.equal(netShortName(k), k, 'wrongly changed: ' + JSON.stringify(k));
@@ -196,4 +197,77 @@ test('CONSOLE FIELD (point of use): typing keeps the flags and joiners, drops th
   const z = 'Z' + '́'.repeat(30);
   assert.equal(typed(z.repeat(5)), z.repeat(2), 'the field did not clip a zalgo name at 64 code units');
   assert.equal(typed('Bed Bath and Regions Beyond'), 'Bed Bath and Reg', 'the 16-grapheme cap is gone');
+});
+
+// ── audit of a21dad23: parse safety, the fallback path, and flag smuggling ──────────────────────────────────────────────────────────────────
+// A RegExp that REFUSES a Unicode property escape, as a WebView older than Chrome 64 does when the source is handed to it at run time. Every
+// construction is recorded so a test can prove the fallback (no u flag) is the regex that actually ran.
+function noPropertyEscapes() {
+  const calls = [];
+  const impl = new Proxy(RegExp, { construct(t, args, nt) {
+    const src = String(args[0]), flags = String(args[1] || '');
+    calls.push({ flags, hasP: /\\[pP]\{/.test(src) });
+    if (/\\[pP]\{/.test(src)) throw new SyntaxError('Invalid regular expression: invalid property name');
+    return Reflect.construct(t, args, nt);
+  } });
+  return { impl, calls };
+}
+const liftWith = (RegExpImpl) => new Function('RegExp', topFn(STEWARD, 'netShortName') + '\nreturn netShortName;')(RegExpImpl);
+
+test('SHIPPED netShortName, FALLBACK (property escapes refused): the same keep list is kept, the same attack list is stripped, and the regex built has no u flag', () => {
+  const { impl, calls } = noPropertyEscapes();
+  const fb = liftWith(impl);
+  for (const k of KEEP) assert.equal(fb(k), k, 'fallback wrongly changed: ' + JSON.stringify(k));
+  for (const [raw, want] of STRIP) assert.equal(fb(raw), want, 'fallback did not clean: ' + JSON.stringify(raw));
+  assert.equal(fb('B\u00ADB\u034F\u061C&\u180ER\u115F\u1160\u3164\uFFA0B\u{E0041}\u0001\u0085\uFE00\uFE0E\u202E\u200B\uFEFF'), 'BB&RB');
+  assert.equal(fb('\u2764\uFE0F'), '\u2764\uFE0F');
+  assert.deepEqual(calls.map(c => c.flags), ['gu', 'g'], 'expected exactly one refused "gu" attempt then one "g" fallback, built once (memoised): ' + JSON.stringify(calls));
+  assert.ok(calls[0].hasP && !calls[1].hasP, 'the fallback source still contains a property escape');
+});
+
+test('CONSOLE FIELD (point of use), FALLBACK: with property escapes refused, typing still keeps the flags/joiners and drops the invisibles', () => {
+  const { impl, calls } = noPropertyEscapes();
+  const p = identityPage({ network: true, RegExpImpl: impl });
+  const typed = (v) => { field(p.render())[0].props.onChange({ target: { value: v } }); return field(p.render())[0].props.value; };
+  for (const k of KEEP) assert.equal(typed(k), k, 'the field (fallback) changed: ' + JSON.stringify(k));
+  for (const [raw, want] of STRIP) assert.equal(typed(raw), want, 'the field (fallback) did not clean: ' + JSON.stringify(raw));
+  assert.ok(calls.some(c => c.flags === 'gu' && c.hasP) && calls.some(c => c.flags === 'g' && !c.hasP), 'the console field never went through the refused-then-fallback construction: ' + JSON.stringify(calls));
+});
+
+test('FLAG SMUGGLING: only England, Scotland and Wales survive as flags; a flag-shaped run carrying any other letters loses its tag characters (the black flag stays)', () => {
+  const tags = (str) => Array.from(str, ch => String.fromCodePoint(0xE0000 + ch.charCodeAt(0))).join('') + '\u{E007F}';
+  const flag = (str) => '\u{1F3F4}' + tags(str);
+  for (const ok of ['gbeng', 'gbsct', 'gbwls']) assert.equal(netShortName(flag(ok)), flag(ok), ok + ' was stripped');
+  for (const bad of ['hello', 'gbxyz', 'gbengx', 'gbe', 'us', 'gbengland', 'ignore all prior'.replace(/ /g, '')]) assert.equal(netShortName('A' + flag(bad) + 'B'), 'A\u{1F3F4}B', 'a flag-shaped run carrying "' + bad + '" kept its payload');
+});
+
+// ── the shipped BUILT output must not hold a regex LITERAL with a Unicode property escape ─────────────────────────────────────────────────
+// The packaged builds run app/*.jsx through esbuild with no target, which leaves a regex literal as it is; one the engine cannot parse is a
+// SyntaxError that blanks the whole file. So scan the COMPILED text (not the .jsx): esbuild drops comments, and a property escape that is
+// legitimately inside a string passed to new RegExp has its backslash doubled in the source, which a literal does not. A single backslash
+// before p{ / P{ is therefore a literal (or a lone escape in a string we did not write). vendor/steward.js is already a bundle: scanned as is.
+const propertyEscapeLiteral = (js) => { const m = /(^|[^\\])\\[pP]\{[A-Za-z_=]+}/.exec(js); return m ? m[0] : null; };
+test('the scanner itself flags a literal and passes a string (positive and negative control)', () => {
+  assert.ok(propertyEscapeLiteral('x.replace(/[\\p{Cf}]/gu, "")'), 'the scanner missed a regex literal with a property escape');
+  assert.ok(propertyEscapeLiteral('x = /\\P{L}/u'));
+  assert.equal(propertyEscapeLiteral('new RegExp("\\\\p{Cf}", "gu")'), null, 'the scanner flagged a doubled backslash inside a string');
+});
+test('BUILT output has no regex literal with a Unicode property escape: esbuild(app/app.jsx), esbuild(app/stew-dashboard.jsx), vendor/steward.js', () => {
+  for (const jsx of ['app/app.jsx', 'app/stew-dashboard.jsx']) {
+    const out = compileScreen(jsx);
+    assert.ok(out.length > 10000, 're-anchor: ' + jsx + ' did not compile to a real bundle');
+    assert.equal(propertyEscapeLiteral(out), null, jsx + ' still ships a regex literal with a property escape: a WebView older than Chrome 64 would fail to parse the whole file');
+  }
+  assert.equal(propertyEscapeLiteral(STEWARD), null, 'vendor/steward.js still ships a regex literal with a property escape');
+});
+
+test('SHIPPED netShortName: the fallback (no property escapes) and the primary regex agree on EVERY code point, alone and inside text', () => {
+  const primary = liftWith(RegExp), { impl } = noPropertyEscapes(), fb = liftWith(impl);
+  const diffs = [];
+  for (let cp = 0; cp <= 0x10FFFF; cp++) {
+    if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+    const s = 'a' + String.fromCodePoint(cp) + 'b';
+    if (primary(s) !== fb(s)) diffs.push(cp.toString(16));
+  }
+  assert.deepEqual(diffs.slice(0, 20), [], 'the fallback differs from the primary regex at code points ' + diffs.slice(0, 20).join(' '));
 });

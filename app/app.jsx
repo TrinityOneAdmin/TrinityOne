@@ -430,12 +430,26 @@ function netProfileOf(e, networkPub) {
   if (!c || typeof c !== 'object') return null;
   return { name: netClipText(c.name, 80, 240), shortName: netClipText(c.short_name, 16, 64), at: e.created_at || 0 };
 }
+// The name-cleaning regex (see netClipText), built once. Same text as Steward.netShortName and the console field.
+function netClipRe() {
+  if (netClipRe._re) return netClipRe._re;
+  let re;
+  try {
+    // Unicode property escapes need Chrome 64+. Built from a STRING inside try, never written as a regex literal: a literal the engine cannot
+    // parse is a SyntaxError for the WHOLE file (the packaged builds ship this text as-is), a string just throws here and we fall back.
+    re = new RegExp('(\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F})|(?![\\u200C\\u200D\\uFE0F])[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u2800\\p{Default_Ignorable_Code_Point}\\p{Cf}]', 'gu');
+  } catch (e) {
+    // the same sets as explicit ranges, no \p and no u flag (astral ranges as surrogate pairs)
+    re = new RegExp('(\\uD83C\\uDFF4\\uDB40\\uDC67\\uDB40\\uDC62(?:\\uDB40\\uDC65\\uDB40\\uDC6E\\uDB40\\uDC67|\\uDB40\\uDC73\\uDB40\\uDC63\\uDB40\\uDC74|\\uDB40\\uDC77\\uDB40\\uDC6C\\uDB40\\uDC73)\\uDB40\\uDC7F)|(?![\\u200C\\u200D\\uFE0F])(?:[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890\\u0891\\u08E2\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFFB]|\\uD804[\\uDCBD\\uDCCD]|\\uD82F[\\uDCA0-\\uDCA3]|\\uD834[\\uDD73-\\uDD7A]|\\uD80D[\\uDC30-\\uDC3F]|[\\uDB40-\\uDB43][\\uDC00-\\uDFFF])', 'g');
+  }
+  return (netClipRe._re = re);
+}
 // A network-chosen string made safe to show as one short line: zero-width and bidi-control characters removed (they let a name look like
 // another, or reverse the text around it -- C0/C1 controls (except tab/newline, which become a space), U+00AD, U+034F, U+061C, U+115F, U+1160, U+180E, U+200B, U+200E-200F, U+202A-202E, U+2060-206F, U+2800, U+3164, U+FE00-FE0E (variation selectors; U+FE0F is KEPT, it is the emoji form), U+FEFF, U+FFA0 and every other Default_Ignorable_Code_Point / Cf character (tag characters, interlinear annotation, musical and hieroglyph format controls included); a WELL-FORMED subdivision flag (U+1F3F4 + 2-7 tag letters/digits + U+E007F: England, Scotland, Wales) is KEPT, stray tag characters are not; U+200C/200D are KEPT: they join emoji sequences and some scripts), whitespace collapsed, then capped at `n`
 // user-perceived characters (grapheme clusters via Intl.Segmenter where the WebView has it, else code points). The same rule as the console's
 // Steward.netShortName. Callers: netProfileOf.
 function netClipText(v, n, units) {
-  const s = String(v == null ? '' : v).replace(/(\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,7}\u{E007F})|(?![\u200C\u200D\uFE0F])[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2800\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, (m, flag) => flag || '').replace(/\s+/g, ' ').trim();
+  const s = String(v == null ? '' : v).replace(netClipRe(), (m, flag) => flag || '').replace(/\s+/g, ' ').trim();
   let parts = null;
   try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
   // and a CODE-UNIT ceiling as well: one grapheme can be any length (zalgo, a long ZWJ chain), so `n` graphemes alone bound nothing
