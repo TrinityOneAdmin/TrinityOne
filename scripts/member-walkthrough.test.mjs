@@ -844,12 +844,12 @@ test('L3-a: Help replay SKIPS a Groups step it cannot word truthfully — adult 
 });
 
 // The AUTOMATIC start (admission, M1), over the real ChatScreen. A tab bar anchor so the Community step can show.
-async function admittedOnCommunity(rooms, clock) {
+async function admittedOnCommunity(rooms, clock, timers) {
   const { React, draw } = miniReact();
   const store = new Map([['trinityone.tour.bible', '1'], ['trinityone.tour.community.wait', '1']]);
   let screens = [];
   const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
-  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store, { clock });
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store, { clock, setTimeout: timers ? (f, ms) => { timers.push(ms); return 0; } : undefined });
   const groups = { rooms };
   const chat = chatScreen(React, draw, { groups, isMinor: false });
   const tabChat = { type: 'button', props: { 'data-tour': 'tab-chat' }, kids: [] };
@@ -863,8 +863,11 @@ const walkHost = (t) => { const seen = []; let b = t.host(); for (let g = 0; g <
 
 test('L3-b: on admission, the start waits for the group list (up to 10 s), then words it truthfully — or starts without it', async () => {
   const clock = { t: 1000 };
-  const t = await admittedOnCommunity(null, clock);
+  const timers = [];
+  const t = await admittedOnCommunity(null, clock, timers);
   assert.equal(t.host(), null, 'the Community part started before the group list arrived');
+  // the list arriving sends the host nothing; while it waits it must look again by itself
+  assert.ok(timers.includes(700), 'the host waits for the group list but never looks again');
   assert.equal(t.store.get('trinityone.tour.community') || null, null, 'the Community part was spent while it waited for the group list');
   clock.t += 4000;
   t.groups.deliver([ADULT_ROOM]);
@@ -887,9 +890,21 @@ test('L3 (§12.2): ChatScreen forgets what it knew about the reader when the chu
   const base = { toast: () => {}, joinState: { loaded: true, isPending: false, removed: false }, myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor: false, clearanceKnown: true }, openPeople() {}, openDM() {}, openDMInbox() {}, openGroup() {} };
   const a = chat({ ...base, church: { npub: 'npub1church', name: 'A', id: 'c1' } });
   assert.equal(find(a, n => n.props && n.props['data-tour'] === 'groups')[0].props['data-tour-minor'], '0', 'premise: church A answered "not a child"');
-  chat({ ...base, church: { npub: 'npub1other', name: 'B', id: 'c2' } });
+  // ONE draw after the switch: the miniature React renders first and only then runs effects, so this tree is the
+  // first commit for church B — before any effect of B's could reset anything (§13).
+  const first = chat({ ...base, church: { npub: 'npub1other', name: 'B', id: 'c2' } });
+  assert.equal(find(first, n => n.props && n.props['data-tour'] === 'groups')[0].props['data-tour-minor'], '?', 'the first frame after switching to church B showed church A\'s "not a child"');
   const b = chat({ ...base, church: { npub: 'npub1other', name: 'B', id: 'c2' } });
   assert.equal(find(b, n => n.props && n.props['data-tour'] === 'groups')[0].props['data-tour-minor'], '?', 'church A\'s answer was carried over to church B, which has not answered');
+});
+
+test('L3: when the engine cannot say who the reader is (assumeMinor fails), the Groups anchor treats them as a possible child', async () => {
+  const { React, draw } = miniReact();
+  const chat = chatScreen(React, draw, { rooms: [ADULT_ROOM, KIDS_ROOM], isMinor: false, minorFor: () => Promise.reject(new Error('relay refused')) });
+  chat(); await settle(); chat();
+  const a = find(chat(), n => n.props && n.props['data-tour'] === 'groups')[0];
+  assert.equal(a.props['data-tour-minor'], '1', 'a failed answer was read as "not a child"');
+  assert.equal(a.props['data-tour-count'], '1', 'premise: the list was filtered as for a child');
 });
 
 test('L3 (§12.5): a Groups step whose words become unknown while it is up is passed over, never drawn empty', async () => {
