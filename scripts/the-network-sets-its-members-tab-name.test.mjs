@@ -271,3 +271,48 @@ test('SHIPPED netShortName: the fallback (no property escapes) and the primary r
   }
   assert.deepEqual(diffs.slice(0, 20), [], 'the fallback differs from the primary regex at code points ' + diffs.slice(0, 20).join(' '));
 });
+
+// ── the name-cleaning regex exists in THREE shipped copies; all three must build the same two regexes ───────────────────────────────────────
+// app/app.jsx netClipRe, app/stew-dashboard.jsx netFieldRe, vendor/steward.js netShortName (inside it). Only the steward copy's fallback is swept
+// over every code point above, so an edit to another copy's fallback went unnoticed. Each copy is LIFTED from its shipped text (the .jsx through
+// esbuild, the bundle as is) and RUN against a RegExp that records every source it is handed and refuses property escapes, so both the primary and
+// the fallback source are captured. Nothing here matches text in app/*.jsx.
+function regexSourcesBuiltBy(code, fnName, call) {
+  const seen = [];
+  const impl = new Proxy(RegExp, { construct(t, args, nt) {
+    const src = String(args[0]), flags = String(args[1] || '');
+    // only the name-cleaning regexes (they hold the flag alternation); other RegExps the function may build are none today
+    seen.push({ src, flags });
+    if (/\\[pP]\{/.test(src)) throw new SyntaxError('Invalid regular expression: invalid property name');
+    return Reflect.construct(t, args, nt);
+  } });
+  // first run with property escapes ALLOWED to capture the primary, then refused to capture the fallback
+  const run = (RegExpImpl) => new Function('RegExp', code + '\n' + call)(RegExpImpl);
+  const primary = []; const allow = new Proxy(RegExp, { construct(t, args, nt) { primary.push({ src: String(args[0]), flags: String(args[1] || '') }); return Reflect.construct(t, args, nt); } });
+  run(allow); run(impl);
+  return { primary: primary[0], fallback: seen[1], nPrimary: primary.length, nSeen: seen.length };
+}
+const liftCompiled = (jsx, name) => {
+  const out = compileScreen(jsx);
+  const m = new RegExp('\\nfunction ' + name + '\\(\\) \\{[\\s\\S]*?\\n\\}\\n').exec(out);
+  assert.ok(m, 'could not lift ' + name + ' from ' + jsx + ' -- re-anchor this test, do not delete it');
+  return m[0];
+};
+test('the three shipped copies of the name-cleaning regex (app.jsx, stew-dashboard.jsx, vendor/steward.js) build IDENTICAL primary and fallback regexes', () => {
+  const copies = {
+    'app/app.jsx netClipRe': regexSourcesBuiltBy(liftCompiled('app/app.jsx', 'netClipRe'), 'netClipRe', 'return netClipRe();'),
+    'app/stew-dashboard.jsx netFieldRe': regexSourcesBuiltBy(liftCompiled('app/stew-dashboard.jsx', 'netFieldRe'), 'netFieldRe', 'return netFieldRe();'),
+    'vendor/steward.js netShortName': regexSourcesBuiltBy(topFn(STEWARD, 'netShortName'), 'netShortName', 'return netShortName("x");'),
+  };
+  const names = Object.keys(copies);
+  for (const n of names) {
+    const c = copies[n];
+    assert.ok(c.primary && c.fallback, n + ': did not capture both a primary and a fallback construction');
+    assert.equal(c.primary.flags, 'gu', n + ' primary flags'); assert.equal(c.fallback.flags, 'g', n + ' fallback flags');
+    assert.ok(/\\\\p\{|\\p\{/.test(c.primary.src) && !/\\[pP]\{/.test(c.fallback.src), n + ': primary must use property escapes, fallback must not');
+  }
+  for (const n of names.slice(1)) {
+    assert.equal(copies[n].primary.src, copies[names[0]].primary.src, n + ' PRIMARY regex differs from ' + names[0]);
+    assert.equal(copies[n].fallback.src, copies[names[0]].fallback.src, n + ' FALLBACK regex differs from ' + names[0]);
+  }
+});
