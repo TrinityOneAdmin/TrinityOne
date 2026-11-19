@@ -2287,10 +2287,12 @@ function _relayInfo(wssUrl) {
 //   · probed for every relay in relays() at console start and whenever a relay comes back (steward-relay-returned);
 //     _relayInfo is NOT used — it caches a failure for the page's life, and this must be retried;
 //   · a positive answer is REMEMBERED (localStorage) under the relay's URL AND the identity key the admission proof
-//     established for it (_gate.provedKey), with the build it reported — a different box answering at that address does
-//     not inherit it; no proved key = nothing remembered;
+//     established for it (_gate.provedKey) — a different box answering at that address does not inherit it; no proved key
+//     = nothing remembered;
 //   · no answer (down, asleep, timeout) changes nothing — a relay silent NOW that said yes before still counts as yes;
-//   · an answer WITHOUT the field clears it (a box downgraded to an old build, once it is next seen up);
+//   · an answer WITHOUT the field, or without a trinityone block at all, clears it (a box downgraded, once next seen up);
+//   · the carry counts EVERY CONFIGURED relay (relaysRaw), not only the proved ones: one that is configured but not
+//     admitted, or admitted but not remembered, means the strict rule (Fable audit MED-1; it dials nothing new);
 //   · read synchronously at carry time: _relaysAllLiveNewest(urls).
 // Stated limit: a relay at a URL path other than /relay never answers (NIP-11 is served there only) → strict.
 const LIVE_NEWEST_LS = 'trinityone.steward.livenewest:';
@@ -2312,11 +2314,13 @@ async function _relayLiveNewest(url) {
     ]);
     clearTimeout(to);
   } catch (e) { info = null; }
-  if (!info || typeof info !== 'object' || !info.trinityone || typeof info.trinityone !== 'object') return null;   // no answer: nothing changes
+  if (!info || typeof info !== 'object') return null;   // no answer: nothing changes
+  const tri = (info.trinityone && typeof info.trinityone === 'object') ? info.trinityone : {};   // no trinityone block: a no
   let key = ''; try { key = _gate.provedKey(url, pub); } catch (e) { key = ''; }
   if (!key) return null;
   const k = _liveNewestKey(url, key);
-  if (info.trinityone.liveNewest === 1) { lsSet(k, JSON.stringify({ liveNewest: 1, version: String(info.version || ''), at: now() })); return true; }
+  // the build is not stored: nothing would read it back (Fable audit NIT); a downgrade is caught by its next answer
+  if (tri.liveNewest === 1) { lsSet(k, JSON.stringify({ liveNewest: 1, at: now() })); return true; }
   try { localStorage.removeItem(k); } catch (e) {}
   return false;
 }
@@ -8199,8 +8203,12 @@ async function _carryOverStewardDocs(pk, opts) {
     try { sub = pool.subscribeMany([url], [filter], { onevent(e) { evs.push(e); }, oneose() { finish(true); }, maxWait: ms + 5000 }); }
     catch (e) { finish(false); return; }
     if (done) { try { sub.close(); } catch (e) {} }
-    setTimeout(() => finish(false), ms);
+    setTimeout(() => { if (!done) silent.add(url); finish(false); }, ms);
   });
+  // A RELAY THAT RAN OUT THE CLOCK ONCE IS NOT WAITED ON AGAIN (Fable audit MED-2): every later question to it is answered
+  // "unanswered" at once, so one frozen box cannot cut a helper with more than 60 documents down to the first slice.
+  const silent = new Set();
+  const askOrSilent = (url, filter, until) => (silent.has(url) ? Promise.resolve({ evs: [], complete: false }) : ask(url, filter, until));
   const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
   // OWNER ANSWER (j), 2026-11-18: a care-team list is carried only if its author HELD 'care' when removed — phones (and the
   // relay) already ignored the list of a steward without it, so carrying it would switch back on a list the owner had
@@ -8256,13 +8264,19 @@ async function _carryOverStewardDocs(pk, opts) {
   let readAll = true;
   // phase A gets HALF of what is left for reading, so a relay that never answers cannot leave phase B nothing (§2.3)
   const phaseAUntil = Date.now() + Math.max(0, Math.floor(readLeft() / 2));
+  // THE CHILDREN LIST a carried care-team list is filtered by (R-L1), asked NOW, beside phase A, and bounded by phase A's
+  // share: its own read waits _KEY_READ_LONG_WAIT on a frozen box, which must not eat phase B (Fable audit LOW). Used only
+  // if a careteam: document turns up.
+  const minorsRead = (window.Steward && window.Steward.readMinors)
+    ? Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, phaseAUntil - Date.now())))])
+    : Promise.resolve(null);
   await Promise.all(urls.map(async (url) => {
     const ids = new Set(); let until = null;
     for (let page = 0; ; page++) {
       if (page >= 40) { readAll = false; return; }
       const f = { kinds: [30078], authors: [who], '#t': [NET], limit: 500 };
       if (until != null) f.until = until;
-      const r = await ask(url, f, phaseAUntil);
+      const r = await askOrSilent(url, f, phaseAUntil);
       let fresh = 0, oldest = until;
       for (const e of r.evs) {
         if (!e || ids.has(e.id)) continue;
@@ -8281,16 +8295,16 @@ async function _carryOverStewardDocs(pk, opts) {
   if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
   // the children list a carried care-team list is filtered by: read once, now, inside the read deadline (R-L1)
   const pre = {};
-  if (ds.some(d => d.startsWith('trinityone/careteam:')) && window.Steward && window.Steward.readMinors) {
-    try { pre.minors = await Promise.race([Promise.resolve(window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, readLeft())))]); }
-    catch (e) { pre.minors = null; }
-  }
+  if (ds.some(d => d.startsWith('trinityone/careteam:'))) { try { pre.minors = await minorsRead; } catch (e) { pre.minors = null; } }
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
     if (readLeft() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
     // the first slice always carries the meals-settings question — see careKnown
     const asked = (i === 0 && slice.indexOf(MEALS_D_) === -1) ? [...slice, MEALS_D_] : slice;
-    const answers = await Promise.all(urls.map(u => ask(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 })));
+    // EACH SLICE GETS ITS OWN SHARE of the read time left (Fable audit MED-2): a relay that freezes during phase B cannot
+    // spend every later slice's time on this one
+    const sliceUntil = Date.now() + Math.max(0, Math.floor(readLeft() / Math.ceil((ds.length - i) / 60)));
+    const answers = await Promise.all(urls.map(u => askOrSilent(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 }, sliceUntil)));
     const whole = answers.every(a => a.complete);   // H1 wording: EVERY relay in relays() answered this slice completely
     const someWhole = answers.some(a => a.complete);   // rule (k): at least ONE relay answered it completely
     if (i === 0) mealsReadWhole = whole;   // the care team is known only from EVERY relay (batch gate) — whatever the rule
@@ -8339,6 +8353,9 @@ async function _carryOverStewardDocs(pk, opts) {
       if (cd === 'unknown') { notC(d, 'no-care', 'a team list (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
       let from = S, teamGone = false;
       if (!heldCare && d === MEALS_D_) {
+        // the church's pointer only from a COMPLETE answer set (every relay answered the slice that read it): under rule (k)
+        // a silent box may hold the church's newer choice (Fable audit LOW), so then the "not yet read" path
+        if (!mealsReadWhole) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
         if (!churchMeals || churchMeals.adminGroupId == null) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission)'); continue; }
         // THEIR WITHDRAWN SETTING (tombstone / empty) is not carried, and listed as no-care (audit of 1fc01a16, LOW 6): a
         // church copy of the withdrawal would withdraw the church's own setting too — and with it the church's care team

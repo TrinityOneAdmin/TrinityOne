@@ -16893,7 +16893,8 @@ zoo`.split("\n");
     } catch (e) {
       info = null;
     }
-    if (!info || typeof info !== "object" || !info.trinityone || typeof info.trinityone !== "object") return null;
+    if (!info || typeof info !== "object") return null;
+    const tri = info.trinityone && typeof info.trinityone === "object" ? info.trinityone : {};
     let key = "";
     try {
       key = _gate.provedKey(url, pub);
@@ -16902,8 +16903,8 @@ zoo`.split("\n");
     }
     if (!key) return null;
     const k = _liveNewestKey(url, key);
-    if (info.trinityone.liveNewest === 1) {
-      lsSet(k, JSON.stringify({ liveNewest: 1, version: String(info.version || ""), at: now() }));
+    if (tri.liveNewest === 1) {
+      lsSet(k, JSON.stringify({ liveNewest: 1, at: now() }));
       return true;
     }
     try {
@@ -21583,8 +21584,13 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
-      setTimeout(() => finish(false), ms);
+      setTimeout(() => {
+        if (!done) silent.add(url);
+        finish(false);
+      }, ms);
     });
+    const silent = /* @__PURE__ */ new Set();
+    const askOrSilent = (url, filter, until) => silent.has(url) ? Promise.resolve({ evs: [], complete: false }) : ask(url, filter, until);
     const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
     const onRoster = [..._careRoster].some((p) => String(p).toLowerCase() === who);
     const capEntry = Object.keys(_stewardCaps || {}).find((k) => k.toLowerCase() === who);
@@ -21622,6 +21628,7 @@ zoo`.split("\n");
     };
     let readAll = true;
     const phaseAUntil = Date.now() + Math.max(0, Math.floor(readLeft() / 2));
+    const minorsRead = window.Steward && window.Steward.readMinors ? Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise((r) => setTimeout(() => r(null), Math.max(0, phaseAUntil - Date.now())))]) : Promise.resolve(null);
     await Promise.all(urls.map(async (url) => {
       const ids = /* @__PURE__ */ new Set();
       let until = null;
@@ -21632,7 +21639,7 @@ zoo`.split("\n");
         }
         const f = { kinds: [30078], authors: [who], "#t": [NET], limit: 500 };
         if (until != null) f.until = until;
-        const r = await ask(url, f, phaseAUntil);
+        const r = await askOrSilent(url, f, phaseAUntil);
         let fresh = 0, oldest = until;
         for (const e of r.evs) {
           if (!e || ids.has(e.id)) continue;
@@ -21653,9 +21660,9 @@ zoo`.split("\n");
     const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));
     if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
     const pre = {};
-    if (ds.some((d) => d.startsWith("trinityone/careteam:")) && window.Steward && window.Steward.readMinors) {
+    if (ds.some((d) => d.startsWith("trinityone/careteam:"))) {
       try {
-        pre.minors = await Promise.race([Promise.resolve(window.Steward.readMinors()).catch(() => null), new Promise((r) => setTimeout(() => r(null), Math.max(0, readLeft())))]);
+        pre.minors = await minorsRead;
       } catch (e) {
         pre.minors = null;
       }
@@ -21667,7 +21674,8 @@ zoo`.split("\n");
         continue;
       }
       const asked = i3 === 0 && slice.indexOf(MEALS_D_) === -1 ? [...slice, MEALS_D_] : slice;
-      const answers = await Promise.all(urls.map((u) => ask(u, { kinds: [30078], "#d": asked, limit: asked.length * 50 })));
+      const sliceUntil = Date.now() + Math.max(0, Math.floor(readLeft() / Math.ceil((ds.length - i3) / 60)));
+      const answers = await Promise.all(urls.map((u) => askOrSilent(u, { kinds: [30078], "#d": asked, limit: asked.length * 50 }, sliceUntil)));
       const whole = answers.every((a) => a.complete);
       const someWhole = answers.some((a) => a.complete);
       if (i3 === 0) mealsReadWhole = whole;
@@ -21728,6 +21736,10 @@ zoo`.split("\n");
         }
         let from = S, teamGone = false;
         if (!heldCare && d === MEALS_D_) {
+          if (!mealsReadWhole) {
+            notC(d, "no-care", "the meals and care setting (they no longer had the Care permission, and this console had not yet read which team is the care team)");
+            continue;
+          }
           if (!churchMeals || churchMeals.adminGroupId == null) {
             notC(d, "no-care", "the meals and care setting (they no longer had the Care permission)");
             continue;

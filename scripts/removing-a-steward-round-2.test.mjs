@@ -318,6 +318,69 @@ test('MED-1 — a configured relay that is not admitted (not proved) means the S
   assert.ok(!eng._pool.asked.some(a => a.urls.includes('wss://not-proved.example/relay')), 'the unproved relay was dialled (rule 10)');
 });
 
+// MED-2 — a frozen relay must not starve later slices: more than 60 documents, r2 asleep
+test('MED-2 — r2 ASLEEP and 63 documents (two slices): every one is carried at S+1 inside the limit', async () => {
+  const { C, eng, sam, gid, S, r1, r2 } = await f1Setup('f1-med2');
+  const extra = [];
+  for (let i = 0; i < 62; i++) extra.push(await mustPut(C, raw(C, sam, GROUP_D + C.cp.slice(0, 16) + '-m' + i, { name: 'Group ' + i })));
+  await silence(r2, 'frozen');
+  try {
+    const t0 = Date.now();
+    const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 12000 });
+    assert.ok(Date.now() - t0 < 15000, 'not bounded by its limit');
+    const carried = new Set(r.carry.carried.map(c => c.d));
+    const missing = [GROUP_D + gid, ...extra.map(dOf)].filter(d => !carried.has(d));
+    assert.deepEqual(missing.length, 0, 'ONE FROZEN BOX CUT THE CARRY SHORT — not carried: ' + missing.length + ' ' + JSON.stringify(r.carry.notCarried.slice(0, 3)));
+    void S; void r1;
+  } finally { thaw(r2); }
+});
+// LOW — the children list read must not eat the read window when it never answers
+test('LOW — a children-list read that never answers: the care-team list is listed, everything else is still carried inside the limit', async () => {
+  const C = await churchOn(1, 'f1-minors');
+  const eng = owner(C);
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
+  eng.window.Steward.readMinors = () => new Promise(() => {});   // a frozen box: the read never comes back
+  const gid = C.cp.slice(0, 16) + '-kg';
+  await mustPut(C, raw(C, kim, GROUP_D + gid, { name: 'Kim’s group' }));
+  await mustPut(C, raw(C, kim, CARETEAM_D + C.cp, { pubs: [H.key().pub] }));
+  const t0 = Date.now();
+  const r = await eng._carryOverStewardDocs(kim.pub, { limitMs: 8000 });
+  assert.ok(Date.now() - t0 < 9500, 'not bounded');
+  assert.ok(r.carried.some(c => c.d === GROUP_D + gid), 'THE CHILDREN READ ATE THE WINDOW — the group was not carried: ' + JSON.stringify(r.notCarried));
+  assert.deepEqual(why(r, CARETEAM_D + C.cp).map(n => n.why), ['children-unread']);
+});
+// LOW — under rule (k) the church's care-team pointer only from a COMPLETE answer set
+test('LOW — r2 off (rule k), a helper without Care: her meals/care setting is not kept with a pointer read from a partial answer', async () => {
+  const { C, eng, sam, gid, r2 } = await f1Setup('f1-ptr');
+  const careId = C.cp.slice(0, 16) + '-care';
+  await setRoster(eng, [sam.pub], { [sam.pub]: ['care', 'content'] });
+  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: careId }, { tagChurch: false }));
+  await mustPut(C, raw(C, sam, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: careId }));
+  await setRoster(eng, [sam.pub], { [sam.pub]: ['content'] });
+  await silence(r2, 'killed');
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, MEALS_D).length, 0, 'the care pointer was taken from a partial answer');
+  assert.match((why(r.carry, MEALS_D)[0] || {}).label || '', /had not yet read which team is the care team/);
+  assert.ok(churchSent(eng, C, GROUP_D + gid).length === 1, 'CONTROL: rule (k) still carried the group');
+});
+// NIT — an answer with no trinityone block at all clears a remembered yes
+test('NIT — a NIP-11 answer with NO trinityone block clears a remembered yes', async () => {
+  const http = await import('node:http');
+  const srv = http.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'application/nostr+json' }); res.end(JSON.stringify({ name: 'a plain nostr relay', supported_nips: [1] })); });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  try {
+    const url = 'ws://127.0.0.1:' + srv.address().port + '/relay';
+    const C = await churchOn(1, 'f1-noblock');
+    const eng = owner(C);
+    eng._gate = { provedKey: () => 'b'.repeat(64) };
+    eng._ls.set(eng._liveNewestKey(url, 'b'.repeat(64)), JSON.stringify({ liveNewest: 1 }));
+    assert.equal(eng._relaysAllLiveNewest([url]), true, 'FIXTURE');
+    assert.equal(await eng._relayLiveNewest(url), false);
+    assert.equal(eng._relaysAllLiveNewest([url]), false, 'an answer with no trinityone block kept a remembered yes');
+  } finally { srv.close(); }
+});
+
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════
 // The real DashMembers, its Block pressed, over the engine lifted from the bundle. setBlocked is a stand-in that
 // publishes the church-signed blocklist to the relay (its own tests are elsewhere); everything else is shipped code.
