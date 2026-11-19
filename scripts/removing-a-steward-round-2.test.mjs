@@ -304,26 +304,28 @@ test('HIGH 1 — the care team NOT READ YET: the team list is not carried, and i
   assert.doesNotMatch(why(r, d)[0].label, /the care team list/, 'an ordinary team list was called "the care team list"');
 });
 
-// LOW 5 — meals-settings is decided FIRST. More than one slice (60) of her documents: she points Care at her own team in
-// meals-settings (her OLDEST document) and writes that team's roster (her NEWEST); the relay answers newest first, so
-// without the ordering the roster is decided in slice 1, before slice 2 shows which team is the care team.
-test('LOW 5 — over 60 documents: the roster of the team she pointed Care at is still not carried (meals-settings is read first)', async () => {
+// LOW 5 — meals-settings is decided FIRST. Her OWN meals-settings is known from phase A already; what only phase B can show
+// is ANOTHER author's copy — here the church's, naming team `churchTeam`, which this console's StewardMeals has not caught up
+// with (careTeamId() still answers an older team). She has more than one slice (60) of documents: the church's care team
+// roster is her NEWEST, her meals-settings her OLDEST, and the relay answers newest first — so without the ordering the
+// roster is decided in slice 1, before slice 2 shows the church's copy naming it as the care team.
+test('LOW 5 — over 60 documents: the care team named only by the CHURCH’s meals-settings copy is still not carried', async () => {
   const C = await churchOn(1, 'f3-slices');
   const eng = owner(C);
-  const careId = C.cp.slice(0, 16) + '-care', kimTeam = C.cp.slice(0, 16) + '-kimteam';
-  eng.window.StewardMeals = { careTeamId: () => careId, careTeamKnown: () => true };
+  const stale = C.cp.slice(0, 16) + '-oldcare', churchTeam = C.cp.slice(0, 16) + '-care', hers = C.cp.slice(0, 16) + '-hers';
+  eng.window.StewardMeals = { careTeamId: () => stale, careTeamKnown: () => true };
   const kim = await newSteward(C);
   await setRoster(eng, [kim.pub], { [kim.pub]: ['care', 'content'] });
-  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: careId }, { tagChurch: false }));
-  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: kimTeam }));
+  await mustPut(C, raw(C, C.church, MEALS_D, { enabled: true, adminGroupId: churchTeam }, { tagChurch: false }));
+  await mustPut(C, raw(C, kim, MEALS_D, { enabled: true, visibility: 'team', adminGroupId: hers }));
   for (let i = 0; i < 61; i++) await mustPut(C, raw(C, kim, GROUP_D + C.cp.slice(0, 16) + '-g' + i, { name: 'Group ' + i }));
-  await mustPut(C, raw(C, kim, ROSTER_D + kimTeam, { pubs: [H.key().pub] }));
+  await mustPut(C, raw(C, kim, ROSTER_D + churchTeam, { pubs: [H.key().pub] }));
   await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
   const r = await eng._removeStewardKeeping(kim.pub);
   assert.ok(r.wrote);
   assert.equal(r.carry.carried.filter(c => c.d.startsWith(GROUP_D)).length, 61, 'FIXTURE: not every group was carried: ' + JSON.stringify(r.carry.notCarried));
-  assert.equal(churchSent(eng, C, ROSTER_D + kimTeam).length, 0, 'THE ROSTER WAS DECIDED BEFORE meals-settings SHOWED IT IS THE CARE TEAM');
-  assert.deepEqual(why(r, ROSTER_D + kimTeam).map(n => n.why), ['no-care']);
+  assert.equal(churchSent(eng, C, ROSTER_D + churchTeam).length, 0, 'THE ROSTER WAS DECIDED BEFORE THE CHURCH’S meals-settings SHOWED IT IS THE CARE TEAM');
+  assert.deepEqual(why(r, ROSTER_D + churchTeam).map(n => n.why), ['no-care']);
 });
 
 // LOW 6 — her WITHDRAWN meals-settings (no Care): not carried, listed as no-care. Carrying it would withdraw the church's own
