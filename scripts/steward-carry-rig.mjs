@@ -108,6 +108,8 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     // the last stamp this console used. The admission gate's proved keys (none unless a test proves one) and a
     // localStorage of the console's own — the liveNewest memory lives there (owner answer s).
     _lastOk: new Map(), _lastStamp: new Map(), _gate: { provedKey: () => '' },
+    // the CONFIGURED relay list (relaysRaw): every one must be admitted AND remembered for rule (k) — by default the same as relays()
+    relaysRaw: () => scope.relays(),
     _ls: new Map(), lsGet: (k) => (scope._ls.has(k) ? scope._ls.get(k) : null), lsSet: (k, v) => { scope._ls.set(k, String(v)); },
     localStorage: { getItem: (k) => (scope._ls.has(k) ? scope._ls.get(k) : null), setItem: (k, v) => { scope._ls.set(k, String(v)); }, removeItem: (k) => { scope._ls.delete(k); } },
     fetch: (...a) => fetch(...a), AbortController,
@@ -164,7 +166,7 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     .filter(([a]) => STEWARD.includes(a));
   for (const [a] of OPT_TOPS) tops.push(fnBody(STEWARD, a, a));
   const optNames = OPT_TOPS.map(([, n]) => n);
-  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = ', 'var LIVE_NEWEST_LS = '].filter(a => STEWARD.includes(a)).map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
+  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = ', 'var LIVE_NEWEST_LS = ', 'var STEWARD_CARRY_RULE = '].filter(a => STEWARD.includes(a)).map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
   const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {', 'blockStewardKeeping(pk, blockedList, opts) {']

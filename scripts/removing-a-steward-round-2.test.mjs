@@ -30,7 +30,7 @@ import { finalizeEvent } from 'nostr-tools/pure';
 import * as H from './relay-network-harness.mjs';
 import { STEWARD, authedPool, consoleEngine } from './steward-carry-rig.mjs';
 import { compiled, membersGlobals, press, reads, SCH } from './dash-render-kit.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 import { readFileSync } from 'node:fs';
 
 const NET = 'trinityone';
@@ -276,6 +276,46 @@ test('F1 (T-F1g) — r2 sends a newer rival then stalls before EOSE: not carried
   assert.equal(churchSent(eng, C, GROUP_D + gid).length, 0, 'carried over a newer copy a relay showed before it stalled');
   // Eve is still a helper: her newer copy is honoured as it stands (superseded — nothing of Sam's changes back)
   assert.ok(r.superseded.includes(GROUP_D + gid), JSON.stringify(r));
+});
+
+// ══ FABLE AUDIT OF THE F1 ROUND — owner answer (u): rule (k) only where relay AND readers keep the newest ══════════════
+const CARRY_LISTS = () => {
+  const C = new Function(stmt(STEWARD, 'var STEWARD_CARRY = ', 'STEWARD_CARRY') + '\nreturn STEWARD_CARRY;')();
+  const R = new Function(stmt(STEWARD, 'var STEWARD_CARRY_RULE = ', 'STEWARD_CARRY_RULE') + '\nreturn STEWARD_CARRY_RULE;')();
+  return { C, R };
+};
+test('(u) — every carried type is classified EXACTLY once: newest (rule k) or strict; the owner’s strict list is strict', () => {
+  const { C, R } = CARRY_LISTS();
+  const all = [...C.carry, ...C.remint];
+  for (const t of all) {
+    const n = (R.newest.includes(t) ? 1 : 0) + (R.strict.includes(t) ? 1 : 0);
+    assert.equal(n, 1, t + ' is classified ' + n + ' times — a carried type needs a decision before it may be kept from a partial answer');
+  }
+  for (const t of [...R.newest, ...R.strict]) assert.ok(all.includes(t), t + ' is classified but not carried');
+  for (const t of ['trinityone/joinpolicy:', 'trinityone/nophoto:', 'trinityone/sermon:', 'trinityone/plan:', 'trinityone/devotional:', 'trinityone/event:', 'trinityone/care:', 'trinityone/request:'])
+    assert.ok(R.strict.includes(t), t + ' must stay STRICT (owner answer u)');
+});
+test('(u) — r2 off, every relay said yes: a STRICT type (a reading plan) is not kept and is listed; a newest type (a group) is kept', async () => {
+  const { C, eng, sam, gid, S, r1, r2 } = await f1Setup('f1u');
+  const plan = 'trinityone/plan:' + C.cp.slice(0, 16) + '-lent';
+  await mustPut(C, raw(C, sam, plan, { title: 'Lent' }));
+  await silence(r2, 'killed');
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, plan).length, 0, 'A STRICT TYPE WAS CARRIED FROM A PARTIAL ANSWER');
+  assert.deepEqual(why(r.carry, plan).map(n => n.why), ['incomplete']);
+  const kept = await churchCopy(C, GROUP_D + gid, r1);
+  assert.ok(kept && kept.created_at === S.created_at + 1, 'CONTROL: the newest-wins type was not carried: ' + JSON.stringify(r.carry.notCarried));
+});
+// MED-1 — "every relay the church uses" is every CONFIGURED relay, not only the ones proved so far
+test('MED-1 — a configured relay that is not admitted (not proved) means the STRICT rule, even when every admitted one said yes', async () => {
+  const { C, eng, sam, gid, r2 } = await f1Setup('f1-med1');
+  const urls = C.relays.map(r => r.wsUrl);
+  eng.relaysRaw = () => [...urls, 'wss://not-proved.example/relay'];   // configured, never admitted — nothing dials it
+  await silence(r2, 'killed');
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, GROUP_D + gid).length, 0, 'CARRIED FROM A PARTIAL ANSWER ALTHOUGH A CONFIGURED RELAY NEVER SAID newest-wins');
+  assert.deepEqual(why(r.carry, GROUP_D + gid).map(n => n.why), ['incomplete']);
+  assert.ok(!eng._pool.asked.some(a => a.urls.includes('wss://not-proved.example/relay')), 'the unproved relay was dialled (rule 10)');
 });
 
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════

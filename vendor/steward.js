@@ -21367,6 +21367,38 @@ zoo`.split("\n");
       // single-writer, sequence-pinned; the relay and console keep them anyway
     ])
   });
+  var STEWARD_CARRY_RULE = Object.freeze({
+    newest: Object.freeze([
+      "trinityone/group:",
+      "trinityone/category:",
+      "trinityone/service:",
+      "trinityone/room:",
+      "trinityone/booking:",
+      "trinityone/runsheet:",
+      "trinityone/rota:",
+      "trinityone/roster:",
+      "trinityone/msgtags",
+      "trinityone/rota-settings",
+      "trinityone/verse-prompt",
+      "trinityone/pinsermon:",
+      "trinityone/pin:",
+      "trinityone/hidden:",
+      "trinityone/reseat:",
+      "trinityone/careteam:",
+      "trinityone/meals-settings",
+      "trinityone/carereqstatus:"
+    ]),
+    strict: Object.freeze([
+      "trinityone/joinpolicy:",
+      "trinityone/nophoto:",
+      "trinityone/sermon:",
+      "trinityone/plan:",
+      "trinityone/devotional:",
+      "trinityone/event:",
+      "trinityone/care:",
+      "trinityone/request:"
+    ])
+  });
   var _CARRY_BARE = ["trinityone/rota-settings", "trinityone/verse-prompt", "trinityone/meals-settings", "trinityone/msgtags"];
   var STEWARD_CARRY_LIMIT_MS = 2e4;
   var _CARRY_WORDS = {
@@ -21501,7 +21533,17 @@ zoo`.split("\n");
       notC("", "no-relay", "anything they set up (no relay could be reached)");
       return out;
     }
-    const liveRule = _relaysAllLiveNewest(urls);
+    const _rk = (u) => String(u || "").trim().toLowerCase().replace(/\/+$/, "");
+    let configured = [];
+    try {
+      configured = relaysRaw();
+    } catch (e) {
+      configured = [];
+    }
+    if (!Array.isArray(configured) || !configured.length) configured = urls;
+    const admitted = new Set(urls.map(_rk));
+    const liveRule = configured.every((u) => admitted.has(_rk(u))) && _relaysAllLiveNewest(urls);
+    const rulek = (d) => liveRule && !!_carryPrefix(d, STEWARD_CARRY_RULE.newest);
     const ask = (url, filter, until) => new Promise((resolve) => {
       const evs = [];
       let done = false, sub = null;
@@ -21659,7 +21701,7 @@ zoo`.split("\n");
       const jobs = [];
       for (const d of slice) {
         const S = mine.get(d), label = _carryLabel(d, S.content);
-        if (liveRule ? !someWhole : !whole) {
+        if (rulek(d) ? !someWhole : !whole) {
           notC(d, "incomplete", label);
           continue;
         }

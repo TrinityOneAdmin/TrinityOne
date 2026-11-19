@@ -8055,6 +8055,26 @@ const STEWARD_CARRY = Object.freeze({
     'finance/',                 // single-writer, sequence-pinned; the relay and console keep them anyway
   ]),
 });
+// WHICH CARRIED TYPES MAY BE KEPT FROM A PARTIAL ANSWER (owner answer u, 2026-11-19, after the Fable audit of the F1
+// round). Rule (k) — the church's copy dated one second after theirs, carried while a box is silent — is safe only where
+// BOTH the relay and the readers keep the newest copy at an address, so a later change sitting on the silent box still
+// wins when it wakes. Every carried type is in exactly one list (removing-a-steward-round-2.test.mjs checks it):
+//   newest  relay map newest-wins (group, roster, meals-settings — gateway LIVE_AT; rota-settings — ROTA_VIS by ts) or no
+//           relay map at all, and every reader newest-first (the shared document store, or its own newest check)
+//   strict  a relay map or a reader that still follows the last arrival — not carried while any relay is silent, listed
+// Until their maps/readers are made newest-wins in a later branch, the strict ones keep the strict rule.
+const STEWARD_CARRY_RULE = Object.freeze({
+  newest: Object.freeze([
+    'trinityone/group:', 'trinityone/category:', 'trinityone/service:', 'trinityone/room:', 'trinityone/booking:',
+    'trinityone/runsheet:', 'trinityone/rota:', 'trinityone/roster:', 'trinityone/msgtags', 'trinityone/rota-settings',
+    'trinityone/verse-prompt', 'trinityone/pinsermon:', 'trinityone/pin:', 'trinityone/hidden:', 'trinityone/reseat:',
+    'trinityone/careteam:', 'trinityone/meals-settings', 'trinityone/carereqstatus:',
+  ]),
+  strict: Object.freeze([
+    'trinityone/joinpolicy:', 'trinityone/nophoto:', 'trinityone/sermon:', 'trinityone/plan:', 'trinityone/devotional:',
+    'trinityone/event:', 'trinityone/care:', 'trinityone/request:',
+  ]),
+});
 // d-tags with no id or church suffix: the SAME string in every church, so another church's own (untagged) copy is
 // not a copy of this one's
 const _CARRY_BARE = ['trinityone/rota-settings', 'trinityone/verse-prompt', 'trinityone/meals-settings', 'trinityone/msgtags'];
@@ -8158,7 +8178,12 @@ async function _carryOverStewardDocs(pk, opts) {
   if (!urls.length) { notC('', 'no-relay', 'anything they set up (no relay could be reached)'); return out; }
   // OWNER ANSWERS (k) and (s): carry from the relays that answered only once EVERY relay is remembered as running the
   // newest-wins build (_relaysAllLiveNewest); otherwise the strict rule — every relay must answer a slice completely.
-  const liveRule = _relaysAllLiveNewest(urls);
+  const _rk = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  let configured = []; try { configured = relaysRaw(); } catch (e) { configured = []; }
+  if (!Array.isArray(configured) || !configured.length) configured = urls;
+  const admitted = new Set(urls.map(_rk));
+  const liveRule = configured.every(u => admitted.has(_rk(u))) && _relaysAllLiveNewest(urls);
+  const rulek = (d) => liveRule && !!_carryPrefix(d, STEWARD_CARRY_RULE.newest);   // owner answer (u): only these types
   // ONE question to ONE relay: what it sent, and whether it FINISHED — an EOSE inside the limit, on a socket the relay
   // accepted the church's login on (an unauthenticated read is answered with the private documents withheld).
   const ask = (url, filter, until) => new Promise((resolve) => {
@@ -8291,7 +8316,7 @@ async function _carryOverStewardDocs(pk, opts) {
     const jobs = [];
     for (const d of slice) {
       const S = mine.get(d), label = _carryLabel(d, S.content);
-      if (liveRule ? !someWhole : !whole) { notC(d, 'incomplete', label); continue; }
+      if (rulek(d) ? !someWhole : !whole) { notC(d, 'incomplete', label); continue; }
       // a copy by anyone else at S or later, in ANY answer received — complete or partial — blocks (rule k)
       const rivals = (others.get(d) || []).filter(x => x.at >= (S.created_at || 0));
       if (rivals.length) {
