@@ -38,6 +38,11 @@
   // the blob: address each track's resolve() handed us. Only these are ever revoked here: a blob the CALLER put in
   // track.src (no resolve) has nothing to rebuild it from, and is the caller's to free.
   const minted = new WeakMap();
+  // held: the SYSTEM paused the element (the WebView's own audio focus: a phone call, another app), not the listener
+  // and not this engine (2026-11-19, PLAN-audio-focus-single-owner v3). The listener still wants sound (wantPlay
+  // stays), but nothing restarts by itself while held: no stall guard, no retry, no return-to-app retry. Cleared by
+  // every Play the listener gives (resume, retry-now, a new track) and by every engine el.play(); also by pause/stop.
+  let held = false;
   let state = { track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, rate, q: queue, qi };
   const subs = new Set();
   const emit = () => { state = { ...state }; subs.forEach(fn => { try { fn(state); } catch (e) {} }); };
@@ -52,7 +57,7 @@
   const disarm = () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } };
   // the no-progress guard: armed only while the element is meant to be advancing (or waiting for the first
   // canplay of a load this engine started), never during a resolve() download, never for a blob.
-  const shouldArm = () => !!(wantPlay && !pending && !retryTimer && state.track && isNet(state.track.src) && (!el.paused || firstLoad));
+  const shouldArm = () => !!(wantPlay && !held && !pending && !retryTimer && state.track && isNet(state.track.src) && (!el.paused || firstLoad));
   const rearm = () => { disarm(); if (shouldArm()) stallTimer = setTimeout(onStall, STALL_MS); };
   const arm = () => { if (!stallTimer) rearm(); else if (!shouldArm()) disarm(); };
   function onStall() { stallTimer = null; if (shouldArm()) onFail(); }
@@ -76,14 +81,14 @@
     }
     el.src = track.src;
     applyRate();
-    firstLoad = true; rearm();
+    firstLoad = true; held = false; rearm();
     el.play().then(() => { if (tok === playTok) set({ playing: true, loading: false }); }).catch(onPlayReject(tok));
   }
   // "retry now": Play on an errored/failed track, resume() from the OS, return-to-app, a seek while errored.
   function retryNow() {
     const track = state.track; if (!track) return;
     cancelRetry(); disarm();
-    attempts = 0; wantPlay = true;
+    attempts = 0; wantPlay = true; held = false;
     osTap();   // retry-now is a tap or a return to the app: the foreground
     if (track.src && typeof track.resolve === 'function' && !isNet(track.src)) {
       // a resolved blob (a sermon, a local chapter) that broke: drop it, free it, and resolve once more, at the position
@@ -101,7 +106,7 @@
   // fresh resolve() download is not re-downloaded while paused: Play does that, at the new place.
   function seekErrored(at) {
     resumeAt = Math.max(0, at); set({ t: resumeAt });
-    if (wantPlay) { retryNow(); return; }
+    if (wantPlay && !held) { retryNow(); return; }   // a seek is not a Play: while held it moves the place silently
     const track = state.track; if (!track) return;
     cancelRetry(); disarm(); attempts = 0;
     set({ retrying: false, loading: false, playing: false });
@@ -120,10 +125,11 @@
     if (!state.track || pending) return;
     cancelRetry(); disarm(); firstLoad = false;
     if (!wantPlay) { set({ loading: false, playing: false, retrying: false }); return; }   // Play will reload it
+    if (held) { set({ failed: true, retrying: false, loading: false, playing: false }); osSync(); return; }   // during a call: no retry; Play reloads
     if (isNet(state.track.src) && attempts < RETRY_MS.length) {
       const tok = playTok, wait = RETRY_MS[attempts++];
       set({ failed: false, retrying: true, loading: true, playing: true });
-      retryTimer = setTimeout(() => { retryTimer = null; if (tok !== playTok || !wantPlay || !state.track) return; reloadEl(state.track, resumeAt); }, wait);
+      retryTimer = setTimeout(() => { retryTimer = null; if (tok !== playTok || !wantPlay || held || !state.track) return; reloadEl(state.track, resumeAt); }, wait);
       return;
     }
     set({ failed: true, retrying: false, loading: false, playing: false });   // wantPlay stays: return-to-app may retry
@@ -138,10 +144,33 @@
   el.addEventListener('durationchange', () => { set({ d: el.duration || 0 }); osPos(); });
   el.addEventListener('seeked', osPos);
   el.addEventListener('ratechange', osPos);
-  el.addEventListener('play', () => { set({ playing: true }); arm(); osPos(); });
-  el.addEventListener('pause', () => { if (!state.retrying) set({ playing: false }); arm(); osPos(); });
+  // A `play` / `playing` the engine did not start (the WebView resuming after a call): every engine el.play() sets
+  // wantPlay and clears held first. So: not wanted → pause it again. Held and the OS card already gone ('none', after
+  // 10 minutes) → pause it again (no service to keep it alive). Held and wanted → owner 2026-11-19: if the phone
+  // resumes, RESUME; held is cleared BEFORE the stall guard re-arms. 'none' WITHOUT held is the P5 no-service fallback:
+  // an engine play there (auto-advance) must go on.
+  const unwantedPlay = () => !wantPlay || (held && osState === 'none');
+  const followPlay = () => { if (held) { held = false; osSync(); } };
+  el.addEventListener('play', () => {
+    if (unwantedPlay()) { try { el.pause(); } catch (e) {} return; }
+    followPlay();
+    set({ playing: true }); arm(); osPos();
+  });
+  // A `pause` the engine did not cause is the system's (a call, another app's music). Decided synchronously in the
+  // listener: every engine pause clears wantPlay first, or runs with pending / retrying, or comes with ended / error
+  // (Chromium fires `pause` before `ended` and after `error`, with el.ended / el.error already set).
+  el.addEventListener('pause', () => {
+    // el.paused too: a queued `pause` from the listener's own Pause can land after their Play; the element is playing again
+    if (el.paused && wantPlay && !held && !pending && !state.retrying && !el.ended && !el.error) {
+      held = true; disarm();
+      set({ playing: false, loading: false });
+      osSync(); osPos();
+      return;
+    }
+    if (!state.retrying) set({ playing: false }); arm(); osPos();
+  });
   el.addEventListener('waiting', () => { set({ loading: true }); arm(); });
-  el.addEventListener('playing', () => { if (state.retrying) { cancelRetry(); attempts = 0; } set({ loading: false, playing: true, retrying: false, failed: false }); firstLoad = false; rearm(); });
+  el.addEventListener('playing', () => { if (unwantedPlay()) { try { el.pause(); } catch (e) {} return; } followPlay(); if (state.retrying) { cancelRetry(); attempts = 0; } set({ loading: false, playing: true, retrying: false, failed: false }); firstLoad = false; rearm(); });
   el.addEventListener('ended', () => {
     set({ playing: false });
     if (api.hasNext()) { begin(queue[qi + 1], queue, 0, true); return; }
@@ -154,7 +183,7 @@
   // to retry, or has given up, retries now. Never navigator.onLine.
   const onReturn = () => {
     const t = state.track;
-    if (!wantPlay || !t || pending || !isNet(t.src)) return;
+    if (!wantPlay || held || !t || pending || !isNet(t.src)) return;
     if (retryTimer || state.failed || el.error) retryNow();
   };
   try {
@@ -207,7 +236,7 @@
   // listener wants sound: loading, retrying, and between chapters.
   function osSync() {
     if (osState === 'none' || !state.track) return;
-    osSend(state.failed ? 'paused' : (wantPlay ? 'playing' : 'paused'));
+    osSend(state.failed ? 'paused' : (wantPlay && !held ? 'playing' : 'paused'));
   }
   function osMeta(track) {
     if (MSP) {
@@ -276,7 +305,7 @@
     const tok = ++playTok;
     pending = false;
     cancelRetry(); disarm();
-    wantPlay = true; resumeAt = at || 0; attempts = 0; firstLoad = false;
+    wantPlay = true; held = false; resumeAt = at || 0; attempts = 0; firstLoad = false;
     const was = state.track;
     osMeta(track);
     osSkips();
@@ -291,7 +320,7 @@
       release(was, track);
       applyRate();
       set({ track, loading: true, failed: false, retrying: false, q: queue, qi });
-      firstLoad = true; rearm();
+      firstLoad = true; held = false; rearm();
       el.play().then(() => { if (tok === playTok) set({ playing: true, loading: false }); }).catch(onPlayReject(tok));
     };
     if (track.src) { start(); return; }
@@ -345,6 +374,7 @@
     // explicit play (the OS / headphone play action): errored, retrying or failed → retry now
     resume() {
       if (!state.track) return;
+      held = false;
       if (pending) { wantPlay = true; osTap(); return; }
       if (errored()) { retryNow(); return; }
       wantPlay = true;
@@ -355,7 +385,7 @@
     // explicit pause: also cancels a pending retry, and nothing restarts by itself
     pause() {
       if (!state.track) return;
-      wantPlay = false; cancelRetry(); disarm(); firstLoad = false;
+      wantPlay = false; held = false; cancelRetry(); disarm(); firstLoad = false;
       try { el.pause(); } catch (e) {}
       set({ playing: false, loading: pending ? state.loading : false, retrying: false });
       osSync();
@@ -379,7 +409,7 @@
     },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; pending = false; wantPlay = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); osSkips(); },
+    stop() { playTok++; pending = false; wantPlay = false; held = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); osSkips(); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };

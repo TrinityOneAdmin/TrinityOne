@@ -29,6 +29,9 @@ export function fakeAudio() {
   const h = {};
   let _src = '', gen = 0, pend = [];
   const fire = (t) => (h[t] || []).slice().forEach(f => f());
+  // A QUEUED event, as Chromium dispatches `pause` and `ended`: it runs as its own task, after the current one and
+  // its microtasks, and a load (src assignment / load()) started in between DROPS it (2026-11-19, audit R2-1).
+  const queue = (t) => { const g = gen; setImmediate(() => { if (g === gen) fire(t); }); };
   const rejectAll = (name) => { const p = pend; pend = []; p.forEach(x => x.rej(DOMEx(name))); };
   const resolveAll = () => { const p = pend; pend = []; p.forEach(x => x.res()); };
   const abs = (v) => { v = String(v == null ? '' : v); if (!v) return ''; try { return new URL(v, 'https://localhost/').href; } catch (e) { return v; } };
@@ -83,17 +86,26 @@ export function fakeAudio() {
       if (!el.paused) return el.readyState >= 3 ? Promise.resolve() : new Promise((res, rej) => pend.push({ res, rej }));
       el.paused = false;
       fire('play');
+      if (el.paused) return Promise.reject(DOMEx('AbortError'));      // a `play` listener paused it again
       if (el.readyState >= 3 && !el.error) { fire('playing'); return Promise.resolve(); }
       fire('waiting');
       return new Promise((res, rej) => pend.push({ res, rej }));
     },
-    pause() { rejectAll('AbortError'); if (!el.paused) { el.paused = true; fire('pause'); } },
+    // pausing a playing element QUEUES `pause`; pausing a paused one fires nothing (HTML "internal pause steps")
+    pause() { rejectAll('AbortError'); if (!el.paused) { el.paused = true; queue('pause'); } },
+    // computed, as in the spec: metadata known, at or past the end
+    get ended() { return el.readyState >= 1 && el.duration > 0 && el.currentTime >= el.duration; },
     emit(t) { fire(t); },
     // ── test controls ──
-    failNow(code = 2) { el.error = { code }; el.readyState = 0; fire('error'); if (!el.paused) { el.paused = true; fire('pause'); } },
+    // a stream dying mid-play: `error`, then (queued) `pause`
+    failNow(code = 2) { el.error = { code }; fire('error'); if (!el.paused) { el.paused = true; queue('pause'); } },
+    // the SYSTEM pausing / resuming the element (Chromium's AudioFocusDelegate on a call): the engine did not ask
+    sysPause() { if (!el.paused) { el.paused = true; queue('pause'); } },
+    sysResume() { if (el.paused) { el.paused = false; fire('play'); if (!el.paused && el.readyState >= 3 && !el.error) fire('playing'); } },
     finish() { gen++; loaded(); },                                 // a 'hang' load completes
     tick(dt) { el.currentTime += dt; fire('timeupdate'); },
-    end() { el.currentTime = el.duration || el.currentTime; fire('timeupdate'); el.paused = true; fire('pause'); fire('ended'); },
+    // reaching the end: `pause` and `ended` are SEPARATE queued tasks (with el.ended already true for both)
+    end() { if (!(el.duration > 0)) el.duration = Math.max(1, el.currentTime); el.currentTime = el.duration; fire('timeupdate'); el.paused = true; queue('pause'); queue('ended'); },
   };
   return el;
 }
