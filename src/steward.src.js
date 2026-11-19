@@ -5964,6 +5964,13 @@ function _publishSigned(tmpl) {
 function _subscribeMany(filters, handlers) {
   return pool.subscribeMany(relays(), filters, handlers);
 }
+// A network's SHORT NAME: the title of the tab its members see inside What's happening (owner 2026-11-19). One line, at most 16 characters
+// (code points, so an emoji is one). '' = not set. Callers: publishProfile (the kind-0 it writes); the console's Short name field
+// (app/stew-dashboard.jsx NetShortNameField) caps with the same rule through window.Steward.netShortName.
+function netShortName(v) {
+  return Array.from(String(v == null ? '' : v).replace(/\s+/g, ' ').trim()).slice(0, 16).join('').trim();
+}
+
 // one-shot read of the single NEWEST event matching `filters` (or null), bounded by a short timeout.
 function _one(filters, ms = 4000) {
   return new Promise((resolve) => {
@@ -9925,6 +9932,7 @@ window.Steward = {
   },
 
   // ---- publish (signed by the church) ----
+  netShortName,
   publishProfile(meta) {
     if (!sk) return Promise.resolve(null);
     // NEVER while acting as a DELEGATED steward. setActiveIdentity's delegated branch sets `sk = churchSk`
@@ -9968,7 +9976,9 @@ window.Steward = {
       const host = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
       if (local && host) nip05 = local + '@' + host;
     }
-    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', mainColor: (typeof m.mainColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.mainColor)) ? m.mainColor : '', titleColor: m.titleColor || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {} });
+    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', mainColor: (typeof m.mainColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.mainColor)) ? m.mainColor : '', titleColor: m.titleColor || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {}, ...(netShortName(m.short_name) ? { short_name: netShortName(m.short_name) } : {}) });
+    // short_name (Networks member step 1, 2026-11-19): a NETWORK's tab title in its members' app, set on Network identity. Written only when
+    // non-empty, so a church's kind-0 is unchanged; capped by netShortName (the member app caps it again on read, app/app.jsx netProfileOf).
     // ⚠ NOTHING REGISTERS A BOX FROM HERE, AND THAT IS DELIBERATE. A `_registerOnOwnBox` hook sat on this
     // publish for one day (2cb1582, reverted 2026-09-12). It duplicated `selfRegister(name, {createHere:
     // true})`, which has done this correctly since 2026-09-04 from the setup wizard's name step, on the

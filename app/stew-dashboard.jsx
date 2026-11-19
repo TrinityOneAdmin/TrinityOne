@@ -166,6 +166,37 @@ const NETWORK_NAV = [
 const NETWORK_SETTINGS_PAGES = new Set(['identity', 'networds']);
 // The networds page is NOT in SETTINGS_GROUPS (the church console's page table): DashSettings adds it to the first group in the network view only.
 const NETWORK_WORDS_PAGE = { k: 'networds', n: 'Network recovery words', d: 'The network’s own 12 words' };
+// THE NETWORK'S SHORT NAME (Networks member step 1, owner 2026-11-19): the title of the tab its members see inside What's happening, in place of
+// the word "Network". Network view only (Network identity). Published in the network's kind-0 as `short_name` by Steward.publishProfile, which
+// caps it (netShortName: one line, 16 characters); the field caps with the same rule so what is typed is what is saved. Empty = members see
+// the network's name. Callers: DashSettings' identity page, network view only.
+function NetShortNameField({ church }) {
+  const cap = (v) => (window.Steward && window.Steward.netShortName) ? window.Steward.netShortName(v) : Array.from(String(v || '')).slice(0, 16).join('');
+  const saved = (church && church.short_name) || '';
+  const [val, setVal] = React.useState(saved);
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState('');
+  React.useEffect(() => { setVal(saved); }, [saved]);
+  const dirty = cap(val) !== saved;
+  const save = async () => {
+    setBusy(true); setNote('');
+    let r = null; try { r = await window.Steward.publishProfile({ short_name: cap(val) }); } catch (e) { r = null; }
+    setBusy(false);
+    setNote(r ? 'Saved' : 'Not saved. Check the network is connected and try again.');
+  };
+  return (
+    <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <label htmlFor="net-short-name" style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Short name (shown as the members' tab title)</label>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <input id="net-short-name" data-testid="net-short-name" value={val} maxLength={32} placeholder={(church && church.name) ? Array.from(church.name).slice(0, 16).join('') : 'e.g. BB&RB'}
+          onChange={(e) => { setVal(cap(e.target.value)); setNote(''); }}
+          style={{ flex: 1, minWidth: 0, height: 38, padding: '0 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14, fontFamily: 'var(--font-ui)' }} />
+        <button onClick={save} disabled={busy || !dirty} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}>{busy ? 'Saving…' : 'Save'}</button>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6 }}>{note || ('Up to 16 characters. ' + (saved ? '' : 'Until you set one, members see the network’s name.'))}</div>
+    </div>
+  );
+}
 function stewNetView(church) { return !!(church && church.isNetwork) && typeof window !== 'undefined' && window.NETWORKS_ENABLED === true; }
 // THE ONE NAME FOR A NETWORK (B2a). The switcher used the name saved on this device when the network was created or imported; the composer used the
 // network's published profile (kind-0). They disagreed until a profile read happened to rewrite the saved one. Both now show the PUBLISHED name when
@@ -14866,6 +14897,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
           </div>
           <button onClick={() => setEditingWeb(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> Edit</button>
         </div>
+        {stewNetView(church) ? <NetShortNameField church={church} /> : null}
       </Panel>
       <DashBrandingPanel church={church} />
       </React.Fragment>
