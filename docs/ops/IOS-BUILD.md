@@ -157,7 +157,7 @@ they're re-applied by `scripts/ios-fixup.sh`, which is **idempotent** and wired 
 `.github/workflows/ios.yml` (it runs between `cap sync ios` and `pod install` in both
 the archive job and the simulator-smoke job). Run it locally the same way.
 
-It applies four fixes, the first three each a hard failure of the default scaffold:
+It applies five fixes, the first two each a hard failure of the default scaffold:
 
 1. **Deployment target 13.0 → 15.0.** Xcode 26+ refuses to build for a deployment
    target below 15.0 (`BUILD FAILED … supported deployment target versions is 15.0
@@ -182,7 +182,14 @@ It applies four fixes, the first three each a hard failure of the default scaffo
    permission — no native code. The `UIBackgroundModes` patch is merge-safe and idempotent:
    it adds the `audio` entry only if absent, never duplicating it or dropping other modes.
 
-4. **`BackupExclude` local plugin.** TrinityOne's first custom iOS Capacitor plugin,
+4. **Export-compliance key** — `ITSAppUsesNonExemptEncryption = NO` in `Info.plist`. The app uses
+   only standard, exempt encryption (HTTPS/TLS, AES‑GCM, the NIP‑44 chat crypto), so declaring this
+   once means App Store Connect / TestFlight stops asking the encryption question — and flagging every
+   build "Missing Compliance" — on each upload. Kept by owner decision; revisit before any public App
+   Store submission (the app ships its own NIP‑44/AES‑GCM, so "Yes, exempt" may be the more accurate
+   answer). Added the same idempotent delete-then-add way as the usage strings.
+
+5. **`BackupExclude` local plugin.** TrinityOne's first custom iOS Capacitor plugin,
    appended to `AppDelegate.swift` (`exclude`/`check`, jsName `BackupExclude`). It sets
    `URLResourceValues.isExcludedFromBackup` on a folder under the app's Library dir so a
    large re-downloadable store (whole audio Bibles under `Library/audio/`) is kept out of
