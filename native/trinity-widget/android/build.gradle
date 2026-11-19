@@ -49,6 +49,7 @@ repositories {
 // treats the test task as UP-TO-DATE after an attribute-only change and reports the previous run's result.
 tasks.withType(Test).configureEach {
     inputs.dir('src/main/res').withPropertyName('widgetRes').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file('src/main/AndroidManifest.xml').withPropertyName('widgetManifest').withPathSensitivity(PathSensitivity.RELATIVE)   // ManifestPermissionTest
 }
 
 dependencies {
