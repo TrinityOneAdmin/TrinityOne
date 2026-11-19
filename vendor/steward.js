@@ -21716,6 +21716,45 @@ zoo`.split("\n");
     }
     return out;
   }
+  async function _settleStewardRemoval(who, o) {
+    let outcome = o.wrote ? "landed" : "unknown";
+    if (!o.wrote && !o.capsOnly) {
+      try {
+        outcome = window.Steward && window.Steward.stewardRemovalOutcome ? await window.Steward.stewardRemovalOutcome(who) : "unknown";
+      } catch (e) {
+        outcome = "unknown";
+      }
+    }
+    if (o.wrote) {
+      const at = o.wrote && typeof o.wrote === "object" && Number(o.wrote.created_at) || now();
+      const kept = {};
+      for (const p of o.next) if (Array.isArray(o.caps[p])) kept[p] = o.caps[p].filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
+      _careRoster = new Set(o.next);
+      _stewardCaps = kept;
+      if (o.before.length !== o.next.length) _rememberExStewards(o.before, o.next, at);
+      if (!o.capsOnly) _justRemoved.set(who, at);
+    }
+    if (outcome === "landed" && !o.capsOnly) {
+      try {
+        if (window.Steward.publishStewardRevoke) Promise.resolve(window.Steward.publishStewardRevoke(who)).catch(() => {
+        });
+      } catch (e) {
+      }
+      const at = Math.floor(Number(o.since));
+      if (Number.isFinite(at) && at >= 1e9) {
+        try {
+          if (window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(who, at)).catch(() => {
+          });
+        } catch (e) {
+        }
+      }
+    }
+    return outcome;
+  }
+  function _stewardSinceOf(who) {
+    const k = Object.keys(_stewardSince || {}).find((x) => x.toLowerCase() === who);
+    return k ? _stewardSince[k] : void 0;
+  }
   function _removeStewardKeeping(pk, opts) {
     _requireTrustedView("steward roster");
     const o = opts || {};
@@ -21732,6 +21771,7 @@ zoo`.split("\n");
       if (!_careRosterKnown) return { wrote: null, carry, next: null, refused: "roster-unknown" };
       const before = [..._careRoster];
       const caps = { ..._stewardCaps };
+      const since = _stewardSinceOf(who);
       let next;
       if (o.capsOnly) {
         next = before.slice();
@@ -21741,21 +21781,67 @@ zoo`.split("\n");
         for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k];
       }
       const wrote = await window.Steward.setStewards(next, caps);
-      if (wrote) {
-        const at = wrote && typeof wrote === "object" && Number(wrote.created_at) || now();
-        const kept = {};
-        for (const p2 of next) if (Array.isArray(caps[p2])) kept[p2] = caps[p2].filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
-        _careRoster = new Set(next);
-        _stewardCaps = kept;
-        if (before.length !== next.length) _rememberExStewards(before, next, at);
-        if (!o.capsOnly) _justRemoved.set(who, at);
-      }
-      return { wrote, carry, next, refused: "" };
+      const outcome = await _settleStewardRemoval(who, { wrote, before, next, caps, capsOnly: !!o.capsOnly, since });
+      return { wrote, carry, next, refused: "", outcome };
     };
     const p = _rosterTurn.then(turn, turn);
     _rosterTurn = p.catch(() => {
     });
     return p;
+  }
+  function _blockStewardKeeping(pk, blockedList, opts) {
+    _requireTrustedView("blocked list");
+    const o = opts || {};
+    const who = String(pk || "").toLowerCase();
+    return (async () => {
+      const out = { carry: null, blocked: null, wrote: null, outcome: "", onRoster: false, rosterUnknown: false, refused: "" };
+      if (actingChurch) {
+        out.refused = "delegated";
+        return out;
+      }
+      try {
+        out.carry = await _carryOverStewardDocs(who, { blocked: true, limitMs: o.limitMs });
+      } catch (e) {
+        out.carry = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
+      }
+      let b;
+      try {
+        b = await window.Steward.setBlocked([...blockedList || [], pk]);
+      } catch (e) {
+        b = null;
+      }
+      out.blocked = b;
+      if (b == null) return out;
+      const turn = async () => {
+        if (!_careRosterKnown) {
+          out.rosterUnknown = true;
+          return;
+        }
+        const before = [..._careRoster];
+        if (!before.some((p) => String(p).toLowerCase() === who)) return;
+        out.onRoster = true;
+        const caps = { ..._stewardCaps };
+        for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k];
+        const next = before.filter((p) => String(p).toLowerCase() !== who);
+        const since = _stewardSinceOf(who);
+        let wrote;
+        try {
+          wrote = await window.Steward.setStewards(next, caps);
+        } catch (e) {
+          wrote = null;
+        }
+        out.wrote = wrote;
+        out.outcome = await _settleStewardRemoval(who, { wrote, before, next, caps, capsOnly: false, since });
+      };
+      const q = _rosterTurn.then(turn, turn);
+      _rosterTurn = q.catch(() => {
+      });
+      try {
+        await q;
+      } catch (e) {
+      }
+      return out;
+    })();
   }
   window.Steward = {
     pubkey: null,
@@ -22900,7 +22986,8 @@ zoo`.split("\n");
     // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
     // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
     // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
-    // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add(), remove()).
+    // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add()), and _settleStewardRemoval (a Remove
+    // or a Block of a current helper that landed — plan 0d N2).
     markStewardRequestHandled(pk, at) {
       const who = String(pk || "").toLowerCase();
       const cp = _hhScope();
@@ -26689,7 +26776,12 @@ zoo`.split("\n");
     removeStewardKeeping(pk, opts) {
       return _removeStewardKeeping(pk, opts);
     },
-    // the carry alone — DashMembers.block runs it BEFORE the block is published (owner answer d), with { blocked: true }
+    // BLOCK AND KEEP, THEN OFF THE HELPER LIST (owner answer l) — see _blockStewardKeeping. Called by DashMembers.block.
+    blockStewardKeeping(pk, blockedList, opts) {
+      return _blockStewardKeeping(pk, blockedList, opts);
+    },
+    // the carry alone. DashMembers.block now goes through blockStewardKeeping (which runs this first, with { blocked: true });
+    // kept for the tests that drive the carry on its own. reseatMember calls _carryOverStewardDocs directly.
     carryOverStewardDocs(pk, opts) {
       return _carryOverStewardDocs(pk, opts);
     },
@@ -26710,7 +26802,8 @@ zoo`.split("\n");
     // setStewards above), so the helper's handler can take `e.pubkey` as the authority and refuse a forgery. CONTENT IS
     // NON-EMPTY on purpose: the relay-wide convention (and the helper's handler) treats empty content OR a ['deleted']
     // tag as a tombstone, so a live revoke must carry content or it would read as its own cancellation. Called ONLY from
-    // DashStewardsPanel.remove, and ONLY after the roster removal is confirmed landed (app/stew-dashboard.jsx).
+    // _settleStewardRemoval (Remove, and Block of a current helper — owner answer l), and ONLY once the roster removal is
+    // confirmed landed.
     publishStewardRevoke(pk) {
       if (!sk || !pk) return Promise.resolve(null);
       return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREVOKE_D + pk], ["t", NET], ["p", pk]], content: JSON.stringify({ revoked: pk }) }), sk));
@@ -26728,7 +26821,7 @@ zoo`.split("\n");
     //   'landed'     the newest roster any relay holds no longer lists them;
     //   'not-landed' EVERY relay answered, and every one still lists them;
     //   'unknown'    anything else (a relay silent, nothing found). Callers must not claim either way.
-    // Callers: DashStewardsPanel.remove (app/stew-dashboard.jsx), the only one.
+    // Callers: _settleStewardRemoval (Remove and Block of a current helper, when setStewards' OK was lost), the only one.
     async stewardRemovalOutcome(pk) {
       const want = String(pk || "").toLowerCase();
       if (!want || !pub) return "unknown";

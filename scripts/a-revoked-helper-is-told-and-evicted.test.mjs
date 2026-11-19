@@ -14,8 +14,9 @@
 //   HELPER (src/steward.src.js, the branch LIFTED FROM THE SHIPPED BUNDLE and run): a live revoke authored by a
 //          church we steward, newer than the roster, evicts it; a tombstone/empty is a no-op; an older-than-roster
 //          revoke is a no-op; a revoke authored by a key we do NOT steward is ignored (forgery guard).
-//   OWNER  (app/stew-dashboard.jsx, remove()/add() LIFTED and run): remove() publishes the revoke ONLY once the
-//          roster removal is confirmed landed — never on not-landed/unknown; add() publishes the cancelling tombstone.
+//   OWNER  the engine's shared settle step (_settleStewardRemoval, LIFTED FROM THE BUNDLE) publishes the revoke ONLY once
+//          the roster removal is confirmed landed — never on not-landed/unknown; remove() (LIFTED from the .jsx) acts on
+//          that outcome and does not publish it again; add() publishes the cancelling tombstone.
 //
 // ⚠ NOT A CODE FAILURE IF YOU SEE IT: the relay section starts a gateway on a fixed high port. If that port is
 // held, requireFreePort names the holding PID — kill THAT pid, never `pkill -f` (it kills other agents and this
@@ -267,7 +268,7 @@ function ownerStubs(over = {}) {
   };
   // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): the screen asks the engine to carry their settings and write the roster
   // (removeStewardKeeping answers { wrote, carry, next }). Here it is the roster write above and nothing to carry.
-  Steward.removeStewardKeeping = (pk) => { const next = stubs.stewards.filter(p => p !== pk); return Promise.resolve(Steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next })); };
+  Steward.removeStewardKeeping = (pk) => { const next = stubs.stewards.filter(p => p !== pk); return Promise.resolve(Steward.setStewards(next)).then(async w => ({ wrote: w, carry: null, next, outcome: w ? 'landed' : await Steward.stewardRemovalOutcome(pk) })); };   // the engine settles the outcome (_settleStewardRemoval, 2026-11-19)
   const stubs = {
     setConfirmRemove: () => {}, setRemoveNote: () => {}, markHandled: () => {}, answeredAt: () => 0, since: {},
     // optimistic-revoke console-UI (stew-dashboard.jsx DashStewardsPanel, pendingRemoval state): the board hides the row while the write settles.
@@ -285,28 +286,57 @@ function ownerStubs(over = {}) {
   return { stubs, calls };
 }
 
-test('OWNER remove(): publishes the revoke ONLY when the removal landed', async () => {
+// THE REVOKE NOTICE MOVED INTO THE ENGINE (2026-11-19, plan PLAN-removed-steward-fixes-F1-F4 §0b R-M4): Remove and Block
+// of a current helper share ONE settle step, _settleStewardRemoval, which decides whether the roster write landed (a lost OK
+// is re-read with stewardRemovalOutcome) and only then publishes the notice. It is LIFTED FROM THE SHIPPED BUNDLE and run
+// here; the screen's remove() is then checked to act on the engine's outcome and never to publish the notice itself.
+const STEWARD_BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+function engineSettle({ outcome = 'unknown' } = {}) {
+  const calls = { revoke: [], outcome: 0, handled: [] };
+  const scope = {
+    now, _careRoster: new Set(), _stewardCaps: {}, _justRemoved: new Map(), _rememberExStewards: () => {},
+    window: { Steward: {
+      stewardRemovalOutcome: async () => { calls.outcome++; return outcome; },
+      publishStewardRevoke: (pk) => { calls.revoke.push(pk); return Promise.resolve(true); },
+      markStewardRequestHandled: (pk, at) => { calls.handled.push({ pk, at }); return Promise.resolve(true); },
+    } },
+  };
+  const body = fnBody(STEWARD_BUNDLE, 'async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval');
+  const settle = new Function('scope', 'with (scope) { ' + body + '\nreturn _settleStewardRemoval; }')(scope);
+  return { settle, calls };
+}
+test('ENGINE (_settleStewardRemoval, shared by Remove and Block): publishes the revoke ONLY when the removal landed', async () => {
+  const roster = { before: [PK, 'other-steward'], next: ['other-steward'], caps: {}, since: 1_790_000_000 };
   // landed directly (setStewards acknowledged)
-  { const { stubs, calls } = ownerStubs({ setStewardsResolves: true });
-    liftOwner('remove', 'const remove = (pk) => {', stubs)(PK); await flush();
+  { const { settle, calls } = engineSettle();
+    assert.equal(await settle(PK, { ...roster, wrote: { created_at: now() } }), 'landed');
     assert.deepEqual(calls.revoke, [PK], 'a landed removal must publish exactly one revoke, for the removed pk');
-    assert.equal(calls.rotate, 1, 'a landed removal also re-keys'); }
-
+    assert.equal(calls.outcome, 0, 'an acknowledged write is not re-read'); }
   // landed via the outcome re-read (ack lost, relay confirms it is gone)
-  { const { stubs, calls } = ownerStubs({ setStewardsResolves: false, outcome: 'landed' });
-    liftOwner('remove', 'const remove = (pk) => {', stubs)(PK); await flush();
+  { const { settle, calls } = engineSettle({ outcome: 'landed' });
+    assert.equal(await settle(PK, { ...roster, wrote: false }), 'landed');
     assert.deepEqual(calls.revoke, [PK], 'a removal confirmed landed by re-read must still publish the revoke'); }
-
   // NOT landed — every relay still lists them: must NOT publish
-  { const { stubs, calls } = ownerStubs({ setStewardsResolves: false, outcome: 'not-landed' });
-    liftOwner('remove', 'const remove = (pk) => {', stubs)(PK); await flush();
-    assert.deepEqual(calls.revoke, [], 'a removal that did NOT land must NOT evict the helper');
-    assert.equal(calls.rotate, 0, 'and must re-key nothing'); }
-
+  { const { settle, calls } = engineSettle({ outcome: 'not-landed' });
+    assert.equal(await settle(PK, { ...roster, wrote: false }), 'not-landed');
+    assert.deepEqual(calls.revoke, [], 'a removal that did NOT land must NOT evict the helper'); }
   // unknown — cannot confirm: must NOT publish
-  { const { stubs, calls } = ownerStubs({ setStewardsResolves: false, outcome: 'unknown' });
-    liftOwner('remove', 'const remove = (pk) => {', stubs)(PK); await flush();
+  { const { settle, calls } = engineSettle({ outcome: 'unknown' });
+    assert.equal(await settle(PK, { ...roster, wrote: false }), 'unknown');
     assert.deepEqual(calls.revoke, [], 'an unconfirmed removal must NOT evict the helper'); }
+  // untick-all (capsOnly): they stay on the roster — no notice, ever
+  { const { settle, calls } = engineSettle();
+    await settle(PK, { ...roster, next: roster.before, wrote: { created_at: now() }, capsOnly: true });
+    assert.deepEqual(calls.revoke, [], 'emptying a helper’s permissions evicted their console'); }
+});
+
+test('OWNER remove(): re-keys only on the engine’s "landed", and never publishes the revoke itself (the engine does)', async () => {
+  for (const [w, outcome, rotates] of [[true, 'landed', 1], [false, 'landed', 1], [false, 'not-landed', 0], [false, 'unknown', 0]]) {
+    const { stubs, calls } = ownerStubs({ setStewardsResolves: w, outcome });
+    liftOwner('remove', 'const remove = (pk) => {', stubs)(PK); await flush();
+    assert.equal(calls.rotate, rotates, 'outcome ' + outcome + ': re-keyed ' + calls.rotate + ' times');
+    assert.deepEqual(calls.revoke, [], 'the screen published the revoke itself — the engine already did (it would go out twice)');
+  }
 });
 
 test('OWNER add(): publishes the cancelling tombstone (every re-add path runs through add())', () => {

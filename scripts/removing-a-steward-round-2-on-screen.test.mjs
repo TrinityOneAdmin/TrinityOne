@@ -73,7 +73,7 @@ async function blockBram(r) {
   return reads(draw(C, {}));
 }
 
-test('F2 — a PARTIAL block (setBlocked answered false): what could not be kept is still on the screen', { todo: 'batch 1 (F2)' }, async () => {
+test('F2 — a PARTIAL block (setBlocked answered false): what could not be kept is still on the screen', async () => {
   const r = blockRig({ carry: someLost(), blocked: false });
   const said = await blockBram(r);
   assert.ok(r.order.some(s => s.step === 'carry'), 'CONTROL: the carry ran');
@@ -82,7 +82,7 @@ test('F2 — a PARTIAL block (setBlocked answered false): what could not be kept
   assert.doesNotMatch(said, ALL_KEPT);
 });
 
-test('F2 — a REFUSED block (setBlocked answered null): what could not be kept is still on the screen', { todo: 'batch 1 (F2)' }, async () => {
+test('F2 — a REFUSED block (setBlocked answered null): what could not be kept is still on the screen', async () => {
   const r = blockRig({ carry: someLost(), blocked: null });
   const said = await blockBram(r);
   assert.match(said, /Couldn’t block Bram Whitlock/, 'CONTROL: the refusal is said');
@@ -144,28 +144,28 @@ async function untickAll(r) {
   return reads(view());
 }
 
-test('F2 — a Revoke that did NOT land still shows what could not be kept (the carry already ran)', { todo: 'batch 1 (F2)' }, async () => {
+test('F2 — a Revoke that did NOT land still shows what could not be kept (the carry already ran)', async () => {
   const r = panelRig(() => ({ wrote: false, carry: someLost(), next: [OTHER_STEW], refused: '', outcome: 'not-landed' }), { outcome: 'not-landed' });
   const said = await revoke(r);
   assert.match(said, /Couldn’t remove Tom Ridley — every relay still lists them/, 'CONTROL: the failure is said');
   assert.match(said, NOT_KEPT, 'A REVOKE THAT DID NOT LAND HID THE NOT-KEPT LIST: ' + said.slice(0, 500));
 });
 
-test('F2 — a Revoke whose outcome is UNKNOWN still shows what could not be kept (the sim’s offline Revoke)', { todo: 'batch 1 (F2)' }, async () => {
+test('F2 — a Revoke whose outcome is UNKNOWN still shows what could not be kept (the sim’s offline Revoke)', async () => {
   const r = panelRig(() => ({ wrote: false, carry: someLost(), next: [OTHER_STEW], refused: '', outcome: 'unknown' }), { outcome: 'unknown' });
   const said = await revoke(r);
   assert.match(said, /Couldn’t confirm that Tom Ridley was removed/, 'CONTROL: the unknown outcome is said');
   assert.match(said, NOT_KEPT, 'AN UNCONFIRMED REVOKE HID THE NOT-KEPT LIST: ' + said.slice(0, 500));
 });
 
-test('F2 — a Revoke REFUSED after the carry ran (roster unread by then) keeps the carry and shows what could not be kept', { todo: 'batch 1 (F2)' }, async () => {
+test('F2 — a Revoke REFUSED after the carry ran (roster unread by then) keeps the carry and shows what could not be kept', async () => {
   const r = panelRig(() => ({ wrote: null, carry: someLost(), next: null, refused: 'roster-unknown' }));
   const said = await revoke(r);
   assert.match(said, /hasn’t finished reading who your stewards are/, 'CONTROL: the refusal is said');
   assert.match(said, NOT_KEPT, 'THE REFUSED PATH DROPPED r.carry (plan 0b R-M5): ' + said.slice(0, 500));
 });
 
-test('F2 — an untick-all whose roster write did not land still shows what could not be kept', { todo: 'batch 1 (F2)' }, async () => {
+test('F2 — an untick-all whose roster write did not land still shows what could not be kept', async () => {
   const r = panelRig(() => ({ wrote: false, carry: someLost(), next: [DELEGATE, OTHER_STEW], refused: '' }));
   const said = await untickAll(r);
   assert.match(said, /Couldn’t remove Tom Ridley’s permissions/, 'CONTROL: the failure is said');

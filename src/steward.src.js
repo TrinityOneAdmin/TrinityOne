@@ -8317,6 +8317,49 @@ function _dropJustRemoved(list, rosterAt) {
   }
   return out;
 }
+// WHAT A ROSTER WRITE THAT TAKES SOMEONE OFF (OR, capsOnly, EMPTIES THEIR PERMISSIONS) DOES ONCE IT IS SETTLED — ONE
+// FUNCTION, shared by Remove / untick-all (_removeStewardKeeping) and Block of a current helper (_blockStewardKeeping), so
+// the two cannot drift (plan PLAN-removed-steward-fixes-F1-F4-2026-11-19 §0b R-M4, §0d N2). Runs inside the roster-queue
+// turn that wrote, so the next turn sees the updated _careRoster / _stewardCaps (R1).
+//   o: { wrote, before, next, caps, capsOnly, since } — `wrote` is what setStewards answered; `since` is when they were
+//      put ON the roster (the roster document's own record, read before the write).
+//   · OK LOST IS NOT "REFUSED": a falsy `wrote` is checked against what the relays hold (stewardRemovalOutcome) —
+//     'landed' | 'not-landed' | 'unknown'. Not for capsOnly: they stay on the roster, there is nothing to look for.
+//   · a write that answered: the engine's own roster and permissions follow it at once, the removal is remembered
+//     (_rememberExStewards) and a stale copy of the old roster cannot put them back before the echo (_justRemoved);
+//   · a removal that LANDED (not capsOnly): their console is told (publishStewardRevoke — the one document a removed
+//     helper can still read) and their old request to help is recorded as answered at `since`, through the engine
+//     (markStewardRequestHandled), so it cannot come back on any device. This never touches the Helpers screen's own
+//     browser copy (useHelperRequests); Remove's screen writes that itself.
+// Answers the outcome.
+async function _settleStewardRemoval(who, o) {
+  let outcome = o.wrote ? 'landed' : 'unknown';
+  if (!o.wrote && !o.capsOnly) {
+    try { outcome = (window.Steward && window.Steward.stewardRemovalOutcome) ? await window.Steward.stewardRemovalOutcome(who) : 'unknown'; }
+    catch (e) { outcome = 'unknown'; }
+  }
+  if (o.wrote) {
+    const at = (o.wrote && typeof o.wrote === 'object' && Number(o.wrote.created_at)) || now();
+    const kept = {};
+    for (const p of o.next) if (Array.isArray(o.caps[p])) kept[p] = o.caps[p].filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
+    _careRoster = new Set(o.next);
+    _stewardCaps = kept;
+    if (o.before.length !== o.next.length) _rememberExStewards(o.before, o.next, at);
+    // …and a stale copy of the old roster must not put them back before the relay's echo arrives (setCareRoster)
+    if (!o.capsOnly) _justRemoved.set(who, at);
+  }
+  if (outcome === 'landed' && !o.capsOnly) {
+    try { if (window.Steward.publishStewardRevoke) Promise.resolve(window.Steward.publishStewardRevoke(who)).catch(() => {}); } catch (e) {}
+    // no `since` = nothing recorded (markStewardRequestHandled would otherwise stamp "now", hiding a genuine new request)
+    const at = Math.floor(Number(o.since));
+    if (Number.isFinite(at) && at >= 1e9) {
+      try { if (window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(who, at)).catch(() => {}); } catch (e) {}
+    }
+  }
+  return outcome;
+}
+// when this key was put on the roster, from the roster document's own record (case-insensitive), or undefined
+function _stewardSinceOf(who) { const k = Object.keys(_stewardSince || {}).find(x => x.toLowerCase() === who); return k ? _stewardSince[k] : undefined; }
 function _removeStewardKeeping(pk, opts) {
   _requireTrustedView('steward roster');   // a refusal is synchronous, exactly as setStewards' is
   const o = opts || {};
@@ -8327,28 +8370,67 @@ function _removeStewardKeeping(pk, opts) {
     let carry;
     try { carry = await _carryOverStewardDocs(who, { limitMs: o.limitMs }); }
     catch (e) { carry = { carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }; }
+    // the carry ran: its result goes back even on this refusal, so the screen can say what could not be kept (plan 0b R-M5)
     if (!_careRosterKnown) return { wrote: null, carry, next: null, refused: 'roster-unknown' };
     const before = [..._careRoster];
     const caps = { ..._stewardCaps };
+    const since = _stewardSinceOf(who);
     let next;
     if (o.capsOnly) { next = before.slice(); caps[before.find(p => String(p).toLowerCase() === who) || who] = []; }
     else { next = before.filter(p => String(p).toLowerCase() !== who); for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k]; }
     const wrote = await window.Steward.setStewards(next, caps);   // answers the SIGNED roster event when it landed (publish -> _landed)
-    if (wrote) {
-      const at = (wrote && typeof wrote === 'object' && Number(wrote.created_at)) || now();
-      const kept = {};
-      for (const p of next) if (Array.isArray(caps[p])) kept[p] = caps[p].filter(c => typeof c === 'string' && c).map(c => c.toLowerCase());
-      _careRoster = new Set(next);
-      _stewardCaps = kept;
-      if (before.length !== next.length) _rememberExStewards(before, next, at);
-      // …and a stale copy of the old roster must not put them back before the relay's echo arrives (setCareRoster)
-      if (!o.capsOnly) _justRemoved.set(who, at);
-    }
-    return { wrote, carry, next, refused: '' };
+    const outcome = await _settleStewardRemoval(who, { wrote, before, next, caps, capsOnly: !!o.capsOnly, since });
+    return { wrote, carry, next, refused: '', outcome };
   };
   const p = _rosterTurn.then(turn, turn);
   _rosterTurn = p.catch(() => {});
   return p;
+}
+// BLOCK A HELPER: KEEP WHAT THEY SAVED, BLOCK THEM, THEN TAKE THEM OFF THE HELPER LIST (owner answers d and l; plan §0b
+// R-M4 with §0c's order). Before this a Block left the person on the steward roster ("6 of 6" under Helpers), so open
+// phones went on honouring their copies while fresh phones and the relays did not (sim F2).
+//   1. the carry (blocked: true — off leaders/members, answer f), bounded by its own limit, OUTSIDE the roster queue —
+//      the queue holds only the roster write, so a 20 s carry does not hold up a Remove;
+//   2. setBlocked, outside the queue. null = nothing was written: stop here, nothing else changes;
+//   3. answered true OR false (false = refused or only partly saved: this console holds them blocked either way, the same
+//      direction as the key rotation that follows): ONE roster-queue turn that rebuilds from the roster as it is THEN
+//      and drops them — never from a list handed in. Not on the roster (a former helper): nothing written. Roster not
+//      read yet: nothing written, `rosterUnknown` says so (the screen tells the owner to remove them from Helpers).
+//   4. the landed side effects Remove has (_settleStewardRemoval): their console told, their old request answered.
+// Answers { carry, blocked, wrote, outcome, onRoster, rosterUnknown, refused }. Never rejects; a refusal of the view is
+// synchronous, as setBlocked's is. CALLER: DashMembers.block (app/stew-dashboard.jsx), for anyone who is or was a helper.
+function _blockStewardKeeping(pk, blockedList, opts) {
+  _requireTrustedView('blocked list');
+  const o = opts || {};
+  const who = String(pk || '').toLowerCase();
+  return (async () => {
+    const out = { carry: null, blocked: null, wrote: null, outcome: '', onRoster: false, rosterUnknown: false, refused: '' };
+    if (actingChurch) { out.refused = 'delegated'; return out; }   // the relay takes the roster and the blocklist from the church only
+    try { out.carry = await _carryOverStewardDocs(who, { blocked: true, limitMs: o.limitMs }); }
+    catch (e) { out.carry = { carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }; }
+    let b;
+    try { b = await window.Steward.setBlocked([...(blockedList || []), pk]); } catch (e) { b = null; }
+    out.blocked = b;
+    if (b == null) return out;
+    const turn = async () => {
+      if (!_careRosterKnown) { out.rosterUnknown = true; return; }
+      const before = [..._careRoster];
+      if (!before.some(p => String(p).toLowerCase() === who)) return;
+      out.onRoster = true;
+      const caps = { ..._stewardCaps };
+      for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k];
+      const next = before.filter(p => String(p).toLowerCase() !== who);
+      const since = _stewardSinceOf(who);
+      let wrote;
+      try { wrote = await window.Steward.setStewards(next, caps); } catch (e) { wrote = null; }
+      out.wrote = wrote;
+      out.outcome = await _settleStewardRemoval(who, { wrote, before, next, caps, capsOnly: false, since });
+    };
+    const q = _rosterTurn.then(turn, turn);
+    _rosterTurn = q.catch(() => {});
+    try { await q; } catch (e) {}
+    return out;
+  })();
 }
 
 window.Steward = {
@@ -9403,7 +9485,8 @@ window.Steward = {
   // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
   // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
   // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
-  // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add(), remove()).
+  // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add()), and _settleStewardRemoval (a Remove
+  // or a Block of a current helper that landed — plan 0d N2).
   markStewardRequestHandled(pk, at) {
     const who = String(pk || '').toLowerCase();
     const cp = _hhScope();
@@ -13277,7 +13360,10 @@ window.Steward = {
   // REMOVE A STEWARD AND KEEP WHAT THEY SAVED (owner, 2026-11-17) — see _removeStewardKeeping. Called by
   // DashStewardsPanel.remove and, with { capsOnly: true }, by its setCaps when every capability is unticked.
   removeStewardKeeping(pk, opts) { return _removeStewardKeeping(pk, opts); },
-  // the carry alone — DashMembers.block runs it BEFORE the block is published (owner answer d), with { blocked: true }
+  // BLOCK AND KEEP, THEN OFF THE HELPER LIST (owner answer l) — see _blockStewardKeeping. Called by DashMembers.block.
+  blockStewardKeeping(pk, blockedList, opts) { return _blockStewardKeeping(pk, blockedList, opts); },
+  // the carry alone. DashMembers.block now goes through blockStewardKeeping (which runs this first, with { blocked: true });
+  // kept for the tests that drive the carry on its own. reseatMember calls _carryOverStewardDocs directly.
   carryOverStewardDocs(pk, opts) { return _carryOverStewardDocs(pk, opts); },
   // is this key on the roster now, or was it ever on it as far as this console has seen?
   isOrWasSteward(pk) { const p = String(pk || '').toLowerCase(); if (!p) return false; for (const x of _careRoster) if (String(x).toLowerCase() === p) return true; return _exStewardSet().has(p); },
@@ -13291,7 +13377,8 @@ window.Steward = {
   // setStewards above), so the helper's handler can take `e.pubkey` as the authority and refuse a forgery. CONTENT IS
   // NON-EMPTY on purpose: the relay-wide convention (and the helper's handler) treats empty content OR a ['deleted']
   // tag as a tombstone, so a live revoke must carry content or it would read as its own cancellation. Called ONLY from
-  // DashStewardsPanel.remove, and ONLY after the roster removal is confirmed landed (app/stew-dashboard.jsx).
+  // _settleStewardRemoval (Remove, and Block of a current helper — owner answer l), and ONLY once the roster removal is
+  // confirmed landed.
   publishStewardRevoke(pk) {
     if (!sk || !pk) return Promise.resolve(null);
     return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREVOKE_D + pk], ['t', NET], ['p', pk]], content: JSON.stringify({ revoked: pk }) }), sk));
@@ -13309,7 +13396,7 @@ window.Steward = {
   //   'landed'     the newest roster any relay holds no longer lists them;
   //   'not-landed' EVERY relay answered, and every one still lists them;
   //   'unknown'    anything else (a relay silent, nothing found). Callers must not claim either way.
-  // Callers: DashStewardsPanel.remove (app/stew-dashboard.jsx), the only one.
+  // Callers: _settleStewardRemoval (Remove and Block of a current helper, when setStewards' OK was lost), the only one.
   async stewardRemovalOutcome(pk) {
     const want = String(pk || '').toLowerCase();
     if (!want || !pub) return 'unknown';

@@ -141,7 +141,7 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   // ROUND 2 (2026-11-19, plan PLAN-removed-steward-fixes-F1-F4): Block of a current helper (owner answer l) and the
   // landed side effects Remove and Block share. Lifted WHEN THE BUNDLE HAS THEM, so the Step 0 tests run on the tree
   // before the fix (where the screen still calls carryOverStewardDocs + setBlocked) and on the fixed one alike.
-  const OPT_TOPS = [['async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval'], ['function _blockStewardKeeping(pk, blockedList, opts) {', '_blockStewardKeeping']]
+  const OPT_TOPS = [['async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval'], ['function _blockStewardKeeping(pk, blockedList, opts) {', '_blockStewardKeeping'], ['function _stewardSinceOf(who) {', '_stewardSinceOf']]
     .filter(([a]) => STEWARD.includes(a));
   for (const [a] of OPT_TOPS) tops.push(fnBody(STEWARD, a, a));
   const optNames = OPT_TOPS.map(([, n]) => n);

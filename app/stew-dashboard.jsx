@@ -9138,24 +9138,33 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     // definitions it carries (owner answer f); takeOffEveryTeam, below, still runs after it, so its later church copies
     // of the rosters and rotas win. A carry that fails never stops the Block. Anyone never on the roster: unchanged.
     const lowPk = String(pk || '').toLowerCase();
-    const stewardish = !!((window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(pk)) || (stewardRoster || []).some(p => String(p || '').toLowerCase() === lowPk));
-    const blockNow = (carry) => {
+    const onRosterHere = (stewardRoster || []).some(p => String(p || '').toLowerCase() === lowPk);
+    const stewardish = !!((window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(pk)) || onRosterHere);
+    // `given` is what Steward.blockStewardKeeping answered (it has already published the block): its `blocked` is used,
+    // and setBlocked is NOT called a second time. Without it (someone who never was a helper) the block is written here.
+    const blockNow = (carry, given) => {
       // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
       // out of the click, and not a key rotation for a block that was never written.
       let wrote;
-      try { wrote = Promise.resolve(window.Steward.setBlocked([...blockedList, pk])); } catch (e) { return; }
+      if (given) wrote = Promise.resolve(given.blocked);
+      else { try { wrote = Promise.resolve(window.Steward.setBlocked([...blockedList, pk])); } catch (e) { return; } }
       // AWAIT THE WRITE BEFORE ROTATING, and read it. This dropped the promise, rotated, and showed "Removed them from
       // the church" whatever the relay said. `null` = nothing was written (no signing key): nothing changed, say so.
       // `false` = every relay refused it or only SOME took it (setBlocked answers false for both): the block may be in force
       // on one relay and this console holds them as blocked either way, so keys are STILL rotated away from them — that is
       // the safe direction — and the steward is told it may be only partly saved, not that it worked.
       return wrote.then((ok) => {
-        // WHAT WAS KEPT IS SAID ONLY FOR A BLOCK THAT SAVED (audit, 2026-11-18): a refused or partial block is not "kept"
-        if (carry && ok) setBlockCarryNote(stewCarryNote(carry));
+        // NEVER SILENT (owner answer a; sim F2): what could NOT be kept is said whatever the block answered — the carry has
+        // already run. "Everything … stays" is said only for a block that saved (audit, 2026-11-18).
+        const keptNote = carry ? stewCarryNote(carry) : null;
+        if (keptNote && (keptNote.tone !== 'ok' || ok)) setBlockCarryNote(keptNote);
         if (ok == null) { setBlockWarn('Couldn’t block ' + who + ' — this console isn’t signed in to your church, so nothing was changed. Try again.'); return; }
-        const saveNote = ok === false
+        // OFF THE HELPER LIST (owner answer l): the engine took them off after the block. If that write did not land, or the
+        // roster had not been read yet, they are blocked but still listed — said, with what to do.
+        const stillListed = !!given && (given.onRoster ? given.outcome !== 'landed' : (!!given.rosterUnknown && onRosterHere));
+        const saveNote = [ok === false
           ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
-          : '';
+          : '', stillListed ? 'Blocked, but still listed as a helper — remove them from Helpers.' : ''].filter(Boolean).join(' ');
         if (saveNote) setBlockWarn(saveNote);
         // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
         // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
@@ -9210,11 +9219,15 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         });
       }).catch(() => {});
     };
-    if (stewardish && window.Steward.carryOverStewardDocs) {
+    // ANYONE WHO IS OR WAS A HELPER: the engine keeps what they saved, publishes the block, then takes a current helper off
+    // the helper list (owner answer l; plan 0b/0c R-M4: carry → block → roster). A former helper: carry and block only.
+    if (stewardish && window.Steward.blockStewardKeeping) {
       setBlockCarryNote(null);
-      return Promise.resolve().then(() => window.Steward.carryOverStewardDocs(pk, { blocked: true }))
-        .catch(() => ({ carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }))
-        .then((carry) => blockNow(carry));
+      let p;
+      try { p = window.Steward.blockStewardKeeping(pk, blockedList); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
+      return Promise.resolve(p).catch(() => null).then((r) => (r
+        ? blockNow(r.carry, r)
+        : blockNow({ carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }, { blocked: null })));
     }
     return blockNow();
   };
@@ -11276,7 +11289,9 @@ function pendingHelperRequests(requests, stewards, ownerPub, ...handledMaps) {
 // requester-clock value never lowers an old one and nothing already hidden comes back. A bare `1`/`true` here is
 // replaced by a real time on the next answer, as eb5c10eb did — it is the only way it ever stops hiding re-requests.
 // CALLERS of markHandled: the × (decline), add() and remove() in DashStewardsPanel — add()/remove() ONLY once the
-// roster write has landed (M1).
+// roster write has landed (M1). remove() passes { localOnly: true }: the engine already recorded the answer on the relay
+// when the removal landed (_settleStewardRemoval, shared with Block — plan 0d N2), so only this browser's copy is written
+// here, and the relay document is not written twice.
 function useHelperRequests() {
   const requests = window.usePendingStewards ? window.usePendingStewards() : [];
   const stewards = window.useStewardStewards ? window.useStewardStewards() : [];
@@ -11294,7 +11309,7 @@ function useHelperRequests() {
     if (!seen) return 0;
     return t >= 1e9 ? Math.floor(t) : Math.floor(Date.now() / 1000);
   };
-  const markHandled = (pk, at) => {
+  const markHandled = (pk, at, opts) => {
     const when = Math.floor(Number(at));
     if (!pk || !Number.isFinite(when) || when < 1e9) return;
     setLocal(h => {
@@ -11302,6 +11317,7 @@ function useHelperRequests() {
       if (Number.isFinite(cur) && cur >= 1e9 && cur >= when) return h;   // the later answer stands, as on the relay
       const n = { ...h, [pk]: when }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n;
     });
+    if (opts && opts.localOnly) return;
     try { if (window.Steward && window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(pk, when)).catch(() => {}); } catch (e) {}
   };
   return { pending, markHandled, answeredAt };
@@ -11313,7 +11329,8 @@ function useHelperRequests() {
 // result ({ carried, notCarried, superseded, refused }). Everything kept: one sentence. Something not kept: the list, by
 // plain name, and it stays on screen. Nothing of theirs to keep: nothing said. No "Try again": once the roster or block
 // lands, those documents are hidden even from the church (owner answer b).
-// Callers: DashStewardsPanel.remove and .setCaps, DashMembers.block.
+// Callers: DashStewardsPanel.remove and .setCaps, DashMembers.block, ReseatModal. A list of what was NOT kept is shown
+// whatever happened to the removal or the block itself (owner answer a; sim F2) — the carry already ran.
 function stewCarryNote(carry) {
   if (!carry || carry.refused) return null;
   const n = Array.isArray(carry.carried) ? carry.carried.length : 0;
@@ -11501,17 +11518,19 @@ function DashStewardsPanel({ church }) {
     if (Array.isArray(list) && list.length === 0) {
       if (capsClearing.has(pk)) return;   // already clearing this one; the editor says so
       const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
-      const failed = (why) => setCarryNote(pk, { tone: 'fail', text: why === 'roster-unknown'
+      // NEVER SILENT (owner answer a; sim F2): the carry may have run before the write failed — what it could not keep is
+      // said with the failure, in the same line (one line per steward)
+      const failed = (why, carry) => { const lost = carry ? stewCarryNote(carry) : null; setCarryNote(pk, { tone: 'fail', text: (why === 'roster-unknown'
         ? 'Couldn’t change what ' + who + ' may do yet — this console hasn’t finished reading who your stewards are. Nothing was changed. Try again in a moment.'
-        : 'Couldn’t remove ' + who + '’s permissions — the change didn’t save. Nothing was changed. Try again.' });
+        : 'Couldn’t remove ' + who + '’s permissions — the change didn’t save. Nothing was changed. Try again.') + (lost && lost.tone === 'fail' ? ' ' + lost.text : '') }); };
       setCarryNote(pk, null);
       let p;
       try { p = Promise.resolve(window.Steward.removeStewardKeeping(pk, { capsOnly: true })); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
       capsClearOn(pk, true);
       p.then((r) => {
         capsClearOn(pk, false);
-        if (!r || r.refused) { failed(r && r.refused); return; }
-        if (!r.wrote) { failed(''); return; }
+        if (!r || r.refused) { failed(r && r.refused, r && r.carry); return; }
+        if (!r.wrote) { failed('', r.carry); return; }
         setCarryNoteTimed(pk, carryNoteOf(pk, who, r.carry));
       }, () => { capsClearOn(pk, false); failed(''); });
       return;
@@ -11592,12 +11611,16 @@ function DashStewardsPanel({ church }) {
     // the last to save over to the church key, inside a fixed limit, and then writes the roster it rebuilds from its OWN
     // current copy (one removal at a time) — never this screen's `stewards`, which a second removal pressed during the
     // carry would still hold the first person in. A carry that fails or runs out of time never stops the removal.
-    let wrote, carried = null, refusedWhy = '';
+    // THE ENGINE SETTLES IT (plan 0b R-M4, shared with Block): whether the roster write landed (`outcome` — a lost OK is
+    // checked against what the relays hold), and, once it has, telling their console (the revoke notice) and recording
+    // their old request as answered. This screen acts on `outcome` and keeps its own browser copy of that answer.
+    let wrote, carried = null, refusedWhy = '', outcome = 'unknown';
     try {
       wrote = Promise.resolve(window.Steward.removeStewardKeeping(pk)).then((r) => {
+        carried = (r && r.carry) || null;   // kept on EVERY path: a refusal after the carry ran still says what was not kept (R-M5)
         if (!r || r.refused) { refusedWhy = (r && r.refused) || 'unknown'; return null; }
-        carried = r.carry || null;
         if (Array.isArray(r.next)) next = r.next;
+        outcome = r.outcome || (r.wrote ? 'landed' : 'unknown');
         return r.wrote;
       });
     } catch (e) { restoreOptimistic(pk); return; }   // a refusal is on the banner (_requireTrustedView)
@@ -11605,34 +11628,29 @@ function DashStewardsPanel({ church }) {
     const isBlocked = (p) => blockedSet.has(String(p || '').toLowerCase());
     const alsoMember = !!(byPub.get(pk) && byPub.get(pk).joined);
     // "NO OK" IS NOT "REFUSED". The relay's OK can be lost with the socket (the app was in the background when Revoke
-    // was pressed) while the roster was written. So a false answer is checked against what the relays actually hold,
-    // and the re-key follows THAT: landed -> re-key; definitely not -> say so; cannot tell -> say that, change nothing.
-    const settle = (ok) => {
-      if (refusedWhy) return Promise.resolve('refused');
-      if (ok) return Promise.resolve('landed');
-      return Promise.resolve().then(() => window.Steward.stewardRemovalOutcome(pk)).catch(() => 'unknown');
-    };
+    // was pressed) while the roster was written. So a false answer is checked against what the relays actually hold
+    // (the engine does it — _settleStewardRemoval), and the re-key follows THAT: landed -> re-key; definitely not -> say
+    // so; cannot tell -> say that, change nothing.
+    const settle = () => (refusedWhy ? 'refused' : outcome);
+    // NEVER SILENT (owner answer a; sim F2 — the offline Revoke whose queued write landed later): whatever happened to the
+    // roster write, the carry already ran, so what it could not keep is said beside the failure
+    const lostToo = () => { const v = carryNoteOf(pk, who, carried); if (v && v.tone === 'fail') setCarryNote(pk, v); };
     let landed = false;
     wrote.then(settle).then((outcome) => {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
       // the relay still honours would only lock out the wrong person. One we cannot confirm rotates nothing either.
       // Either way the optimistic row must come BACK — the relay refused, so the UI must not keep claiming "removed".
-      if (outcome === 'refused') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: refusedWhy === 'roster-unknown' ? 'Couldn’t remove ' + who + ' yet — this console hasn’t finished reading who your stewards are, so nothing was changed. Try again in a moment.' : 'Couldn’t remove ' + who + ' — nothing was changed. Try again.' }); return null; }
-      if (outcome === 'not-landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
-      if (outcome !== 'landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
+      if (outcome === 'refused') { restoreOptimistic(pk); lostToo(); setRemoveNote({ tone: 'fail', text: refusedWhy === 'roster-unknown' ? 'Couldn’t remove ' + who + ' yet — this console hasn’t finished reading who your stewards are, so nothing was changed. Try again in a moment.' : 'Couldn’t remove ' + who + ' — nothing was changed. Try again.' }); return null; }
+      if (outcome === 'not-landed') { restoreOptimistic(pk); lostToo(); setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
+      if (outcome !== 'landed') { restoreOptimistic(pk); lostToo(); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
       landed = true;
       landedRemoval(pk);   // the row leaves now, not before
       setCarryNoteTimed(pk, carryNoteOf(pk, who, carried));
-      // TELL THE REMOVED HELPER (2026-11-05, helper-delegation). ONLY here, in the landed branch — never before
-      // `settle` — because the relay stops serving them the stewards: roster the instant they are off it, so a
-      // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>
-      // is the one document they can still read; their subscribeStewardedChurches drops the ghost church on it.
-      try { if (window.Steward.publishStewardRevoke) window.Steward.publishStewardRevoke(pk); } catch (e) {}
-      // REMOVED = ANSWERED, ONLY NOW IT LANDED (audit of eb5c10eb, M1) — keeps their never-consumed old request out of
-      // "Requests to help". The time is when they were put ON the roster (`since`, from the roster document): the
-      // request that got them there is older, and a genuine new one, made after this removal, is newer. Their request
-      // is not in the stream while they are a steward, so it cannot be read here; no `since` = record nothing.
-      try { markHandled(pk, Number(since[pk]) || 0); } catch (e) {}
+      // TELL THE REMOVED HELPER (2026-11-05, helper-delegation) and RECORD THEIR OLD REQUEST AS ANSWERED (audit of
+      // eb5c10eb, M1): both done by the engine once the removal LANDED (_settleStewardRemoval, shared with Block), never
+      // for a removal that did not. This screen keeps its own browser copy of the answer — the time they were put ON the
+      // roster (`since`); no `since` = nothing recorded.
+      try { markHandled(pk, Number(since[pk]) || 0, { localOnly: true }); } catch (e) {}
       const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients

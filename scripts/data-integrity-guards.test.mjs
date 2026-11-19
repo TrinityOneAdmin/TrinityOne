@@ -56,7 +56,7 @@ function body(name, src = BUNDLE) {
 // prove a `_requireTrustedView` is present; an anchor that can drift onto a caller would pass while the guard
 // it names had been deleted. AUDIT 2026-08-02, caught by this test failing on exactly that change.
 const WHOLE_LIST_WRITERS = [
-  ['setBlocked', 'every banned member is silently unbanned'],
+  ['setBlocked', 'every banned member is silently unbanned', 'setBlocked(pubkeys)'],   // the declaration: _blockStewardKeeping CALLS window.Steward.setBlocked( first (2026-11-19)
   ['setNoPhoto', 'photo suppression is lifted for every child'],
   ['setMinors', 'every other child stops being a minor — the relay stops blocking adult↔minor DMs'],
   ['setApproved', 'every youth-cleared adult loses clearance', 'setApproved(pubkeys, opts)'],

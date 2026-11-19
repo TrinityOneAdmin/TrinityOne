@@ -35,7 +35,7 @@ function setup({ setStewardsResult = true, outcome = 'unknown' } = {}) {
     subscribeStewardRequests: (cb) => { cb([]); return () => {}; },
     setStewards: (pubkeys) => { wrote.push(pubkeys); return Promise.resolve(setStewardsResult); },
     // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
-    removeStewardKeeping: (pk) => { const next = state.roster.filter(p => p !== pk); wrote.push(next); return Promise.resolve(setStewardsResult).then(w => ({ wrote: w, carry: null, next })); },
+    removeStewardKeeping: (pk) => { const next = state.roster.filter(p => p !== pk); wrote.push(next); return Promise.resolve(setStewardsResult).then(async w => ({ wrote: w, carry: null, next, outcome: w ? 'landed' : await outcome })); },   // the engine settles the outcome (_settleStewardRemoval, 2026-11-19)
     stewardRemovalOutcome: () => outcome,
     // The landed path rotates keys; give it a clean no-op so a SUCCESSFUL revoke resolves instead of throwing.
     publishStewardRevoke: () => Promise.resolve(true), listIsFresh: () => false,

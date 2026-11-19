@@ -131,6 +131,7 @@ async function blockOnScreen({ blockAnswer } = {}) {
   const eng = owner(C);
   const kim = await newSteward(C), eve = await newSteward(C), cleo = H.key();
   await setRoster(eng, [kim.pub, eve.pub], { [kim.pub]: ['content'], [eve.pub]: ['care'] });
+  eng._stewardSince = { [kim.pub]: 1_790_000_000, [eve.pub]: 1_790_000_100 };   // when each was put on the roster (the roster document's record)
   const gid = C.cp.slice(0, 16) + '-kims';
   await mustPut(C, raw(C, kim, GROUP_D + gid, { name: 'Kim’s Study', leaders: [kim.pub] }));
   const order = [], told = { revoke: [], handled: [] };
@@ -174,7 +175,7 @@ async function blockOnScreen({ blockAnswer } = {}) {
   return { C, X, eng, kim, eve, order, told };
 }
 
-test('F2b — Block of a CURRENT helper: after the carry and the block, the helper list on the relay no longer names them', { todo: 'batch 1 (F2 + answer l)' }, async () => {
+test('F2b — Block of a CURRENT helper: after the carry and the block, the helper list on the relay no longer names them', async () => {
   const { C, X, kim, eve, order, told } = await blockOnScreen();
   assert.ok(order.indexOf('carry') !== -1 && order.indexOf('block') > order.indexOf('carry'), 'CONTROL: carry then block: ' + order.join(' → '));
   const roster = await rosterOn(C, X);
@@ -183,12 +184,16 @@ test('F2b — Block of a CURRENT helper: after the carry and the block, the help
   assert.ok(roster.includes(eve.pub), 'the other helper was taken off too');
   assert.ok(order.indexOf('roster') > order.indexOf('block'), 'the roster was written before the block (plan 0c R-M4 order): ' + order.join(' → '));
   assert.deepEqual(told.revoke, [kim.pub], 'their console was not told (publishStewardRevoke, as Remove does)');
+  // plan 0d N2: their old request to help is recorded as answered THROUGH THE ENGINE, at the time they were put on the
+  // roster — so it does not come back under "Requests to help" on any device
+  assert.deepEqual(told.handled, [{ pk: kim.pub, at: 1_790_000_000 }], 'their request was not recorded as answered');
 });
 
 test('F2b — CONTROL: a Block that was REFUSED (setBlocked answered null) leaves the helper list untouched', async () => {
-  const { C, X, kim, order } = await blockOnScreen({ blockAnswer: null });
+  const { C, X, kim, order, told } = await blockOnScreen({ blockAnswer: null });
   assert.ok(order.includes('block'), 'CONTROL: the block was asked for');
   assert.ok(!order.includes('roster'), 'the roster was written although the block was refused: ' + order.join(' → '));
+  assert.deepEqual(told.revoke, [], 'a refused block still told their console it was removed');
   assert.ok((await rosterOn(C, X)).includes(kim.pub), 'a refused block took them off the helper list');
 });
 

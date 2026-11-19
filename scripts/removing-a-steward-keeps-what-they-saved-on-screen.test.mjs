@@ -101,7 +101,8 @@ test('T2 — while the carry runs the row STAYS and says so; it leaves only when
 });
 
 test('T2 — a removal that did not land puts the row back, without "Removing…"', async () => {
-  const r = panelRig({ keep: () => Promise.resolve({ wrote: false, carry: { carried: [], notCarried: [], superseded: [] }, next: [OTHER_STEW] }) });
+  // the engine re-reads a lost OK and answers the outcome (_settleStewardRemoval, 2026-11-19)
+  const r = panelRig({ keep: () => Promise.resolve({ wrote: false, carry: { carried: [], notCarried: [], superseded: [] }, next: [OTHER_STEW], outcome: 'not-landed' }) });
   r.globals.window.Steward.stewardRemovalOutcome = () => Promise.resolve('not-landed');
   const p = await revokeDelegate(r);
   await flush();
@@ -183,6 +184,14 @@ function blockRig({ stewards = [], wasSteward = false, carry } = {}) {
     isOrWasSteward: (pk) => (wasSteward && pk === BRAM),
     carryOverStewardDocs: (pk, o) => { order.push({ step: 'carry', pk, o }); return carry ? carry() : Promise.resolve({ carried: [{ d: 'g', label: 'a group' }], notCarried: [], superseded: [] }); },
     setBlocked: (list) => { order.push({ step: 'block', list }); return Promise.resolve(true); },
+    // BLOCK OF ANYONE WHO IS OR WAS A HELPER GOES THROUGH THE ENGINE (2026-11-19, owner answer l): blockStewardKeeping runs
+    // the carry, then the block, then (a current helper) the roster write. Modelled here from the two calls above, so the
+    // order the screen sees is the engine's; its real-relay test is removing-a-steward-round-2.test.mjs (F2b).
+    blockStewardKeeping: async (pk, list) => {
+      let carry; try { carry = await steward.carryOverStewardDocs(pk, { blocked: true }); } catch (e) { carry = { carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }; }
+      const blocked = await steward.setBlocked([...list, pk]);
+      return { carry, blocked, wrote: null, outcome: '', onRoster: false, rosterUnknown: false, refused: '' };
+    },
     rotateCareKey: () => Promise.resolve(true), rotateMediaKey: () => Promise.resolve(true),
     ensureNameKeyForMembers: () => Promise.resolve({ rotated: true }), publishGroupKey: () => Promise.resolve({}), publishGroup: () => Promise.resolve(true),
     publishRoster: (team) => { order.push({ step: 'roster', team }); return Promise.resolve({ id: team }); },
