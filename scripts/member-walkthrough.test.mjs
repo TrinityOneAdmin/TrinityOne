@@ -272,6 +272,19 @@ test('M1-b: closed and reopened while still waiting — nothing on boot, nothing
   h.join(PENDING);
   for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null);
   assert.equal(h.store.getItem('trinityone.tour.community.wait'), '1', 'joining did not record that the Community part is to come');
+  // A start with NO cached join answer (wiped, or never written) — only the wait flag says Community is to come:
+  // boot must not mark it seen (the host's `!memberTourWaiting()` term).
+  const bare = storeOf(h);
+  bare.delete('trinityone.joinstate.' + NPUB);
+  assert.equal(bare.get('trinityone.tour.community.wait'), '1');
+  const nocache = bootApp({ church: true, store: bare });
+  nocache.endSplash();
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(nocache.show(), nocache), null);
+  assert.equal(nocache.store.getItem('trinityone.tour.community'), null, 'boot marked Community seen for a member whose join is still waiting (wait flag, no cached answer)');
+  nocache.join(ADMITTED);
+  nocache.el(nocache.show().tree, nocache.mod.TabBar).props.onChange('chat');
+  nocache.screens([ADULT_ROOM]);
+  assert.deepEqual(walkSaid(nocache).map(x => x[0]), ['Community', 'Groups and teams'], 'with only the wait flag, admission did not run the Community part');
   // the phone is closed; the app starts again, still following the church
   const again = bootApp({ church: true, store: storeOf(h) });
   again.endSplash();
@@ -378,6 +391,18 @@ test('POINT OF USE (L4): on a thin link (church check never answers), the Commun
   const b = bubbleOf(h.show(), h);
   assert.ok(b, 'the Community part did not show once they stopped typing');
   assert.equal(b.step.title, 'Community');
+});
+
+test('L4: a Help replay is NOT held back while typing (only automatic starts are)', () => {
+  const h = bootApp();
+  h.store.setItem('trinityone.tour.bible', '1');
+  h.endSplash();
+  h.show();
+  h.window.document.activeElement = { tagName: 'TEXTAREA', closest: () => null };
+  h.ctxOf(h.show().tree).replayTour();
+  const b = bubbleOf(h.show(), h);
+  assert.ok(b, 'Help → Take the tour again was held back because focus was in a text box');
+  assert.equal(b.step.title, 'Welcome');
 });
 
 test('L4: what counts as typing — text boxes, text-like inputs, selects, editable areas; not a checkbox, and not the tour itself', () => {
@@ -633,6 +658,24 @@ test('a reader tip never shows over an open sheet, and gives way when one opens 
   win.__trinityBackStack.splice(0, 1);                // the verse card closes
   draw(M.MemberTourHost, { page: 'read' });
   assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card')), 'Translation', 'the tip a sheet interrupted came back instead of giving way');
+});
+
+test('M1: a member let in but still owed the Community part, on the Read page, still gets the reader tips', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  let screens = [];
+  const store = new Map([['trinityone.tour.bible', '1'], ['trinityone.tour.community.wait', '1']]);
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store);
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  const props = { page: 'read', inChurch: true, admitted: true };
+  draw(M.MemberTourHost, props);
+  draw(M.MemberTourHost, props);
+  const tip = drawnBubble(draw(M.MemberTourHost, props), 'tip-card');
+  assert.ok(tip, 'a member owed the Community part got no reader tip on the Read page');
+  assert.equal(titleOf(tip), 'Tap a verse');
+  assert.equal(store.get('trinityone.tour.community') || null, null, 'the Community part was spent on the Read page');
 });
 
 // ── 2026-11-19 audit fixes, over the real reader ───────────────────────────────────────────────────────────

@@ -1006,7 +1006,8 @@ function App() {
     if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) unconfirmedChurches.current.add(npub);
     // The first-run tour's Community part is now wanted — recorded at once, so an app closed before the church
     // check below answers still has it to come. It runs only once the church lets this person in (tourAdmitted,
-    // below); for a code that turns out not to be a church nothing ever admits, so nothing runs.
+    // below); for a code that turns out not to be a church nothing ever admits, so nothing runs. This is the only
+    // call: the church check's branches below are all `!alreadyFollowed` too, so they no longer repeat it.
     if (!alreadyFollowed) memberTourJoin();
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
@@ -1025,7 +1026,6 @@ function App() {
           if (result === 'church') {
             unconfirmedChurches.current.delete(npub);
             if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
-            memberTourJoin();
           } else if (result === 'not-found') {
             unconfirmedChurches.current.delete(npub);
             setChurches(cs => cs.filter(c => c.id !== npub));
@@ -1046,7 +1046,6 @@ function App() {
             // stop holding the heartbeat back and send it now, as the heartbeat did before the gate existed.
             unconfirmedChurches.current.delete(npub);
             if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
-            memberTourJoin();
           }
         } catch (e) { unconfirmedChurches.current.delete(npub); }
       };
@@ -1054,7 +1053,6 @@ function App() {
     } else if (!alreadyFollowed) {
       // Fallback when checkChurch is not available (stale bundle)
       if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
-      memberTourJoin();
     } else if (_wasLeaving && window.Fellowship && window.Fellowship.announceMembership) {
       // Still on the phone because the Leave had not gone yet, and they have followed again: they are staying.
       // The church is already confirmed (it is in the list), so announce now.
