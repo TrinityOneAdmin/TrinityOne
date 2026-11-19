@@ -16353,8 +16353,6 @@ window.Steward = {
     try { const np = toPubHex(networkPub) || networkPub; const jr = await _netReadJoiners(np); if (!(jr && jr.ok && jr.joiners.length > 0)) return null; return jr.authoritative ? jr.joiners.length : { atLeast: jr.joiners.length }; }
     catch (e) { return null; }
   },
-  // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
-  // Callers (rule 2): IdentitySwitcher.pick (app/stew-dashboard.jsx) only. -> '' when nothing is wrong that it can see.
   // THE NETWORK'S OWN RECOVERY WORDS (B2a re-audit, 2026-11-19), for the network-view settings page. From this console's sealed network-key record
   // (netKeys), and only while the church key is unlocked (the record is sealed to it). NEVER the church's phrase: this does not call, or fall back
   // to, exportMnemonic. -> the 12 words | '' (not held here, or locked). Callers (rule 2): NetworkWordsPanel (app/stew-dashboard.jsx) only.
@@ -16364,6 +16362,8 @@ window.Steward = {
     const rec = netKeys().find(x => x.pub === np);
     return (rec && typeof rec.mnemonic === 'string') ? rec.mnemonic : '';
   },
+  // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
+  // Callers (rule 2): IdentitySwitcher.pick (app/stew-dashboard.jsx) only. -> '' when nothing is wrong that it can see.
   networkOpenProblem(networkPub) {
     const np = toPubHex(networkPub) || networkPub;
     const raw = _netKeysRaw().find(x => x.pub === np);

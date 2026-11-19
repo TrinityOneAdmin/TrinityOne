@@ -14899,7 +14899,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
       </Panel>
       ) : null}
 
-      {open === 'networds' && stewNetView(church) ? <NetworkWordsPanel /> : null}
+      {/* KEYED ON THE ACTIVE NETWORK (re-audit): a switch from network A to B must remount the panel, or A's revealed words stay on screen under B.
+          activePub is the identity itself and changes exactly on that switch (the idv counter also moves for other identity events). */}
+      {open === 'networds' && stewNetView(church) ? <NetworkWordsPanel key={(window.Steward && window.Steward.activePub) || ''} /> : null}
       {open === 'key' ? (
       <Panel title={stewNetView(church) ? 'Network key' : 'Church key'}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>

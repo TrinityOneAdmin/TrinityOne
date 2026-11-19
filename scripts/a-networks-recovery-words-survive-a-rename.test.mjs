@@ -191,3 +191,14 @@ test('networkWords: the NETWORK\'s words from its sealed record -- not the churc
   assert.notEqual(sab, NETWORDS, 'sabotage did not apply');
   assert.notEqual(wordsHarness([sealedRecord()], { body: sab }).networkWords(NET), WORDS, 'THE SABOTAGE WAS NOT CAUGHT');
 });
+
+// re-audit: the `if (!churchSk) return ''` guard, pinned. An UNMIGRATED record keeps its words in plain text, so without the guard a LOCKED console
+// would still hand them out.
+test('networkWords on a PLAINTEXT (unmigrated) record: nothing while the console is locked, the words while unlocked; SABOTAGE (guard deleted) leaks them while locked', () => {
+  const plain = { pub: NET, name: 'Old Name', mnemonic: WORDS };
+  assert.equal(wordsHarness([plain], { locked: true }).networkWords(NET), '', 'a LOCKED console handed out the network\'s words from a plaintext record');
+  assert.equal(wordsHarness([plain]).networkWords(NET), WORDS, 'CONTROL: an unlocked console could not read a plaintext record');
+  const guard = "if (!churchSk) return '';", sab = NETWORDS.replace(/if \(!churchSk\) return "";|if \(!churchSk\) return '';/, '');
+  assert.notEqual(sab, NETWORDS, 'sabotage anchor (the locked guard) not found');
+  assert.equal(wordsHarness([plain], { locked: true, body: sab }).networkWords(NET), WORDS, 'THE SABOTAGE WAS NOT CAUGHT');
+});

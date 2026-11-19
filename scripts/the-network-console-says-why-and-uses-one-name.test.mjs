@@ -67,7 +67,7 @@ function consoleWith(React, opts0 = {}) {
   const want = ['StewDashboard', 'DashNetworkOverview', 'DashOverview', 'DashSettings', 'Panel', 'IdentitySwitcher', 'NetworkAnnounceComposer', 'NetworkAnnouncementCard'];
   const mod = new Function(...names, (opts0.mutate ? opts0.mutate(JS) : JS) + '\nreturn { ' + want.join(', ') + ' };')(...names.map(k => globals[k]));
   for (const n of want) assert.equal(typeof mod[n], 'function', `${n} is not a component — re-anchor this test`);
-  return { mod, copied, removed, syncs, opts: opts0 };
+  return { mod, copied, removed, syncs, opts: opts0, win };
 }
 const run = (opts) => { const { React, draw } = miniReact(); const c = consoleWith(React, opts); return { ...c, draw }; };
 const said = (tree) => texts(tree).join(' ').replace(/\s+/g, ' ');
@@ -319,4 +319,28 @@ test('NETWORK WORDS SABOTAGE: with the page reading exportMnemonic instead, the 
   const shown = find(w.r.draw(w.r.mod.DashSettings, w.props), n => n.props && n.props['data-network-words'] === '1').map(n => (n.kids || []).filter(k => typeof k === 'string').join('')).join(' ');
   assert.equal(shown, CHURCHWORDS, 'sabotage did not take');
   assert.notEqual(shown, NETWORDS, 'THE SABOTAGE WAS NOT CAUGHT');
+});
+
+// re-audit: the words panel is keyed on the ACTIVE network -- switching from network A to network B must not leave A's revealed words on screen
+test('NETWORK WORDS ACROSS A SWITCH: reveal on network A, switch to B -> nothing of A is shown and Reveal shows B\'s words; SABOTAGE (no key) keeps A\'s', () => {
+  const NB = 'ef'.repeat(32), WORDS_A = 'alpha words of network a one two three four five six seven eight', WORDS_B = 'bravo words of network b one two three four five six seven eight';
+  const shownIn = (tree) => find(tree, n => n.props && n.props['data-network-words'] === '1').map(n => (n.kids || []).filter(k => typeof k === 'string').join('')).join(' ');
+  const flow = (mutate) => {
+    const r = run({ network: true, mutate, steward: { activePub: NETPUB, networkWords: (p) => (p === NETPUB ? WORDS_A : p === NB ? WORDS_B : ''), exportMnemonic: () => 'church' } });
+    const props = { initialSection: 'networds', onSectionConsumed() {} };
+    const reveal = (t) => find(t, n => n.type === 'button' && /Reveal the network’s words/.test(said(n)))[0];
+    reveal(drawTwice(r.draw, r.mod.DashSettings, props)).props.onClick();
+    const onA = shownIn(r.draw(r.mod.DashSettings, props));
+    r.win.Steward.activePub = NB;   // the steward switches to network B (set on the console object itself: the harness copies the stub)
+    const onB = r.draw(r.mod.DashSettings, props);
+    return { r, props, onA, onBShown: shownIn(onB), revealB: reveal(onB) };
+  };
+  const f = flow(null);
+  assert.equal(f.onA, WORDS_A, 'setup: network A\'s words were not revealed');
+  assert.equal(f.onBShown, '', 'network A\'s words are still on screen after switching to network B');
+  assert.ok(f.revealB, 'after the switch the page does not offer to reveal B\'s words');
+  f.revealB.props.onClick();
+  assert.equal(shownIn(f.r.draw(f.r.mod.DashSettings, f.props)), WORDS_B, 'Reveal after the switch did not show network B\'s words');
+  const nokey = (js) => { const a = 'React.createElement(NetworkWordsPanel, { key: window.Steward && window.Steward.activePub || "" })'; assert.equal(js.split(a).length, 2, 'sabotage anchor not unique'); return js.replace(a, 'React.createElement(NetworkWordsPanel, null)'); };
+  assert.equal(flow(nokey).onBShown, WORDS_A, 'THE SABOTAGE WAS NOT CAUGHT: without the key A\'s words were still cleared');
 });
