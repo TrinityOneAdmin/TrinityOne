@@ -217,8 +217,10 @@ function memberTourTyping() {
     return !!a.isContentEditable;
   } catch (e) { return false; }
 }
-// Put the tour (or a tip) on the back stack, so Android Back and Escape (both go through window.trinityGoBack)
-// close it first, as they close a sheet. Marked, so memberTourBlocked does not count it.
+// Put the TOUR on the back stack, so Android Back and Escape (both go through window.trinityGoBack) close it first,
+// as they close a sheet. Marked, so memberTourBlocked does not count it. A reader TIP is not put there (triage P1,
+// 2026-11-19): it blocks nothing and takes no focus, so Back must do what it always does on Read — leave it. The tip
+// was marked seen when drawn and goes when its anchor does; "Got it" still dismisses it.
 function useMemberTourLayer(open, onClose) {
   const ref = React.useRef(onClose);
   ref.current = onClose;
@@ -233,13 +235,13 @@ function useMemberTourLayer(open, onClose) {
 
 // ── the bubble ──────────────────────────────────────────────────────────────────────────────────────────────
 // The tour is a dialog like the app's sheets (useDialogA11y): focus moves into it and is trapped there, Escape
-// skips it. A tip takes no focus and blocks nothing.
+// and Back skip it. A tip takes no focus, blocks nothing and is on no back stack: Back and Escape pass it by.
 const memberTourPrimary = { border: 'none', background: 'var(--clay-ink, var(--clay))', color: 'var(--on-clay, #fff)' };
 function MemberTourBubble(props) {
   const panelRef = React.useRef(null);
   const isTip = props.variant === 'tip';
   if (typeof useDialogA11y === 'function') useDialogA11y(!isTip, panelRef, props.onSkip);
-  useMemberTourLayer(true, isTip ? props.onNext : props.onSkip);
+  useMemberTourLayer(!isTip, props.onSkip);
   const insets = React.useMemo(() => tourKitInsets(), []);
   return <TourKitBubble {...props} panelRef={panelRef} mark="data-member-tour" insets={insets} primary={memberTourPrimary} anim="trinityScale" ringMaxH={props.step && props.step.id === 'groups' ? 200 : undefined} z={isTip ? 70 : 260} />;
 }

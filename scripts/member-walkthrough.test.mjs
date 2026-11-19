@@ -649,6 +649,21 @@ test('POINT OF USE: opening the reader shows "Tap a verse" on the first verse Re
   assert.equal(store.get('trinityone.tour.tip.verse'), '1');
 });
 
+test('POINT OF USE (P1): a reader tip is NOT on the back stack — the first Back on Read leaves Read, it does not just close the tip', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, __trinityBackStack: [] };
+  let screens = [];
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, new Map());
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  draw(M.MemberTourHost, { page: 'read' });
+  const tree = draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(titleOf(drawnBubble(tree, 'tip-card')), 'Tap a verse', 'premise: the reader tip is not up');
+  assert.equal(win.__trinityBackStack.filter(e => e && e.memberTour).length, 0,
+    'the reader tip put itself on the back stack, so Android Back / Escape close the tip instead of leaving Read');
+});
+
 test('a reader tip never shows over an open sheet, and gives way when one opens (it counts as seen)', () => {
   const { React, draw } = miniReact();
   const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, __trinityBackStack: [] };
@@ -665,11 +680,11 @@ test('a reader tip never shows over an open sheet, and gives way when one opens 
   win.__trinityBackStack.length = 0;
   draw(M.MemberTourHost, { page: 'read' });
   assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card')), 'Tap a verse');
-  win.__trinityBackStack.unshift(sheet);              // the person taps a verse: its card opens under the tip's own entry
+  win.__trinityBackStack.push(sheet);                 // the person taps a verse: its card opens (a tip has no back-stack entry, triage P1)
   draw(M.MemberTourHost, { page: 'read' });
   assert.equal(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card'), null, 'the tip stayed up over the sheet that opened');
   assert.equal(store.get('trinityone.tour.tip.verse'), '1');
-  win.__trinityBackStack.splice(0, 1);                // the verse card closes
+  win.__trinityBackStack.splice(win.__trinityBackStack.indexOf(sheet), 1);   // the verse card closes
   draw(M.MemberTourHost, { page: 'read' });
   assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card')), 'Translation', 'the tip a sheet interrupted came back instead of giving way');
 });
