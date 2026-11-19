@@ -4962,7 +4962,8 @@ function netDocWriteOk(e, d) {
     else if (t[0] === 'deleted') { if (t[1] !== '1') return false; }
     else return false;
   }
-  if (tagBytes > NETDOC_TAGS_MAX_BYTES) return false;
+  if (tagBytes > NETDOC_TAGS_MAX_BYTES) return false;   // DEFENCE IN DEPTH, UNREACHABLE TODAY: the checks above already pin every value (d === the bounded d-tag, t === NET, deleted === '1', each
+  //   name once), so no accepted tag set comes near 256 bytes. Sabotage-confirmed 2026-11-19: removing this line fails no test, and no test can reach it.
   const hasDel = (e.tags || []).some(t => t[0] === 'deleted'), content = typeof e.content === 'string' ? e.content : '';
   const tomb = hasDel || !content;
   if (tomb) { if (content) return false; }   // a "tombstone" carrying content would be a way round the shape check
