@@ -7979,9 +7979,10 @@ function ReseatModal({ member, memberName: memberNameNow, realName: realNameNow,
           {res && res.carry && (res.carry.swapped || []).length ? 'Groups they set up now name their new key. ' : ''}
           {res && res.carry && (res.carry.swapFailed || []).length ? <b>{'Couldn’t put their new key on ' + res.carry.swapFailed.join(', ') + ' — open Groups and add them. '}</b> : null}
           {res && res.carry && (res.carry.swapOther || []).length ? <b>{'Another steward has changed ' + res.carry.swapOther.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
+          {res && res.carry && (res.carry.swapOtherSomeone || []).length ? <b>{'Someone else has changed ' + res.carry.swapOtherSomeone.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
           {res && res.carry && (res.carry.swapUnchecked || []).length ? <b>{'Couldn’t check ' + res.carry.swapUnchecked.join(', ') + ' — open Groups and check whether they should be on ' + (res.carry.swapUnchecked.length > 1 ? 'them' : 'it') + '. '}</b> : null}
           One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.swapped || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
-          again.{res && res.carry && (res.carry.swapAnyUnanswered || (res.carry.swapFailed || []).length || (res.carry.swapOther || []).length || (res.carry.swapUnchecked || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
+          again.{res && res.carry && (res.carry.swapAnyUnanswered || (res.carry.swapFailed || []).length || (res.carry.swapOther || []).length || (res.carry.swapOtherSomeone || []).length || (res.carry.swapUnchecked || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
             thief reading the church for ever, and the screen said nothing either way. It can only be true
@@ -9193,16 +9194,21 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         const rosterLine = !given ? ''
           : given.onRoster ? (given.outcome === 'landed' ? '' : given.outcome === 'unknown' ? 'Couldn’t confirm they were taken off the helper list — check Helpers.' : 'Blocked, but still listed as a helper — remove them from Helpers.')
           : (given.rosterUnknown && onRosterHere ? 'Blocked, but still listed as a helper — remove them from Helpers.' : '');
-        // OWNER ANSWER (r): a former helper's name taken off the church's groups — and what could not be, said
-        const go = (given && given.groupsOff) || null;
-        const groupsLine = !go ? '' : [
+        // OWNER ANSWER (r): their name taken off the church's groups — and what could not be, said. The engine hands the
+        // take-off back UNFINISHED (`groupsOffDone`, audit of 98ab7e38 item 2) so the keys below are rotated at once,
+        // not behind it; its line is added when it settles.
+        const lineOf = (go) => !go ? '' : [
           (go.failed || []).length ? 'Couldn’t take them off ' + go.failed.join(', ') + ' — open Groups and take them off by hand.' : '',
           (go.unchecked || []).length ? 'Couldn’t check ' + go.unchecked.join(', ') + ' — open Groups and check whether they are still on ' + (go.unchecked.length > 1 ? 'them' : 'it') + '.' : '',
           (go.other || []).length ? 'Another helper has changed ' + go.other.join(', ') + ' since, and it still names them — check it by hand.' : '',
+          (go.otherSomeone || []).length ? 'Someone else has changed ' + go.otherSomeone.join(', ') + ' since, and it still names them — check it by hand.' : '',
         ].filter(Boolean).join(' ');
+        const groupsP = (given && given.groupsOffDone)
+          ? Promise.resolve(given.groupsOffDone).then(lineOf, () => lineOf({ unchecked: ['the groups they may have been on'] }))
+          : Promise.resolve(lineOf((given && given.groupsOff) || null));
         const saveNote = [ok === false
           ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
-          : '', rosterLine, groupsLine].filter(Boolean).join(' ');
+          : '', rosterLine].filter(Boolean).join(' ');
         if (saveNote) setBlockWarn(saveNote);
         // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
         // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
@@ -9239,7 +9245,11 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         // checked or rewritten, so it is counted and said — never silently skipped, never published from empty.
         const lockedTeams = ok === false ? 0 : (Array.isArray(rostersAll) ? rostersAll : []).filter(r => r && r._locked && r.team).length;
         const lockedNote = lockedTeams ? 'Couldn\u2019t remove them from ' + lockedTeams + ' team' + (lockedTeams === 1 ? '' : 's') + ' \u2014 try again shortly.' : '';
-        return Promise.all([rotating, teams, clearing]).then(([failed, teamFailed, clearFailed]) => {
+        let allDone = false;
+        groupsP.then((gl) => { if (gl && !allDone) setBlockWarn([saveNote, gl].filter(Boolean).join(' ')); });
+        return Promise.all([rotating, teams, clearing, groupsP]).then(([failed, teamFailed, clearFailed, groupsLine]) => {
+          allDone = true;
+          const said = [saveNote, groupsLine].filter(Boolean).join(' ');
           const offFailed = [...teamFailed, ...clearFailed];
           const teamNote = [offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '', lockedNote].filter(Boolean).join(' ');
           // WHAT IS TRUE, SAID (round 3e, MED 1; audit of b102dc6). This said "Try blocking them again — and if it keeps
@@ -9252,8 +9262,8 @@ function DashMembers({ dmConvos: dmConvosProp }) {
           // the words come from the engine's records for this person (round 3g) — see blockWarnView
           const pend = failed.pending || [];
           const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
-          if (failed.length || pend.length) setBlockWarn({ pk, verb: 'block', pre: saveNote ? saveNote + ' ' : '', post: teamNote ? ' ' + teamNote : '', failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });
-          else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
+          if (failed.length || pend.length) setBlockWarn({ pk, verb: 'block', pre: said ? said + ' ' : '', post: teamNote ? ' ' + teamNote : '', failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });
+          else if (teamNote) setBlockWarn((said ? said + ' ' : '') + teamNote);
         });
       }).catch(() => {});
     };

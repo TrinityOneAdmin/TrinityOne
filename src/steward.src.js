@@ -8305,22 +8305,32 @@ async function _carryOverStewardDocs(pk, opts) {
 // (audit round 3, N1). The church's copies are still readable after the old key is blocked.
 // It changes a group only when the church's copy is the NEWEST copy anyone holds at that address (so it never re-saves
 // the church's older copy over another steward's later edit) and that copy names the old key (so it never touches a group
-// the old key was not on). Every relay in relays() must answer, or the group is left alone and listed as failed.
-// Answers { swapped, failed, other, unchecked } (labels): failed = needed the change and did not get it; unchecked = not
-// every relay answered, so whether it names them is unknown; other = another author's newer copy still names the old key
-// (left alone, for the steward to check by hand).
+// the old key was not on). Every relay in relays() must answer, or the group is left alone and listed as unchecked.
+// Answers { swapped, failed, other, otherSomeone, unchecked, anyUnanswered } (labels): failed = needed the change and did
+// not get it; unchecked = not every relay answered, so whether it names them is unknown; other / otherSomeone = another
+// author's newer copy still names the old key (left alone, for the steward to check by hand) — a helper's / anyone else's.
+// Also the groups that name the old key which the carry never saw — see below (item 1).
 const SWAP_PUBLISH_MS = 8000;   // one group's re-save in the re-seat swap; a slower relay gets the group listed as failed
-// F4 (plan rev 4 §5, answers o and r, 2026-11-19). The candidates also come from the CHURCH's group definitions this console
-// holds (_lastGroups, only when it is a genuine read — _listIsFresh) that name the old key: for a FORMER helper the relay
-// hides everything they wrote, so the carry finds nothing and the swap used to return before asking any relay (sim F4).
-// Not fresh → "Couldn't check the groups they may have been on". `anyUnanswered` says whether every relay answered the
-// swap read — even with nothing to check — so the done screen can drop "Ordinary groups need nothing" when one did not.
-// `newPk` '' (Block of a former helper, answer r) REMOVES the old key from leaders/members instead of replacing it.
+// PROGRESS, NOT A CLOCK (audit of 98ab7e38, item 5; churches-run-on-small-pipes): a swap read gives a relay up only when it
+// has said NOTHING for SWAP_QUIET_MS — each event it sends starts that wait again, so a slow relay that is still sending is
+// waited for. SWAP_READ_CAP_MS is the overall cap, so a relay that trickles for ever cannot hold the screen.
+const SWAP_QUIET_MS = 8000;
+const SWAP_READ_CAP_MS = 45000;
+// F4 (plan rev 4 §5, answers o and r, 2026-11-19). WHICH GROUPS NAME THE OLD KEY is asked of EVERY RELAY directly (audit of
+// 98ab7e38, item 1): the church's group copies, and every copy tagged with the church, each relay judged on its own. The
+// console's Groups list (_lastGroups) is no evidence of completeness: it is marked fresh only by the read subscribeGroups
+// opens for SEALED rooms, so a church whose rooms are all ordinary never had a fresh one and always got "Couldn't check".
+// The list, when fresh, still adds names. Not every relay answering → "the groups they may have been on" is listed as
+// unchecked and `anyUnanswered` set, so the done screen can drop "Ordinary groups need nothing".
+// `newPk` '' (Block, answer r) REMOVES the old key from leaders/members instead of replacing it.
+// `other` = a newer copy by a helper on this console's roster still names them; `otherSomeone` = by anyone else (item 6).
 async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
   const from = String(oldPk || '').toLowerCase(), to = String(newPk || '').toLowerCase();
-  const out = { swapped: [], failed: [], other: [], unchecked: [], anyUnanswered: false };
+  const out = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false };
   if (!from || from === to || !carry || !sk || !pub) return out;
   const isGroup = (d) => String(d || '').startsWith('trinityone/group:');
+  const dOf = (e) => ((e && e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+  const namesOld = (g) => [...(Array.isArray(g.leaders) ? g.leaders : []), ...(Array.isArray(g.members) ? g.members : [])].some(x => String(x || '').toLowerCase() === from);
   const labelOf = new Map();
   for (const c of (carry.carried || [])) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
   for (const d of (carry.superseded || [])) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, '');
@@ -8328,41 +8338,49 @@ async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
   if (gl) {
     for (const g of gl) {
       if (!g || !g.id) continue;
-      const names = [...(Array.isArray(g.leaders) ? g.leaders : []), ...(Array.isArray(g.members) ? g.members : [])].some(x => String(x || '').toLowerCase() === from);
       const d = 'trinityone/group:' + g.id;
-      if (names && !labelOf.has(d)) labelOf.set(d, g.name ? 'the group “' + String(g.name).slice(0, 60) + '”' : '');
+      if (namesOld(g) && !labelOf.has(d)) labelOf.set(d, g.name ? 'the group “' + String(g.name).slice(0, 60) + '”' : '');
     }
-  } else { out.unchecked.push('the groups they may have been on'); out.anyUnanswered = true; }
-  const ds = [...labelOf.keys()];
-  const urls = relays();
-  if (!ds.length) {
-    // nothing known to check — still ask every relay, so the screen does not say "nothing needed" over a silent one
-    const probe = (url) => new Promise((resolve) => { let done = false, sub = null; const fin = (c) => { if (done) return; done = true; try { if (sub) sub.close(); } catch (e) {} let a = false; try { a = _keyReadAuthedOn(url); } catch (e) { a = false; } resolve(!!c && a); };
-      try { sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [pub], '#d': ['trinityone/group:'], limit: 1 }], { onevent() {}, oneose() { fin(true); }, maxWait: 11000 }); } catch (e) { fin(false); return; } setTimeout(() => fin(false), 6000); });
-    const ok = urls.length ? await Promise.all(urls.map(probe)) : [false];
-    if (!ok.every(Boolean)) out.anyUnanswered = true;
-    return out;
   }
-  const ask = (url) => new Promise((resolve) => {
-    const evs = []; let done = false, sub = null;
-    const finish = (complete) => { if (done) return; done = true; try { if (sub) sub.close(); } catch (e) {} let a = false; try { a = _keyReadAuthedOn(url); } catch (e) { a = false; } resolve({ evs, complete: !!complete && a }); };
-    try { sub = pool.subscribeMany([url], [{ kinds: [30078], '#d': ds, limit: ds.length * 50 }], { onevent(e) { evs.push(e); }, oneose() { finish(true); }, maxWait: 11000 }); } catch (e) { finish(false); return; }
+  const urls = relays();
+  // ONE QUESTION TO ONE RELAY: what it sent, and whether it FINISHED — an EOSE on a socket the relay accepted the church's
+  // login on — before it fell silent for SWAP_QUIET_MS or the cap ran out.
+  const ask = (url, filters) => new Promise((resolve) => {
+    const evs = []; let done = false, sub = null, quiet = null, cap = null;
+    const finish = (complete) => { if (done) return; done = true; clearTimeout(quiet); clearTimeout(cap); try { if (sub) sub.close(); } catch (e) {} let a = false; try { a = _keyReadAuthedOn(url); } catch (e) { a = false; } resolve({ evs, complete: !!complete && a }); };
+    const hush = () => { clearTimeout(quiet); quiet = setTimeout(() => finish(false), SWAP_QUIET_MS); };
+    hush(); cap = setTimeout(() => finish(false), SWAP_READ_CAP_MS);
+    try { sub = pool.subscribeMany([url], filters, { onevent(e) { if (done) return; evs.push(e); hush(); }, oneose() { finish(true); }, maxWait: SWAP_READ_CAP_MS + 5000 }); } catch (e) { finish(false); return; }
     if (done) { try { sub.close(); } catch (e) {} }
-    setTimeout(() => finish(false), 6000);
   });
-  const answers = urls.length ? await Promise.all(urls.map(ask)) : [];
+  // WHICH GROUPS — every relay. A relay that hit the asked limit is not a whole answer (the relay keeps the newest).
+  const LIM = 2000;
+  const found = urls.length ? await Promise.all(urls.map(u => ask(u, [{ kinds: [30078], authors: [pub], '#t': [NET], limit: LIM }, { kinds: [30078], '#church': [pub], '#t': [NET], limit: LIM }]))) : [];
+  const foundWhole = found.length > 0 && found.every(a => a.complete && a.evs.filter(e => e.pubkey === pub).length < LIM && a.evs.filter(e => e.pubkey !== pub).length < LIM);
+  if (!foundWhole) { out.unchecked.push('the groups they may have been on'); out.anyUnanswered = true; }
+  for (const a of found) for (const e of a.evs) {
+    const d = dOf(e);
+    if (!isGroup(d) || labelOf.has(d) || !e.content || (e.tags || []).some(t => t[0] === 'deleted')) continue;
+    const ch = ((e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
+    if (ch && ch !== pub) continue;
+    let g; try { g = JSON.parse(e.content); } catch (x) { continue; }
+    if (g && typeof g === 'object' && namesOld(g)) labelOf.set(d, '');
+  }
+  const ds = [...labelOf.keys()];
+  if (!ds.length) return out;
+  const answers = urls.length ? await Promise.all(urls.map(u => ask(u, [{ kinds: [30078], '#d': ds, limit: ds.length * 50 }]))) : [];
   const whole = answers.length > 0 && answers.every(a => a.complete);
   if (!whole) out.anyUnanswered = true;
   const newest = new Map();
   for (const a of answers) for (const e of a.evs) {
-    const d = ((e && e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    const d = dOf(e);
     if (!labelOf.has(d)) continue;
     const ch = ((e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
     if (ch && ch !== pub) continue;
     const cur = newest.get(d);
     if (!cur || (e.created_at || 0) > (cur.created_at || 0) || ((e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub)) newest.set(d, e);   // a tie with someone else is not the church's to settle
   }
-  const namesOld = (g) => [...(Array.isArray(g.leaders) ? g.leaders : []), ...(Array.isArray(g.members) ? g.members : [])].some(x => String(x || '').toLowerCase() === from);
+  const isHelper = (pk) => { try { return [..._careRoster].some(p => String(p || '').toLowerCase() === String(pk || '').toLowerCase()); } catch (e) { return false; } };
   for (const d of ds) {
     const ev = newest.get(d);
     const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
@@ -8374,8 +8392,9 @@ async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     if (!ev || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;   // no live copy anywhere: nothing names anyone
     let g; try { g = JSON.parse(ev.content); } catch (e) { continue; }
     if (!g || typeof g !== 'object') continue;
-    // SOMEONE ELSE'S COPY IS NEWEST: never re-saved over — but if it still names the old key, say so (L1 a)
-    if (ev.pubkey !== pub) { if (namesOld(g)) out.other.push(label); continue; }
+    // SOMEONE ELSE'S COPY IS NEWEST: never re-saved over — but if it still names the old key, say so (L1 a), and say WHO:
+    // "another helper" only when its author is on this console's helper list (audit of 98ab7e38, item 6)
+    if (ev.pubkey !== pub) { if (namesOld(g)) (isHelper(ev.pubkey) ? out.other : out.otherSomeone).push(label); continue; }
     let changed = false;
     const swap = (arr) => { const o = []; for (const x of arr) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !o.some(y => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v); } return o; };   // to '' → removed
     if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
@@ -8530,12 +8549,23 @@ function _blockStewardKeeping(pk, blockedList, opts) {
     const q = _rosterTurn.then(turn, turn);
     _rosterTurn = q.catch(() => {});
     try { await q; } catch (e) {}
-    // OWNER ANSWER (r): a FORMER helper (not on the roster) is also taken off leaders/members of the church's own group
-    // copies that still name them — the same strict machinery as Reconnect's swap, removing instead of replacing. Every
-    // relay must answer, or the groups are listed as unchecked. (A current helper's carried groups already lost them, f.)
-    if (!out.onRoster && !out.rosterUnknown) {
-      try { out.groupsOff = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, ''); }
-      catch (e) { out.groupsOff = { swapped: [], failed: [], other: [], unchecked: ['the groups they may have been on'], anyUnanswered: true }; }
+    // OWNER ANSWER (r): they are also taken off leaders/members of the church's own group copies that still name them —
+    // the same strict machinery as Reconnect's swap, removing instead of replacing. Every relay must answer, or the groups
+    // are listed as unchecked. Audit of 98ab7e38:
+    //   · item 2 — NOT AWAITED HERE. The screen rotates the church's keys once this answers, and the take-off can take
+    //     tens of seconds on a slow relay; a console closed in that gap left the blocked person holding the keys. It is
+    //     handed back as `groupsOffDone` (resolving to the same answer, also put on `groupsOff`), to run alongside.
+    //   · item 3 — a CURRENT helper too, once the helper-list write has landed (the church's own copies were never theirs
+    //     to edit, so the carry did not touch them). A write that did not land leaves them a helper: not run.
+    //   · item 4 — the helper list not read yet: run anyway (the take-off does not need it), never skipped in silence.
+    if (!out.onRoster || out.outcome === 'landed') {
+      out.groupsOffDone = (async () => {
+        let r;
+        try { r = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, ''); }
+        catch (e) { r = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: ['the groups they may have been on'], anyUnanswered: true }; }
+        out.groupsOff = r;
+        return r;
+      })();
     }
     return out;
   })();
@@ -13061,8 +13091,8 @@ window.Steward = {
       const blocked = await w(() => window.Steward.setBlocked([...new Set([...low(o.blocked), oldH])]));
       if (!blocked) throw new Error('Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.');
       if (carryOld && !carryOld.refused) {
-        try { const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH); carryOld.swapped = sw.swapped; carryOld.swapFailed = sw.failed; carryOld.swapOther = sw.other; carryOld.swapUnchecked = sw.unchecked; carryOld.swapAnyUnanswered = !!sw.anyUnanswered; }
-        catch (e) { carryOld.swapped = []; carryOld.swapFailed = []; carryOld.swapOther = []; carryOld.swapUnchecked = ['the groups they may have been on']; carryOld.swapAnyUnanswered = true; }   // not known which: said as such, never a list of every group
+        try { const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH); carryOld.swapped = sw.swapped; carryOld.swapFailed = sw.failed; carryOld.swapOther = sw.other; carryOld.swapOtherSomeone = sw.otherSomeone || []; carryOld.swapUnchecked = sw.unchecked; carryOld.swapAnyUnanswered = !!sw.anyUnanswered; }
+        catch (e) { carryOld.swapped = []; carryOld.swapFailed = []; carryOld.swapOther = []; carryOld.swapOtherSomeone = []; carryOld.swapUnchecked = ['the groups they may have been on']; carryOld.swapAnyUnanswered = true; }   // not known which: said as such, never a list of every group
       }
     }
 

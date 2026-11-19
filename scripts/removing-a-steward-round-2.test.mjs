@@ -536,11 +536,13 @@ test('F4 — Reconnect ("taken") of a FORMER helper with r2 OFF: the screen is t
   assert.equal(res.carry.swapAnyUnanswered, true, 'the done screen is not told a relay did not answer');
   assert.deepEqual(res.carry.swapped || [], [], 'a group was re-saved although a relay did not answer (the swap is strict)');
 });
-test('F4 — the Groups list not loaded yet: "the groups they may have been on" could not be checked; nothing swapped', async () => {
-  const { res } = await f4Case({ downR2: false, fresh: false });
-  assert.ok((res.carry.swapUnchecked || []).includes('the groups they may have been on'), JSON.stringify(res.carry));
-  assert.equal(res.carry.swapAnyUnanswered, true);
-  assert.deepEqual(res.carry.swapped || [], []);
+// (audit of 98ab7e38, item 1) the relays are asked directly which groups name the old key, so a console whose Groups list is
+// not loaded (or, for a church with only ordinary rooms, never "fresh") still swaps — this test said "nothing swapped" until then
+test('F4 — the Groups list not loaded yet: every relay is asked directly, and the group is swapped', async () => {
+  const { C, r1, r2, res, gid, tessNew } = await f4Case({ downR2: false, fresh: false });
+  assert.deepEqual(res.carry.swapped, ['the group “Tess Bible Group”'], JSON.stringify(res.carry));
+  assert.equal(res.carry.swapAnyUnanswered, false);
+  for (const relay of [r1, r2]) assert.deepEqual(JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content).leaders, [tessNew.pub], relay.name);
 });
 test('F4 (answer o) — an ORDINARY member (never a helper) reconnected with "taken": nothing is swapped', async () => {
   const C = await churchOn(1, 'f4-ordinary');
@@ -577,6 +579,7 @@ async function blockFormer({ downR2 }) {
 test('(r) — Block of a FORMER helper takes her off leaders and members of the church’s group copy, on every relay', async () => {
   const { C, r1, r2, b, gid, tess, other } = await blockFormer({ downR2: false });
   assert.ok(b.blocked, 'FIXTURE: the block did not land');
+  b.groupsOff = await groupsOffOf(b);
   assert.deepEqual(b.groupsOff && b.groupsOff.swapped, ['the group “Tess Bible Group”'], JSON.stringify(b.groupsOff));
   for (const relay of [r1, r2]) {
     const g = JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content);
@@ -586,6 +589,7 @@ test('(r) — Block of a FORMER helper takes her off leaders and members of the 
 });
 test('(r) — Block of a FORMER helper with r2 OFF: nothing is re-saved and the group is listed as not checked', async () => {
   const { b } = await blockFormer({ downR2: true });
+  b.groupsOff = await groupsOffOf(b);
   assert.deepEqual(b.groupsOff.swapped, []);
   assert.ok(b.groupsOff.unchecked.includes('the group “Tess Bible Group”'), JSON.stringify(b.groupsOff));
 });

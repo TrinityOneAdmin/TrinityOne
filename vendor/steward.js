@@ -21664,11 +21664,15 @@ zoo`.split("\n");
     return out;
   }
   var SWAP_PUBLISH_MS = 8e3;
+  var SWAP_QUIET_MS = 8e3;
+  var SWAP_READ_CAP_MS = 45e3;
   async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
-    const out = { swapped: [], failed: [], other: [], unchecked: [], anyUnanswered: false };
+    const out = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false };
     if (!from || from === to || !carry || !sk || !pub) return out;
     const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
+    const dOf = (e) => ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+    const namesOld = (g) => [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
     const labelOf = /* @__PURE__ */ new Map();
     for (const c of carry.carried || []) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
     for (const d of carry.superseded || []) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, "");
@@ -21681,55 +21685,19 @@ zoo`.split("\n");
     if (gl) {
       for (const g of gl) {
         if (!g || !g.id) continue;
-        const names = [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
         const d = "trinityone/group:" + g.id;
-        if (names && !labelOf.has(d)) labelOf.set(d, g.name ? "the group \u201C" + String(g.name).slice(0, 60) + "\u201D" : "");
+        if (namesOld(g) && !labelOf.has(d)) labelOf.set(d, g.name ? "the group \u201C" + String(g.name).slice(0, 60) + "\u201D" : "");
       }
-    } else {
-      out.unchecked.push("the groups they may have been on");
-      out.anyUnanswered = true;
     }
-    const ds = [...labelOf.keys()];
     const urls = relays();
-    if (!ds.length) {
-      const probe = (url) => new Promise((resolve) => {
-        let done = false, sub = null;
-        const fin = (c) => {
-          if (done) return;
-          done = true;
-          try {
-            if (sub) sub.close();
-          } catch (e) {
-          }
-          let a = false;
-          try {
-            a = _keyReadAuthedOn(url);
-          } catch (e) {
-            a = false;
-          }
-          resolve(!!c && a);
-        };
-        try {
-          sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [pub], "#d": ["trinityone/group:"], limit: 1 }], { onevent() {
-          }, oneose() {
-            fin(true);
-          }, maxWait: 11e3 });
-        } catch (e) {
-          fin(false);
-          return;
-        }
-        setTimeout(() => fin(false), 6e3);
-      });
-      const ok = urls.length ? await Promise.all(urls.map(probe)) : [false];
-      if (!ok.every(Boolean)) out.anyUnanswered = true;
-      return out;
-    }
-    const ask = (url) => new Promise((resolve) => {
+    const ask = (url, filters) => new Promise((resolve) => {
       const evs = [];
-      let done = false, sub = null;
+      let done = false, sub = null, quiet = null, cap = null;
       const finish = (complete) => {
         if (done) return;
         done = true;
+        clearTimeout(quiet);
+        clearTimeout(cap);
         try {
           if (sub) sub.close();
         } catch (e) {
@@ -21742,12 +21710,20 @@ zoo`.split("\n");
         }
         resolve({ evs, complete: !!complete && a });
       };
+      const hush = () => {
+        clearTimeout(quiet);
+        quiet = setTimeout(() => finish(false), SWAP_QUIET_MS);
+      };
+      hush();
+      cap = setTimeout(() => finish(false), SWAP_READ_CAP_MS);
       try {
-        sub = pool.subscribeMany([url], [{ kinds: [30078], "#d": ds, limit: ds.length * 50 }], { onevent(e) {
+        sub = pool.subscribeMany([url], filters, { onevent(e) {
+          if (done) return;
           evs.push(e);
+          hush();
         }, oneose() {
           finish(true);
-        }, maxWait: 11e3 });
+        }, maxWait: SWAP_READ_CAP_MS + 5e3 });
       } catch (e) {
         finish(false);
         return;
@@ -21758,21 +21734,48 @@ zoo`.split("\n");
         } catch (e) {
         }
       }
-      setTimeout(() => finish(false), 6e3);
     });
-    const answers = urls.length ? await Promise.all(urls.map(ask)) : [];
+    const LIM = 2e3;
+    const found = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], authors: [pub], "#t": [NET], limit: LIM }, { kinds: [30078], "#church": [pub], "#t": [NET], limit: LIM }]))) : [];
+    const foundWhole = found.length > 0 && found.every((a) => a.complete && a.evs.filter((e) => e.pubkey === pub).length < LIM && a.evs.filter((e) => e.pubkey !== pub).length < LIM);
+    if (!foundWhole) {
+      out.unchecked.push("the groups they may have been on");
+      out.anyUnanswered = true;
+    }
+    for (const a of found) for (const e of a.evs) {
+      const d = dOf(e);
+      if (!isGroup(d) || labelOf.has(d) || !e.content || (e.tags || []).some((t) => t[0] === "deleted")) continue;
+      const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+      if (ch && ch !== pub) continue;
+      let g;
+      try {
+        g = JSON.parse(e.content);
+      } catch (x) {
+        continue;
+      }
+      if (g && typeof g === "object" && namesOld(g)) labelOf.set(d, "");
+    }
+    const ds = [...labelOf.keys()];
+    if (!ds.length) return out;
+    const answers = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], "#d": ds, limit: ds.length * 50 }]))) : [];
     const whole = answers.length > 0 && answers.every((a) => a.complete);
     if (!whole) out.anyUnanswered = true;
     const newest = /* @__PURE__ */ new Map();
     for (const a of answers) for (const e of a.evs) {
-      const d = ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      const d = dOf(e);
       if (!labelOf.has(d)) continue;
       const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
       if (ch && ch !== pub) continue;
       const cur = newest.get(d);
       if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
     }
-    const namesOld = (g) => [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
+    const isHelper = (pk) => {
+      try {
+        return [..._careRoster].some((p) => String(p || "").toLowerCase() === String(pk || "").toLowerCase());
+      } catch (e) {
+        return false;
+      }
+    };
     for (const d of ds) {
       const ev = newest.get(d);
       const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
@@ -21789,7 +21792,7 @@ zoo`.split("\n");
       }
       if (!g || typeof g !== "object") continue;
       if (ev.pubkey !== pub) {
-        if (namesOld(g)) out.other.push(label);
+        if (namesOld(g)) (isHelper(ev.pubkey) ? out.other : out.otherSomeone).push(label);
         continue;
       }
       let changed = false;
@@ -21968,12 +21971,17 @@ zoo`.split("\n");
         await q;
       } catch (e) {
       }
-      if (!out.onRoster && !out.rosterUnknown) {
-        try {
-          out.groupsOff = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, "");
-        } catch (e) {
-          out.groupsOff = { swapped: [], failed: [], other: [], unchecked: ["the groups they may have been on"], anyUnanswered: true };
-        }
+      if (!out.onRoster || out.outcome === "landed") {
+        out.groupsOffDone = (async () => {
+          let r;
+          try {
+            r = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, "");
+          } catch (e) {
+            r = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: ["the groups they may have been on"], anyUnanswered: true };
+          }
+          out.groupsOff = r;
+          return r;
+        })();
       }
       return out;
     })();
@@ -26605,12 +26613,14 @@ zoo`.split("\n");
             carryOld.swapped = sw.swapped;
             carryOld.swapFailed = sw.failed;
             carryOld.swapOther = sw.other;
+            carryOld.swapOtherSomeone = sw.otherSomeone || [];
             carryOld.swapUnchecked = sw.unchecked;
             carryOld.swapAnyUnanswered = !!sw.anyUnanswered;
           } catch (e) {
             carryOld.swapped = [];
             carryOld.swapFailed = [];
             carryOld.swapOther = [];
+            carryOld.swapOtherSomeone = [];
             carryOld.swapUnchecked = ["the groups they may have been on"];
             carryOld.swapAnyUnanswered = true;
           }
