@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { compileScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { compileScreen, loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
@@ -176,6 +176,97 @@ test('POINT OF USE: a helper closing their welcome screen starts the tour, witho
   const titles = walk(h);
   // Members and Groups are locked for this helper (no capabilities), and a helper cannot rename the church.
   assert.deepEqual(titles, ['Welcome', 'Overview', 'Inviting people', 'Settings and Help']);
+});
+
+// ── L2 (audit 2026-11-19): the wizard's exits do not fight the tour ────────────────────────────────────────
+// Open the wizard on a brand-new church through the dashboard's own 1.8 s decision, and return its element.
+function openWizard(h) {
+  h.store.set('trinityone.steward.newchurch', '1');
+  h.show();
+  h.timers.find(x => x.ms === 1800).fn();
+  const wiz = find(h.show(), n => n.type === h.mod.StewSetupWizard);
+  assert.equal(wiz.length, 1, 'premise: the wizard did not open');
+  return wiz[0];
+}
+const tabOf = (tree, h) => find(tree, n => n.type === h.mod.StewTourHost)[0].props.tab;
+
+test('POINT OF USE (L2-a): leaving the wizard by "Relays & settings" starts the tour and stays on Settings (owner, 2026-11-19)', () => {
+  const h = boot({ church: { name: '' } });
+  const wiz = openWizard(h);
+  // what the wizard's "Relays & settings" does (L2-b proves it calls exactly these, in this order)
+  wiz.props.onSettings('relays');
+  wiz.props.onDone({ keepTab: true });
+  const tree = h.show();
+  const b = bubble(tree);
+  assert.ok(b, 'leaving the wizard by Relays & settings did not start the tour');
+  assert.equal(titleOf(b), 'Welcome');
+  assert.equal(tabOf(tree, h), 'settings', 'the tour took the steward off the Settings page they chose');
+  // CONTROL: "Go to dashboard" (no keepTab) still brings them to Overview, as the tour expects
+  const g = boot({ church: { name: '' } });
+  const w2 = openWizard(g);
+  w2.props.onSettings('relays');
+  w2.props.onDone();
+  assert.equal(tabOf(g.show(), g), 'overview', 'a plain finish no longer opens Overview for the tour');
+});
+
+// The real StewSetupWizard alone, seeded to its last step (scoped as the-suite-first-run-is-one-guided-path.test.mjs
+// seeds it: React.useState(0) occurs exactly once inside the component and it is `step`).
+function wizardLastStep({ hostname }) {
+  const src = read('app/stew-dashboard.jsx');
+  const at = src.indexOf('function StewSetupWizard(');
+  assert.notEqual(at, -1, 'StewSetupWizard is gone — re-anchor this test');
+  const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
+  assert.equal((body.match(/React\.useState\(0\)/g) || []).length, 1, 'React.useState(0) is no longer unique inside StewSetupWizard — the seed could be aiming at other state');
+  const { React: R, draw } = miniReact();
+  const React = { ...R, useState: (init) => (init === 0 ? [6, () => {}] : R.useState(init)) };
+  const store = new Map();
+  const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  const location = { hostname, host: hostname, href: 'http://' + hostname + '/steward.html' };
+  const win = { Steward: { exportMnemonic: () => '', npub: 'npub1x', hasPinLock: () => true, needsPin: false }, addEventListener() {}, removeEventListener() {}, innerWidth: 900, localStorage };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['StewSetupWizard'], {
+    React, window: win, location, localStorage, document: { addEventListener() {}, removeEventListener() {} },
+    navigator: { userAgent: '' }, setTimeout, clearTimeout, console, fetch: async () => ({ ok: false, json: async () => ({}) }),
+    Icon: function Icon() { return null; }, WizMeetings: function WizMeetings() { return null; }, _wizMeetingId: () => 'evt1',
+    useStewDialog: () => ({ current: null }), useStewModalOpen: () => {}, stewCapState: () => ({ allowed: false }),
+    SkQR: function SkQR() { return null; }, SkPill: function SkPill() { return null; }, SK_TINT: {},
+  });
+  const calls = [];
+  const tree = draw(mod.StewSetupWizard, { church: { name: 'Grace Church' },
+    onDone: (o) => calls.push(['done', o === undefined ? undefined : JSON.parse(JSON.stringify(o)), location.href]),
+    onTab: (t) => calls.push(['tab', t]), onSettings: (s) => calls.push(['settings', s]), onInvite() {}, onNewPost() {} });
+  assert.match(texts(tree).join(' '), /You’re all set/, 'seeding the step did not reach the last step');
+  const btn = (label) => find(tree, n => n.type === 'button' && texts(n.kids || []).join(' ').includes(label))[0];
+  return { calls, btn, location };
+}
+
+test('L2-b: the wizard\'s last step — "Relays & settings" asks to keep the page; "Back to the Suite" defers the tour, then leaves', () => {
+  const w = wizardLastStep({ hostname: 'app.example' });
+  w.btn('Relays & settings').props.onClick();
+  assert.deepEqual(w.calls, [['settings', 'relays'], ['done', { keepTab: true }, 'http://app.example/steward.html']]);
+  const s = wizardLastStep({ hostname: '127.0.0.1' });   // the Suite: loopback, no Capacitor
+  const back = s.btn('Back to the Suite');
+  assert.ok(back, 'premise: no "Back to the Suite" on the Suite');
+  back.props.onClick();
+  assert.deepEqual(s.calls, [['done', { defer: true }, 'http://127.0.0.1/steward.html']], 'the Suite exit did not ask for the tour to wait, BEFORE leaving');
+  assert.equal(s.location.href, '/relay-app/home.html', 'the Suite exit no longer goes to the launcher');
+});
+
+test('POINT OF USE (L2-c): leaving by "Back to the Suite" — no tour now; it starts on the next console open, once', () => {
+  const h = boot({ church: { name: '' } });
+  const wiz = openWizard(h);
+  wiz.props.onDone({ defer: true });           // what "Back to the Suite" does before it navigates (L2-b)
+  assert.equal(bubble(h.show()), null, 'the tour started on a page that is about to be left');
+  assert.equal(h.store.get('trinityone.steward.tour.churchpub.pending'), '1', 'the deferred tour was not recorded');
+  assert.equal(h.store.get('trinityone.steward.tour.churchpub.tour') || null, null, 'the deferred tour was spent');
+  assert.equal(h.store.get('trinityone.steward.wizard.done'), '1', 'premise: finishing did not mark the wizard done');
+  // the next time the console opens
+  const again = boot({ store: h.store });
+  const b = bubble(again.show());
+  assert.ok(b, 'the deferred tour did not start when the console next opened');
+  assert.equal(titleOf(b), 'Welcome');
+  assert.deepEqual(walk(again), OWNER_TITLES);
+  const third = boot({ store: h.store });
+  assert.equal(bubble(third.show()), null, 'the deferred tour ran a second time');
 });
 
 test('an established church (wizard passed on an earlier version) gets no tour on boot', () => {

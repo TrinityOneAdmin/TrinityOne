@@ -2039,7 +2039,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
             (stewOnSuite: loopback and no Capacitor) — the hosted console and the APK have no launcher. Setup is
             marked done FIRST, the way "Go to dashboard" does, so the launcher's own read of that marker shows
             its doors and never the first-run card again. */}
-        {stewOnSuite() ? <button onClick={() => { onDone(); location.href = '/relay-app/home.html'; }} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="grid2" size={15} color="currentColor" /> Back to the Suite</button> : null}
+        {stewOnSuite() ? <button onClick={() => { onDone({ defer: true }); location.href = '/relay-app/home.html'; }} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="grid2" size={15} color="currentColor" /> Back to the Suite</button> : null}
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (onTab) onTab('overview'); onDone(); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 22px' }}><Icon name="check" size={16} color="var(--on-clay)" /> Go to dashboard</button>
       </React.Fragment>}>
@@ -2049,7 +2049,8 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
           ['send', 'Post a note', 'Reach your whole church from “New post”.', () => { if (onDone) onDone(); if (onNewPost) onNewPost(); }],
           // NAMES A PAGE. It used to call onTab('settings') and land on whichever page Settings opened
           // first, which since 2026-09-09 is Church identity — not what these words promise.
-          ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onSettings) onSettings('relays'); else if (onTab) onTab('settings'); if (onDone) onDone(); }],
+          // The tour starts over the page this opens, not by sending them back to Overview (owner, 2026-11-19).
+          ['globe', 'Relays & settings', 'Manage relays, video & audio in Settings.', () => { if (onSettings) onSettings('relays'); else if (onTab) onTab('settings'); if (onDone) onDone({ keepTab: true }); }],
         ].map(([ic, t, d, act]) => (
           <button key={t} onClick={act} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', width: '100%', fontFamily: 'var(--font-ui)' }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--clay-ink)' }}><Icon name={ic} size={17} color="currentColor" /></div>
@@ -2547,7 +2548,15 @@ function StewDashboard({ initial = 'overview' }) {
     return () => clearTimeout(t);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   // The console tour (app/stew-tour.jsx) starts here, once — never for a church that passed the wizard earlier.
-  const finishWizard = () => { try { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); } catch {} setWizard(false); try { if (window.stewTourStart) window.stewTourStart('wizard'); } catch (e) {} };
+  // opts from the wizard's exits (audit L2): { keepTab: true } — "Relays & settings", start the tour where they now
+  // are; { defer: true } — "Back to the Suite", the page is being left, so start it the next time the console
+  // opens. Read strictly (=== true): "Skip setup" hands this its click event.
+  const finishWizard = (opts) => {
+    const keepTab = !!(opts && opts.keepTab === true), defer = !!(opts && opts.defer === true);
+    try { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); } catch {}
+    setWizard(false);
+    try { if (window.stewTourStart) window.stewTourStart('wizard', { keepTab, defer }); } catch (e) {}
+  };
   // AUDIT-2026-07-28 F10 — SELF-HEAL. A church set up on a relay that already hosts a congregation had its
   // "people must be approved before they can join" write REFUSED (the relay does not accept documents from a
   // church it has not been told about), and the wizard swallowed it. Those churches are open-join right now

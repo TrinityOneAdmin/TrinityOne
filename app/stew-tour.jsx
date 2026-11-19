@@ -95,10 +95,18 @@ function stewTourSeenSet(church, what) { tourKitFlagSet(stewTourKey(church, what
 
 // Ask for the tour. 'wizard' and 'brief' are the two automatic starts and happen at most once per church on
 // this device; 'replay' (Help) always starts it. Returns whether a start was queued.
-function stewTourStart(reason) {
+// An automatic start is also RECORDED (`pending`, per church): one asked for and never shown — the page left before
+// it could start — is picked up the next time the console opens (the host's resume). opts (audit L2):
+//   keepTab: start where the steward is, without opening Overview (the wizard's "Relays & settings" exit);
+//   defer:   only record it — the page is about to be left (the wizard's "Back to the Suite" exit).
+function stewTourStart(reason, opts) {
   const why = reason || 'replay';
-  if (why !== 'replay' && stewTourSeen(stewTourChurch(), 'tour')) return false;
-  stewTourStore.pending = { reason: why };
+  const o = opts || {};
+  const church = stewTourChurch();
+  if (why !== 'replay' && stewTourSeen(church, 'tour')) return false;
+  if (why !== 'replay') stewTourSeenSet(church, 'pending');
+  if (o.defer) return true;
+  stewTourStore.pending = { reason: why, keepTab: !!o.keepTab };
   try { window.dispatchEvent(new Event('stew-tour')); } catch (e) {}
   return true;
 }
@@ -216,6 +224,15 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
     try { window.addEventListener('stew-tour', f); window.addEventListener('stew-modals', f); } catch (e) {}
     return () => { try { window.removeEventListener('stew-tour', f); window.removeEventListener('stew-modals', f); } catch (e) {} };
   }, []);
+  // RESUME (audit L2): an automatic start recorded for this church and never shown (deferred by the wizard's Suite
+  // exit, or the page closed first) is queued on mount and on a church change — here in the render, so the first
+  // frame already has it and no section tip flashes up before it. Once it starts, `tour` is seen and it is not
+  // queued again.
+  const resumeFor = React.useRef(null);
+  if (!isNetwork && church && resumeFor.current !== church) {
+    resumeFor.current = church;
+    if (stewTourSeen(church, 'pending') && !stewTourSeen(church, 'tour') && !stewTourStore.pending) stewTourStore.pending = { reason: 'resume' };
+  }
   const plan = stewTourPlan(nav, { narrow: !!narrow, delegate: !!delegate });
   // While the tour runs, something opening over it (another dialog, the error banner, a join toast) hides the
   // bubble; the run and its step are kept, and it comes back at the same step once that has gone.
@@ -232,7 +249,7 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
       stewTourStore.pending = null;
       stewTourSeenSet(church, 'tour');
       setTip(null);
-      if (onTab && tab !== 'overview' && plan.some(s => s.id === 'overview' || s.id === 'invite')) onTab('overview');
+      if (onTab && !pending.keepTab && tab !== 'overview' && plan.some(s => s.id === 'overview' || s.id === 'invite')) onTab('overview');
       setRun({ i: 0 });
       return;
     }
