@@ -108,8 +108,20 @@ async function makeChurch(s, name) {
   await s.ev(`(() => { const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; const words=${JSON.stringify(words)}; const nums=[...document.body.innerText.matchAll(/WORD #(\\d+)/g)].map(m=>Number(m[1])); const ins=[...document.querySelectorAll('input')].filter(i=>i.type==='text').slice(0,3); ins.forEach((i,k)=>{set.call(i,words[nums[k]-1]); i.dispatchEvent(new Event('input',{bubbles:true}));}); return ins.length; })()`);
   await sleep(500); await s.press(/^Continue$/);
   await s.waitFor(`/Create a few spaces/.test(document.body.innerText)`, 30000, 'the rooms step');
+  // TEST RIG, NOT THE FEATURE (triage P3, 2026-11-19). Finishing the wizard rightly starts the console tour
+  // (app/stew-tour.jsx), and its bubble has a "Next" button — which this test's own presses of /^Next$/ would hit.
+  // So this church's tour is marked seen on this device, under the key the console itself reads
+  // (stewTourChurch(), the console's own global), before the wizard ends: then neither the start nor a later
+  // resume of a recorded start (it also needs the tour unseen) brings it up.
+  const church = await s.ev(`(() => { try { const c = stewTourChurch(); if (!c) return ''; localStorage.setItem('trinityone.steward.tour.' + c + '.tour', '1'); return c; } catch (e) { return 'ERR ' + e.message; } })()`);
+  assert.ok(/^[0-9a-f]{64}$/.test(church || ''), 'staging: could not mark the console tour seen for this church (got ' + JSON.stringify(church) + ')');
   await s.press(/^Skip setup$/);
   await s.waitFor(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings') && !document.querySelector('[data-stew-modal-panel]') && !/Skip setup/.test(document.body.innerText)`, 30000, 'the dashboard');
+  // CONTROL: the tour really is not up — looked at for about a second, since it starts a frame or two after the wizard.
+  for (let i = 0; i < 5; i++) {
+    assert.equal(await s.ev(`!!document.querySelector('[data-stew-tour="bubble"]')`), false, 'staging: the console tour is up over the dashboard, so a press of "Next" would hit it');
+    await sleep(200);
+  }
 }
 
 // Open a Settings page by its row (title + description), unfolding its group first if it is folded.

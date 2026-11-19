@@ -1004,6 +1004,11 @@ function App() {
     if (_wasLeaving) bumpLeave(x => x + 1);
     // Marked BEFORE setActiveChurch below: the heartbeat effect runs on the render that follows it.
     if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) unconfirmedChurches.current.add(npub);
+    // The first-run tour's Community part is now wanted — recorded at once, so an app closed before the church
+    // check below answers still has it to come. It runs only once the church lets this person in (tourAdmitted,
+    // below); for a code that turns out not to be a church nothing ever admits, so nothing runs. This is the only
+    // call: the church check's branches below are all `!alreadyFollowed` too, so they no longer repeat it.
+    if (!alreadyFollowed) memberTourJoin();
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
     // M-9: do NOT announce membership until we confirm this npub is actually a church. A valid npub that
@@ -1021,7 +1026,6 @@ function App() {
           if (result === 'church') {
             unconfirmedChurches.current.delete(npub);
             if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
-            memberTourJoin();
           } else if (result === 'not-found') {
             unconfirmedChurches.current.delete(npub);
             setChurches(cs => cs.filter(c => c.id !== npub));
@@ -1042,7 +1046,6 @@ function App() {
             // stop holding the heartbeat back and send it now, as the heartbeat did before the gate existed.
             unconfirmedChurches.current.delete(npub);
             if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
-            memberTourJoin();
           }
         } catch (e) { unconfirmedChurches.current.delete(npub); }
       };
@@ -1050,7 +1053,6 @@ function App() {
     } else if (!alreadyFollowed) {
       // Fallback when checkChurch is not available (stale bundle)
       if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
-      memberTourJoin();
     } else if (_wasLeaving && window.Fellowship && window.Fellowship.announceMembership) {
       // Still on the phone because the Leave had not gone yet, and they have followed again: they are staying.
       // The church is already confirmed (it is in the list), so announce now.
@@ -1692,6 +1694,13 @@ function App() {
   }, [connTick, lazyReady, keyReady]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
+  // FOR THE FIRST-RUN TOUR (app/member-tour.jsx, audit M1). Was this person still waiting for approval when the app
+  // started? Read once, from the join answer cached for the active church (written below; offline fallback reads
+  // the same key) — such a person is not an upgrading member and still has the Community part to come.
+  const [tourPendingAtBoot] = useA(() => {
+    let c = null; try { c = JSON.parse(localStorage.getItem('trinityone.joinstate.' + activeChurch) || 'null'); } catch (e) {}
+    return !!(c && c.isPending && !c.removed);
+  });
   const joinChurchRef = React.useRef(null);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
@@ -1768,6 +1777,16 @@ function App() {
     }
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
   React.useEffect(() => { approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
+  // Has the ACTIVE church let this person in? For the first-run tour's Community part only (audit M1). Two positive
+  // answers, neither falsely positive: my key is on the admitted list (isAdmitted — the approved toast above relies
+  // on it), or the church's trusted policy needs no approval (openKnown, default-deny in the engine). `loaded` is
+  // required: the initial state says isAdmitted:true before anything has been asked. isPending alone is not used —
+  // the policy is last-document-wins and can briefly read "no approval" before it arrives.
+  const tourAdmitted = (() => {
+    const js = joinState || {};
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    return !!(np && js.loaded && js.churchId === activeChurch && !js.removed && !js.isPending && (js.isAdmitted || js.openKnown));
+  })();
   // events posted by group leaders (members the church empowered) — merged into the church's events
   const [groupEvents, setGroupEvents] = useA([]);
   // depend on STABLE string keys (npub + sorted group-ids), not the array refs — else this re-subscribes on
@@ -2934,6 +2953,7 @@ function App() {
         {/* the first-run tour and reader tips (app/member-tour.jsx). Handed the tab only to READ it — never a way to
             change it — and App's own reasons to wait. */}
         {window.MemberTourHost ? <MemberTourHost page={tab} inChurch={!!(churches.find(c => c.id === activeChurch) || {}).npub}
+          admitted={tourAdmitted} pendingAtBoot={tourPendingAtBoot}
           hold={showSplash || showOnboarding || (commLocked && !gateEscaped) || churchSwitcher || !!help || profile} /> : null}
 
         {confirmExit ? (
