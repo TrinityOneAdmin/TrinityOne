@@ -26,7 +26,7 @@
 //       relay down the screen is told what it could not check. `todo` until the F4 round.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { finalizeEvent } from 'nostr-tools/pure';
+import { finalizeEvent, verifyEvent } from 'nostr-tools/pure';
 import * as H from './relay-network-harness.mjs';
 import { STEWARD, authedPool, consoleEngine } from './steward-carry-rig.mjs';
 import { compiled, membersGlobals, press, reads, SCH } from './dash-render-kit.mjs';
@@ -379,6 +379,99 @@ test('NIT — a NIP-11 answer with NO trinityone block clears a remembered yes',
     assert.equal(await eng._relayLiveNewest(url), false);
     assert.equal(eng._relaysAllLiveNewest([url]), false, 'an answer with no trinityone block kept a remembered yes');
   } finally { srv.close(); }
+});
+
+// ══ MED-4b — the probe WIRING runs: at console start and whenever a relay comes back ═══════════════════════════════════
+// The two statements that start _probeLiveNewestAll, lifted out of the bundle as they ship (with the function itself),
+// run against a recording setTimeout / addEventListener. Deleting either wiring line turns this red.
+test('MED-4b — the liveNewest probe runs at console start, and again on steward-relay-returned, for every relay', async () => {
+  const fnSrc = fnBody(STEWARD, 'function _probeLiveNewestAll() {', '_probeLiveNewestAll');
+  const at = STEWARD.indexOf('setTimeout(_probeLiveNewestAll');
+  assert.ok(at > 0, 'the probe is no longer started anywhere in the bundle');
+  const tryAt = STEWARD.lastIndexOf('try {', at);
+  const wiring = fnBody(STEWARD, tryAt, 'the probe wiring') + ' catch (e) {}';   // the try block as shipped; its catch is empty
+  const timers = [], listeners = {}, asked = [];
+  const stubs = { relays: () => ['wss://a.example/relay', 'wss://b.example/relay'], _relayLiveNewest: (u) => { asked.push(u); return Promise.resolve(true); },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    window: { addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); } } };
+  new Function(...Object.keys(stubs), fnSrc + '\n' + wiring)(...Object.values(stubs));
+  assert.equal(timers.length, 1, 'nothing is scheduled at console start');
+  timers.shift().fn();
+  assert.deepEqual(asked, ['wss://a.example/relay', 'wss://b.example/relay'], 'the start-up probe did not ask every relay');
+  assert.ok((listeners['steward-relay-returned'] || []).length === 1, 'no probe when a relay comes back');
+  listeners['steward-relay-returned'][0]();
+  assert.equal(timers.length, 1, 'a returning relay schedules nothing');
+  timers.shift().fn();
+  assert.equal(asked.length, 4, 'a returning relay did not probe every relay again');
+});
+
+// ══ MED-4c — the REAL admission gate and the REAL publish() ════════════════════════════════════════════════════════
+// The console's own createRelayGate and its possession proof (verifyRelayIdentityDetailed: a fresh nonce, the relay's
+// signed /relay-identity answer, the address bound into it), and the console's own publish() (Promise.any over relays()),
+// lifted out of vendor/steward.js and run against the real gateways. Stand-ins: which relays the church SIGNS (the
+// relay-net document) and the websocket transport under publish.
+function realGate() {
+  const B2 = (sig, n) => fnBody(STEWARD, sig, n);
+  const body = [B2('function relayHttpBase', 'relayHttpBase'), B2('function relayAddrKey', 'relayAddrKey'), B2('function _relayKey(', '_relayKey'),
+    stmt(STEWARD, 'var _isHex64 = ', '_isHex64'), B2('function canonicalPinsFor', 'canonicalPinsFor'), B2('function isSharedAddress', 'isSharedAddress'),
+    B2('function sharedRelayKeys', 'sharedRelayKeys'), B2('function _originKey', '_originKey'), B2('function sameOriginRelay', 'sameOriginRelay'),
+    B2('async function proveRelay', 'proveRelay'), stmt(STEWARD, 'var VERIFIED_KEY = ', 'VERIFIED_KEY'), stmt(STEWARD, 'var VERIFIED_TTL_SEC = ', 'VERIFIED_TTL_SEC'),
+    stmt(STEWARD, 'var VERIFIED_REFRESH_SEC = ', 'VERIFIED_REFRESH_SEC'), stmt(STEWARD, 'var VERIFY_RETRY_SEC = ', 'VERIFY_RETRY_SEC'),
+    B2('function readVerified', 'readVerified'), B2('function writeVerified', 'writeVerified'), B2('function admitCached', 'admitCached'),
+    B2('function _scopesOf', '_scopesOf'), B2('function _admittingScope', '_admittingScope'), B2('function rememberVerified', 'rememberVerified'),
+    B2('function createRelayGate', 'createRelayGate'), B2('function relayIdentityNonce', 'relayIdentityNonce'),
+    B2('async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'), B2('async function verifyRelayIdentity(', 'verifyRelayIdentity')].join('\n');
+  return new Function('scope', `with (scope) { ${body}; return { createRelayGate, verifyRelayIdentity }; }`)({ URL, console, CANONICAL_RELAY_PUBS: {}, fetch, AbortController, setTimeout, clearTimeout, crypto, verifyEvent2: verifyEvent });
+}
+function realPublish(eng, relays) {
+  const body = fnBody(STEWARD, 'async function publish(evt, opts) {', 'publish');
+  const byUrl = new Map(relays.map(r => [r.wsUrl, r]));
+  const wsPub = (url, evt) => new Promise((res, rej) => {
+    H.connect(byUrl.get(url)).then((w) => {
+      w.on('message', (d) => { const m = JSON.parse(d); if (m[0] === 'OK' && m[1] === evt.id) { try { w.close(); } catch {} m[2] ? res(m[3] || '') : rej(new Error(m[3] || 'refused')); } });
+      w.send(JSON.stringify(['EVENT', evt]));
+    }, (e) => rej(new Error('connection failure: ' + e.message)));   // a frozen box: the handshake never completes, nothing settles
+  });
+  const scope = { _lastOk: eng._lastOk, _pubLatest: new Map(), NO_NETWORK_RELAY: 'no-network-relay', _waitForRegistration: async () => {},
+    relays: () => eng.relays(), relaysRaw: () => eng.relaysRaw(), pool: { publish: (urls, evt) => urls.map(u => wsPub(u, evt)) },
+    window: { dispatchEvent: () => true }, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } }, console: { warn() {}, log() {} } };
+  return new Function('scope', `with (scope) { ${body}; return publish; }`)(scope);
+}
+test('MED-4c — the REAL gate proves both relays, the REAL publish() answers on the first accept: r2 asleep, the group is kept at S+1', async () => {
+  const { C, eng, sam, gid, S, r1, r2 } = await f1Setup('f1-real', { yes: false });
+  const L = realGate();
+  const mem = new Map();
+  const gate = L.createRelayGate({ store: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)) }, verify: L.verifyRelayIdentity,
+    netEntries: async () => C.relays.map(r => ({ pubkey: r.relayPub, url: r.wsUrl })), origin: '', pins: {} });
+  await gate.refresh(C.relays.map(r => r.wsUrl), C.cp);
+  for (const r of C.relays) assert.equal(gate.provedKey(r.wsUrl, C.cp), r.relayPub, 'FIXTURE: the real proof did not admit ' + r.name);
+  eng._gate = gate;
+  for (const r of C.relays) assert.equal(await eng._relayLiveNewest(r.wsUrl), true, 'the real gate’s proved key did not carry the yes for ' + r.name);
+  eng.publish = realPublish(eng, C.relays);
+  await silence(r2, 'frozen');
+  try {
+    const t0 = Date.now();
+    const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 8000 });
+    assert.ok(r.wrote, 'the real publish() did not answer the roster write while r2 was asleep');
+    assert.ok(Date.now() - t0 < 11000, 'publish() waited for the frozen relay');
+    const kept = await churchCopy(C, GROUP_D + gid, r1);
+    assert.ok(kept && kept.created_at === S.created_at + 1, 'NOT KEPT through the real publish(): ' + JSON.stringify(r.carry.notCarried));
+  } finally { thaw(r2); }
+});
+test('MED-4c (R-L2) — the REAL publish(): a "newer version stored" refusal answers success only when this console holds the newer copy', async () => {
+  const C = await churchOn(1, 'f1-rl2');
+  const eng = owner(C);
+  const pub2 = realPublish(eng, C.relays);
+  const d = GROUP_D + C.cp.slice(0, 16) + '-rl2';
+  const newer = raw(C, C.church, d, { name: 'church, newer' }, { tagChurch: false, at: T() + 10 });
+  assert.ok(await pub2(newer), 'FIXTURE: the church copy was not stored');
+  const older = raw(C, C.church, d, { name: 'church, older' }, { tagChurch: false, at: newer.created_at - 5 });
+  assert.equal(eng._lastOk.get(d), newer.created_at, 'the real publish() did not record what was accepted');
+  assert.ok(await pub2(older), 'a "newer version" refusal while this console HOLDS the newer copy was not answered as ours (the R-L2 superseded case)');
+  eng._lastOk.delete(d);
+  const po = {};
+  assert.equal(await pub2(older, po), false, 'a "newer version" refusal of a copy this console does not hold was answered as success');
+  assert.match(String(po.reason || ''), /newer version/, 'the refusal reason the carry classifies as "newer" is not reported');
 });
 
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════
