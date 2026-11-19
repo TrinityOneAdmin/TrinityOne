@@ -27,7 +27,8 @@ const said = (n) => { const out = []; const walk = (x) => { if (x == null || x =
 
 async function switcher({ ids, activePub, delegated, church, networksOn = true }) {
   const { React, draw } = miniReact();
-  const src = fnBody(DASH, 'function IdentitySwitcher(', 'IdentitySwitcher');
+  // + the one-network-name helpers the switcher's network rows draw through (B2a, 2026-11-19)
+  const src = fnBody(DASH, 'function IdentitySwitcher(', 'IdentitySwitcher') + '\n' + fnBody(DASH, 'function useNetDisplayName(', 'useNetDisplayName') + '\n' + fnBody(DASH, 'function NetName(', 'NetName');
   const tmp = join(tmpdir(), 'idsw-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

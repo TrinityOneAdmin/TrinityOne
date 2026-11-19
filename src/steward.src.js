@@ -16327,6 +16327,23 @@ window.Steward = {
   syncNetworkKeys(opts) { return _netSyncAll(opts || {}); },
   // what the last sync learned about one network this church is in: { owner, joiners, key:'active'|'waiting'|'trouble', reason } | null
   networkStatus(networkPub) { return _netStatus.get(toPubHex(networkPub) || networkPub) || null; },
+  // How many churches have joined a network THIS console holds the key of, read live AS that key (c92c6e3a; works in network view, where
+  // syncNetworkKeys is church-only). -> a number >= 1, or null = UNKNOWN (no key, read failed, nothing came back -- never 0). Never throws.
+  // Callers (rule 2): DashNetworkOverview (app/stew-dashboard.jsx) only.
+  async networkJoinerCount(networkPub) {
+    try { const np = toPubHex(networkPub) || networkPub; const jr = await _netReadJoiners(np); return (jr && jr.ok && jr.joiners.length > 0) ? jr.joiners.length : null; }
+    catch (e) { return null; }
+  },
+  // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
+  // Callers (rule 2): IdentitySwitcher.pick (app/stew-dashboard.jsx) only. -> '' when nothing is wrong that it can see.
+  networkOpenProblem(networkPub) {
+    const np = toPubHex(networkPub) || networkPub;
+    const raw = _netKeysRaw().find(x => x.pub === np);
+    if (!raw) return 'This console doesn’t hold that network’s key.';
+    const rec = netKeys().find(x => x.pub === np);
+    if (!rec || !rec.mnemonic) return 'Its recovery words are sealed to a church key this console doesn’t have open — unlock the console, or restore the network’s words here.';
+    return 'Its key could not be opened on this console.';
+  },
   // a network's posts as the console previews them (newest first): [{ id, kind, text|title|date|…, ts }]. Waits for the ring.
   subscribeNetworkPosts(networkPub, onPosts) {
     const np = toPubHex(networkPub) || networkPub;
@@ -16576,9 +16593,14 @@ window.Steward = {
       if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
         if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
         localStorage.removeItem(PENDING_CHURCH_KEY);
-      } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+      } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want
+        // NEVER OUT OF A NETWORK VIEW (B2a, 2026-11-19). This block re-runs on every relay reconnect (steward-root re-subscribes on `conn`), and a
+        // steward viewing a network has actingChurch === '' -- so a remembered church, or the blank-helper auto-land below, snapped them out of the
+        // network on any blip. A remembered church and the auto-land are boot DEFAULTS; a network view is a choice made since. (The pending-request
+        // branch above, a deliberate join that has just been granted, still opens.) Read through the API so a lifted copy without it behaves as before.
+        && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
         window.Steward.setActiveIdentity(want);
-      } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+      } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
         // PURE HELPER, NO REMEMBERED CHURCH. The own key is only a signing key (createKeyQuiet) and we steward
         // at least one church, so landing on the own key would open the empty "your church" setup beside a
         // church they actually run — round 9's trap. Default into a stewarded church instead. Deterministic:

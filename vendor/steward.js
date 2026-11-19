@@ -30170,6 +30170,28 @@ zoo`.split("\n");
     networkStatus(networkPub) {
       return _netStatus.get(toPubHex(networkPub) || networkPub) || null;
     },
+    // How many churches have joined a network THIS console holds the key of, read live AS that key (c92c6e3a; works in network view, where
+    // syncNetworkKeys is church-only). -> a number >= 1, or null = UNKNOWN (no key, read failed, nothing came back -- never 0). Never throws.
+    // Callers (rule 2): DashNetworkOverview (app/stew-dashboard.jsx) only.
+    async networkJoinerCount(networkPub) {
+      try {
+        const np = toPubHex(networkPub) || networkPub;
+        const jr = await _netReadJoiners(np);
+        return jr && jr.ok && jr.joiners.length > 0 ? jr.joiners.length : null;
+      } catch (e) {
+        return null;
+      }
+    },
+    // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
+    // Callers (rule 2): IdentitySwitcher.pick (app/stew-dashboard.jsx) only. -> '' when nothing is wrong that it can see.
+    networkOpenProblem(networkPub) {
+      const np = toPubHex(networkPub) || networkPub;
+      const raw = _netKeysRaw().find((x) => x.pub === np);
+      if (!raw) return "This console doesn\u2019t hold that network\u2019s key.";
+      const rec = netKeys().find((x) => x.pub === np);
+      if (!rec || !rec.mnemonic) return "Its recovery words are sealed to a church key this console doesn\u2019t have open \u2014 unlock the console, or restore the network\u2019s words here.";
+      return "Its key could not be opened on this console.";
+    },
     // a network's posts as the console previews them (newest first): [{ id, kind, text|title|date|…, ts }]. Waits for the ring.
     subscribeNetworkPosts(networkPub, onPosts) {
       const np = toPubHex(networkPub) || networkPub;
@@ -30425,9 +30447,9 @@ zoo`.split("\n");
         if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
           if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
           localStorage.removeItem(PENDING_CHURCH_KEY);
-        } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+        } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
           window.Steward.setActiveIdentity(want);
-        } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+        } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
           const first = [...stewardedChurches.keys()].find((cp) => !_ownedPubs.has(cp));
           if (first) window.Steward.setActiveIdentity(first, { persist: false });
         }

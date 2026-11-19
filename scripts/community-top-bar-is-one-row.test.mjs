@@ -184,7 +184,8 @@ html,body{margin:0;padding:0} #app{position:relative;width:100%;box-sizing:borde
 // THE CONSOLE BRANDING PREVIEW (app/stew-dashboard.jsx, DashBrandingPanel) is "the church header the way members' phones draw
 // it", so it carries the same 150px cap. The REAL panel is sliced, compiled and rendered; its preview node is laid out here.
 async function previewTree() {
-  const src = fnBody(readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8'), 'function DashBrandingPanel(', 'DashBrandingPanel') + '\nexport { DashBrandingPanel };\n';
+  const _dash = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
+  const src = fnBody(_dash, 'function DashBrandingPanel(', 'DashBrandingPanel') + '\n' + fnBody(_dash, 'function stewNetView(', 'stewNetView') + '\nexport { DashBrandingPanel };\n';   // + stewNetView (B2a, 2026-11-19: the panel title asks it)
   const tmp = join(tmpdir(), 'cprev-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try { writeFileSync(tmp, src); js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' }); }

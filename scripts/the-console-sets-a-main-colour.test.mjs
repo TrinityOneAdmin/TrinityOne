@@ -24,7 +24,7 @@ const Stub = (n) => { const f = function () { return null; }; Object.definePrope
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function load(globals) {
-  const src = fnBody(STEW, 'function DashBrandingPanel(', 'DashBrandingPanel') + '\nexport { DashBrandingPanel };\n';
+  const src = fnBody(STEW, 'function DashBrandingPanel(', 'DashBrandingPanel') + '\n' + fnBody(STEW, 'function stewNetView(', 'stewNetView') + '\nexport { DashBrandingPanel };\n';   // + stewNetView (B2a, 2026-11-19: network view = a network identity AND the Networks switch; the lifted code now asks it)
   const tmp = join(tmpdir(), 'mainc-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

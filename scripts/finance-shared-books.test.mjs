@@ -389,7 +389,7 @@ test('the mint does not fire for a church that does not exist', () => {
   const dash = stripComments(DASH);
   // Anchored on ORDER, not a character window — a lazy quantifier matched only the first line and passed
   // against the sabotage, which is the third time today a regex window has quietly proved nothing.
-  const ownerOnly = dash.indexOf('if (!S || S.actingChurch || !S.ensureCapKeyFor) return;');
+  const ownerOnly = dash.indexOf('if (!S || S.actingChurch || netView || !S.ensureCapKeyFor) return;');   // (B2a, 2026-11-19: the network view mints no church keys either -- one more refusal in the same guard)
   const nameGuard = dash.indexOf('if (!church.name) return;', ownerOnly);   // the one AFTER the owner check, not the first in the file
   assert.ok(ownerOnly > 0, 're-anchor: the mint guard changed shape');
   assert.ok(nameGuard > ownerOnly && nameGuard - ownerOnly < 200,
