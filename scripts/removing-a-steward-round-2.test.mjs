@@ -334,6 +334,19 @@ test('MED-2 — r2 ASLEEP and 63 documents (two slices): every one is carried at
     void S; void r1;
   } finally { thaw(r2); }
 });
+test('MED-2 — r2 answers phase A, then STALLS in phase B (no EOSE) and 63 documents: each slice its own share, every one carried', async () => {
+  const { C, eng, sam, gid, r2 } = await f1Setup('f1-med2b');
+  const extra = [];
+  for (let i = 0; i < 62; i++) extra.push(await mustPut(C, raw(C, sam, GROUP_D + C.cp.slice(0, 16) + '-n' + i, { name: 'Group ' + i })));
+  const realSub = eng.pool.subscribeMany.bind(eng.pool);
+  eng.pool.subscribeMany = (urls, filters, h) => (urls.length === 1 && urls[0] === r2.wsUrl && (filters[0] || {})['#d'])
+    ? realSub(urls, filters, { ...h, oneose() {} })   // phase B questions: the end never comes
+    : realSub(urls, filters, h);
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 12000 });
+  const carried = new Set(r.carry.carried.map(c => c.d));
+  const missing = [GROUP_D + gid, ...extra.map(dOf)].filter(d => !carried.has(d));
+  assert.equal(missing.length, 0, 'THE FIRST SLICE SPENT EVERY LATER SLICE’S TIME — not carried: ' + missing.length + ' ' + JSON.stringify(r.carry.notCarried.slice(0, 2)));
+});
 // LOW — the children list read must not eat the read window when it never answers
 test('LOW — a children-list read that never answers: the care-team list is listed, everything else is still carried inside the limit', async () => {
   const C = await churchOn(1, 'f1-minors');
