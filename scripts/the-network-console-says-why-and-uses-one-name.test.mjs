@@ -172,7 +172,7 @@ test('NETWORK VIEW mounts no church machinery (join notices, key distribution); 
 // ── B2a audit (2026-11-19) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // HIGH: the settings page titled "Network key" in the network view revealed the CHURCH recovery phrase (exportMnemonic is the church seed).
 const KEYPAGE = (tree) => find(tree, n => n.type === 'button' && /Reveal recovery phrase/.test(said(n)));
-const PAGES_ONLY_IDENTITY = (js) => { const a = 'const NETWORK_SETTINGS_PAGES = /* @__PURE__ */ new Set(["identity"]);'; assert.equal(js.split(a).length, 2, 'sabotage anchor not unique'); return js.replace(a, 'const NETWORK_SETTINGS_PAGES = /* @__PURE__ */ new Set(["identity", "key"]);'); };
+const PAGES_ONLY_IDENTITY = (js) => { const a = 'const NETWORK_SETTINGS_PAGES = /* @__PURE__ */ new Set(["identity", "networds"]);'; assert.equal(js.split(a).length, 2, 'sabotage anchor not unique'); return js.replace(a, 'const NETWORK_SETTINGS_PAGES = /* @__PURE__ */ new Set(["identity", "networds", "key"]);'); };
 function keyPage({ network, mutate }) {
   const exported = [];
   const r = run({ network, mutate, steward: { exportMnemonic: () => { exported.push(1); return 'church words one two three'; } } });
@@ -250,4 +250,73 @@ test('CAPABILITY KEYS: the church view mints after its timer; the network view d
   assert.deepEqual(await mints(true), [], 'the network view minted church capability keys');
   const old = (js) => { const a = 'if (!S || S.actingChurch || netView || !S.ensureCapKeyFor) return;'; assert.equal(js.split(a).length, 2); return js.replace(a, 'if (!S || S.actingChurch || !S.ensureCapKeyFor) return;'); };
   assert.ok((await mints(true, old)).length > 0, 'THE SABOTAGE WAS NOT CAUGHT');
+});
+
+// ── B2a re-audit (2026-11-19) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// (d) backed by a test: the capability-key effect RE-RUNS when the view changes (netView is a dependency) -- church -> network -> church on ONE mount.
+test('CAPABILITY KEYS RE-RUN ON A VIEW SWITCH: church (mints) -> network (does not) -> church again (mints again); SABOTAGE (netView out of the deps) never re-mints', async () => {
+  const cycle = async (mutate) => {
+    const got = [];
+    const { React, draw } = miniReact();
+    const opts = { network: false, mutate, steward: { ensureCapKeyFor: async (kind) => { got.push(kind); }, stewardCaps: () => ({}), actingChurch: '' } };
+    const c = consoleWith(React, opts);
+    const wait = () => new Promise(res => setTimeout(res, 1400));
+    drawTwice(draw, c.mod.StewDashboard, {}); await wait();
+    const first = got.length;
+    opts.network = true; drawTwice(draw, c.mod.StewDashboard, {}); await wait();
+    const inNetwork = got.length - first;
+    opts.network = false; drawTwice(draw, c.mod.StewDashboard, {}); await wait();
+    return { first, inNetwork, back: got.length - first - inNetwork };
+  };
+  const ok = await cycle(null);
+  assert.ok(ok.first > 0, 'CONTROL: the church view minted nothing');
+  assert.equal(ok.inNetwork, 0, 'the network view minted church capability keys');
+  assert.ok(ok.back > 0, 'coming back to the church did not re-run the capability-key effect');
+  const noDep = (js) => { const a = '|| {}), netView]);'; assert.equal(js.split(a).length, 2, 'sabotage anchor not unique'); return js.replace(a, '|| {})]);'); };
+  assert.equal((await cycle(noDep)).back, 0, 'THE SABOTAGE WAS NOT CAUGHT: without netView in the deps the effect still re-ran');
+});
+
+// 4: the CHURCH key's sidebar box ("Key on this device · lock with a PIN" -> the church key page) is not shown in the network view
+const KEYBOX = (tree) => /Key on this device/.test(said(tree));
+test('SIDEBAR: the church-key box is in the church view and not in the network view; SABOTAGE puts it back', () => {
+  const ch = run({ network: false }); assert.ok(KEYBOX(drawTwice(ch.draw, ch.mod.StewDashboard, {})), 'CONTROL: the church console lost its key box');
+  const nv = run({ network: true }); assert.ok(!KEYBOX(drawTwice(nv.draw, nv.mod.StewDashboard, {})), 'the network view shows the CHURCH key box (it opens the church key page)');
+  const back = (js) => { const i = js.indexOf('"Key on this device"'), j = js.lastIndexOf('netView ? null : ', i); assert.ok(i > 0 && j > 0 && i - j < 1000, 'sabotage anchor not found near the key box'); return js.slice(0, j) + js.slice(j + 'netView ? null : '.length); };
+  const sb = run({ network: true, mutate: back }); assert.ok(KEYBOX(drawTwice(sb.draw, sb.mod.StewDashboard, {})), 'THE SABOTAGE WAS NOT CAUGHT');
+});
+
+// 5: the NETWORK's recovery words page (network view only; Reveal + Copy; never the church's words)
+const NETWORDS = 'net one two three four five six seven eight nine ten eleven', CHURCHWORDS = 'church alpha beta gamma delta epsilon zeta eta theta iota kappa lambda';
+function wordsPage({ network, mutate }) {
+  const asked = [];
+  const r = run({ network, mutate, steward: { activePub: NETPUB, networkWords: (p) => { asked.push(p); return p === NETPUB ? NETWORDS : ''; }, exportMnemonic: () => CHURCHWORDS } });
+  const props = { initialSection: 'networds', onSectionConsumed() {} };
+  const t = drawTwice(r.draw, r.mod.DashSettings, props);
+  return { r, t, props, asked };
+}
+test('NETWORK WORDS: the network view lists the page; Reveal shows the NETWORK\'s words (not the church\'s), with Copy and no file backup', () => {
+  const w = wordsPage({ network: true });
+  assert.match(said(w.t), /Network recovery words/, 'the network view does not list the network\'s words page');
+  assert.match(said(w.t), /not your church’s/, 'the page does not say these words are not the church\'s');
+  const rv = find(w.t, n => n.type === 'button' && /Reveal the network’s words/.test(said(n)))[0]; assert.ok(rv, 'no Reveal button');
+  rv.props.onClick();
+  const after = w.r.draw(w.r.mod.DashSettings, w.props);
+  const shown = find(after, n => n.props && n.props['data-network-words'] === '1').map(n => (n.kids || []).filter(k => typeof k === 'string').join('')).join(' ');
+  assert.equal(shown, NETWORDS, 'the words shown are not the network\'s');
+  assert.notEqual(shown, CHURCHWORDS);
+  assert.deepEqual(w.asked, [NETPUB], 'the words were not asked for the network being viewed');
+  assert.ok(find(after, n => n.type === 'button' && /Copy the network’s words/.test(said(n))).length === 1, 'no Copy button');
+  assert.equal(find(after, n => n.type === 'button' && /Back up|file|download/i.test(said(n))).length, 0, 'a file backup is offered -- that file is the CHURCH backup');
+});
+test('NETWORK WORDS: the church view never lists or opens the page (even by a deep link)', () => {
+  const w = wordsPage({ network: false });
+  assert.doesNotMatch(said(w.t), /Network recovery words|Reveal the network’s words/);
+});
+test('NETWORK WORDS SABOTAGE: with the page reading exportMnemonic instead, the CHURCH words appear -- the test goes red', () => {
+  const swap = (js) => { const a = 'S.networkWords && S.networkWords(S.activePub)'; assert.equal(js.split(a).length, 2, 'sabotage anchor not unique'); return js.replace(a, 'S.exportMnemonic()'); };
+  const w = wordsPage({ network: true, mutate: swap });
+  find(w.t, n => n.type === 'button' && /Reveal the network’s words/.test(said(n)))[0].props.onClick();
+  const shown = find(w.r.draw(w.r.mod.DashSettings, w.props), n => n.props && n.props['data-network-words'] === '1').map(n => (n.kids || []).filter(k => typeof k === 'string').join('')).join(' ');
+  assert.equal(shown, CHURCHWORDS, 'sabotage did not take');
+  assert.notEqual(shown, NETWORDS, 'THE SABOTAGE WAS NOT CAUGHT');
 });

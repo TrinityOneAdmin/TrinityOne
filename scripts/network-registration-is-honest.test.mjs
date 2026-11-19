@@ -182,3 +182,30 @@ test('WALL PROBE IS PARALLEL: three slow relays are checked in about the time of
   // asked one at a time take ~3x one; asked together, ~1x. Parallel must be under half of serial.
   assert.ok(par.ms * 2 < ser.ms, 'three relays took ' + par.ms + 'ms in parallel vs ' + ser.ms + 'ms one at a time -- they are not being asked together');
 });
+
+// ── B2a re-audit (2026-11-19): two engine paths that were only tested through the screen ─────────────────────────────────────────────────────
+test('JOIN, A RELAY THAT DOES NOT ANSWER: refused with "couldn\'t reach … try again later", the relay listed as unreachable (not lacking), nothing published; SABOTAGE lets it through', async () => {
+  const run = (mutate) => { const base = fakeRelay(), church = K(); const c = bootConsole({ relay: base, church, joinApi: true, relayUrls: [R1, R2], fetchImpl: fetchFor({ 'two.example': 'down' }), mutate }); return c; };
+  const c = run(null);
+  const r = await c.api.joinNetwork(OTHER, { scopes: ['announcements'] });
+  assert.equal(r.ok, false); assert.equal(r.stage, 'relay');
+  assert.deepEqual(r.unreachable, [R2]); assert.deepEqual(r.lacking, []);
+  assert.match(r.reason, /couldn’t reach wss:\/\/two\.example\/relay/); assert.match(r.reason, /Try again later/);
+  assert.equal(c.published.length + c.refused.length, 0, 'something was published although a relay could not be checked');
+  const cut = (src) => { const a = 'if (unreachable.length) return { ok: false, stage: "relay"'; assert.equal(src.split(a).length, 2, 'sabotage anchor not unique'); return src.replace(a, 'if (false) return { ok: false, stage: "relay"'); };
+  const s = run(cut);
+  assert.equal((await s.api.joinNetwork(OTHER, { scopes: ['announcements'] })).ok, true, 'THE SABOTAGE WAS NOT CAUGHT: with the unreachable branch removed the join was still refused');
+});
+
+test('networkJoinerCount: a PARTIAL read (not every relay answered) is { atLeast: n }; a complete one is n; nothing known is null; SABOTAGE (a plain number) goes red', async () => {
+  const N = K(), A = K(), C = K();
+  const base = fakeRelay();
+  for (const ch of [A, C]) base.put(finalizeEvent({ kind: 30078, created_at: 100, tags: [['d', 'trinityone/network:' + N.pub], ['t', 'trinityone'], ['p', N.pub]], content: JSON.stringify({ joined: true, v: 1, scopes: ['announcements'] }) }, ch.sk));
+  const count = async (complete, mutate, empty) => bootConsole({ relay: base, church: A, networks: [N], mutate,
+    queryAsKey: async (u, sk, f) => ({ events: empty ? [] : await base.querySync(u, f), complete }) }).api.networkJoinerCount(N.pub);
+  assert.deepEqual(await count(false), { atLeast: 2 }, 'a partial read gave a confident number');
+  assert.equal(await count(true), 2, 'a complete read did not give the number');
+  assert.equal(await count(true, null, true), null, 'an empty read claimed a count (never 0)');
+  const plain = (src) => { const a = 'return jr.authoritative ? jr.joiners.length : { atLeast: jr.joiners.length };'; assert.equal(src.split(a).length, 2, 'sabotage anchor not unique'); return src.replace(a, 'return jr.joiners.length;'); };
+  assert.equal(await count(false, plain), 2, 'THE SABOTAGE WAS NOT CAUGHT: the partial read still said "at least"');
+});

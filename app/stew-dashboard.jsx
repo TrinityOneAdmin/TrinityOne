@@ -162,7 +162,10 @@ const NETWORK_NAV = [
 //                church's relays, so changing them here would silently change the church's.
 //   media / features / rules / tags -- hidden: the church's own members' settings.   network / become -- hidden: circular / a church action.
 //   access    -- hidden: a delegate's page (never shown to an owner anyway).
-const NETWORK_SETTINGS_PAGES = new Set(['identity']);
+//   networds  -- KEPT (added 2026-11-19): the NETWORK's own recovery words (Steward.networkWords), Reveal + Copy only -- never the church's.
+const NETWORK_SETTINGS_PAGES = new Set(['identity', 'networds']);
+// The networds page is NOT in SETTINGS_GROUPS (the church console's page table): DashSettings adds it to the first group in the network view only.
+const NETWORK_WORDS_PAGE = { k: 'networds', n: 'Network recovery words', d: 'The network’s own 12 words' };
 function stewNetView(church) { return !!(church && church.isNetwork) && typeof window !== 'undefined' && window.NETWORKS_ENABLED === true; }
 // THE ONE NAME FOR A NETWORK (B2a). The switcher used the name saved on this device when the network was created or imported; the composer used the
 // network's published profile (kind-0). They disagreed until a profile read happened to rewrite the saved one. Both now show the PUBLISHED name when
@@ -2767,11 +2770,13 @@ function StewDashboard({ initial = 'overview' }) {
             })}
           </nav>
           <div style={{ flex: 1 }} />
+          {netView ? null : (   /* B2a re-audit: the CHURCH key's lock -- not shown in the network view (it would open the church key page) */
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
             <Icon name="lock" size={16} color="var(--sage)" />
             <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Key on this device</div><div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{(window.Steward.hasPinLock && window.Steward.hasPinLock()) ? 'Stored locally · locked' : <React.Fragment>Stored locally · <span onClick={() => openSettings('key', 'pin')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>lock with a PIN</span></React.Fragment>}</div></div>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} />
           </div>
+          )}
           {/* WHERE THIS CHURCH'S RECORDS ACTUALLY LIVE, said permanently and in plain words.
               The Suite used to let a steward choose this at launch, invisibly and stickily, and two doors into
               this same console pointed at different stores — same key, two churches, and nothing on screen to
@@ -14527,6 +14532,31 @@ function settingsPageFor(wanted, visible, pages) {
   return (seen && seen.length) ? seen[0].k : (pages.length ? pages[0].k : null);
 }
 
+// THE NETWORK'S OWN RECOVERY WORDS (B2a re-audit, 2026-11-19). They were shown once, at creation, and nowhere after -- lose that screen and the network
+// cannot be run from another console. Network view only. It reads Steward.networkWords(activePub), which returns the words from this console's sealed
+// network-key record and NEVER the church's (exportMnemonic). Reveal + Copy only: there is deliberately no "Back up to a file" -- that file is the
+// CHURCH backup. Callers (rule 2): DashSettings, behind open === 'networds' && stewNetView(church).
+function NetworkWordsPanel() {
+  const [shown, setShown] = React.useState('');
+  const [none, setNone] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const S = window.Steward || {};
+  const reveal = () => { let w = ''; try { w = (S.networkWords && S.networkWords(S.activePub)) || ''; } catch (e) { w = ''; } setShown(w); setNone(!w); };
+  return (
+    <Panel title="Network recovery words">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>These 12 words are the <b>network’s</b> key — not your church’s. They are different from your church’s recovery phrase. Whoever holds them can post as the network and run it from another console, so keep them private.</div>
+      {shown ? (
+        <React.Fragment>
+          <div data-network-words="1" style={{ fontFamily: 'var(--mono)', fontSize: 13, lineHeight: 1.7, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>{shown}</div>
+          <button onClick={() => { if (copyText(shown)) { setCopied(true); setTimeout(() => setCopied(false), 1600); } }} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Copied' : 'Copy the network’s words'}</button>
+        </React.Fragment>
+      ) : (
+        <button onClick={reveal} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Reveal the network’s words</button>
+      )}
+      {none ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 9, lineHeight: 1.45 }}>The network’s words can’t be shown here: this console doesn’t hold them, or the console is locked.</div> : null}
+    </Panel>
+  );
+}
 function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed, repicked }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
@@ -14544,6 +14574,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
   // bodies, so the list and the detail cannot disagree: a page missing from this list cannot be opened, and
   // one present in it always has a body.
   const groups = React.useMemo(() => SETTINGS_GROUPS
+    .map(([g, items], gi) => [g, (gi === 0 && stewNetView(church)) ? [...items, NETWORK_WORDS_PAGE] : items])   // the network's own words page: network view only
     .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true) && !(stewNetView(church) && !NETWORK_SETTINGS_PAGES.has(p.k)))])   // NETWORKS SWITCH: the Network page; NETWORK VIEW shows only NETWORK_SETTINGS_PAGES
     .filter(([, items]) => items.length), [delegated, stewNetView(church)]);   // B2a: the view is a dependency (church <-> network on one mounted page)
   const pages = groups.reduce((a, [, items]) => a.concat(items), []);
@@ -14868,6 +14899,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
       </Panel>
       ) : null}
 
+      {open === 'networds' && stewNetView(church) ? <NetworkWordsPanel /> : null}
       {open === 'key' ? (
       <Panel title={stewNetView(church) ? 'Network key' : 'Church key'}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>

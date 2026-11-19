@@ -238,7 +238,8 @@ test('NETWORK SETTINGS: network view hides the six church-only pages and keeps t
   const nr = settingsRows(drawTwice(net.draw, net.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).join(' | ');
   for (const re of HIDDEN) assert.doesNotMatch(nr, re, 'network view still lists ' + re + ': ' + nr);
   assert.match(nr, /Network identity/, 'network view lost its identity page: ' + nr);
-  assert.equal(settingsRows(drawTwice(net.draw, net.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).filter(r => /set-item-n /.test(r)).length, 1, 'the network view lists more than its identity page: ' + nr);
+  assert.match(nr, /Network recovery words/, 'network view lost its recovery-words page: ' + nr);   // B2a re-audit: the network's OWN words
+  assert.equal(settingsRows(drawTwice(net.draw, net.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).filter(r => /set-item-n /.test(r)).length, 2, 'the network view lists more than identity + its own recovery words: ' + nr);
   const ch = run({ network: false });
   const cr = settingsRows(drawTwice(ch.draw, ch.mod.DashSettings, { initialSection: 'identity', onSectionConsumed() {} })).join(' | ');
   for (const re of HIDDEN) assert.match(cr, re, 'church view lost ' + re + ': ' + cr);

@@ -170,3 +170,24 @@ test('A KIND-0 SIGNED BY ANOTHER KEY never names the network, on screen or in th
   subs.at(-1).h.onevent({ kind: 0, pubkey: 'ef'.repeat(32), created_at: 2000, content: JSON.stringify({ name: 'Forged Name' }), tags: [] });
   assert.deepEqual(seen, ['Forged Name'], 'THE SABOTAGE WAS NOT CAUGHT');
 });
+
+// B2a re-audit (2026-11-19): Steward.networkWords(pub) -- the NETWORK's recovery words for the network-view settings page. From the sealed network-key
+// record only, only while the church key is unlocked, and NEVER the church's phrase (exportMnemonic).
+const NETWORDS = once(VENDOR, 'networkWords(networkPub)');
+function wordsHarness(records, { locked = false, body = NETWORDS } = {}) {
+  const store = new Map([[NETKEYS_LS, JSON.stringify(records)]]);
+  const world = { churchSk: locked ? null : CHURCH_SK, NETKEYS_LS, lsGet: (k) => (store.has(k) ? store.get(k) : null), lsSet: (k, v) => { store.set(k, v); },
+    encrypt2: (m, k) => nip44.encrypt(m, k), decrypt3: (c, k) => nip44.decrypt(c, k), toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null) };
+  const names = Object.keys(world);
+  return new Function(...names, `${LIFTED}\nconst Steward = { exportMnemonic() { return 'church words are never these'; }, ${body} };\nreturn Steward;`)(...names.map(n => world[n]));
+}
+test('networkWords: the NETWORK\'s words from its sealed record -- not the church phrase; nothing while locked or for a network not held; SABOTAGE (exportMnemonic) goes red', () => {
+  const S = wordsHarness([sealedRecord()]);
+  assert.equal(S.networkWords(NET), WORDS, 'the network\'s own words were not returned');
+  assert.notEqual(S.networkWords(NET), S.exportMnemonic(), 'networkWords returned the CHURCH phrase');
+  assert.equal(wordsHarness([sealedRecord()], { locked: true }).networkWords(NET), '', 'words were handed out while the church key is locked');
+  assert.equal(S.networkWords('cd'.repeat(32)), '', 'words were returned for a network this console does not hold');
+  const sab = NETWORDS.replace(/networkWords\(networkPub\) \{[\s\S]*\}$/, 'networkWords(networkPub) { return this.exportMnemonic(); }');
+  assert.notEqual(sab, NETWORDS, 'sabotage did not apply');
+  assert.notEqual(wordsHarness([sealedRecord()], { body: sab }).networkWords(NET), WORDS, 'THE SABOTAGE WAS NOT CAUGHT');
+});
