@@ -3765,7 +3765,10 @@ const GROUP_GONE = new Set();        // groupIds whose definition has been tombs
 // derives (who may read/post, childsafe, leaders, invite members, the team's people, the care team) used to follow the last
 // ARRIVAL. A late OLDER copy (peer sync, a woken box) then overrode a newer one until the next restart. Now each of those
 // branches applies an incoming copy only if it is not older than the copy it last applied at that address:
-//   key   group|<id>, roster|<id>, meals|<resolved owner church>   (never the bare meals address)
+//   key   group|<church>|<id>, roster|<id>, meals|<resolved owner church>   (never the bare meals address). A group is keyed
+//         by the church its copy is for, so a co-tenant church's copy (above all a far-future tombstone for an id whose
+//         owner this relay has not seen yet) cannot pin the address against the owner's first copy; idOwnerOk still
+//         refuses the co-tenant once the owner is known (Fable audit of c9f355eb, LOW).
 //   entry { at, id, by, cp } — created_at, event id, author, the church it was applied for
 //   order created_at, then the LOWER event id on a same-second tie (the store's own tie rule, event-store.mjs); the same
 //         event again (hydrate's two passes) is applied again
@@ -3774,8 +3777,39 @@ const GROUP_GONE = new Set();        // groupIds whose definition has been tombs
 //   no clock cap (0d M-cap): raw created_at, exactly as phones (_pickWinner) and the store compare.
 // Checked and written AFTER each branch's authority/ownership checks and BEFORE its tombstone early return. Rebuilt from
 // scratch by hydrateMaps (clearDerivedMaps), replayed oldest-first.
+// …AND RE-DERIVED WHEN AN AUTHOR BECOMES VOID (Fable audit of c9f355eb, HIGH-1). The void rule was consulted only when a
+// later copy arrived: a helper's newer copy applied, the church's older correction correctly refused, THEN the roster
+// removing the helper arrived — and nothing re-applied the church's copy, so the relay followed the removed helper until
+// it restarted (when replay gave the other answer). Now every live stewards: note schedules _replayVoidLive(church): each
+// LIVE_AT entry of that church whose author no longer passes the authority test is dropped, the address's derived state
+// is cleared, and every stored copy at the address is replayed oldest-first through note() — the newest VALID copy wins,
+// exactly as a restart would decide. Coalesced per church (one pass per tick), and scoped to the addresses affected.
 const LIVE_AT = new Map();
 const _liveAuthor = (by, cp) => CHURCH_PUBS.has(by) || stewardCan(by, cp, 'any');
+const _voidReplayQueued = new Set();
+function _replayVoidLive(cp) {
+  if (_hydrating || !cp || _voidReplayQueued.has(cp)) return;
+  _voidReplayQueued.add(cp);
+  setImmediate(() => {
+    _voidReplayQueued.delete(cp);
+    const stale = [...LIVE_AT].filter(([, v]) => v && v.cp === cp && !_liveAuthor(v.by, v.cp)).map(([k]) => k);
+    for (const k of stale) {
+      LIVE_AT.delete(k);
+      const [kind, ...rest] = k.split('|');
+      let d = '';
+      if (kind === 'group') { const id = rest.slice(1).join('|'); d = GROUP_D + id;
+        BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id);
+        GROUP_EVENTPOLICY.delete(id); GROUP_GONE.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); }
+      else if (kind === 'roster') { const id = rest.join('|'); d = ROSTER_D + id; ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); }
+      else if (kind === 'meals') { d = MEALS_SETTINGS_D; MEALS_ADMIN_GROUP.delete(cp); MEALS_OPEN_MEMBER.delete(cp); }
+      if (!d) continue;
+      let copies = [];
+      try { copies = store.query({ kinds: [30078], '#d': [d], limit: 500 }); } catch { copies = []; }
+      copies.sort((a, b) => (a.created_at - b.created_at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));   // oldest first; same second: the lower id last, so it governs
+      for (const x of copies) { try { note(x); } catch {} }
+    }
+  });
+}
 function liveNewest(key, e, cp) {
   const cur = LIVE_AT.get(key), at = e.created_at || 0;
   if (cur && cur.id !== e.id && _liveAuthor(cur.by, cur.cp)) {
@@ -4359,7 +4393,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // R-7: keep GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS so canRead()/accept() still know the ownership and
     // visibility of a deleted room — clearing them made the room fall through to the default-allow path.
     // GROUP_GONE marks it as tombstoned; canRead() and accept() check it.
-    if (!liveNewest('group|' + id, e, namedChurch(e) || e.pubkey)) return;   // owner answer (p): an older copy changes nothing — see LIVE_AT
+    if (!liveNewest('group|' + (namedChurch(e) || e.pubkey) + '|' + id, e, namedChurch(e) || e.pubkey)) return;   // owner answer (p): an older copy changes nothing — see LIVE_AT
     if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); GROUP_GONE.add(id); return; }
     GROUP_GONE.delete(id);   // R-7: undo — a non-tombstone re-publish restores the room
     if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
@@ -4539,6 +4573,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       } catch {}
     }
     STEWARDS_BY.set(e.pubkey, set); STEWARD_CAPS.set(e.pubkey, caps);
+    _replayVoidLive(e.pubkey);   // a removed or narrowed steward's live entries are void now — see LIVE_AT
   }
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);

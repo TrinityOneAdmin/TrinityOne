@@ -122,3 +122,57 @@ test('meals-settings: a late OLDER copy does not override the newer care setting
   await W.restart();
   assert.equal((await put(W.relay, need(W.ann, W.cp)))[0], true, 'after a restart');
 });
+
+// ══ FABLE AUDIT OF c9f355eb ══════════════════════════════════════════════════════════════════════════════════════════
+test('HIGH-1 — the church’s older copy arrives FIRST (refused), THEN the helper is removed: the church’s copy governs at once, and after restart', async () => {
+  const W = await church('void-reverse');
+  const gid = W.cp.slice(0, 16) + '-room';
+  const theirs = doc(W.helper, GROUP_D + gid, { name: 'Room', childsafe: true }, { tags: tag(W.cp) });             // child-safe, newest
+  await must(W.relay, theirs);
+  await must(W.relay, doc(W.C, GROUP_D + gid, { name: 'Room (adults)' }, { at: theirs.created_at - 3 }));          // older: refused while they are a helper
+  assert.equal(await posts(W.relay, W.child, gid), true, 'CONTROL: the helper’s newer copy governs while they are a helper');
+  await must(W.relay, W.roster([]));                                                                                 // the helper is removed
+  await sleep(150);
+  assert.equal(await posts(W.relay, W.child, gid), false, 'THE RELAY STILL FOLLOWS THE REMOVED HELPER’S COPY (until a restart)');
+  await W.restart();
+  assert.equal(await posts(W.relay, W.child, gid), false, 'after a restart');
+});
+
+test('third author — after a void entry, the NEWEST VALID copy governs, not the church’s older one', async () => {
+  const W = await church('void-third');
+  const tara = H.key();
+  await must(W.relay, doc(tara, MEMBER_D + W.cp, { joined: ++clock }));
+  await must(W.relay, doc(W.C, STEWARDS_D + W.cp, { pubkeys: [W.helper.pub, tara.pub], caps: { [W.helper.pub]: ['content'], [tara.pub]: ['content'] } }));
+  const gid = W.cp.slice(0, 16) + '-third';
+  const theirs = doc(W.helper, GROUP_D + gid, { name: 'R', childsafe: true }, { tags: tag(W.cp), at: clock + 50 });
+  await must(W.relay, theirs);
+  await must(W.relay, doc(W.C, GROUP_D + gid, { name: 'R', childsafe: true }, { at: theirs.created_at - 10 }));      // church, oldest, child-safe
+  await must(W.relay, doc(tara, GROUP_D + gid, { name: 'R (adults)' }, { tags: tag(W.cp), at: theirs.created_at - 2 }));   // Tara, newer than the church
+  await must(W.relay, doc(W.C, STEWARDS_D + W.cp, { pubkeys: [tara.pub], caps: { [tara.pub]: ['content'] } }));      // the first helper removed
+  await sleep(150);
+  assert.equal(await posts(W.relay, W.child, gid), false, 'THE CHURCH’S OLDER COPY BEAT TARA’S NEWER ONE after the void entry');
+  await W.restart();
+  assert.equal(await posts(W.relay, W.child, gid), false, 'after a restart');
+});
+
+test('MED-4a — an OLDER church withdrawal arriving after a newer live copy does not take the room away — live, and after restart', async () => {
+  const W = await church('older-tomb');
+  const gid = W.cp.slice(0, 16) + '-alive';
+  const live = doc(W.helper, GROUP_D + gid, { name: 'Alive' }, { tags: tag(W.cp) });
+  await must(W.relay, live);
+  await must(W.relay, doc(W.C, GROUP_D + gid, '', { at: live.created_at - 4, tags: [['deleted', '1'], ['for', '*']] }));
+  assert.equal(await posts(W.relay, W.ann, gid), true, 'AN OLDER WITHDRAWAL TOOK A NEWER ROOM AWAY');
+  await W.restart();
+  assert.equal(await posts(W.relay, W.ann, gid), true, 'after a restart');
+});
+
+test('co-tenant — another church’s FAR-FUTURE withdrawal of an id this relay has not seen does not pin it against the owner', async () => {
+  const A = H.key(), Bc = H.key(), kid = H.key();
+  const relay = await H.startRelay({ name: 'cotenant', churches: [A.pub, Bc.pub] });
+  await must(relay, doc(kid, MEMBER_D + A.pub, { joined: ++clock }));
+  await must(relay, doc(A, MINORS_D + A.pub, { pubkeys: [kid.pub] }));
+  const gid = 'shared-youth-id';
+  await must(relay, doc(Bc, GROUP_D + gid, '', { at: Math.floor(Date.now() / 1000) + 300, tags: [['deleted', '1']] }));
+  await must(relay, doc(A, GROUP_D + gid, { name: 'Youth', childsafe: true }));
+  assert.equal(await posts(relay, kid, gid), true, 'THE CO-TENANT’S FUTURE TOMBSTONE KEPT THE OWNER’S ROOM AWAY');
+});
