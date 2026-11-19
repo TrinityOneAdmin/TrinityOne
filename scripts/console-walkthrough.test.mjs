@@ -37,7 +37,14 @@ function boot(opts = {}) {
   const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), removeItem: (k) => { store.delete(k); },
     setItem: (k, v) => { if (opts.failWrites) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; } store.set(k, String(v)); } };
   const timers = [];
-  const state = { tree: null, modal: false };
+  const frames = [];   // requestAnimationFrame callbacks, run by show() between its two draws (the next frame)
+  // <main data-tour="main">, the console's scroller: its scrollTop is the test's to set (state.mainTop), and
+  // a scroll is dispatched to its listeners by h.scrollMain(y).
+  const mainListeners = [];
+  const state = { tree: null, modal: false, mainTop: 0 };
+  const fakeMain = { get scrollTop() { return state.mainTop; },
+    addEventListener(t, f) { if (t === 'scroll') mainListeners.push(f); },
+    removeEventListener(t, f) { const i = mainListeners.indexOf(f); if (i >= 0) mainListeners.splice(i, 1); } };
   const winListeners = {}, docListeners = {};
   const fakeEl = { getClientRects: () => [1], getBoundingClientRect: () => ({ left: 20, top: 30, right: 140, bottom: 74, width: 120, height: 44 }), scrollIntoView() {} };
   const doc = {
@@ -46,6 +53,7 @@ function boot(opts = {}) {
     activeElement: null,
     // only the tour's anchor lookups are answered, and only from what the dashboard really drew
     querySelector(sel) {
+      if (sel === 'main[data-tour="main"]') return state.tree && find(state.tree, n => n.type === 'main' && n.props['data-tour'] === 'main').length ? fakeMain : null;
       const m = /^\[data-tour="([^"]+)"\]$/.exec(sel);
       if (!m || !state.tree) return null;
       return find(state.tree, n => n.props && n.props['data-tour'] === m[1]).length ? fakeEl : null;
@@ -78,6 +86,7 @@ function boot(opts = {}) {
     localStorage: ls, console, Event: class { constructor(type) { this.type = type; } },
     // timers are recorded, never fired on their own: a test fires the one it means
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {},
+    requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     setInterval: () => 0, clearInterval() {},
     fetch: async () => ({ ok: false, json: async () => ({}) }),
     Icon: function Icon() { return null; }, Halo: function Halo() { return null; },
@@ -101,8 +110,11 @@ function boot(opts = {}) {
   // useStewDialog's real count holds in a browser (the bubble registers through it).
   win.stewModalCount = () => (state.modal ? 1 : 0) + (mod.stewTourStore.up ? 1 : 0);
   // Two draws: effects that set state show on the next one, as in React. The tree is kept for querySelector.
-  const show = (props = {}) => { state.tree = draw(mod.StewDashboard, props); state.tree = draw(mod.StewDashboard, props); return state.tree; };
-  return { mod, win, store, timers, state, docListeners, show, draw, realCount };
+  // …with the next frame (requestAnimationFrame) in between, as a browser runs it.
+  const flushFrames = () => { for (const f of frames.splice(0)) f(); };
+  const show = (props = {}) => { state.tree = draw(mod.StewDashboard, props); flushFrames(); state.tree = draw(mod.StewDashboard, props); return state.tree; };
+  const scrollMain = (y) => { state.mainTop = y; mainListeners.slice().forEach(f => f({ type: 'scroll' })); };
+  return { mod, win, store, timers, frames, state, docListeners, show, draw, realCount, scrollMain, mainListeners };
 }
 const bubble = (tree) => find(tree, n => n.props && n.props['data-stew-tour'] === 'bubble')[0] || null;
 const tipOf = (tree) => find(tree, n => n.props && n.props['data-stew-tour'] === 'tip')[0] || null;
@@ -553,7 +565,9 @@ test('the running tour does not hide behind ITSELF (stew-modal.jsx\'s real count
   for (let i = 0; i < 3; i++) assert.ok(bubble(h.show()), 'the tour hid because it counted its own bubble as another dialog');
 });
 
-test('the section tip is drawn in the flow of <main>, ahead of the section — it cannot sit over sign-ups or Approve', () => {
+// In the flow when <main> is at its top (the usual case): it pushes the section down and covers nothing in it. The
+// one exception — a section opened already scrolled, where it floats until <main> is back at its top — is the next test.
+test('the section tip is drawn in the flow of <main>, ahead of the section, when <main> is at its top — it does not sit over sign-ups or Approve', () => {
   const h = boot();
   const tree = h.show();
   const main = find(tree, n => n.type === 'main' && n.props['data-tour'] === 'main')[0];
@@ -566,6 +580,33 @@ test('the section tip is drawn in the flow of <main>, ahead of the section — i
   const order = find(main, n => n === tip || (n.props && n.type && n.type.name === 'DashOverview'));
   assert.equal(order[0], tip, 'the tip is not ahead of the Overview in <main>');
   assert.equal(order.length, 2, 'premise: the Overview is not drawn in <main>');
+});
+
+test('POINT OF USE (P2): a section opened with <main> already scrolled gets a FLOATING tip; back at the top, it drops into the flow', () => {
+  const h = boot();
+  h.store.set('trinityone.steward.tour.churchpub.tip.overview', '1');   // Overview's tip already read
+  h.show();
+  h.state.mainTop = 300;                                // the steward has scrolled down Overview
+  const navBtn = (tree, label) => find(tree, n => n.type === 'button' && n.props['data-tour'] === 'nav-' + label)[0];
+  navBtn(h.state.tree, 'groups').props.onClick();       // and opens Groups: <main> keeps its scroll
+  let tree = h.show();
+  const floatHolder = find(tree, n => n.props && n.props['data-stew-tour-float'] === '1')[0];
+  assert.ok(floatHolder, 'a section opened scrolled drew its tip in the flow, above what is in view (out of sight; Chromium also moves the view by its height)');
+  assert.equal(floatHolder.props.style.position, 'sticky');
+  assert.equal(floatHolder.props.style.height, 0, 'the floating holder takes up height, so the page under it moves');
+  assert.ok(tipOf(floatHolder), 'the tip card is not inside the floating holder');
+  assert.equal(h.mainListeners.length, 1, 'a floating tip does not watch <main> for the return to the top');
+  // the steward scrolls back to the top: the tip goes into the flow, so it no longer covers the section's top
+  h.scrollMain(0);
+  tree = h.show();
+  assert.equal(find(tree, n => n.props && n.props['data-stew-tour-float'] === '1').length, 0, 'back at the top of <main>, the tip still floats over the section');
+  assert.ok(tipOf(tree), 'the tip went away instead of dropping into the flow');
+  // (the listener's removal is an effect cleanup, which the miniature React never runs — not provable here)
+  // CONTROL: at the top of <main> a section's tip is in the flow from the start
+  const g = boot();
+  const t0 = g.show();
+  assert.ok(tipOf(t0), 'premise: no Overview tip');
+  assert.equal(find(t0, n => n.props && n.props['data-stew-tour-float'] === '1').length, 0, 'a tip floated with <main> at its top');
 });
 
 // ── the shell ──────────────────────────────────────────────────────────────────────────────────────────────

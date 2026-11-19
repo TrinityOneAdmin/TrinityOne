@@ -281,6 +281,24 @@ test('desktop 900x600: after a sidebar re-pick, leaving Settings and ARRIVING ag
   await sleep(600);
   const later = await state();
   assert.ok(Math.abs(later.scrollTop - y) <= 2, 'arriving at Settings after an earlier re-pick moved the console from ' + y + 'px to ' + later.scrollTop + 'px — the re-pick mark outlived leaving Settings');
+  // THE CONSOLE TOUR'S SECTION TIP (triage P2). Arriving scrolled, Settings' first-visit tip is up — and it is IN
+  // VIEW: inside <main>'s box, floating at the top of what is shown (not in the flow above it, where it would be
+  // out of sight and, inserted above the view, would make Chromium's scroll anchoring move the console — the
+  // 120 → 218 this test used to see).
+  const TIP = `(() => { const t = document.querySelector('[data-stew-tour="tip"]'); const m = document.querySelector('main'); if (!t || !m) return JSON.stringify({ tip: !!t });
+    const tr = t.getBoundingClientRect(), mr = m.getBoundingClientRect(), nx = t.nextElementSibling ? t.nextElementSibling.getBoundingClientRect() : null;
+    return JSON.stringify({ tip: true, inMain: tr.top >= mr.top - 1 && tr.bottom <= mr.bottom + 1, float: !!t.closest('[data-stew-tour-float]'), top: Math.round(tr.top), bottom: Math.round(tr.bottom),
+      nextTop: nx ? Math.round(nx.top) : null, scrollTop: m.scrollTop }); })()`;
+  const tipNow = async (ok, budget = 3000) => { const t0 = Date.now(); for (;;) { const v = JSON.parse(await evalIn(TIP)); if (ok(v) || Date.now() - t0 > budget) return v; await sleep(150); } };
+  const up = await tipNow(v => v.tip);
+  assert.ok(up.tip, 'CONTROL: no section tip on arriving at Settings — the tip check below would prove nothing');
+  assert.ok(up.inMain, 'the section tip is not inside the visible console: ' + JSON.stringify(up));
+  assert.equal(up.float, true, 'arriving scrolled, the tip is not floating: ' + JSON.stringify(up));
+  // Back at the top: the tip drops into the flow, above the section — not over its first card.
+  await scrollMainTo(0);
+  const docked = await tipNow(v => v.tip && !v.float);
+  assert.equal(docked.float, false, 'back at the top of <main>, the tip still floats over the section: ' + JSON.stringify(docked));
+  assert.ok(docked.nextTop != null && docked.bottom <= docked.nextTop, 'the docked tip overlaps the section under it: ' + JSON.stringify(docked));
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 

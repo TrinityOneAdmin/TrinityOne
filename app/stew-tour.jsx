@@ -34,7 +34,7 @@
 // Top-level names DECLARED here — unique across the console's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): STEW_TOUR_STEPS, STEW_TOUR_TIPS, STEW_TOUR_LOCKED,
 // stewTourStore, stewTourChurch, stewTourKey, stewTourSeen, stewTourSeenSet, stewTourStart, stewTourPlan,
-// stewTourSectionTip, stewTourBlocked, StewTourBubble, StewTourTip, StewTourHost.
+// stewTourSectionTip, stewTourBlocked, stewTourMainTop, stewTourLater, StewTourBubble, StewTourTip, StewTourHost.
 
 // ── the words (approved by the owner, 2026-11-18 — CONSOLE-WALKTHROUGH-COPY-2026-11-18.html) ────────────────
 // `nav` names a console section the step points at; `targets` names any other anchor. A step with neither is
@@ -179,21 +179,48 @@ function StewTourBubble(props) {
   return <TourKitBubble {...props} panelRef={panelRef} mark="data-stew-tour" />;
 }
 
+// How far the console's scroller (<main data-tour="main">, both layouts) is scrolled down; 0 when it is not found.
+function stewTourMainTop() {
+  try { const el = document.querySelector('main[data-tour="main"]'); return Number(el && el.scrollTop) || 0; } catch (e) { return 0; }
+}
+// Run fn after the browser's next frame — so after every effect of the frame being drawn, the section's own included.
+function stewTourLater(fn) {
+  try { if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn); } catch (e) {}
+  return setTimeout(fn, 0);
+}
+
 // ── the section tip ─────────────────────────────────────────────────────────────────────────────────────────
 // Not a dialog: nothing behind it is blocked, it takes no focus, and it is announced politely. Escape (with
 // nothing else open) or "Got it" dismisses it.
 // IN FLOW, NOT FIXED (2026-11-19). It was a fixed card over the top of <main>, which is exactly where Overview
 // puts new sign-ups and Members its Approve buttons — the tip covered them. The host is drawn inside <main>,
-// just before the section, so as an ordinary block the tip sits ABOVE the section and pushes it down: it cannot
-// cover anything in it at any width, and nothing has to be measured.
-function StewTourTip({ tip, onDone }) {
+// just before the section, so as an ordinary block the tip sits ABOVE the section and pushes it down, and covers
+// nothing in it.
+// THE ONE EXCEPTION: A SECTION OPENED ALREADY SCROLLED (triage P2, owner-accepted 2026-11-19). <main> keeps its
+// scroll across sections, and an in-flow tip at the top of a scrolled <main> is out of sight — worse, inserting it
+// above what is in view makes Chromium's scroll anchoring push the view down by the tip's height. So when <main> is
+// scrolled at the moment the tip is decided (after the section's own effects: the host decides a frame later),
+// the tip FLOATS: the same card in a zero-height sticky holder at the top of what is in view. It adds no height,
+// so nothing moves, but it DOES cover the top ~100px of what is in view until "Got it". As soon as <main> is back at
+// its top the tip drops into the flow (onDock), so it never sits over sign-ups or Approve at the top of a section.
+function StewTourTip({ tip, onDone, onDock }) {
   const reduced = tourKitReducedMotion();
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !(typeof window.stewModalOpen === 'function' && window.stewModalOpen())) onDone(); };
     try { document.addEventListener('keydown', onKey); } catch (e) {}
     return () => { try { document.removeEventListener('keydown', onKey); } catch (e) {} };
   }, [tip.key, tip.title]);   // eslint-disable-line react-hooks/exhaustive-deps
-  return (
+  // Floating: watch <main> and drop into the flow once it is back at its top. The listener goes with the tip.
+  React.useEffect(() => {
+    if (!tip.float) return undefined;
+    let el = null;
+    try { el = document.querySelector('main[data-tour="main"]'); } catch (e) {}
+    if (!el || !el.addEventListener) return undefined;
+    const onScroll = () => { if (stewTourMainTop() <= 0 && onDock) onDock(); };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => { try { el.removeEventListener('scroll', onScroll); } catch (e) {} };
+  }, [tip.float, tip.key]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const card = (
     <div data-stew-tour="tip" role="status" aria-live="polite" aria-label={'Tip: ' + tip.title}
       style={{ position: 'relative', maxWidth: 520, margin: '0 auto 14px', boxSizing: 'border-box',
         display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 12px 12px 14px', borderRadius: 14,
@@ -206,6 +233,8 @@ function StewTourTip({ tip, onDone }) {
       <button onClick={onDone} className="sk-btn sk-btn--ghost" style={{ flexShrink: 0, minHeight: 40, padding: '8px 12px', fontSize: 13, fontWeight: 700 }}>Got it</button>
     </div>
   );
+  if (!tip.float) return card;
+  return <div data-stew-tour-float="1" style={{ position: 'sticky', top: 8, height: 0, zIndex: 5, overflow: 'visible' }}>{card}</div>;
 }
 
 // ── the host ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -219,6 +248,12 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
   const [run, setRun] = React.useState(null);   // { i } while the tour is showing
   const [tip, setTip] = React.useState(null);   // the section tip on screen
   const church = stewTourChurch();
+  // A section tip is decided a frame after it is wanted (stewTourLater), once the section's own effects have run —
+  // one of them may move <main> (DashSettings puts a re-picked Settings back at its top). deciding: the section
+  // a decision is waiting for; tabNow: the section open when it comes.
+  const deciding = React.useRef(null);
+  const tabNow = React.useRef(tab);
+  tabNow.current = tab;
   React.useEffect(() => {
     const f = () => force(x => x + 1);
     try { window.addEventListener('stew-tour', f); window.addEventListener('stew-modals', f); } catch (e) {}
@@ -257,9 +292,18 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
     if (tip && tip.section !== tab) { setTip(null); return; }
     if (tip || blocked || holdTips) return;
     const c = tipFor();
-    // NOT marked seen here: the tip is drawn in-flow at the top of <main>, and <main> keeps its scroll across
-    // sections, so a steward scrolled down can open a section with its tip above the fold. Seen = "Got it".
-    if (c) setTip({ ...c, section: tab });
+    // NOT marked seen here: a steward can open a section and not read its tip. Seen = "Got it".
+    // float: <main> is scrolled, so the tip floats at the top of what is in view (see StewTourTip).
+    if (c && deciding.current !== tab) {
+      deciding.current = tab;
+      const sec = tab;
+      stewTourLater(() => {
+        deciding.current = null;
+        if (tabNow.current !== sec) return;   // they moved on; the next section decides its own
+        setTip(t => t || { ...c, section: sec, float: stewTourMainTop() > 0 });
+        force(x => x + 1);
+      });
+    }
   });
   // Waiting behind something that sends no event (the error banner, a join toast): look again shortly.
   React.useEffect(() => {
@@ -280,7 +324,7 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
     return <StewTourBubble step={step} pos={live.indexOf(step) + 1} count={live.length} first={prev < 0} last={next < 0}
       onSkip={end} onNext={() => { if (next < 0) end(); else setRun({ i: next }); }} onBack={() => { if (prev >= 0) setRun({ i: prev }); }} />;
   }
-  if (tip && tip.section === tab && !blocked) return <StewTourTip tip={tip} onDone={() => { stewTourSeenSet(church, tip.key); setTip(null); }} />;
+  if (tip && tip.section === tab && !blocked) return <StewTourTip tip={tip} onDone={() => { stewTourSeenSet(church, tip.key); setTip(null); }} onDock={() => setTip(t => (t && t.float ? { ...t, float: false } : t))} />;
   return null;
 }
 
