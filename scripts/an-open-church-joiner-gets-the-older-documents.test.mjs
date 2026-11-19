@@ -108,8 +108,9 @@ async function joinOpen(c, storage, me = c.nell) {
   const cp = c.church.pub;
   let memSinceAtReopen = null, okAt = 0;
   const app = memberApp({ me, relays: [c.url], storage, announce: true, realAdmitted: true,
-    // F5: the members hub's `since` at the instant each members REQ is sent after the OK (S7's detector needs it > 0)
-    onReq: (rec) => { if (okAt && rec.filters.some(f => f['#p'] && (f.kinds || []).includes(1))) memSinceAtReopen = (app.t._memHubs.get(cp) || {}).since; } });
+    // F5: the members hub's `since` just BEFORE the refull touches that hub (S7's detector needs it > 0). Read when the
+    // first docs REQ after the OK goes out: the helper reopens the docs hub first, before it touches the members hub.
+    onReq: (rec) => { if (okAt && memSinceAtReopen === null && rec.filters.some(f => f.authors && f.authors[0] === cp)) memSinceAtReopen = (app.t._memHubs.get(cp) || {}).since; } });
   const seen = { devos: null, plans: null, members: null, lists: [] };
   app.api.subscribeChurchDevotionals(cp, d => { seen.devos = d; });
   app.api.subscribeChurchPlans(cp, p => { seen.plans = p; });
@@ -149,7 +150,7 @@ test('O1: an open-church joiner gets the ten-day-old devotional, plan and member
   const k1 = memAfter.map(q => q.filters.find(f => (f.kinds || []).includes(1))).filter(Boolean);
   assert.ok(k1.length, 'the members hub was reopened after the OK');
   // F5: the kind-1 assertion is only meaningful if the hub had a cursor when it was reopened
-  assert.ok(r.memSince() > 0, `instrument: the members hub had no cursor (since=${r.memSince()}) at the reopen, so the kind-1 check below is void`);
+  assert.ok(r.memSince() > 0, `instrument: the members hub had no cursor (since=${r.memSince()}) when the refull began, so the kind-1 check below is void`);
   for (const f of k1) assert.ok(f.since > 0, 'the chat (kind-1) half must stay incremental after the refull — never re-pull the chat history');
   const sd = app.persisted('trinityone.docshub.' + cp), sm = app.persisted('trinityone.memhub.' + cp);
   assert.ok(sd && sd.fullAt * 1000 >= r.okAt - 1000, `persisted docs fullAt (${sd && sd.fullAt}) predates the OK`);
