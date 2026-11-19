@@ -251,6 +251,23 @@ test('a step whose anchor is not on screen is skipped, never pointed at', () => 
 });
 
 // ── section tips ───────────────────────────────────────────────────────────────────────────────────────────
+test('POINT OF USE (L1): a wizard abandoned after its name step does not hold the section tips back for ever', () => {
+  // The owner named the church (the wizard publishes the name at its first step), then reloaded before Done: on
+  // this boot `newchurch` is still '1' and `wizard.done` is unset, and the wizard will not open over a named church.
+  const h = boot({ church: { name: 'Grace Church' } });
+  h.store.set('trinityone.steward.newchurch', '1');
+  assert.equal(tipOf(h.show()), null, 'a section tip showed in the moment before the wizard could open');
+  const t = h.timers.find(x => x.ms === 1800);
+  assert.ok(t, 'the dashboard no longer schedules the wizard decision — re-anchor this test');
+  t.fn();                                              // the decision: the church has a name, so no wizard
+  const tree = h.show();
+  assert.equal(find(tree, n => n.type === h.mod.StewSetupWizard).length, 0, 'premise: the wizard opened over a named church');
+  const tip = tipOf(tree);
+  assert.ok(tip, 'with no wizard coming, the Overview tip is still held back');
+  assert.ok(texts(tip).join(' ').includes(h.mod.STEW_TOUR_TIPS.overview.text));
+  assert.equal(bubble(tree), null, 'the tour auto-started for an abandoned wizard (owner, 2026-11-19: Help is enough)');
+});
+
 test('POINT OF USE: the first visit to a section shows its tip once; Got it dismisses it; a second boot shows nothing', () => {
   const h = boot();
   let tree = h.show();

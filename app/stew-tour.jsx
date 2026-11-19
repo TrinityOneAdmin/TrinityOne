@@ -34,7 +34,7 @@
 // Top-level names DECLARED here — unique across the console's single global scope on purpose (a duplicate
 // top-level name in classic scripts blanks the whole app): STEW_TOUR_STEPS, STEW_TOUR_TIPS, STEW_TOUR_LOCKED,
 // stewTourStore, stewTourChurch, stewTourKey, stewTourSeen, stewTourSeenSet, stewTourStart, stewTourPlan,
-// stewTourSectionTip, stewTourBlocked, stewTourHoldTips, StewTourBubble, StewTourTip, StewTourHost.
+// stewTourSectionTip, stewTourBlocked, StewTourBubble, StewTourTip, StewTourHost.
 
 // ── the words (approved by the owner, 2026-11-18 — CONSOLE-WALKTHROUGH-COPY-2026-11-18.html) ────────────────
 // `nav` names a console section the step points at; `targets` names any other anchor. A step with neither is
@@ -159,12 +159,6 @@ function stewTourBlocked() {
   } catch (e) {}
   try { return !!document.querySelector('[data-stew-overlay], [role="dialog"][aria-modal="true"]:not([data-stew-tour])'); } catch (e) { return false; }
 }
-// A brand-new church whose setup wizard has not run yet: hold the section tips back so the first thing a new
-// owner sees is the wizard, then the tour — not an Overview tip 1.8s before the wizard covers it.
-// (The keys are StewDashboard's own; this only reads them.)
-function stewTourHoldTips() {
-  try { return localStorage.getItem('trinityone.steward.newchurch') === '1' && localStorage.getItem('trinityone.steward.wizard.done') !== '1'; } catch (e) { return false; }
-}
 
 // ── the tour bubble ─────────────────────────────────────────────────────────────────────────────────────────
 // A console dialog like any other (useStewDialog): Escape and Android Back skip the tour, focus moves into the
@@ -209,8 +203,10 @@ function StewTourTip({ tip, onDone }) {
 // ── the host ────────────────────────────────────────────────────────────────────────────────────────────────
 // Mounted once by StewDashboard (inside its shared `content`, so it is in both layouts). `nav` is stewNav()'s
 // output, `tab` the open section, `onTab` the dashboard's setTab (the tour opens Overview so the joining code
-// is there to point at).
-function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab }) {
+// is there to point at). `holdTips`: StewDashboard's own answer to "might the setup wizard still open, or is it
+// open?" — section tips wait for it, so a new owner sees the wizard first (audit L1: it ends when the dashboard
+// decides, so an abandoned wizard no longer holds the tips for ever).
+function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }) {
   const [, force] = React.useState(0);
   const [run, setRun] = React.useState(null);   // { i } while the tour is showing
   const [tip, setTip] = React.useState(null);   // the section tip on screen
@@ -242,7 +238,7 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab }) {
     }
     if (run || pending) return;
     if (tip && tip.section !== tab) { setTip(null); return; }
-    if (tip || blocked || stewTourHoldTips()) return;
+    if (tip || blocked || holdTips) return;
     const c = tipFor();
     // NOT marked seen here: the tip is drawn in-flow at the top of <main>, and <main> keeps its scroll across
     // sections, so a steward scrolled down can open a section with its tip above the fold. Seen = "Got it".

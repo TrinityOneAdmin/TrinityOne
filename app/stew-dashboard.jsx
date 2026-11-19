@@ -2525,6 +2525,15 @@ function StewDashboard({ initial = 'overview' }) {
   // `wizard.done`, so they were already covered; this closes the case where a real church simply loads slowly.
   // The name check and the 1.8s wait are kept as belt-and-braces: never show it over a church that has a name.
   const [wizard, setWizard] = React.useState(false);
+  // FOR THE CONSOLE TOUR (app/stew-tour.jsx, audit L1): true only while the wizard MIGHT still open — the 1.8s
+  // before the decision below. The section tips wait for it, so a new owner's first sight is the wizard, not an
+  // Overview tip. It ends when the decision is made either way: a wizard abandoned after its name step (the name
+  // is published at step 1) is never opened again, and used to hold every tip back for ever on this device.
+  const [wizardDeciding, setWizardDeciding] = React.useState(() => {
+    try {
+      return localStorage.getItem('trinityone.steward.wizard.done') !== '1' && localStorage.getItem('trinityone.steward.newchurch') === '1' && !church.isNetwork;
+    } catch { return false; }
+  });
   const nameRef = React.useRef(church.name);
   nameRef.current = church.name;
   React.useEffect(() => {
@@ -2534,7 +2543,7 @@ function StewDashboard({ initial = 'overview' }) {
       isNew = localStorage.getItem('trinityone.steward.newchurch') === '1';
     } catch {}
     if (done || !isNew || church.isNetwork) return;
-    const t = setTimeout(() => { if (!nameRef.current) setWizard(true); }, 1800);
+    const t = setTimeout(() => { if (!nameRef.current) setWizard(true); setWizardDeciding(false); }, 1800);
     return () => clearTimeout(t);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   // The console tour (app/stew-tour.jsx) starts here, once — never for a church that passed the wizard earlier.
@@ -2574,7 +2583,7 @@ function StewDashboard({ initial = 'overview' }) {
     <React.Fragment>
       <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
-      {window.StewTourHost ? <window.StewTourHost nav={nav} tab={tab} narrow={narrow} delegate={_delegate} isNetwork={!!church.isNetwork} onTab={setTab} /> : null}
+      {window.StewTourHost ? <window.StewTourHost nav={nav} tab={tab} narrow={narrow} delegate={_delegate} isNetwork={!!church.isNetwork} onTab={setTab} holdTips={wizardDeciding || wizard} /> : null}
       {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
