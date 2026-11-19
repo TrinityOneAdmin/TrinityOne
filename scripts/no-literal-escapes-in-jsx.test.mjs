@@ -48,7 +48,8 @@ function regexEnd(src, i) {
   const p = j < 0 ? '' : src[j];
   const opens = p === '' || '(,=:[!&|?{;+-*%~^'.includes(p) || (p === '>' && src[j - 1] === '=') ||
     REGEX_AFTER_KEYWORD.test(src.slice(Math.max(0, j - 7), j + 1));
-  if (!opens) return -1;
+  // `a++ / 2` and `a-- / 2` are division: a postfix `++`/`--` ends an operand (audit 2026-11-19, finding 2).
+  if (!opens || ((p === '+' || p === '-') && src[j - 1] === p)) return -1;
   let k = i + 1, inClass = false;
   while (k < src.length) {
     const c = src[k];
@@ -56,6 +57,7 @@ function regexEnd(src, i) {
     if (c === '\\') { k += 2; continue; }
     if (inClass) { if (c === ']') inClass = false; }
     else if (c === '[') inClass = true;
+    else if (c === '/' && src[k - 1] === '<') return -1;   // `</` is a closing tag, not a regex's end: `Yes, /<b>…</b>`
     else if (c === '/') { k++; while (k < src.length && /[a-z]/.test(src[k])) k++; return k; }
     k++;
   }
@@ -65,9 +67,16 @@ function regexEnd(src, i) {
 // If offset `at` is inside a regex literal, the index just past that regex; else -1. A run is taken by jumping from a
 // `>` to the next `<`, so it can end INSIDE a regex (`</Sheet>` … `h.replace(/<b>/g, '')`): the scan must then resume
 // after the regex, not in the middle of it, where its `>` would open another fake run. A regex never spans a line, so
-// the line is lexed on its own, as code — strings, line comments, regexes. The same check excuses a hit that lies in
-// a regex. Only a regex does: an apostrophe in real JSX text ("can't \u2019") still reports.
-function regexAround(src, at) {
+// the line is lexed on its own, as code — strings, line comments, regexes. This ONLY moves where the scan resumes;
+// it never excuses a hit. (An earlier version also excused a hit "inside a regex" by looking up the FIRST copy of
+// the escape — so `<p>{s.replace(/\u2019/g, "'")} can\u2019t</p>` was excused by the regex's copy. Audit
+// 2026-11-19, finding 1. A regex inside `{…}` is already removed by stripBraces, so no excuse is needed.)
+//
+// Audit 2026-11-19, finding 2, closed in regexEnd: JSX text ending in `, /`, `( /` or `: /` before a child element
+// (`<p>Yes, /<b>it\u2019s</b>`) once read `/<b>…</` as a regex, and `a++ / 2` once read as one. A candidate that would
+// end on the `/` of `</`, or that follows a postfix `++`/`--`, is not a regex. Still a guess: `x = /<b>a</` on one
+// line of JSX text is the shape that would fool it.
+function regexEndAt(src, at) {
   const s = src.lastIndexOf('\n', at - 1) + 1, eol = src.indexOf('\n', at), e = eol === -1 ? src.length : eol;
   let i = s, quote = '';
   while (i < e) {
@@ -110,7 +119,7 @@ function jsxTextRuns(src) {
       // check caught that. Inside `{...}` an escape is legitimate; outside it is four characters on screen.
       const plain = stripBraces(run);
       if (plain.trim()) runs.push({ text: plain, at: i + 1 });
-      const past = regexAround(src, end);
+      const past = regexEndAt(src, end);
       i = past === -1 ? end : past; continue;
     }
     i++;
@@ -127,7 +136,6 @@ test('no \\uXXXX escapes are typed into JSX text', () => {
       // scanner does not model — and they are not the defect anyway: a stray \n reads as a typo, while
       // \u2019 mid-sentence looks like deliberate, correct code right up until a member reads it.
       const m = text.match(/\\u[0-9a-fA-F]{4}/);
-      if (m && regexAround(src, src.indexOf(m[0], at)) !== -1) continue;
       if (m) {
         const line = src.slice(0, at).split('\n').length;
         bad.push(`${f}:${line} — ${m[0]} in "${text.trim().slice(0, 60)}"`);
