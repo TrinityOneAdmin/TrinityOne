@@ -298,3 +298,42 @@ test('(r) — Block of a former helper: groups that could not be checked are sai
   const said = await blockBram(r);
   assert.match(said, /Couldn’t check the group “Youth” — open Groups and check whether they are still on it\./, said.slice(0, 600));
 });
+
+// ══ AUDIT OF 98ab7e38 — the screens ═══════════════════════════════════════════════════════════════════════════════════
+// AUDIT 2: the Block screen rotates the church's keys as soon as the block has landed — never behind the group take-off,
+// which may take tens of seconds on a slow relay — and adds the take-off's line when it settles.
+test('AUDIT 2 — Block: the key rotation STARTS while the group take-off is still running; its line is added when it settles', async () => {
+  const r = blockRig({ carry: allKept(), blocked: true, stewards: [] });
+  r.g.window.Steward.isOrWasSteward = (pk) => pk === BRAM;
+  const rotated = [];
+  r.g.window.Steward.rotateCareKey = () => { rotated.push('care'); return Promise.resolve(true); };
+  let finishOff;
+  const offDone = new Promise((res) => { finishOff = res; });
+  const real = r.g.window.Steward.blockStewardKeeping;
+  r.g.window.Steward.blockStewardKeeping = async (pk, list) => ({ ...(await real(pk, list)), groupsOffDone: offDone });
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }]);
+  await press(draw(C, {}), /Remove \/ block this member/, { which: 0 });
+  await press(draw(C, {}), /Confirm — bans them/);
+  await flush(30);
+  assert.deepEqual(rotated, ['care'], 'THE KEYS WERE NOT ROTATED WHILE THE GROUP TAKE-OFF WAS STILL RUNNING (audit 2)');
+  finishOff({ swapped: [], failed: [], other: [], otherSomeone: [], unchecked: ['the group “Youth”'], anyUnanswered: true });
+  await flush(30);
+  assert.match(reads(draw(C, {})), /Couldn’t check the group “Youth” — open Groups and check whether they are still on it\./, 'the take-off’s line was not added once it settled');
+});
+// AUDIT 6: the words say who changed the group — "another helper" only when it was one
+test('AUDIT 6 — Block: a newer copy by someone who is not a helper is NOT called "another helper"', async () => {
+  const r = blockRig({ carry: allKept(), blocked: true, stewards: [] });
+  r.g.window.Steward.isOrWasSteward = (pk) => pk === BRAM;
+  const real = r.g.window.Steward.blockStewardKeeping;
+  const off = { swapped: [], failed: [], other: [], otherSomeone: ['the group “Youth”'], unchecked: [], anyUnanswered: false };
+  r.g.window.Steward.blockStewardKeeping = async (pk, list) => ({ ...(await real(pk, list)), groupsOff: off, groupsOffDone: Promise.resolve(off) });
+  const said = await blockBram(r);
+  assert.doesNotMatch(said, /Another helper has changed the group “Youth”/, 'CALLED SOMEONE "ANOTHER HELPER" WHO IS NOT ONE (audit 6)');
+  assert.match(said, /Someone else has changed the group “Youth” since, and it still names them — check it by hand\./, said.slice(0, 600));
+});
+test('AUDIT 6 — Reconnect: a newer copy by someone who is not a helper is NOT called "another steward"', async () => {
+  const said = await reconnectDone({ carried: [], notCarried: [], superseded: [], swapped: [], swapFailed: [], swapOther: [], swapOtherSomeone: ['the group “Youth”'], swapUnchecked: [], swapAnyUnanswered: false });
+  assert.doesNotMatch(said, /Another steward has changed the group “Youth”/, 'CALLED SOMEONE "ANOTHER STEWARD" WHO IS NOT ONE (audit 6)');
+  assert.match(said, /Someone else has changed the group “Youth” since, and it still names their old key — check it by hand\./, said.slice(0, 800));
+  assert.doesNotMatch(said, /Ordinary groups need nothing/, 'said "nothing needed" over a group that still names the old key');
+});

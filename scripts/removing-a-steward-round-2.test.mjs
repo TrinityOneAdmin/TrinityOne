@@ -589,3 +589,191 @@ test('(r) — Block of a FORMER helper with r2 OFF: nothing is re-saved and the 
   assert.deepEqual(b.groupsOff.swapped, []);
   assert.ok(b.groupsOff.unchecked.includes('the group “Tess Bible Group”'), JSON.stringify(b.groupsOff));
 });
+
+// ══ AUDIT OF 98ab7e38 (Opus, GREEN WITH CHANGES; owner: fix all) ═════════════════════════════════════════════════════
+// The F4/(r) tests above inject a "fresh" Groups list. On the real console that list is marked fresh ONLY by the narrow
+// read subscribeGroups opens for SEALED rooms — so a church whose rooms are all ordinary never had one, and Reconnect /
+// Block of a former helper always said "Couldn't check". These drive the REAL subscribeGroups (lifted from the bundle,
+// with the real _listIsFresh) on real relays, for a church with no sealed room (CLAUDE.md rule 1).
+const liftFn = (name) => { const m = new RegExp('\\n  function ' + name + '\\([\\s\\S]*?\\n  \\}').exec(STEWARD); assert.ok(m, 'could not lift ' + name + ' — re-anchor'); return m[0]; };
+function mountRealGroups(eng) {
+  const narrow = [];
+  Object.assign(eng, {
+    _keyReadEpoch: 0, _careRosterSeen: true, _sealedGroupIds: new Set(), _keysReadSignal: () => {},
+    // THE SHIPPED _corpusSub's fallback (pool.subscribeMany(relays(), …)); the shared feed is not under test here
+    _corpusSub: (f, h) => eng.pool.subscribeMany(eng.relays(), f, h),
+    // the narrow read is opened only for SEALED rooms; this church has none, so it must never be asked for
+    _freshDocRead: (cp, ds) => { narrow.push(ds); return () => {}; },
+    localStorage: { _m: new Map(), getItem(k) { return this._m.has(k) ? this._m.get(k) : null; }, setItem(k, v) { this._m.set(k, v); } },
+  });
+  const names = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets', '_seedFromCache', '_capsOf',
+    '_consoleDisplay', '_consoleChurchVoice', '_listTag', '_stampFor', '_freshTok', '_tokIsFresh', '_listIsFresh'];
+  const api = new Function('scope', 'with (scope) { ' + names.map(liftFn).join('\n') + '\nreturn { ' + names.join(', ') + ', reader: ({ '
+    + fnBody(STEWARD, 'subscribeGroups(onGroups) {', 'subscribeGroups') + ' }) }; }')(eng);
+  // the REAL freshness test replaces the rig's stand-in, for every lifted engine function that asks it
+  eng._listIsFresh = api._listIsFresh;
+  let lists = 0;
+  const stop = api.reader.subscribeGroups(() => { lists++; });
+  return { stop, narrow, lists: () => lists };
+}
+async function formerHelperWithOrdinaryGroup(name, { members = true } = {}) {
+  const C = await churchOn(2, name);
+  const eng = owner(C);
+  const tess = await newSteward(C), other = H.key().pub;
+  await setRoster(eng, [tess.pub], { [tess.pub]: ['content'] });
+  const gid = C.cp.slice(0, 16) + '-plain';
+  await mustPut(C, raw(C, tess, GROUP_D + gid, { name: 'Tess Bible Group', leaders: [tess.pub], ...(members ? { visibility: 'invite', members: [tess.pub, other] } : {}) }));
+  const rm = await eng._removeStewardKeeping(tess.pub);
+  assert.ok(rm.wrote && rm.carry.carried.some(c => c.d === GROUP_D + gid), 'FIXTURE: not carried: ' + JSON.stringify(rm.carry));
+  eng._exStewards.add(tess.pub);
+  const g = mountRealGroups(eng);
+  await H.waitFor(async () => (eng._lastGroups.list || []).some(x => x && x.id === gid), { timeout: 8000, label: 'the real Groups reader to deliver the group' });
+  await sleep(300);
+  assert.deepEqual(g.narrow, [], 'FIXTURE: a sealed-room read was opened — this church was meant to have none');
+  return { C, eng, tess, other, gid, g };
+}
+const blockApi = (eng, C) => {
+  Object.assign(eng.window.Steward, {
+    setBlocked: async (list) => { const e = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', BLOCKED_D + C.cp], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, C.church.sk); return (await putAll(C, e))[0] ? e : false; },
+    stewardRemovalOutcome: async () => 'unknown', publishStewardRevoke: async () => true, markStewardRequestHandled: async () => true,
+  });
+};
+const groupsOffOf = async (b) => (b.groupsOffDone ? await b.groupsOffDone : b.groupsOff);
+test('AUDIT 1 — Block of a FORMER helper, church with NO sealed room, the REAL Groups reader mounted: she is taken off', async () => {
+  const { C, eng, tess, other, gid, g } = await formerHelperWithOrdinaryGroup('a1-block');
+  try {
+    blockApi(eng, C);
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 6000 });
+    assert.ok(b.blocked, 'FIXTURE: the block did not land');
+    const go = await groupsOffOf(b);
+    assert.deepEqual(go && go.swapped, ['the group “Tess Bible Group”'], 'A CHURCH WITH ONLY ORDINARY ROOMS NEVER GETS THE TAKE-OFF (audit 1): ' + JSON.stringify(go));
+    for (const relay of C.relays) {
+      const copy = JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content);
+      assert.ok(!JSON.stringify(copy).includes(tess.pub), relay.name + ': still names her');
+      assert.deepEqual(copy.members, [other]);
+    }
+  } finally { g.stop(); }
+});
+test('AUDIT 1 — Reconnect of a FORMER helper, church with NO sealed room, the REAL Groups reader mounted: the new key is put in', async () => {
+  const { C, eng, tess, other, gid, g } = await formerHelperWithOrdinaryGroup('a1-reseat');
+  try {
+    const tessNew = H.key();
+    const res = await liftReseat(eng, C)(tess.pub, tessNew.pub, { blockOld: true, blocked: [], minors: [], approved: [], admitted: [], reseats: [] });
+    assert.deepEqual(res.carry.swapped, ['the group “Tess Bible Group”'], 'A CHURCH WITH ONLY ORDINARY ROOMS NEVER GETS THE SWAP (audit 1): ' + JSON.stringify(res.carry));
+    assert.equal(res.carry.swapAnyUnanswered, false, JSON.stringify(res.carry));
+    for (const relay of C.relays) {
+      const copy = JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content);
+      assert.deepEqual(copy.leaders, [tessNew.pub], relay.name);
+      assert.deepEqual(copy.members, [tessNew.pub, other], relay.name);
+    }
+  } finally { g.stop(); }
+});
+// AUDIT 2: the Block's answer (which the screen waits for before it rotates the keys) must not wait for the group take-off
+test('AUDIT 2 — Block of a FORMER helper answers BEFORE the group take-off settles (the key rotation is not held behind it)', async () => {
+  const { C, eng, tess, g } = await formerHelperWithOrdinaryGroup('a2-order');
+  const [, r2] = C.relays;
+  try {
+    blockApi(eng, C);
+    frozen.add(r2); r2.proc.kill('SIGSTOP');   // a silent relay: the take-off can only end on its give-up
+    let offSettled = false;
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 4000 });
+    assert.ok(b.blocked, 'FIXTURE: the block did not land on r1');
+    assert.ok(b.groupsOffDone && typeof b.groupsOffDone.then === 'function', 'THE TAKE-OFF IS NOT HANDED BACK TO RUN ALONGSIDE THE ROTATION: ' + JSON.stringify(Object.keys(b)));
+    b.groupsOffDone.then(() => { offSettled = true; });
+    await sleep(0);
+    assert.equal(offSettled, false, 'the Block waited for the take-off before answering');
+    const go = await b.groupsOffDone;
+    assert.ok(go.unchecked.length && go.anyUnanswered, 'a silent relay was not said: ' + JSON.stringify(go));
+    assert.deepEqual(go.swapped, []);
+  } finally { if (frozen.has(r2)) { try { r2.proc.kill('SIGCONT'); } catch {} frozen.delete(r2); } g.stop(); }
+});
+// AUDIT 3: a CURRENT helper's Block also takes them off the church's OWN group copies (they never edited those)
+test('AUDIT 3 — Block of a CURRENT helper: once the helper-list write lands, the church’s own group copy no longer names them', async () => {
+  const C = await churchOn(2, 'a3-current');
+  const eng = owner(C);
+  const kim = await newSteward(C), other = H.key().pub;
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
+  const gid = C.cp.slice(0, 16) + '-church';
+  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Church Choir', leaders: [kim.pub], visibility: 'invite', members: [kim.pub, other] }, { tagChurch: false }));
+  blockApi(eng, C);
+  const b = await eng._blockStewardKeeping(kim.pub, [], { limitMs: 6000 });
+  assert.ok(b.blocked && b.onRoster && b.outcome === 'landed', 'FIXTURE: ' + JSON.stringify({ blocked: !!b.blocked, onRoster: b.onRoster, outcome: b.outcome }));
+  const go = await groupsOffOf(b);
+  assert.deepEqual(go && go.swapped, ['the group “Church Choir”'], 'A BLOCKED CURRENT HELPER STAYS ON THE CHURCH’S OWN GROUPS (audit 3): ' + JSON.stringify(go));
+  for (const relay of C.relays) {
+    const copy = JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content);
+    assert.ok(!JSON.stringify(copy).includes(kim.pub), relay.name + ': still names her: ' + JSON.stringify(copy));
+  }
+});
+// AUDIT 4: the helper list not read yet — the take-off does not need it, so it still runs
+test('AUDIT 4 — Block with the helper list NOT read yet: the group take-off still runs (never skipped in silence)', async () => {
+  const { C, eng, tess, g } = await formerHelperWithOrdinaryGroup('a4-unknown');
+  try {
+    blockApi(eng, C);
+    eng._careRosterKnown = false;
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 6000 });
+    assert.ok(b.blocked && b.rosterUnknown, 'FIXTURE: ' + JSON.stringify({ blocked: !!b.blocked, rosterUnknown: b.rosterUnknown }));
+    const go = await groupsOffOf(b);
+    assert.ok(go, 'THE TAKE-OFF WAS SKIPPED, AND NOTHING SAID (audit 4)');
+    assert.deepEqual(go.swapped, ['the group “Tess Bible Group”'], JSON.stringify(go));
+  } finally { g.stop(); }
+});
+// AUDIT 5: progress-based, per churches-run-on-small-pipes — a relay that is slow but SENDING is waited for; one that says
+// nothing at all is given up on, inside an overall cap
+function slowRelay(eng, url, gapMs) {
+  const real = eng.pool.subscribeMany;
+  eng.pool.subscribeMany = (urls, filters, h) => {
+    if (!urls.includes(url)) return real(urls, filters, h);
+    // every message this relay sends is held `gapMs` behind the one before: always sending, never quick
+    let chain = Promise.resolve(), closed = false;
+    const later = (fn) => { chain = chain.then(() => sleep(gapMs)).then(() => { if (!closed) fn(); }); };
+    const sub = real(urls, filters, { onevent: (e) => later(() => h.onevent && h.onevent(e)), oneose: () => later(() => h.oneose && h.oneose()) });
+    return { close() { closed = true; sub.close(); } };
+  };
+}
+test('AUDIT 5 — a relay that is SLOW BUT SENDING (a message every 2.5 s) is waited for: the former helper is taken off', async () => {
+  const { C, eng, tess, gid, g } = await formerHelperWithOrdinaryGroup('a5-slow');
+  try {
+    blockApi(eng, C);
+    slowRelay(eng, C.relays[1].wsUrl, 2500);
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 6000 });
+    const go = await groupsOffOf(b);
+    assert.deepEqual(go.unchecked, [], 'A SLOW BUT ANSWERING RELAY WAS CUT OFF ON A FIXED TIMER (audit 5): ' + JSON.stringify(go));
+    assert.deepEqual(go.swapped, ['the group “Tess Bible Group”'], JSON.stringify(go));
+    assert.ok(!JSON.stringify(JSON.parse((await churchCopy(C, GROUP_D + gid, C.relays[1])).content)).includes(tess.pub));
+  } finally { g.stop(); }
+});
+test('AUDIT 5 — a relay that says NOTHING is given up on, inside the cap, and said', async () => {
+  const { C, eng, tess, g } = await formerHelperWithOrdinaryGroup('a5-silent');
+  const [, r2] = C.relays;
+  try {
+    blockApi(eng, C);
+    frozen.add(r2); r2.proc.kill('SIGSTOP');
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 4000 });
+    const t0 = Date.now();
+    const go = await groupsOffOf(b);
+    assert.ok(Date.now() - t0 < 40000, 'the take-off hung on a silent relay: ' + (Date.now() - t0) + ' ms');
+    assert.ok(go.anyUnanswered && go.unchecked.length, JSON.stringify(go));
+    assert.deepEqual(go.swapped, []);
+  } finally { if (frozen.has(r2)) { try { r2.proc.kill('SIGCONT'); } catch {} frozen.delete(r2); } g.stop(); }
+});
+// AUDIT 6: "Another helper has changed …" only when the newest copy's author IS a helper on this console's roster
+test('AUDIT 6 — the newest copy is by someone NOT on the helper list: listed apart from "another helper"', async () => {
+  const C = await churchOn(1, 'a6-who');
+  const eng = owner(C);
+  const tess = await newSteward(C), sam = await newSteward(C);
+  await setRoster(eng, [tess.pub, sam.pub], { [tess.pub]: ['content'], [sam.pub]: ['content'] });
+  const gid = C.cp.slice(0, 16) + '-sam';
+  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Sam’s Group', leaders: [tess.pub] }, { tagChurch: false }));
+  await mustPut(C, raw(C, sam, GROUP_D + gid, { name: 'Sam’s Group', leaders: [tess.pub, sam.pub] }));
+  eng._lastGroups = { cp: C.cp, list: Object.assign([{ id: gid, name: 'Sam’s Group', leaders: [tess.pub, sam.pub], _by: sam.pub }], { _fresh: true }) };
+  // Sam on this console's helper list → "another helper"
+  const a = await eng._swapKeyInChurchGroups({ carried: [], superseded: [] }, tess.pub, '');
+  assert.deepEqual(a.other, ['the group “Sam’s Group”'], 'CONTROL: ' + JSON.stringify(a));
+  assert.deepEqual(a.otherSomeone || [], [], JSON.stringify(a));
+  // Sam no longer on it → not "another helper"
+  eng._careRoster = new Set([tess.pub]);
+  const b2 = await eng._swapKeyInChurchGroups({ carried: [], superseded: [] }, tess.pub, '');
+  assert.deepEqual(b2.other, [], 'SAID "ANOTHER HELPER" OF SOMEONE WHO IS NOT ONE (audit 6): ' + JSON.stringify(b2));
+  assert.deepEqual(b2.otherSomeone, ['the group “Sam’s Group”'], JSON.stringify(b2));
+});
