@@ -9369,7 +9369,7 @@ window.Fellowship = {
         if (e.pubkey !== np || (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D))) return;
         const prev = raw.get(d);
         if (prev && ((prev.created_at || 0) > (e.created_at || 0) || ((prev.created_at || 0) === (e.created_at || 0) && prev.id < e.id))) return;
-        if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written (B1 audit)
+        if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written (B1 audit). RESIDUAL: a re-post in the SAME second as its deletion is hidden (a tie goes to the deletion)
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { raw.delete(d); dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0)); } else raw.set(d, e);
         emit();
       },

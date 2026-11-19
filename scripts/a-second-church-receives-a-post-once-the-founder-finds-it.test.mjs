@@ -115,7 +115,8 @@ test('END TO END: the founder auto-discovers church C from the relay, and C\'s m
 
 test('NON-VACUITY: with discovery cut out of the founder\'s sync, church C is never wrapped and its member is left waiting', async () => {
   await as(A, joinDoc(A, M.pub)); await as(C, joinDoc(C, M.pub));
-  const cut = (src) => scoped(src, 'async function _netSyncAll(', 'async function _netPublishPost(', 'const jr = await _netReadJoiners(r.pub);', 'const jr = { ok: false, joiners: [], authoritative: false };');
+  // (re-anchored 2026-11-19: the join read moved INSIDE the per-network queue -- _netSyncAll now asks for it with readJoiners)
+  const cut = (src) => scoped(src, 'async function _netSyncAll(', 'async function _netPublishPost(', '_netSyncKey(r.pub, { readJoiners: true })', '_netSyncKey(r.pub, {})');
   const a2 = consoleFor(A, { networks: [M], nameKey: nkA, founded: [M.pub], mutate: cut });
   assert.equal((await a2.api.syncNetworkKeys({ force: true })).ok, true);
   assert.equal((await a2.api.publishNetworkPost(M.pub, 'announcement', { text: 'never reaches C' })).ok, true);

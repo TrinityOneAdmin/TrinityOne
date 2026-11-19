@@ -43,8 +43,12 @@ export function newNetKey(cryptoObj) { return toHex((cryptoObj || globalThis.cry
 // -> 64-hex | null
 export async function firstNetKey(netSk, cryptoObj) {
   try {
-    const subtle = (cryptoObj || globalThis.crypto).subtle;
+    // EXACTLY 32 BYTES OR NOTHING (re-audit 2026-11-19): toBytes would turn a short, long or non-hex value into SOME bytes, and a key derived from
+    // garbage is a key nobody else can derive. A secp256k1 secret is 32 bytes; anything else is refused and the caller must not mint.
+    if (!(netSk instanceof Uint8Array) && !(typeof netSk === 'string' && /^[0-9a-f]{64}$/i.test(netSk))) return null;
     const ikm = netSk instanceof Uint8Array ? netSk : toBytes(netSk);
+    if (ikm.length !== 32) return null;
+    const subtle = (cryptoObj || globalThis.crypto).subtle;
     const k = await subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
     const bits = await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new TextEncoder().encode('trinityone'), info: new TextEncoder().encode('trinityone/netring/0') }, k, 256);
     return toHex(new Uint8Array(bits));

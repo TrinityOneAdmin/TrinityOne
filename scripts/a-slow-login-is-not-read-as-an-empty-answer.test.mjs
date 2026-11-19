@@ -71,3 +71,20 @@ test('SABOTAGE (no re-ask): the same slow login gets a FALSE "complete and empty
   assert.equal(k.complete, true, 'the premise: the first answer arrives looking complete');
 });
 
+
+// ── re-audit 2026-11-19: the re-ask claim, backed. A login that THROWS (nostr-tools logs it and never settles the AUTH) or simply NEVER settles must
+// give complete:false -- never a complete empty answer -- within maxWait (short here; the auditor measured ~13.5s at the shipped 8s).
+const LOGIN_CHECK = (code) => { const a = 'if (!logins || logins.some((ok) => !ok)) return { events: first.events, complete: false };'; assert.equal(code.split(a).length, 2, 'sabotage anchor not unique in _queryAsKey'); return code.replace(a, ''); };
+test('A LOGIN THAT THROWS, OR NEVER SETTLES: the answer is INCOMPLETE, never "complete and empty"; SABOTAGE (the login check removed) reports complete', { timeout: 60000 }, async () => {
+  const throws = async () => { throw new Error('signer unavailable'); };
+  const never = () => new Promise(() => {});
+  for (const [name, fin] of [['a throwing signer', throws], ['a signer that never answers', never]]) {
+    const t0 = Date.now();
+    const k = await shippedQueryAsKey(null, { finalize: fin })([WS_URL], N.sk, KEY_F, 2500);
+    assert.equal(k.complete, false, name + ': the answer was reported complete although the login never succeeded: ' + JSON.stringify(k));
+    assert.equal(k.events.length, 0, name + ': setup -- an unauthenticated socket was served the envelope');
+    assert.ok(Date.now() - t0 < 15000, name + ': the helper did not give up within its bound');
+  }
+  const s = await shippedQueryAsKey(LOGIN_CHECK, { finalize: never })([WS_URL], N.sk, KEY_F, 2500);
+  assert.equal(s.complete, true, 'THE SABOTAGE WAS NOT CAUGHT: without the login check the answer was still reported incomplete');
+});

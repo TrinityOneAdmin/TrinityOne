@@ -1646,6 +1646,8 @@ async function _queryAsKey(urls, sk, filters, maxWait = NET_QUERY_MAX_WAIT) {
       new Promise(res => setTimeout(() => res(null), maxWait)),
     ]);
     if (!logins || logins.some(ok => !ok)) return { events: first.events, complete: false };
+    // RESIDUAL (re-audit): a socket that DROPS between the two passes is reported by the second pass's close reasons as incomplete -- unless the pool
+    // silently reconnects anonymously and the relay answers within its grace; not reproduced, not defended beyond the close-reason check.
     const second = await pass();
     const byId = new Map(); for (const e of [...first.events, ...second.events]) if (e && e.id) byId.set(e.id, e);
     return { events: [...byId.values()], complete: second.complete };
@@ -1714,8 +1716,21 @@ async function _netWallMissing(urls) {
   (urls || []).forEach((u, i) => { if (!ok[i]) out.push(u); });
   return out;
 }
+// THE WALL CHECK BEFORE NETWORK KEY WORK -- AN ALARM, NOT A GUARD (re-audit 2026-11-19; the B1 comment overclaimed). A relay running software from
+// before the wall decides what a joined network key may read from THAT relay's copy of the church's join document, whatever this console does next;
+// pausing key work here takes nothing back from it. What the pause does: it stops this console adding fresh key material and posts while one of the
+// church's own relays is on old software, and it tells the steward, plainly, which relay -- the remedy is to update or remove that relay (or leave
+// the network). Used by _netSyncAll, _netSyncKeyOnce, _netSyncHop2 and _netPublishPost, so every API way in is covered. Rule 10: relays() only.
+//   -> null (every relay confirmed) | { waiting: true, reason } (no relay ready yet: still connecting) | { waiting: false, missing, reason }
+async function _netWallGate() {
+  const set = relays();
+  if (!set.length) return { waiting: true, missing: [], reason: 'Still connecting — no relay is ready for this church yet.' };
+  const missing = await _netWallMissingCached(set);
+  if (!missing.length) return null;
+  return { waiting: false, missing, reason: 'Network keys are paused: ' + missing.join(', ') + (missing.length === 1 ? ' has' : ' have') + ' not confirmed it runs the software that keeps a network out of your church’s private records. Update ' + (missing.length === 1 ? 'it' : 'them') + ' or remove ' + (missing.length === 1 ? 'it' : 'them') + ' from this church’s relays.' };
+}
 // _netWallMissing with a session cache of the relays that DID confirm the marker (a "missing" answer is never cached: an updated relay passes on the
-// next sync). Callers: _netSyncAll only. joinNetwork deliberately asks fresh every time.
+// next sync). Callers: _netWallGate only. joinNetwork deliberately asks fresh every time.
 const _netWallOk = new Set();
 async function _netWallMissingCached(urls) {
   const ask = (urls || []).filter(u => !_netWallOk.has(u));
@@ -1830,6 +1845,21 @@ async function _netSyncKeyOnce(np, opts = {}) {
   const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
   if (!nsk || getPublicKey(nsk) !== np) return { ok: false, reason: 'This console does not hold that network’s key.' };
   if (!churchSk || !churchPub) return { ok: false, reason: 'This console has no church key loaded.' };
+  const wall = await _netWallGate();
+  if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+  // WHO JOINED, READ INSIDE THE QUEUE (re-audit 2026-11-19). _netSyncAll used to read the join list BEFORE queueing; a church that joined while that
+  // run waited behind another (and was added by it) was then missing from a stale "authoritative" list -- dropped, and the ring rotated. Read here,
+  // the list is as fresh as the envelope it is compared with.
+  let joinersRead = null;
+  if (opts.readJoiners) {
+    const jr = await _netReadJoiners(np);
+    joinersRead = jr.ok ? jr.joiners.length : null;
+    opts = jr.authoritative ? { ...opts, joiners: jr.joiners, authoritative: true } : { ...opts, add: [...(opts.add || []), ...jr.joiners] };
+  }
+  const r = await _netSyncKeyCore(np, nsk, opts);
+  return joinersRead === null ? r : { ...r, joiners: joinersRead };
+}
+async function _netSyncKeyCore(np, nsk, opts) {
   const cur = await _netRingFor(np);
   if (cur.readFailed) return { ok: false, waiting: true, reason: 'Could not read the current network key just now — it will try again rather than replace it.' };   // C4
   if (cur.unreadable) return { ok: false, reason: 'A network key already exists that this console cannot open, so it will not replace it.' };
@@ -1847,6 +1877,9 @@ async function _netSyncKeyOnce(np, opts = {}) {
     if (lsGet(NETRING_SEEN_LS + np) === '1') return { ok: false, waiting: true, reason: 'The network key could not be read just now; a new one will not be minted over the existing one.' };   // C4: positive evidence a ring exists
     const b = _netMintBlockers(np);
     if (b.unproved.length || b.notAuthed || b.notFounder) return { ok: false, waiting: true, reason: b.notFounder ? 'This console did not create the network and cannot see an existing key, so it will not start a new one.' : 'Still connecting — the network key will be set up in a moment.' };
+    // RESIDUAL (re-audit): derivation covers a repeated FIRST mint only. After a rotation the ring head is random; a second console that cannot see
+    // the envelope and still believes it is the founder would mint the derived first key, not the current head -- narrow (needs both the guards
+    // above to fail on a network that has already rotated), not defended further.
     const k0 = await firstNetKey(nsk);   // DERIVED: every first-mint for this network makes the same key (see firstNetKey)
     if (!k0) return { ok: false, reason: 'Could not make the network key on this device.' };
     ring = cleanRing([k0]); mintedNow = true;
@@ -1878,6 +1911,8 @@ async function _netSyncHop2(np, opts = {}) {
   if (!nk || !_nameKeyChecked) return { ok: false, waiting: true, reason: 'Waiting for this church’s name key.' };
   let unproved = []; try { unproved = _gate.unsettled(relaysRaw(), pub); } catch (e) { unproved = []; }
   if (unproved.length || !_isRelayAuthed()) return { ok: false, waiting: true, reason: 'Still connecting.' };
+  const wall = await _netWallGate();
+  if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
   const cur = await _netRingFor(np);
   if (cur.readFailed) return { ok: false, waiting: true, reason: 'Could not read the network key just now — it will try again.' };   // C4
   if (cur.absent) return { ok: false, waiting: true, reason: 'Waiting for the network to add this church to its key.' };
@@ -1922,31 +1957,26 @@ async function _netSyncAll(opts = {}) {
         _joinedNets = found; _joinedNetsFor = churchPub;
       }
       const joined = _joinedNets;
-      // THE WALL, ON EVERY SYNC (B1 audit, 2026-11-19). joinNetwork checks it once; a relay added to the church later, running software from before
-      // the wall, would hand a joined network key the church's private records -- each relay enforces from its own copy. So no hop-1 / hop-2 work is
-      // done while any relay this church writes to (relays(): the proved publish set; nothing added, rule 10) has not confirmed 'network-wall-1'.
-      // Cheap: a relay that confirmed it is not asked again this session; one that did not is asked again next sync.
+      // THE WALL CHECK (an alarm, not a guard -- see _netWallGate). One check for the whole sync; each step below also checks (cached, cheap).
+      // NO RELAY READY (boot) is "still connecting", not trouble -- and it does not count as a sync, so the next call runs at once.
       if (joined.size) {
-        const set = relays();
-        const missing = set.length ? await _netWallMissingCached(set) : ['(no relay ready)'];
-        if (missing.length) {
-          const reason = set.length
-            ? 'Network keys are paused: ' + missing.join(', ') + (missing.length === 1 ? ' has' : ' have') + ' not confirmed it runs the software that keeps a network out of your church’s private records. Update ' + (missing.length === 1 ? 'it' : 'them') + ' or remove ' + (missing.length === 1 ? 'it' : 'them') + ' from this church’s relays.'
-            : 'Network keys are paused: no relay is ready for this church yet.';
+        const wall = await _netWallGate();
+        if (wall) {
+          if (wall.waiting) _netSyncAt = 0;
           const ownedNow = new Set(netKeys().map(r => r.pub));
-          for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: 'trouble', reason });
+          for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: wall.waiting ? 'waiting' : 'trouble', reason: wall.reason });
           try { window.dispatchEvent(new CustomEvent('steward-network-status')); } catch (e) {}
-          return { ok: false, wallMissing: set.length ? missing : [], reason };
+          return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
         }
       }
       const owned = new Set();
       for (const r of netKeys()) {
         if (!joined.has(r.pub)) continue;
-        // N5c: the founder asks the relay who joined (as the network) and hands the answer to the seam. An answer that is not positive, complete
-        // evidence still ADDS the churches it found (grow-only) but drops nobody.
-        const jr = await _netReadJoiners(r.pub);
+        // N5c: the founder asks the relay who joined (as the network) -- INSIDE the per-network queue (readJoiners; see _netSyncKeyOnce). An answer
+        // that is not positive, complete evidence still ADDS the churches it found (grow-only) but drops nobody.
         owned.add(r.pub);
-        out[r.pub] = { hop1: await _netSyncKey(r.pub, jr.authoritative ? { joiners: jr.joiners, authoritative: true } : { add: jr.joiners }), joiners: jr.ok ? jr.joiners.length : null };
+        const hop1 = await _netSyncKey(r.pub, { readJoiners: true });
+        out[r.pub] = { hop1, joiners: typeof hop1.joiners === 'number' ? hop1.joiners : null };
       }
       for (const np of joined) { out[np] = Object.assign(out[np] || {}, { hop2: await _netSyncHop2(np, opts) }); }
       for (const np of joined) {
@@ -1968,6 +1998,8 @@ async function _netPublishPost(np, kind, input, id) {
   if (!isEvt && kind !== 'announcement') return { ok: false, reason: 'Unknown post type.' };
   const body = isEvt ? netEventBody(input) : netAnnounceBody(input && typeof input === 'object' ? input.text : input);
   if (isEvt ? !(body.title && body.date) : !body.text) return { ok: false, reason: isEvt ? 'An event needs a title and a date.' : 'Write something to post.' };
+  const wall = await _netWallGate();
+  if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
   let cur = await _netRingFor(np);
   if (cur.readFailed) return { ok: false, reason: 'Could not read the network key just now, so nothing was posted. Try again.' };
   if (!cur.ring && !cur.unreadable) { const k = await _netSyncKey(np); if (!k.ok) return { ok: false, reason: k.reason }; cur = await _netRingFor(np); }
@@ -16320,7 +16352,7 @@ window.Steward = {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
           const prev = raw.get(d); if (prev && (prev.created_at || 0) >= (e.created_at || 0)) return;
-          if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written
+          if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written. RESIDUAL: a re-post in the SAME second as its deletion is hidden (a tie goes to the deletion)
           if (e.tags.some(t => t[0] === 'deleted') || !e.content) { raw.delete(d); dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0)); } else raw.set(d, e);
           emit();
         },

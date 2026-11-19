@@ -57,8 +57,46 @@ test('CACHE: a relay that confirmed the wall is not asked again this session; on
   assert.equal(w.fetched.length, n2, 'a third sync asked again although every relay had confirmed the wall');
 });
 
-test('SABOTAGE: with the check in the sync removed, the same relay without the wall gets key work done through it', async () => {
-  const w = rig({ wallOn: { 'one.example': true, 'two.example': false }, mutate: (s) => scoped(s, 'async function _netSyncAll(', 'async function _netPublishPost(', 'if (missing.length) {', 'if (false) {') });
+// (re-anchored 2026-11-19: the check is now one gate, _netWallGate, used by the sync and by every step under it)
+test('SABOTAGE: with the wall gate removed, the same relay without the wall gets key work done through it', async () => {
+  const w = rig({ wallOn: { 'one.example': true, 'two.example': false }, mutate: (s) => scoped(s, 'async function _netWallGate(', 'async function _netWallMissingCached(', 'if (!missing.length) return null;', 'return null;') });
   await w.c.api.syncNetworkKeys({ force: true });
   assert.ok(w.c.published.length > 0, 'THE SABOTAGE WAS NOT CAUGHT: without the check the sync still published nothing');
+});
+
+// ── re-audit 2026-11-19: every API way in is covered, and "no relay yet" is waiting, not trouble ─────────────────────────────────────────────
+test('A RELAY ADDED LATER WITHOUT THE WALL: publishNetworkPost, syncNetworkKey and syncNetworkHop2 each refuse and name it; nothing is published', async () => {
+  const urls = [R1];
+  const relay = fakeRelay(), N = K(), A = K(), wallOn = { 'one.example': true, 'two.example': false };
+  const fetchImpl = async (url) => { const caps = wallOn[new URL(url).host] ? ['network-wall-1'] : []; return { ok: true, json: async () => ({ trinityone: { capabilities: caps }, capabilities: caps }) }; };
+  const mk = (mutate) => { const c = bootConsole({ relay, church: A, networks: [N], nameKey: rnd32(), founded: [N.pub], relayUrls: urls, fetchImpl, mutate }); return c; };
+  const c = mk(); c.join(N.pub);
+  assert.equal((await c.api.syncNetworkKeys({ force: true })).ok, true, 'setup: the first sync (one relay, with the wall) failed');
+  assert.equal((await c.api.publishNetworkPost(N.pub, 'announcement', { text: 'before' })).ok, true, 'CONTROL: posting works while every relay carries the wall');
+  urls.push(R2);   // the church adds a relay running old software
+  const n = c.published.length;
+  const post = await c.api.publishNetworkPost(N.pub, 'announcement', { text: 'after' });
+  assert.equal(post.ok, false, 'a post went out while one of the church\'s relays lacks the wall'); assert.deepEqual(post.wallMissing, [R2]); assert.match(post.reason, /two\.example/);
+  const k = await c.api.syncNetworkKey(N.pub, { add: [K().pub] });
+  assert.equal(k.ok, false); assert.deepEqual(k.wallMissing, [R2]);
+  const h = await c.api.syncNetworkHop2(N.pub, { force: true });
+  assert.equal(h.ok, false); assert.deepEqual(h.wallMissing, [R2]);
+  assert.equal(c.published.length, n, 'something was published through the API while a relay lacks the wall');
+  // SABOTAGE: the gate removed from the post path only -> the same post goes out
+  const s = mk((src) => scoped(src, 'async function _netPublishPost(', 'async function _netRemovePost(', 'const wall = await _netWallGate();\n    if (wall) return', 'const wall = null;\n    if (wall) return'));
+  assert.equal((await s.api.publishNetworkPost(N.pub, 'announcement', { text: 'sabotaged' })).ok, true, 'THE SABOTAGE WAS NOT CAUGHT: without the gate in the post path the post was still refused');
+});
+
+test('NO RELAY READY YET (boot): the status says waiting, not trouble -- and the next sync is not throttled; SABOTAGE (stamping the sync) throttles it', async () => {
+  const mk = (mutate) => { const relay = fakeRelay(), N = K(), A = K(); const c = bootConsole({ relay, church: A, networks: [N], nameKey: rnd32(), founded: [N.pub], relayUrls: [], mutate }); c.join(N.pub); return { c, N }; };
+  const { c, N } = mk();
+  const r = await c.api.syncNetworkKeys({ force: true });
+  assert.equal(r.ok, false); assert.equal(r.waiting, true);
+  assert.equal(c.api.networkStatus(N.pub).key, 'waiting', 'a console with no relay ready yet shows TROUBLE to the steward');
+  assert.match(c.api.networkStatus(N.pub).reason, /connecting/i);
+  const again = await c.api.syncNetworkKeys();   // NOT forced: a roster tick a moment later
+  assert.notEqual(again.skipped, true, 'the next sync was throttled for 30s although the first one never ran');
+  const s = mk((src) => scoped(src, 'async function _netSyncAll(', 'async function _netPublishPost(', 'if (wall.waiting) _netSyncAt = 0;', ''));
+  await s.c.api.syncNetworkKeys({ force: true });
+  assert.equal((await s.c.api.syncNetworkKeys()).skipped, true, 'THE SABOTAGE WAS NOT CAUGHT: with the sync stamped, the next call still ran');
 });

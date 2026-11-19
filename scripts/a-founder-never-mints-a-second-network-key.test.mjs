@@ -126,12 +126,14 @@ test('FOUNDER WHOSE ONLY RELAY IS UNREACHABLE (the SHIPPED _queryAsKey): "comple
   const N = NETS[4];
   await joinAs(A, N); await joinAs(C, N);
   const real = await ringWrappedTo(N, [C]);
-  const c = founderConsole(N, { relayUrls: [DEAD_URL] });
+  // (2026-11-19: the wall probe is not under test here -- a dead relay can never confirm it, and the gate would stop this before the read. Stub it.)
+  const wallOk = async () => ({ ok: true, json: async () => ({ trinityone: { capabilities: ['network-wall-1'] } }) });
+  const c = founderConsole(N, { relayUrls: [DEAD_URL], fetchImpl: wallOk });
   const r = await c.api.syncNetworkKey(N.pub);
   assert.equal(r.waiting, true, JSON.stringify(r)); assert.equal(c.published.length, 0);
   assert.equal((await stored(N)).key, real);
   const lie = shippedQueryAsKey((code) => { const a = 'complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every((r) => r === "closed automatically on eose")'; assert.equal(code.split(a).length, 2, 'sabotage anchor not unique in _queryAsKey'); return code.replace(a, 'complete: true'); });
-  const s = founderConsole(N, { relayUrls: [DEAD_URL], queryAsKey: lie });
+  const s = founderConsole(N, { relayUrls: [DEAD_URL], queryAsKey: lie, fetchImpl: wallOk });
   assert.equal((await s.api.syncNetworkKey(N.pub)).minted, true, 'THE SABOTAGE WAS NOT CAUGHT: an unreachable relay reported as complete still did not mint');
 });
 

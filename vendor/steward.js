@@ -13929,8 +13929,10 @@ zoo`.split("\n");
   }
   async function firstNetKey(netSk, cryptoObj) {
     try {
-      const subtle = (cryptoObj || globalThis.crypto).subtle;
+      if (!(netSk instanceof Uint8Array) && !(typeof netSk === "string" && /^[0-9a-f]{64}$/i.test(netSk))) return null;
       const ikm = netSk instanceof Uint8Array ? netSk : toBytes(netSk);
+      if (ikm.length !== 32) return null;
+      const subtle = (cryptoObj || globalThis.crypto).subtle;
       const k = await subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
       const bits2 = await subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("trinityone"), info: new TextEncoder().encode("trinityone/netring/0") }, k, 256);
       return toHex(new Uint8Array(bits2));
@@ -16544,6 +16546,13 @@ zoo`.split("\n");
     });
     return out;
   }
+  async function _netWallGate() {
+    const set = relays();
+    if (!set.length) return { waiting: true, missing: [], reason: "Still connecting \u2014 no relay is ready for this church yet." };
+    const missing = await _netWallMissingCached(set);
+    if (!missing.length) return null;
+    return { waiting: false, missing, reason: "Network keys are paused: " + missing.join(", ") + (missing.length === 1 ? " has" : " have") + " not confirmed it runs the software that keeps a network out of your church\u2019s private records. Update " + (missing.length === 1 ? "it" : "them") + " or remove " + (missing.length === 1 ? "it" : "them") + " from this church\u2019s relays." };
+  }
   var _netWallOk = /* @__PURE__ */ new Set();
   async function _netWallMissingCached(urls) {
     const ask = (urls || []).filter((u) => !_netWallOk.has(u));
@@ -16680,6 +16689,18 @@ zoo`.split("\n");
     })();
     if (!nsk || getPublicKey2(nsk) !== np) return { ok: false, reason: "This console does not hold that network\u2019s key." };
     if (!churchSk || !churchPub) return { ok: false, reason: "This console has no church key loaded." };
+    const wall = await _netWallGate();
+    if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+    let joinersRead = null;
+    if (opts.readJoiners) {
+      const jr = await _netReadJoiners(np);
+      joinersRead = jr.ok ? jr.joiners.length : null;
+      opts = jr.authoritative ? { ...opts, joiners: jr.joiners, authoritative: true } : { ...opts, add: [...opts.add || [], ...jr.joiners] };
+    }
+    const r = await _netSyncKeyCore(np, nsk, opts);
+    return joinersRead === null ? r : { ...r, joiners: joinersRead };
+  }
+  async function _netSyncKeyCore(np, nsk, opts) {
     const cur = await _netRingFor(np);
     if (cur.readFailed) return { ok: false, waiting: true, reason: "Could not read the current network key just now \u2014 it will try again rather than replace it." };
     if (cur.unreadable) return { ok: false, reason: "A network key already exists that this console cannot open, so it will not replace it." };
@@ -16740,6 +16761,8 @@ zoo`.split("\n");
       unproved = [];
     }
     if (unproved.length || !_isRelayAuthed()) return { ok: false, waiting: true, reason: "Still connecting." };
+    const wall = await _netWallGate();
+    if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
     const cur = await _netRingFor(np);
     if (cur.readFailed) return { ok: false, waiting: true, reason: "Could not read the network key just now \u2014 it will try again." };
     if (cur.absent) return { ok: false, waiting: true, reason: "Waiting for the network to add this church to its key." };
@@ -16797,25 +16820,24 @@ zoo`.split("\n");
         }
         const joined = _joinedNets;
         if (joined.size) {
-          const set = relays();
-          const missing = set.length ? await _netWallMissingCached(set) : ["(no relay ready)"];
-          if (missing.length) {
-            const reason = set.length ? "Network keys are paused: " + missing.join(", ") + (missing.length === 1 ? " has" : " have") + " not confirmed it runs the software that keeps a network out of your church\u2019s private records. Update " + (missing.length === 1 ? "it" : "them") + " or remove " + (missing.length === 1 ? "it" : "them") + " from this church\u2019s relays." : "Network keys are paused: no relay is ready for this church yet.";
+          const wall = await _netWallGate();
+          if (wall) {
+            if (wall.waiting) _netSyncAt = 0;
             const ownedNow = new Set(netKeys().map((r) => r.pub));
-            for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: "trouble", reason });
+            for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: wall.waiting ? "waiting" : "trouble", reason: wall.reason });
             try {
               window.dispatchEvent(new CustomEvent("steward-network-status"));
             } catch (e) {
             }
-            return { ok: false, wallMissing: set.length ? missing : [], reason };
+            return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
           }
         }
         const owned = /* @__PURE__ */ new Set();
         for (const r of netKeys()) {
           if (!joined.has(r.pub)) continue;
-          const jr = await _netReadJoiners(r.pub);
           owned.add(r.pub);
-          out[r.pub] = { hop1: await _netSyncKey(r.pub, jr.authoritative ? { joiners: jr.joiners, authoritative: true } : { add: jr.joiners }), joiners: jr.ok ? jr.joiners.length : null };
+          const hop1 = await _netSyncKey(r.pub, { readJoiners: true });
+          out[r.pub] = { hop1, joiners: typeof hop1.joiners === "number" ? hop1.joiners : null };
         }
         for (const np of joined) {
           out[np] = Object.assign(out[np] || {}, { hop2: await _netSyncHop2(np, opts) });
@@ -16853,6 +16875,8 @@ zoo`.split("\n");
     if (!isEvt && kind !== "announcement") return { ok: false, reason: "Unknown post type." };
     const body = isEvt ? netEventBody(input) : netAnnounceBody(input && typeof input === "object" ? input.text : input);
     if (isEvt ? !(body.title && body.date) : !body.text) return { ok: false, reason: isEvt ? "An event needs a title and a date." : "Write something to post." };
+    const wall = await _netWallGate();
+    if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
     let cur = await _netRingFor(np);
     if (cur.readFailed) return { ok: false, reason: "Could not read the network key just now, so nothing was posted. Try again." };
     if (!cur.ring && !cur.unreadable) {

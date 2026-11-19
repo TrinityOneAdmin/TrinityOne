@@ -176,8 +176,9 @@ test('WALL PROBE IS PARALLEL: three slow relays are checked in about the time of
   };
   const par = await time(null);
   assert.equal(par.r.ok, true, JSON.stringify(par.r));
-  assert.ok(par.ms < 1500, 'three relays took ' + par.ms + 'ms to probe -- they are being asked one at a time');
   const serial = (s) => { const a = 'const ok = await Promise.all((urls || []).map((u) => ask(u).catch(() => false)));'; assert.equal(s.split(a).length, 2, 'sabotage anchor not unique'); return s.replace(a, 'const ok = []; for (const u of (urls || [])) ok.push(await ask(u).catch(() => false));'); };
   const ser = await time(serial);
-  assert.ok(ser.ms >= 2000, 'THE SABOTAGE WAS NOT CAUGHT: one-at-a-time probing finished in ' + ser.ms + 'ms');
+  // A RATIO, NOT A WALL-CLOCK NUMBER (re-audit 2026-11-19: an absolute 1500ms could flake under load; load slows both runs alike). Three relays
+  // asked one at a time take ~3x one; asked together, ~1x. Parallel must be under half of serial.
+  assert.ok(par.ms * 2 < ser.ms, 'three relays took ' + par.ms + 'ms in parallel vs ' + ser.ms + 'ms one at a time -- they are not being asked together');
 });
