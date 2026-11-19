@@ -20169,7 +20169,7 @@ zoo`.split("\n");
     return pool.subscribeMany(relays(), filters, handlers);
   }
   function netShortName(v) {
-    const s = String(v == null ? "" : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\u3164\uFE00-\uFE0E\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu, "").replace(/\s+/g, " ").trim();
+    const s = String(v == null ? "" : v).replace(/(\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,7}\u{E007F})|(?![\u200C\u200D\uFE0F])[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2800\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, (m, flag) => flag || "").replace(/\s+/g, " ").trim();
     let parts = null;
     try {
       if (typeof Intl !== "undefined" && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(void 0, { granularity: "grapheme" }).segment(s), (x) => x.segment);

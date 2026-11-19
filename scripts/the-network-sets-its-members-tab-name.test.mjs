@@ -173,3 +173,27 @@ test('the field keeps a space typed between two words (it is trimmed on Save, no
   await find(t, n => n.type === 'button' && (n.kids || []).some(k => k === 'Save'))[0].props.onClick();
   assert.deepEqual(p.published, [{ short_name: 'Bed Bath' }]);
 });
+
+// ── audit of 79bf25fe: round 2 of the character list, and the console field's own cleaning (`live`) ──────────────────────────────────────
+const ENG = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}', SCT = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}', WLS = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}';
+const KEEP = ['café é', 'שלום', 'مرحبا', '\u{1F44D}\u{1F3FD}', '\u{1F468}‍\u{1F469}‍\u{1F467}', '1️⃣', '❤️', ENG, SCT, WLS, 'a‌b'];
+const STRIP = [['a⠀b', 'ab'], ['a⁪b⁯c', 'abc'], ['a᠋b᠍c', 'abc'], ['a឴b឵c', 'abc'], ['a￹b￻c', 'abc'], ['a\u{1D173}b\u{1D17A}c', 'abc'], ['a\u{13430}b\u{1343F}c', 'abc'],
+  ['a\u{E0041}b', 'ab'], ['a\u{E007F}b', 'ab'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}', '\u{1F3F4}'], ['x\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}y', 'xy']];
+
+test('SHIPPED netShortName: keeps accents, Hebrew, Arabic, skin tone, family, keycap, heart and the England/Scotland/Wales flags; drops the newly-found invisibles and stray tags', () => {
+  for (const k of KEEP) assert.equal(netShortName(k), k, 'wrongly changed: ' + JSON.stringify(k));
+  for (const [raw, want] of STRIP) assert.equal(netShortName(raw), want, 'not cleaned: ' + JSON.stringify(raw));
+  assert.equal(netShortName('⠀⁪\u{E0041}'), '', 'a name that cleans to nothing is not empty (the caller falls back on empty)');
+});
+
+test('CONSOLE FIELD (point of use): typing keeps the flags and joiners, drops the invisibles, and caps at 16 characters AND 64 code units', () => {
+  const p = identityPage({ network: true });
+  const typed = (v) => { field(p.render())[0].props.onChange({ target: { value: v } }); return field(p.render())[0].props.value; };
+  for (const k of KEEP) assert.equal(typed(k), k, 'the field changed: ' + JSON.stringify(k));
+  for (const [raw, want] of STRIP) assert.equal(typed(raw), want, 'the field did not clean: ' + JSON.stringify(raw));
+  const fam = '\u{1F468}‍\u{1F469}‍\u{1F467}';   // one grapheme, 8 code units
+  assert.equal(typed(fam.repeat(20)), fam.repeat(8), 'the field did not apply the 64-code-unit ceiling (8 families), or split a family');
+  const z = 'Z' + '́'.repeat(30);
+  assert.equal(typed(z.repeat(5)), z.repeat(2), 'the field did not clip a zalgo name at 64 code units');
+  assert.equal(typed('Bed Bath and Regions Beyond'), 'Bed Bath and Reg', 'the 16-grapheme cap is gone');
+});

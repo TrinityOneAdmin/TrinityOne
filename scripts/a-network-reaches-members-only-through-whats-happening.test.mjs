@@ -70,7 +70,7 @@ function boot({ flag = 'on', features, standing = 'unmarked', assumeChild = fals
     const p = last('subscribeNetworkProfile'); assert.ok(p, 'the App never read the network\'s profile');
     p[2]({ kind: 0, pubkey, created_at: at, content: JSON.stringify(content) }); draw(); await tick(); draw();
   };
-  return { window, calls, last, draw, ctx, settle, join, deliver, profile, tick, fake };
+  return { window, calls, last, draw, ctx, settle, join, deliver, profile, tick, fake, get standingCalls() { return standingCalls; } };
 }
 
 test('SWITCH OFF (shipped default): no network is looked up and nothing reaches the screens', async () => {
@@ -303,4 +303,52 @@ test('NAMES: controls, soft hyphen, combining grapheme joiner, Arabic letter mar
   assert.equal(m.ctx().netTabs[0].title, g.repeat(2), 'a zalgo short name was not clipped at 64 code units (whole graphemes only)');
   await m.profile(NETHEX, { name: 'N', short_name: '\u2764\uFE0F' }, NOW + 2);
   assert.equal(m.ctx().netTabs[0].title, '\u2764\uFE0F', 'the emoji presentation selector was stripped, breaking the emoji');
+});
+
+// ── audit of 79bf25fe: the backoff and the reconnect re-ask were claimed, never proved ──────────────────────────────────────────────────
+// Real timers (the App's own setTimeout), so these two take ~16s each. Each answer is time-stamped, so what is proved is the SPACING, not
+// just the count (a restarted effect cannot pass for a retry).
+async function until(m, cond, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { m.draw(); if (cond()) return true; await m.tick(100); } m.draw(); return cond(); }
+
+test('F2b: "unknown" is asked again after 3s, AGAIN after a further 12s (the second backoff step), and then not on a timer', async () => {
+  const at = [];
+  const m = boot({ standing: (np, me, n) => { at.push(Date.now()); return n <= 2 ? 'unknown' : 'unmarked'; } });
+  await m.settle(); await m.join();
+  assert.ok(await until(m, () => at.length >= 2, 6000), 'the first "unknown" was not asked again within 6s');
+  assert.ok(at[1] - at[0] >= 2500 && at[1] - at[0] < 4500, 'the first retry was not ~3s after the first ask: ' + (at[1] - at[0]) + 'ms');
+  assert.equal(m.ctx().netTabs.length, 0, 'something was shown after two "unknown" answers');
+  assert.ok(await until(m, () => at.length >= 3, 15000), 'there was no SECOND retry: an adult stays blank after two "unknown" answers until the next reconnect');
+  assert.ok(at[2] - at[1] >= 11000 && at[2] - at[1] < 14000, 'the second retry was not ~12s after the first: ' + (at[2] - at[1]) + 'ms');
+  await m.tick(300); await m.deliver();
+  assert.equal(m.ctx().netTabs.length, 1, 'the third answer ("unmarked") did not open the tab');
+}, { timeout: 40000 });
+
+test('F2c: after the backoff is spent ("unknown" three times) NOTHING asks again on a timer, but the next reconnect does -- and the tab opens', async () => {
+  const m = boot({ standing: (np, me, n) => (n <= 3 ? 'unknown' : 'unmarked') });
+  await m.settle(); await m.join();
+  assert.ok(await until(m, () => m.standingCalls >= 3, 20000), 'setup: the backoff did not run its two retries');
+  await m.tick(2500); m.draw();
+  assert.equal(m.standingCalls, 3, 'a third retry was scheduled: the backoff is not "two retries, then the next reconnect"');
+  assert.equal(m.ctx().netTabs.length, 0);
+  m.ctx().reconnectNow();   // the member's own Try again / foregrounding: the scheduler bumps connTick
+  assert.ok(await until(m, () => m.standingCalls >= 4, 3000), 'a reconnect (connTick) did not ask the church again');
+  await m.join();   // the reconnect re-opened the church's network subscription too; its fresh callback answers
+  assert.ok(await until(m, () => !!m.last('subscribeNetworkContent'), 3000), 'the answer after the reconnect did not open the content subscription');
+  await m.deliver();
+  assert.equal(m.ctx().netTabs.length, 1, 'the answer after the reconnect did not open the tab');
+}, { timeout: 40000 });
+
+// NAMES, round 2: the invisible characters the first list missed, and the subdivision flags it wrongly removed.
+const ENG = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}', SCT = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}', WLS = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}';
+const KEEP = ['café é', 'שלום', 'مرحبا', '\u{1F44D}\u{1F3FD}', '\u{1F468}‍\u{1F469}‍\u{1F467}', '1️⃣', '❤️', ENG, SCT, WLS, 'a‌b'];
+const STRIP = [['a⠀b', 'ab'], ['a⁪b⁯c', 'abc'], ['a᠋b᠍c', 'abc'], ['a឴b឵c', 'abc'], ['a￹b￻c', 'abc'], ['a\u{1D173}b\u{1D17A}c', 'abc'], ['a\u{13430}b\u{1343F}c', 'abc'],
+  ['a\u{E0041}b', 'ab'], ['a\u{E007F}b', 'ab'], ['\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}', '\u{1F3F4}'], ['x\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}y', 'xy']];
+test('NAMES round 2: member app keeps accents, Hebrew, Arabic, skin tones, family, keycap, heart, England/Scotland/Wales flags; drops braille blank, U+206A-F, U+180B-D, U+17B4/5, U+FFF9-B, U+1D173-A, U+13430-F and stray tag characters', async () => {
+  const m = boot(); await m.settle(); await m.join(); await m.deliver();
+  let at = NOW + 10;
+  for (const k of KEEP) { await m.profile(NETHEX, { name: 'N', short_name: k }, at++); assert.equal(m.ctx().netTabs[0].title, k, 'wrongly changed: ' + JSON.stringify(k)); }
+  for (const [raw, want] of STRIP) { await m.profile(NETHEX, { name: 'N', short_name: raw }, at++); assert.equal(m.ctx().netTabs[0].title, want, 'not cleaned: ' + JSON.stringify(raw)); }
+  // blank after cleaning -> falls back to the network's name, as before
+  await m.profile(NETHEX, { name: 'Real Name', short_name: '⠀⁪\u{E0041}' }, at++);
+  assert.equal(m.ctx().netTabs[0].title, 'Real Name', 'a name that cleans to nothing did not fall back');
 });

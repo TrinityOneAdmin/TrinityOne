@@ -431,11 +431,11 @@ function netProfileOf(e, networkPub) {
   return { name: netClipText(c.name, 80, 240), shortName: netClipText(c.short_name, 16, 64), at: e.created_at || 0 };
 }
 // A network-chosen string made safe to show as one short line: zero-width and bidi-control characters removed (they let a name look like
-// another, or reverse the text around it -- C0/C1 controls (except tab/newline, which become a space), U+00AD, U+034F, U+061C, U+115F, U+1160, U+180E, U+200B, U+200E-200F, U+202A-202E, U+2060-2069, U+3164, U+FE00-FE0E (variation selectors; U+FE0F is KEPT, it is the emoji form), U+FEFF, U+FFA0 and the tag block U+E0000-E007F, U+E0100-E01EF (which also drops the subdivision-flag emoji); U+200C/200D are KEPT: they join emoji sequences and some scripts), whitespace collapsed, then capped at `n`
+// another, or reverse the text around it -- C0/C1 controls (except tab/newline, which become a space), U+00AD, U+034F, U+061C, U+115F, U+1160, U+180E, U+200B, U+200E-200F, U+202A-202E, U+2060-206F, U+2800, U+3164, U+FE00-FE0E (variation selectors; U+FE0F is KEPT, it is the emoji form), U+FEFF, U+FFA0 and every other Default_Ignorable_Code_Point / Cf character (tag characters, interlinear annotation, musical and hieroglyph format controls included); a WELL-FORMED subdivision flag (U+1F3F4 + 2-7 tag letters/digits + U+E007F: England, Scotland, Wales) is KEPT, stray tag characters are not; U+200C/200D are KEPT: they join emoji sequences and some scripts), whitespace collapsed, then capped at `n`
 // user-perceived characters (grapheme clusters via Intl.Segmenter where the WebView has it, else code points). The same rule as the console's
 // Steward.netShortName. Callers: netProfileOf.
 function netClipText(v, n, units) {
-  const s = String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\u3164\uFE00-\uFE0E\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu, '').replace(/\s+/g, ' ').trim();
+  const s = String(v == null ? '' : v).replace(/(\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,7}\u{E007F})|(?![\u200C\u200D\uFE0F])[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2800\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, (m, flag) => flag || '').replace(/\s+/g, ' ').trim();
   let parts = null;
   try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
   // and a CODE-UNIT ceiling as well: one grapheme can be any length (zalgo, a long ZWJ chain), so `n` graphemes alone bound nothing
