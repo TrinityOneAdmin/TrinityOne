@@ -17,6 +17,8 @@ import { verifyRelayIdentity, verifyRelayIdentityDetailed } from './relay-identi
 import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
+// (after the nip44 import on purpose: bundle order follows import order, and the tests that lift a module out of the bundle end their slice at the next `// src/` marker)
+import { NETANN_D, NETEVENT_D, NETKEYC_D, openPost as openNetPost, openHop2 as openNetHop2, netEventFields } from './network-seal.src.js';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
@@ -3026,7 +3028,10 @@ const CHURCH_SEALED_PFXS = ['trinityone/event:', 'trinityone/service:', 'trinity
   // careavail: is member-authored rather than church-authored, but it is sealed under the same church name
   // key and therefore has the same late-key problem — without this, "Ready to help" stays empty for a newly
   // admitted member until they restart the app.
-  'trinityone/careavail:'];
+  'trinityone/careavail:',
+  // netkeyc: is the CHURCH's hop-2 re-seal of a joined network's ring (Networks N5b, ported 2026-11-18), sealed under this same name key.
+  // Without this a member whose name key lands AFTER the document stays on "locked" until the app restarts.
+  'trinityone/netkeyc:'];
 
 // Re-open every sealed CALENDAR document already buffered for a church, once its name key is usable.
 //
@@ -9312,6 +9317,63 @@ window.Fellowship = {
       oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // ── a network's announcements + events, SEALED (Networks N5b, 365dff7a; ported 2026-11-18). The cleartext reader above is refused by every
+  // walled relay and goes when Phase B2 rewires app/app.jsx onto this.
+  //   REQ authors:[network], kind 30078, t=trinityone -- the d-prefix (netann: / netevent:) is filtered here, because a relay filter matches
+  //   `#d` exactly. The relay serves these to a member of a church that JOINED the network with the matching scope, and never to that
+  //   church's marked children (netReader, scripts/gateway.mjs). The ring that opens them arrives as the CHURCH's hop-2 document
+  //   (netkeyc:<network>, church-authored, sealed under the church name key) through the church-docs hub. Until it has, cb gets state
+  //   'locked' -- never an error, never an empty list dressed up as "nothing posted".
+  // cb({ state: 'locked' | 'ready', announcements: [{id, text, ts, networkPub}], events: [{id, ...event fields, ts, networkPub}], unreadable })
+  // Callers (rule 2): none yet -- app/app.jsx's network effect moves onto it in Phase B2 (behind NETWORKS_ENABLED).
+  subscribeNetworkContent(networkNpub, churchNpub, cb) {
+    const np = toPub(networkNpub), cp = toPub(churchNpub);
+    if (!np || !cp) { try { cb({ state: 'locked', announcements: [], events: [], unreadable: 0 }); } catch {} return () => {}; }
+    const raw = new Map();   // d -> the newest event for it
+    let ring = null, ringAt = 0, eosed = false;
+    const emit = _coalesce(() => {
+      const announcements = [], events = []; let unreadable = 0;
+      if (ring) {
+        for (const [d, e] of raw) {
+          const body = openNetPost(e.content, ring);
+          if (!body) { unreadable++; continue; }
+          if (d.startsWith(NETEVENT_D)) events.push({ id: d.slice(NETEVENT_D.length), ...netEventFields(body), ts: e.created_at, networkPub: np });
+          else announcements.push({ id: d.slice(NETANN_D.length), text: String(body.text || ''), ts: e.created_at, networkPub: np });
+        }
+      }
+      announcements.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      // sticky: until the relay has answered, do not tell the screen "locked" about a ring that is simply on its way
+      if (!ring && !eosed) return;
+      try { cb({ state: ring ? 'ready' : 'locked', announcements, events, unreadable }); } catch (err) { _featureFailed('network content', np, err); }
+    });
+    // HOP-2: the church's re-seal of the network ring. Church key only (the relay refuses any other author for netkeyc:), newest wins.
+    const stopKey = _onChurchDocs(cp, {
+      emit,
+      want: [NETKEYC_D],
+      onevent(e, d) {
+        if (d !== NETKEYC_D + np || e.pubkey !== cp) return;
+        if ((e.created_at || 0) < ringAt) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { ringAt = e.created_at || 0; ring = null; emit(); return; }
+        const r = openNetHop2(e.content, _nameKeys.get(cp) || []);
+        if (!r) return;   // sealed under a name key this phone does not hold YET: the hub replays it when the key lands (CHURCH_SEALED_PFXS)
+        ringAt = e.created_at || 0; ring = r; emit();
+      },
+      oneose() { eosed = true; emit(); },
+    });
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [np], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (e.pubkey !== np || (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D))) return;
+        const prev = raw.get(d);
+        if (prev && ((prev.created_at || 0) > (e.created_at || 0) || ((prev.created_at || 0) === (e.created_at || 0) && prev.id < e.id))) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) raw.delete(d); else raw.set(d, e);
+        emit();
+      },
+      oneose() { eosed = true; emit(); },
+    });
+    return () => { try { emit.cancel(); } catch {} try { stopKey(); } catch {} try { sub.close(); } catch {} };
   },
 
   // ── serving requests the church p-tagged to ME ("can you serve?") ──

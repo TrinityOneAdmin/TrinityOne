@@ -1796,10 +1796,9 @@ function App() {
       return changed ? next : cs;
     });
   }, [churchNetworks, networkNames]);
-  // content aggregation: pull the network's events + plans into the member's own views, tagged with
+  // content aggregation: pull the network's events into the member's own views, tagged with
   // the network name (so a region-wide gathering shows on everyone's calendar without switching).
   const [netEventsBy, setNetEventsBy] = useA({});
-  const [netPlansBy, setNetPlansBy] = useA({});
   const [netAnnounceBy, setNetAnnounceBy] = useA({});
   useAE(() => {
     const F = window.Fellowship; if (!F) return;
@@ -1807,14 +1806,14 @@ function App() {
     churchNetworks.forEach(n => {
       const label = networkNames[n.networkPub] || 'Network';
       if (F.subscribeChurchEvents) subs.push(F.subscribeChurchEvents(n.npub, (evs) => setNetEventsBy(m => ({ ...m, [n.networkPub]: evs.map(e => ({ ...e, _network: label, _networkPub: n.networkPub })) }))));
-      if (F.subscribeChurchPlans) subs.push(F.subscribeChurchPlans(n.npub, (ps) => setNetPlansBy(m => ({ ...m, [n.networkPub]: ps.map(p => ({ ...p, _network: label })) }))));
+      // (network PLANS were read here as if the network were a church. Removed 2026-11-18: since N5a a network key may write only its own
+      // net* documents, so no plan can ever arrive -- and this path was never child-gated. Plan audit M1.)
       if (F.subscribeNetworkAnnouncements) subs.push(F.subscribeNetworkAnnouncements(n.npub, (ps) => setNetAnnounceBy(m => ({ ...m, [n.networkPub]: ps.map(p => ({ ...p, _network: label, _networkPub: n.networkPub })) }))));
     });
     return () => subs.forEach(o => { try { o && o(); } catch {} });
   }, [churchNetworks, networkNames]);
   const activeNetworkPubs = new Set(churchNetworks.map(n => n.networkPub));
   const netEvents = Object.entries(netEventsBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
-  const netPlans = Object.entries(netPlansBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v);
   const netAnnouncements = Object.entries(netAnnounceBy).filter(([k]) => activeNetworkPubs.has(k)).flatMap(([, v]) => v).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   // broadcast-channel posts from the church (kind-1 in its broadcast groups) — surfaced as notifications
   const [broadcastMsgs, setBroadcastMsgs] = useA([]);
@@ -2399,7 +2398,7 @@ function App() {
     planRead,
     planChurch: activeChurch,
     devoProgress,
-    churchPlans: [...churchPlans, ...netPlans].map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
+    churchPlans: churchPlans.map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
     churchDevos,
     churchPeople, churchPeopleLoading,   // prefetched at app load so the People screen is instant
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
