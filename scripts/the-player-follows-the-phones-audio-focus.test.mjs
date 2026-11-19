@@ -90,7 +90,10 @@ test('the listener PAUSES during the call: when the phone resumes, the player pa
   w.el.sysPause(); await settle();
   press(w.player(), 'Play'); press(w.player(), 'Pause'); await settle();   // or the notification's Pause: the element is already paused
   const plays = w.el.plays;
-  w.el.sysResume(); await settle();
+  const seen = []; const off = w.A.subscribe(st => seen.push(st.playing)); seen.length = 0;
+  w.el.sysResume(); await settle();                     // Chromium queues BOTH play and playing
+  off();
+  assert.equal(seen.includes(true), false, 'THE PLAYER FLASHED "playing" on a resume it then refused (the playing listener has no early return)');
   assert.equal(w.el.paused, true, 'THE PHONE RESUMED A PLAYER THE LISTENER HAD PAUSED');
   assert.equal(last(f), 'paused');
   assert.equal(byLabel(w.player(), 'Play').length, 1);
@@ -211,10 +214,56 @@ test('a call while the OS is at "none" (the service was refused): no state is se
   w.el.sysPause(); await settle();
   assert.equal(f.states().length, n, 'A SYSTEM PAUSE SENT "paused" FROM "none" — that starts the foreground service from the background');
   assert.equal(byLabel(w.player(), 'Play').length, 1);
-  // R3-1 as written: held + 'none' pauses again, whatever made it 'none'. So with no service (P5), the listener presses
-  // Play after the call; Play from inside the app works.
+  // owner 2026-11-19 (build audit #5): 'none' only because the service could not start is NOT a Close or a timeout,
+  // so the phone's resume after the call RESUMES, still with no state sent.
   w.el.sysResume(); await settle();
+  assert.equal(w.el.paused, false, 'THE PHONE\'S RESUME WAS REFUSED although the listener never paused or closed (P5 fallback)');
+  assert.equal(f.states().length, n, 'a state was sent from "none" on the resume');
+});
+
+// ── build audit 2026-11-19 (AUDIT-build-audio-focus-single-owner-2026-11-19.md) ──
+
+test('audit #1 — a call DURING A RETRY RELOAD is a system pause: OS "paused", no play() for the whole call, no stall reload', async () => {
+  const { w, f } = await playing();
+  w.el.net = () => 'fail'; w.el.failNow(2); await settle();
+  w.el.net = () => 'hang';
+  await w.clock.advance(2000);                          // the retry's reload is in flight, the element unpaused
+  assert.equal(w.el.paused, false, 're-anchor: no reload in flight');
+  w.el.sysPause(); await settle();                      // the call
+  assert.equal(last(f), 'paused', 'THE OS STILL SAYS PLAYING DURING THE CALL');
+  assert.doesNotMatch(reads(w.player()), /Reconnecting/);
+  const plays = w.el.plays, loads = w.el.loads.length;
+  await w.clock.advance(120000);                        // the auditor's probe: 2 plays in 120 s before the fix
+  assert.equal(w.el.plays, plays, 'THE ENGINE CALLED play() DURING THE CALL');
+  assert.equal(w.el.loads.length, loads, 'a retry or stall reload ran during the call');
   assert.equal(w.el.paused, true);
-  press(w.player(), 'Play'); await settle();
+  w.el.net = () => 'ok';
+  press(w.player(), 'Play'); await settle();            // the listener's Play retries from the place
   assert.equal(w.el.paused, false);
+  assert.equal(w.el.currentTime, 30);
+});
+
+test('audit #2 — after the LAST retry fails mid-play, that error\'s pause is not a call: returning to the app still retries', async () => {
+  const { w } = await playing();
+  w.el.net = () => 'hang';
+  w.el.failNow(2);
+  for (const ms of [2000, 5000, 15000, 30000]) { await w.clock.advance(ms); w.el.failNow(2); }   // each reload dies mid-load
+  await settle();
+  assert.match(reads(w.player()), /Couldn.t load/, 're-anchor: it did not give up');
+  w.el.net = () => 'ok';
+  const loads = w.el.loads.length;
+  w.doc.fire('visibilitychange'); await settle();
+  assert.equal(w.el.loads.length, loads + 1, 'RETURNING TO THE APP DID NOT RETRY — the final error\'s pause was taken for a call');
+  assert.equal(w.el.paused, false);
+});
+
+test('audit #4 — a call, then a stream error, then the listener opens the app during the call: no sound', async () => {
+  const { w } = await playing();
+  w.el.sysPause(); await settle();
+  w.el.net = () => 'fail'; w.el.failNow(2); await settle();
+  w.el.net = () => 'ok';
+  const plays = w.el.plays, loads = w.el.loads.length;
+  w.doc.fire('visibilitychange'); await settle();
+  assert.equal(w.el.plays, plays, 'OPENING THE APP DURING A CALL STARTED SOUND');
+  assert.equal(w.el.loads.length, loads);
 });

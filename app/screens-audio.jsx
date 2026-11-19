@@ -43,6 +43,9 @@
   // stays), but nothing restarts by itself while held: no stall guard, no retry, no return-to-app retry. Cleared by
   // every Play the listener gives (resume, retry-now, a new track) and by every engine el.play(); also by pause/stop.
   let held = false;
+  // osGone: the OS card and service were taken down ON PURPOSE: Close, or 10 minutes paused (build audit #5, owner
+  // 2026-11-19). NOT set when the service merely could not start (P5): there the phone's resume after a call RESUMES.
+  let osGone = false;
   let state = { track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, rate, q: queue, qi };
   const subs = new Set();
   const emit = () => { state = { ...state }; subs.forEach(fn => { try { fn(state); } catch (e) {} }); };
@@ -149,7 +152,7 @@
   // 10 minutes) → pause it again (no service to keep it alive). Held and wanted → owner 2026-11-19: if the phone
   // resumes, RESUME; held is cleared BEFORE the stall guard re-arms. 'none' WITHOUT held is the P5 no-service fallback:
   // an engine play there (auto-advance) must go on.
-  const unwantedPlay = () => !wantPlay || (held && osState === 'none');
+  const unwantedPlay = () => !wantPlay || (held && osGone);
   const followPlay = () => { if (held) { held = false; osSync(); } };
   el.addEventListener('play', () => {
     if (unwantedPlay()) { try { el.pause(); } catch (e) {} return; }
@@ -161,9 +164,13 @@
   // (Chromium fires `pause` before `ended` and after `error`, with el.ended / el.error already set).
   el.addEventListener('pause', () => {
     // el.paused too: a queued `pause` from the listener's own Pause can land after their Play; the element is playing again
-    if (el.paused && wantPlay && !held && !pending && !state.retrying && !el.ended && !el.error) {
+    // NOT `!state.retrying` (build audit #1): a call during a retry reload IS a system pause. The engine's own pauses
+    // while retrying come with el.error set (error, then pause) or are dropped by the reload.
+    if (el.paused && wantPlay && !held && !pending && !el.ended && !el.error) {
       held = true; disarm();
-      set({ playing: false, loading: false });
+      const wasRetrying = state.retrying;
+      cancelRetry();   // a call during a reload: stop retrying; the place (resumeAt) is kept and Play retries from it
+      set({ playing: false, loading: false, retrying: false, failed: wasRetrying || state.failed });
       osSync(); osPos();
       return;
     }
@@ -218,7 +225,7 @@
     if (st === osState) return;
     osState = st;
     if (osPausedTimer) { clearTimeout(osPausedTimer); osPausedTimer = null; }
-    if (st === 'paused') osPausedTimer = setTimeout(() => { osPausedTimer = null; if (osState === 'paused') osSend('none'); }, PAUSED_TO_NONE_MS);
+    if (st === 'paused') osPausedTimer = setTimeout(() => { osPausedTimer = null; if (osState === 'paused') { osGone = true; osSend('none'); } }, PAUSED_TO_NONE_MS);
     if (MSP) {
       try {
         const p = MSP.setPlaybackState({ playbackState: st });
@@ -231,7 +238,7 @@
   }
   // the FIRST 'playing' after 'none' is sent only from here: inside api.play()/resume()/retry-now (the listener's
   // tap) or the return-to-app retry, i.e. with the app in the foreground. Never from a media event.
-  function osTap() { osSend('playing'); osPos(); }
+  function osTap() { osGone = false; osSend('playing'); osPos(); }
   // every later change comes from events, and never moves the OS out of 'none'. 'playing' is held while the
   // listener wants sound: loading, retrying, and between chapters.
   function osSync() {
@@ -409,7 +416,7 @@
     },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; pending = false; wantPlay = false; held = false; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); osSkips(); },
+    stop() { playTok++; pending = false; wantPlay = false; held = false; osGone = true; resumeAt = 0; attempts = 0; firstLoad = false; cancelRetry(); disarm(); try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} release(state.track, null); queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, retrying: false, t: 0, d: 0, q: queue, qi }); osSend('none'); osSkips(); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };

@@ -100,9 +100,10 @@ export function fakeAudio() {
     // a stream dying mid-play: `error`, then (queued) `pause`
     failNow(code = 2) { el.error = { code }; fire('error'); if (!el.paused) { el.paused = true; queue('pause'); } },
     // the SYSTEM pausing / resuming the element (Chromium's AudioFocusDelegate on a call): the engine did not ask
-    sysPause() { if (!el.paused) { el.paused = true; queue('pause'); } },
-    sysResume() { if (el.paused) { el.paused = false; fire('play'); if (!el.paused && el.readyState >= 3 && !el.error) fire('playing'); } },
-    finish() { gen++; loaded(); },                                 // a 'hang' load completes
+    sysPause() { if (!el.paused) { el.paused = true; rejectAll('AbortError'); queue('pause'); } },
+    // Chromium's resume: `play` and `playing` are BOTH queued, so `playing` still arrives after a play listener paused it
+    sysResume() { if (el.paused) { el.paused = false; queue('play'); if (el.readyState >= 3 && !el.error) queue('playing'); } },
+    finish() { loaded(); },                                        // a 'hang' load completes (a completing load drops no queued event)
     tick(dt) { el.currentTime += dt; fire('timeupdate'); },
     // reaching the end: `pause` and `ended` are SEPARATE queued tasks (with el.ended already true for both)
     end() { if (!(el.duration > 0)) el.duration = Math.max(1, el.currentTime); el.currentTime = el.duration; fire('timeupdate'); el.paused = true; queue('pause'); queue('ended'); },
