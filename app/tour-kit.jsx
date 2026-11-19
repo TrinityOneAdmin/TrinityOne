@@ -11,7 +11,7 @@
 // Globals this file takes from elsewhere: React (vendor), document, window, localStorage.
 // Top-level names DECLARED here — unique across BOTH pages' single global scopes on purpose (a duplicate top-level
 // name in classic scripts blanks the whole app): tourKitFind, tourKitWalk, tourKitPlace, tourKitReducedMotion,
-// tourKitInsets, tourKitFlag, tourKitFlagSet, TourKitBubble.
+// tourKitInsets, tourKitSeenMem, tourKitFlag, tourKitFlagSet, TourKitBubble.
 
 // An anchor that is on screen (in the DOM and laid out), or null. Anchors are `data-tour="…"` attributes.
 function tourKitFind(t) {
@@ -64,10 +64,13 @@ function tourKitInsets() {
     return out;
   } catch (e) { return { t: 0, b: 0 }; }
 }
-// "Seen" flags: per device, in localStorage, never a relay. A blocked or full store reads as "not seen" and a
-// write that fails is dropped — the worst case is a tip shown twice, never a broken page.
-function tourKitFlag(key) { try { return localStorage.getItem(key) === '1'; } catch (e) { return false; } }
-function tourKitFlagSet(key) { try { localStorage.setItem(key, '1'); } catch (e) {} }
+// "Seen" flags: per device, in localStorage, never a relay. Each flag set is ALSO kept in memory for this page
+// session, and a read consults that first: with a blocked or full store (setItem throws) a write is lost, and
+// without the memory "Got it" would offer the same tip again on the very next render, for ever. With it, the
+// worst case is a tip shown again on the next launch, never a broken page and never a tip that cannot be closed.
+const tourKitSeenMem = new Set();
+function tourKitFlag(key) { if (tourKitSeenMem.has(key)) return true; try { return localStorage.getItem(key) === '1'; } catch (e) { return false; } }
+function tourKitFlagSet(key) { tourKitSeenMem.add(key); try { localStorage.setItem(key, '1'); } catch (e) {} }
 
 // ── the bubble ──────────────────────────────────────────────────────────────────────────────────────────────
 // One step: a small card pointing at one real element, a ring round it and (for a tour) the rest dimmed.

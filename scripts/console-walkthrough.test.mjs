@@ -26,13 +26,16 @@ const read = (f) => readFileSync(join(ROOT, f), 'utf8');
 const FILES = ['app/help-illustrations.jsx', 'app/help-data.jsx', 'app/screens-help.jsx', 'app/stew-modal.jsx', 'app/stew-help.jsx', 'app/tour-kit.jsx', 'app/stew-tour.jsx', 'app/stew-dashboard.jsx'];
 const JS = FILES.map(compileScreen).join('\n;\n');
 const WANT = ['StewDashboard', 'StewSetupWizard', 'DelegateBrief', 'StewTourHost', 'stewNav', 'NAV',
-  'stewTourPlan', 'tourKitWalk', 'stewTourSectionTip', 'tourKitPlace', 'stewTourStart', 'STEW_TOUR_TIPS', 'STEW_TOUR_STEPS'];
+  'stewTourPlan', 'tourKitWalk', 'stewTourSectionTip', 'tourKitPlace', 'stewTourStart', 'STEW_TOUR_TIPS', 'STEW_TOUR_STEPS', 'stewTourStore', 'StewTourTip'];
 
-// opts: { church, delegate, innerWidth, caps (bool: capabilities allowed), store (a Map to share across boots) }
+// opts: { church, delegate, innerWidth, caps (bool: capabilities allowed), store (a Map to share across boots),
+//         helperCaps (a helper's capabilities, e.g. ['members']), failWrites (localStorage.setItem throws, as a full
+//         or blocked store does) }
 function boot(opts = {}) {
   const { React, draw } = miniReact();
   const store = opts.store || new Map();
-  const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); } };
+  const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), removeItem: (k) => { store.delete(k); },
+    setItem: (k, v) => { if (opts.failWrites) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; } store.set(k, String(v)); } };
   const timers = [];
   const state = { tree: null, modal: false };
   const winListeners = {}, docListeners = {};
@@ -57,7 +60,7 @@ function boot(opts = {}) {
     useStewardAdmitted: () => [], useStewardJoinPolicy: () => false,
     Steward: {
       pubkey: opts.delegate ? 'helperpub' : 'churchpub', actingChurch: opts.delegate ? 'churchpub' : undefined,
-      isDelegated: () => !!opts.delegate, myStewardCaps: () => (opts.delegate ? [] : null),
+      isDelegated: () => !!opts.delegate, myStewardCaps: () => (opts.delegate ? (opts.helperCaps || []) : null),
       hasKey: true, hasPinLock: () => false, whereChurchLives: () => 'community',
       relays: () => [], relayStatus: () => ({}), networks: () => [], publishProfile: () => {},
       npub: 'npub1grace', becomeStewardPayload: () => 'steward-invite-payload', qrSVG: () => '',
@@ -86,15 +89,20 @@ function boot(opts = {}) {
     churchHandle: () => 'grace',
     _wizMeetingId: () => 'evt1',                               // app/stew-console.jsx (the wizard's starter meetings)
     DashRota: function DashRota() { return null; },            // app/stew-schedule.jsx
-    stewCapState: () => ({ allowed: opts.caps !== false && !opts.delegate }),
+    stewCapState: (cap) => ({ allowed: opts.delegate ? (opts.helperCaps || []).includes(cap) : opts.caps !== false }),
+    ...(opts.globals || {}),
   };
   const names = Object.keys(globals);
   const mod = new Function(...names, JS + '\nreturn { ' + WANT.join(', ') + ' };')(...names.map(k => globals[k]));
   for (const n of WANT) assert.ok(mod[n] !== undefined, `${n} is missing — re-anchor this test`);
+  const realCount = win.stewModalCount;    // stew-modal.jsx's own count, kept for the one test that needs it
   win.stewModalOpen = () => state.modal;   // see the header: the count is driven here
+  // …and the count: the dialog the test opened, plus the tour bubble itself while it says it is mounted — what
+  // useStewDialog's real count holds in a browser (the bubble registers through it).
+  win.stewModalCount = () => (state.modal ? 1 : 0) + (mod.stewTourStore.up ? 1 : 0);
   // Two draws: effects that set state show on the next one, as in React. The tree is kept for querySelector.
   const show = (props = {}) => { state.tree = draw(mod.StewDashboard, props); state.tree = draw(mod.StewDashboard, props); return state.tree; };
-  return { mod, win, store, timers, state, docListeners, show, draw };
+  return { mod, win, store, timers, state, docListeners, show, draw, realCount };
 }
 const bubble = (tree) => find(tree, n => n.props && n.props['data-stew-tour'] === 'bubble')[0] || null;
 const tipOf = (tree) => find(tree, n => n.props && n.props['data-stew-tour'] === 'tip')[0] || null;
@@ -318,6 +326,99 @@ test('the bubble stays inside a 16px gutter at phone width', () => {
     assert.ok(p.left >= 16 && p.left + size.w <= vp.w - 16, `left ${p.left} out of the gutter for ${JSON.stringify(rect)}`);
     assert.ok(p.top >= 16 && p.top + size.h <= vp.h - 16, `top ${p.top} out of the gutter for ${JSON.stringify(rect)}`);
   }
+});
+
+// ── 2026-11-19 audit fixes ─────────────────────────────────────────────────────────────────────────────────
+test('POINT OF USE: with a store that refuses writes, "Got it" still dismisses a section tip for good', () => {
+  const h = boot({ failWrites: true });
+  let tip = tipOf(h.show());
+  assert.ok(tip, 'premise: Overview opened for the first time with no tip');
+  assert.equal(h.store.size, 0, 'premise: the store took a write it was meant to refuse');
+  press(tip, 'Got it');
+  for (let i = 0; i < 3; i++) assert.equal(tipOf(h.show()), null, 'the tip came back after Got it because its seen-flag could not be stored');
+});
+
+// The Members panel itself is not under test here (only the tip drawn above it): its own components are stubbed.
+const MEMBERS_STUBS = Object.fromEntries(['SkPill'].map(n => [n, Object.defineProperty(function () { return null; }, 'name', { value: n })]));
+const helperBoot = (caps) => { const h = boot({ delegate: true, helperCaps: caps, globals: MEMBERS_STUBS }); h.store.set('trinityone.steward.delegatebrief.helperpub', '1'); return h; };
+const tipText = (tree) => { const t = tipOf(tree); return t ? texts(t.kids || []).join(' ') : null; };
+test('POINT OF USE: a helper is told the helper words on the Settings tip; an owner the owner words', () => {
+  const T = boot().mod.STEW_TOUR_TIPS.settings;
+  assert.ok(T.helperText && T.helperText !== T.text, 'premise: Settings has no separate helper words');
+  const helper = tipText(helperBoot([]).show({ initial: 'settings' }));
+  assert.ok(helper, 'a helper opening Settings got no tip');
+  assert.ok(helper.includes('Some settings here belong to whoever holds the church key.'), 'the helper was not given the helper words: ' + helper);
+  assert.ok(!helper.includes(T.text), 'the helper was told the owner-only words');
+  const owner = tipText(boot().show({ initial: 'settings' }));
+  assert.ok(owner && owner.includes(T.text), 'the owner was not told the owner words');
+  assert.ok(!owner.includes(T.helperText), 'the owner was given the helper words');
+});
+
+test('POINT OF USE: a helper holding Members is told only what they can do on the Members tip', () => {
+  const T = boot().mod.STEW_TOUR_TIPS.members;
+  const helper = tipText(helperBoot(['members']).show({ initial: 'members' }));
+  assert.ok(helper, 'a helper with the members capability opened Members with no tip');
+  assert.ok(helper.includes('Approve new people.'), 'the helper was not given the helper words: ' + helper);
+  assert.ok(!/children|helpers/.test(helper), 'a helper was told they can mark children or add helpers (the relay refuses both)');
+  const owner = tipText(boot({ globals: MEMBERS_STUBS }).show({ initial: 'members' }));
+  assert.ok(owner && owner.includes(T.text), 'the owner was not told the owner words');
+});
+
+test('POINT OF USE: the tour\'s Settings and Help step tells a helper the helper words, an owner the owner words', () => {
+  const stepText = (h) => {
+    h.mod.stewTourStart('replay');
+    let tree = h.show();
+    for (let g = 0; g < 20; g++) {
+      const b = bubble(tree);
+      assert.ok(b, 'the tour ended before Settings and Help');
+      if (titleOf(b) === 'Settings and Help') return texts(find(b, n => n.type === 'p')[0].kids || []).join('');
+      press(b, 'Next');
+      tree = h.show();
+    }
+    throw new Error('the tour never reached Settings and Help');
+  };
+  const S = boot().mod.STEW_TOUR_STEPS.find(s => s.id === 'settings');
+  assert.equal(stepText(helperBoot([])), 'Stuck? Help is here, and so is this tour.');
+  assert.equal(stepText(boot()), S.text);
+});
+
+test('the tour hides while a dialog opens over it, and comes back at the same step — not ended, not restarted', () => {
+  const h = boot();
+  h.mod.stewTourStart('replay');
+  let tree = h.show();
+  press(bubble(tree), 'Next');
+  tree = h.show();
+  const at = titleOf(bubble(tree));
+  assert.equal(at, 'Your church’s name', 'premise: Next did not move to step 2');
+  h.state.modal = true;                                   // a console dialog opens mid-tour
+  assert.equal(bubble(h.show()), null, 'the tour stayed up over a dialog that opened while it ran');
+  assert.equal(bubble(h.show()), null);
+  h.state.modal = false;
+  assert.equal(titleOf(bubble(h.show())), at, 'the tour did not come back at the step it was on');
+});
+
+test('the running tour does not hide behind ITSELF (stew-modal.jsx\'s real count holds the bubble)', () => {
+  const h = boot();
+  h.win.stewModalCount = h.realCount;                     // the real count: the bubble registers through useStewDialog
+  h.mod.stewTourStart('replay');
+  assert.ok(bubble(h.show()), 'premise: the tour did not show');
+  assert.ok(h.realCount() >= 1, 'premise: the bubble is not in stew-modal.jsx\'s count');
+  for (let i = 0; i < 3; i++) assert.ok(bubble(h.show()), 'the tour hid because it counted its own bubble as another dialog');
+});
+
+test('the section tip is drawn in the flow of <main>, ahead of the section — it cannot sit over sign-ups or Approve', () => {
+  const h = boot();
+  const tree = h.show();
+  const main = find(tree, n => n.type === 'main' && n.props['data-tour'] === 'main')[0];
+  assert.ok(main, 'premise: no <main data-tour="main">');
+  const tip = tipOf(main);
+  assert.ok(tip, 'the Overview tip is not inside <main>');
+  const pos = (tip.props.style || {}).position;
+  assert.ok(pos !== 'fixed' && pos !== 'absolute', 'the tip is positioned over the page (' + pos + '), so it can cover what the section puts at its top');
+  // and it comes before the section in <main>: the Overview is drawn after it, so it is pushed down, not covered
+  const order = find(main, n => n === tip || (n.props && n.type && n.type.name === 'DashOverview'));
+  assert.equal(order[0], tip, 'the tip is not ahead of the Overview in <main>');
+  assert.equal(order.length, 2, 'premise: the Overview is not drawn in <main>');
 });
 
 // ── the shell ──────────────────────────────────────────────────────────────────────────────────────────────

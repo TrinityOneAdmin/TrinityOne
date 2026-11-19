@@ -219,10 +219,14 @@ function MemberTourHost({ page, inChurch, hold }) {
     try { window.addEventListener('member-tour', f); } catch (e) {}
     return () => { try { window.removeEventListener('member-tour', f); } catch (e) {} };
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  const blocked = run ? false : (!!hold || memberTourBlocked());
+  // While the tour runs, anything that comes up over it (the PIN idle-lock, a sheet, an aria-modal dialog) hides
+  // the bubble; the run and its step are kept, and it comes back at the same step once that has gone.
+  const blocked = !!hold || memberTourBlocked();
   const pending = memberTourStore.pending;
   const present = (t) => !!tourKitFind(t);
   const wantTip = () => memberTourStore.reader && memberTourNextTip({ seen: memberTourSeen, present, audio: memberTourHasAudio() });
+  // Is any reader tip still unseen, whatever is on screen? When none is, there is nothing to wait for.
+  const tipsLeft = () => memberTourStore.reader && !!memberTourNextTip({ seen: memberTourSeen, present: () => true, audio: memberTourHasAudio() });
   React.useEffect(() => {
     if (pending && !run && !blocked) {
       memberTourStore.pending = null;
@@ -244,11 +248,12 @@ function MemberTourHost({ page, inChurch, hold }) {
   });
   // Waiting behind something that sends no event (a sheet closing): look again shortly.
   React.useEffect(() => {
-    if (!blocked || !(pending || (!tip && memberTourStore.reader))) return undefined;
+    if (!blocked || !(pending || run || (!tip && tipsLeft()))) return undefined;
     const t = setTimeout(() => force(x => x + 1), 700);
     return () => clearTimeout(t);
   });
   if (run) {
+    if (blocked) return null;
     const step = run.plan[run.i];
     if (!step) return null;
     const shown = step.id === 'groups' ? { ...step, text: memberTourGroupsText(memberTourGroupFacts()) } : step;

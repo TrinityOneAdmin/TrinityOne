@@ -52,12 +52,14 @@ function tourDoc(source) {
 const anchors = (names, facts) => { const s = new Set(names); s.facts = facts || {}; return s; };
 
 // ══════════════ THE REAL APP ════════════════════════════════════════════════════════════════════════════
-// opts: { onboarded, church (follow one at boot), store (Map shared across boots), anchors (Set) }
+// opts: { onboarded, church (follow one at boot), store (Map shared across boots), anchors (Set), search (the page's
+//         location.search), setup(window) (run after the app's scripts load, before its first frame) }
 function bootApp(opts = {}) {
   const r = fakeReact();
   const env = appBrowser();
   const window = env.window;
   if (opts.store) for (const [k, v] of opts.store) window.localStorage.setItem(k, v);
+  if (opts.search) window.location.search = opts.search;
   window.Bible = { loaded: true, activeVersion: 'KJV', subscribe: () => () => {}, books: () => ['John'], maxChapter: () => 21, defaultLoc: () => ({ book: 'John', chap: 1 }) };
   window.MyData = { seedIfEmpty() {}, on: () => () => {}, list: () => [], settings: { get: () => ({}) }, count: () => 0, set: () => {} };
   window.TrinityData = {};
@@ -91,6 +93,7 @@ function bootApp(opts = {}) {
   const ctxOf = (tree) => { const n = nodes(tree).find(x => x.props && x.props.ctx && 'followChurch' in x.props.ctx); assert.ok(n, 'no screen received a ctx — re-anchor'); return n.props.ctx; };
   // the splash ends by calling the onDone App gave it
   const endSplash = () => { const s = el(frame().tree, mod.Splash); if (s) s.props.onDone(); };
+  if (opts.setup) opts.setup(window);
   return { mod, window, store: window.localStorage, frame, show, el, ctxOf, endSplash, setAnchors: (a) => { anc = a; } };
 }
 const bubbleOf = (f, h) => (f.out && f.out.type === h.mod.MemberTourBubble && f.out.props.variant !== 'tip') ? f.out.props : null;
@@ -239,10 +242,68 @@ test('the tour waits behind any open sheet on the back stack, then shows', () =>
   assert.ok(bubbleOf(h.show(), h), 'the tour did not show once the sheet closed');
 });
 
+// ── 2026-11-19 audit fixes, through the real App ────────────────────────────────────────────────────────────
+test('POINT OF USE: an invite link adopted on a never-set-up phone starts the tour (App\'s invite effect)', async () => {
+  const seed = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const run = async (onboarded) => {
+    const h = bootApp({ onboarded, search: '?invite=' + encodeURIComponent(seed),
+      setup: (w) => { w.confirm = () => true; w.TrinityIdentity = { importMnemonic: async () => {} }; } });
+    h.endSplash();
+    h.show();
+    await settle();                                     // the confirm, then importMnemonic
+    return { h, b: bubbleOf(h.show(), h) };
+  };
+  const fresh = await run(false);
+  assert.ok(fresh.b, 'adopting an invite on a phone that was never set up did not start the tour');
+  assert.equal(fresh.b.step.title, 'Welcome');
+  // CONTROL: the same link on a phone already set up is not a first run, and starts nothing
+  const used = await run(true);
+  assert.equal(used.b, null, 'an invite adopted on an already set-up phone started the tour');
+});
+
+test('POINT OF USE: the tour never shows over the PIN gate; it shows once the person goes past it', () => {
+  const h = bootApp({ setup: (w) => { w.TrinityIdentity = { isLocked: () => true }; } });
+  h.endSplash();
+  let f = h.show();
+  const gate = nodes(f.tree).find(n => n.type && n.type.name === 'PinUnlockGate');
+  assert.ok(gate, 'premise: the PIN gate is not up for a locked identity');
+  h.mod.memberTourStart('replay');
+  for (let i = 0; i < 3; i++) assert.equal(bubbleOf(h.show(), h), null, 'the tour showed over the PIN gate');
+  gate.props.onReadBible();                             // "read the Bible without unlocking": the gate goes
+  assert.ok(bubbleOf(h.show(), h), 'the tour did not show once the gate had gone');
+});
+
+test('the tour hides when a sheet or the PIN lock comes up mid-run, and resumes at the same step', () => {
+  const h = bootApp();
+  h.endSplash();
+  h.show();
+  h.mod.memberTourStart('replay');
+  bubbleOf(h.show(), h).onNext();
+  const at = bubbleOf(h.show(), h).step.title;
+  assert.equal(at, 'Verse of the day', 'premise: Next did not move to step 2');
+  h.window.__trinityBackStack.push({ close() {} });   // a sheet opens over the tour
+  for (let i = 0; i < 2; i++) assert.equal(bubbleOf(h.show(), h), null, 'the tour stayed up over a sheet that opened while it ran');
+  h.window.__trinityBackStack.length = 0;
+  const resumed = bubbleOf(h.show(), h);
+  assert.ok(resumed, 'the tour did not come back once the sheet closed');
+  assert.equal(resumed.step.title, at, 'the tour did not come back at the step it was on');
+  h.window.TrinityIdentity = { isLocked: () => true };   // the PIN idle-lock
+  h.window.dispatch('trinity-identity-lock', {});
+  assert.ok(nodes(h.show().tree).some(n => n.type && n.type.name === 'PinUnlockGate'), 'premise: the idle-lock did not put the PIN gate up');
+  assert.equal(bubbleOf(h.show(), h), null, 'the tour stayed up over the PIN gate');
+  h.window.TrinityIdentity = { isLocked: () => false };
+  h.window.dispatch('trinity-identity-lock', {});
+  const back = bubbleOf(h.show(), h);
+  assert.ok(back, 'the tour did not come back after unlocking');
+  assert.equal(back.step.title, at, 'the tour came back at a different step');
+});
+
 // ══════════════ THE HOST OVER REAL SCREENS (the full miniature React: the bubble is drawn) ══════════════════
-function kit(React, win, doc, store) {
-  const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); } };
-  const base = { React, window: win, document: doc, localStorage: ls, getComputedStyle: () => ({}), console, setTimeout: () => 0, clearTimeout() {}, Event: class { constructor(t) { this.type = t; } } };
+// o: { failWrites (localStorage.setItem throws, as a full or blocked store does), setTimeout (to record timers) }
+function kit(React, win, doc, store, o = {}) {
+  const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), removeItem: (k) => { store.delete(k); },
+    setItem: (k, v) => { if (o.failWrites) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; } store.set(k, String(v)); } };
+  const base = { React, window: win, document: doc, localStorage: ls, getComputedStyle: () => ({}), console, setTimeout: o.setTimeout || (() => 0), clearTimeout() {}, Event: class { constructor(t) { this.type = t; } } };
   const K = loadScreen('app/tour-kit.jsx', ['tourKitFind', 'tourKitWalk', 'tourKitPlace', 'tourKitInsets', 'tourKitFlag', 'tourKitFlagSet', 'TourKitBubble'], base);
   const M = loadScreen('app/member-tour.jsx', ['MemberTourHost', 'memberTourPlan', 'memberTourGroupsText', 'memberTourNextTip', 'memberTourReader', 'memberTourStart'],
     { ...base, ...K, useDialogA11y: () => {} });
@@ -337,6 +398,46 @@ test('a reader tip never shows over an open sheet, and gives way when one opens 
   win.__trinityBackStack.splice(0, 1);                // the verse card closes
   draw(M.MemberTourHost, { page: 'read' });
   assert.equal(titleOf(drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card')), 'Translation', 'the tip a sheet interrupted came back instead of giving way');
+});
+
+// ── 2026-11-19 audit fixes, over the real reader ───────────────────────────────────────────────────────────
+test('POINT OF USE: with a store that refuses writes, "Got it" still moves the reader tips on — no tip comes back', () => {
+  const { React, draw } = miniReact();
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } };
+  let screens = [];
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: tourDoc(() => screens) }, store, { failWrites: true });
+  win.memberTourReader = M.memberTourReader;
+  const { ReadScreen, ctx } = readerScreen(React, win);
+  screens = [draw(ReadScreen, { ctx })];
+  draw(M.MemberTourHost, { page: 'read' });
+  let tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  const order = [];
+  for (let g = 0; g < 8 && tip; g++) {
+    order.push(titleOf(tip));
+    find(tip, n => n.type === 'button' && texts(n.kids || []).join('').trim() === 'Got it')[0].props.onClick();
+    draw(M.MemberTourHost, { page: 'read' });
+    tip = drawnBubble(draw(M.MemberTourHost, { page: 'read' }), 'tip-card');
+  }
+  assert.equal(store.size, 0, 'premise: the store took a write it was meant to refuse');
+  assert.deepEqual(order, ['Tap a verse', 'Translation', 'Study'], 'a tip came back after Got it because its seen-flag could not be stored');
+});
+
+test('with every reader tip seen, an open sheet no longer makes the host look again every 700ms', () => {
+  const { React, draw } = miniReact();
+  const timers = [];
+  const win = { addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, __trinityBackStack: [{ close() {} }] };
+  const store = new Map();
+  const { M } = kit(React, win, { querySelector: () => null }, store, { setTimeout: (f, ms) => { timers.push(ms); return 0; } });
+  M.memberTourReader();
+  const polls = () => timers.filter(ms => ms === 700).length;
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.ok(polls() > 0, 'CONTROL: with tips still to show and a sheet open, the host does not look again');
+  for (const id of ['verse', 'version', 'listen', 'study']) store.set('trinityone.tour.tip.' + id, '1');
+  timers.length = 0;
+  draw(M.MemberTourHost, { page: 'read' });
+  draw(M.MemberTourHost, { page: 'read' });
+  assert.equal(polls(), 0, 'the host kept re-rendering every 700ms with nothing left to show');
 });
 
 function chatScreen(React, draw, { rooms = [], isMinor = false } = {}) {
