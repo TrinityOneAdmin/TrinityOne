@@ -27788,7 +27788,7 @@ zoo`.split("\n");
     subscribeVersePrompt(cb) {
       const VP_KEY = "trinityone.steward.versebanner." + (pub || "");
       const _vpSeedRow = (v) => ({ ref: v.ref || "", schedule: Array.isArray(v.schedule) ? v.schedule : [], ts: v.ts || 0, id: v.id || "" });
-      let current = null, eosed = false, sawDelete = false;
+      let current = null, eosed = false, sawDelete = false, newest = null;
       try {
         const c = JSON.parse(lsGet(VP_KEY) || "null");
         if (c && c.ref) current = { ref: c.ref, note: "", schedule: Array.isArray(c.schedule) ? c.schedule : [], ts: c.ts || 0, id: c.id || "" };
@@ -27806,6 +27806,8 @@ zoo`.split("\n");
       if (current) cb(current);
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [VERSE_PROMPT_D] }, { kinds: [30078], "#church": [pub], "#d": [VERSE_PROMPT_D] }], {
         onevent(e) {
+          if (newest && (newest.ts > e.created_at || newest.ts === e.created_at && String(newest.id || "") <= String(e.id || ""))) return;
+          newest = { ts: e.created_at, id: e.id };
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             sawDelete = true;
             if (current) {

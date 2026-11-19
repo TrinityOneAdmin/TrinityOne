@@ -122,3 +122,25 @@ for (const [label, list] of orders(ev(HELPER, 'trinityone/group:g1', { name: 'Yo
     assert.ok(!g || g._gone || g.deleted, 'the control is vacuous: the church’s newer withdrawal withdrew nothing: ' + JSON.stringify(g));
   });
 }
+
+// ── MED-3 (Fable audit of the F1 round): the OWNER CONSOLE's verse-prompt reader keeps the newest too ─────────────────
+const ST = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+function consoleVersePrompt(events) {
+  let card;
+  const stubs = { pub: CP, VERSE_PROMPT_D: 'trinityone/verse-prompt', relays: () => ['wss://x'],
+    lsGet: () => null, lsSet() {}, localStorage: { removeItem() {} },
+    pool: { subscribeMany: (_u, _f, h) => { for (const e of events) h.onevent(e); h.oneose(); return { close() {} }; } } };
+  const built = new Function(...Object.keys(stubs), `return ({ ${fnBody(ST, '  subscribeVersePrompt(cb) {', 'subscribeVersePrompt').trim()} });`)(...Object.values(stubs));
+  built.subscribeVersePrompt((v) => { card = v; });
+  return card;
+}
+for (const [label, list] of orders(ev(CP, 'trinityone/verse-prompt', '', S + 1, [['deleted', '1'], ['for', '*']]), ev(HELPER, 'trinityone/verse-prompt', { ref: 'Psalm 23' }, S + 2))) {
+  test('MED-3 console verse-prompt — the church’s carried WITHDRAWAL (S+1) vs a newer live copy, ' + label + ': the newer shows', () => {
+    assert.equal((consoleVersePrompt(list) || {}).ref, 'Psalm 23', 'A WITHDRAWAL CLEARED A NEWER PROMPT ON THE CONSOLE');
+  });
+}
+for (const [label, list] of orders(ev(HELPER, 'trinityone/verse-prompt', { ref: 'Psalm 23' }, S + 1), ev(CP, 'trinityone/verse-prompt', '', S + 2, [['deleted', '1'], ['for', '*']]))) {
+  test('MED-3 console verse-prompt — a NEWER withdrawal vs an older live copy, ' + label + ': nothing shows', () => {
+    assert.equal(consoleVersePrompt(list) || null, null, 'an older prompt came back after a newer withdrawal');
+  });
+}

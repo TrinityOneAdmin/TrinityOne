@@ -14294,12 +14294,16 @@ window.Steward = {
     // the banner. Write on SETTLE; CLEAR the seed only on a GENUINE delete (sawDelete), never a transient empty.
     const VP_KEY = 'trinityone.steward.versebanner.' + (pub || '');
     const _vpSeedRow = (v) => ({ ref: v.ref || '', schedule: Array.isArray(v.schedule) ? v.schedule : [], ts: v.ts || 0, id: v.id || '' });
-    let current = null, eosed = false, sawDelete = false;
+    let current = null, eosed = false, sawDelete = false, newest = null;   // newest: { ts, id } of the newest copy seen, live or withdrawn
     try { const c = JSON.parse(lsGet(VP_KEY) || 'null'); if (c && c.ref) current = { ref: c.ref, note: '', schedule: Array.isArray(c.schedule) ? c.schedule : [], ts: c.ts || 0, id: c.id || '' }; } catch {}
     const _vpWrite = () => { if (!eosed) return; if (!current && !sawDelete) return; try { if (current) lsSet(VP_KEY, JSON.stringify(_vpSeedRow(current))); else localStorage.removeItem(VP_KEY); } catch {} };
     if (current) cb(current);   // paint the last-known prompt instantly
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [VERSE_PROMPT_D] }, { kinds: [30078], '#church': [pub], '#d': [VERSE_PROMPT_D] }], {
       onevent(e) {
+        // NEWEST WINS, WITHDRAWALS INCLUDED (Fable audit of c9f355eb, MED-3 — the member app's reader got this in R-M1): a
+        // withdrawal cleared the prompt whatever its date, and an older live copy could then come back.
+        if (newest && (newest.ts > e.created_at || (newest.ts === e.created_at && String(newest.id || '') <= String(e.id || '')))) return;
+        newest = { ts: e.created_at, id: e.id };
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { sawDelete = true; if (current) { current = null; cb(null); } _vpWrite(); return; }
         // NEVER let an OLDER copy overwrite a newer one. On an exact same-second tie the RELAY keeps the lowest
         // event id (its replaceable-event rule), so do the same here: a tie between two DIFFERENT events (two
