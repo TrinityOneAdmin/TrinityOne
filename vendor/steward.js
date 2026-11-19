@@ -16849,6 +16849,86 @@ zoo`.split("\n");
     _relayInfoCache.set(wssUrl, p);
     return p;
   }
+  var LIVE_NEWEST_LS = "trinityone.steward.livenewest:";
+  function _liveNewestKey(url, key) {
+    return LIVE_NEWEST_LS + String(url || "").replace(/\/+$/, "") + "|" + key;
+  }
+  function _liveNewestRemembered(url) {
+    let key = "";
+    try {
+      key = _gate.provedKey(url, pub);
+    } catch (e) {
+      key = "";
+    }
+    if (!key) return false;
+    try {
+      const v = JSON.parse(lsGet(_liveNewestKey(url, key)) || "null");
+      return !!(v && v.liveNewest === 1);
+    } catch (e) {
+      return false;
+    }
+  }
+  function _relaysAllLiveNewest(urls) {
+    return Array.isArray(urls) && urls.length > 0 && urls.every(_liveNewestRemembered);
+  }
+  async function _relayLiveNewest(url) {
+    let info = null;
+    try {
+      const httpUrl = String(url).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/+$/, "");
+      const ctrl = new AbortController();
+      const to = setTimeout(() => {
+        try {
+          ctrl.abort();
+        } catch (e) {
+        }
+      }, 6e3);
+      info = await Promise.race([
+        (async () => {
+          const res = await fetch(httpUrl, { headers: { Accept: "application/nostr+json" }, signal: ctrl.signal });
+          return res.ok ? res.json() : null;
+        })(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("relay-info timeout")), 6500))
+      ]);
+      clearTimeout(to);
+    } catch (e) {
+      info = null;
+    }
+    if (!info || typeof info !== "object" || !info.trinityone || typeof info.trinityone !== "object") return null;
+    let key = "";
+    try {
+      key = _gate.provedKey(url, pub);
+    } catch (e) {
+      key = "";
+    }
+    if (!key) return null;
+    const k = _liveNewestKey(url, key);
+    if (info.trinityone.liveNewest === 1) {
+      lsSet(k, JSON.stringify({ liveNewest: 1, version: String(info.version || ""), at: now() }));
+      return true;
+    }
+    try {
+      localStorage.removeItem(k);
+    } catch (e) {
+    }
+    return false;
+  }
+  function _probeLiveNewestAll() {
+    let urls = [];
+    try {
+      urls = relays();
+    } catch (e) {
+      urls = [];
+    }
+    for (const u of urls) _relayLiveNewest(u).catch(() => {
+    });
+  }
+  try {
+    setTimeout(_probeLiveNewestAll, 3e3);
+    window.addEventListener("steward-relay-returned", () => {
+      setTimeout(_probeLiveNewestAll, 3e3);
+    });
+  } catch (e) {
+  }
   var _discoverySeed = [];
   function _probeRelayEnforces(wssUrl, timeoutMs) {
     return new Promise((resolve) => {
@@ -21332,7 +21412,7 @@ zoo`.split("\n");
     }
     return _CARRY_WORDS[p] || "a church setting";
   }
-  async function _carryTemplate(S, blocked, who) {
+  async function _carryTemplate(S, blocked, who, pre) {
     let tags = (S.tags || []).filter((t) => Array.isArray(t) && t[0] !== "for");
     let content = typeof S.content === "string" ? S.content : "";
     const d = (tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -21359,7 +21439,7 @@ zoo`.split("\n");
         return { skip: "unreadable" };
       }
       if (!body || typeof body !== "object" || !Array.isArray(body.pubs)) return { skip: "unreadable" };
-      const m = window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
+      const m = pre && "minors" in pre ? pre.minors : window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
       if (!m || !m.known) return { skip: "children-unread" };
       const minors = new Set((m.list || []).map((p) => String(p || "").toLowerCase()));
       content = JSON.stringify({ ...body, pubs: body.pubs.filter((p) => !minors.has(String(p || "").toLowerCase())) });
@@ -21408,8 +21488,11 @@ zoo`.split("\n");
       out.refused = "no-key";
       return out;
     }
-    const deadline = Date.now() + (typeof o.limitMs === "number" && o.limitMs > 0 ? o.limitMs : STEWARD_CARRY_LIMIT_MS);
+    const limit = typeof o.limitMs === "number" && o.limitMs > 0 ? o.limitMs : STEWARD_CARRY_LIMIT_MS;
+    const deadline = Date.now() + limit;
     const left = () => deadline - Date.now();
+    const readDeadline = deadline - Math.min(5e3, Math.floor(limit / 4));
+    const readLeft = () => readDeadline - Date.now();
     const dOf = (e) => ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
     const chOf = (e) => ((e && e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
     const notC = (d, why, label) => out.notCarried.push({ d, why, label: label || _carryLabel(d, null) });
@@ -21418,10 +21501,11 @@ zoo`.split("\n");
       notC("", "no-relay", "anything they set up (no relay could be reached)");
       return out;
     }
-    const ask = (url, filter) => new Promise((resolve) => {
+    const liveRule = _relaysAllLiveNewest(urls);
+    const ask = (url, filter, until) => new Promise((resolve) => {
       const evs = [];
       let done = false, sub = null;
-      const ms = left();
+      const ms = Math.min(readLeft(), until ? until - Date.now() : Infinity);
       const finish = (complete) => {
         if (done) return;
         done = true;
@@ -21495,6 +21579,7 @@ zoo`.split("\n");
       if (!cur || (e.created_at || 0) > (cur.created_at || 0)) mine.set(d, e);
     };
     let readAll = true;
+    const phaseAUntil = Date.now() + Math.max(0, Math.floor(readLeft() / 2));
     await Promise.all(urls.map(async (url) => {
       const ids = /* @__PURE__ */ new Set();
       let until = null;
@@ -21505,7 +21590,7 @@ zoo`.split("\n");
         }
         const f = { kinds: [30078], authors: [who], "#t": [NET], limit: 500 };
         if (until != null) f.until = until;
-        const r = await ask(url, f);
+        const r = await ask(url, f, phaseAUntil);
         let fresh = 0, oldest = until;
         for (const e of r.evs) {
           if (!e || ids.has(e.id)) continue;
@@ -21525,15 +21610,24 @@ zoo`.split("\n");
     if (!readAll) notC("", "incomplete", "anything else they set up that a relay did not show in time");
     const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));
     if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
+    const pre = {};
+    if (ds.some((d) => d.startsWith("trinityone/careteam:")) && window.Steward && window.Steward.readMinors) {
+      try {
+        pre.minors = await Promise.race([Promise.resolve(window.Steward.readMinors()).catch(() => null), new Promise((r) => setTimeout(() => r(null), Math.max(0, readLeft())))]);
+      } catch (e) {
+        pre.minors = null;
+      }
+    }
     for (let i3 = 0; i3 < ds.length; i3 += 60) {
       const slice = ds.slice(i3, i3 + 60);
-      if (left() <= 0) {
+      if (readLeft() <= 0) {
         for (const d of slice) notC(d, "time", _carryLabel(d, mine.get(d).content));
         continue;
       }
       const asked = i3 === 0 && slice.indexOf(MEALS_D_) === -1 ? [...slice, MEALS_D_] : slice;
       const answers = await Promise.all(urls.map((u) => ask(u, { kinds: [30078], "#d": asked, limit: asked.length * 50 })));
       const whole = answers.every((a) => a.complete);
+      const someWhole = answers.some((a) => a.complete);
       if (i3 === 0) mealsReadWhole = whole;
       const others = /* @__PURE__ */ new Map();
       for (const a of answers) for (const e of a.evs) {
@@ -21565,7 +21659,7 @@ zoo`.split("\n");
       const jobs = [];
       for (const d of slice) {
         const S = mine.get(d), label = _carryLabel(d, S.content);
-        if (!whole) {
+        if (liveRule ? !someWhole : !whole) {
           notC(d, "incomplete", label);
           continue;
         }
@@ -21574,6 +21668,11 @@ zoo`.split("\n");
           if (rivals.every((x) => x.church && x.at > (S.created_at || 0))) out.superseded.push(d);
           else if (rivals.every((x) => x.at > (S.created_at || 0) && (x.church || x.steward))) out.superseded.push(d);
           else notC(d, rivals.some((x) => x.at === (S.created_at || 0)) ? "tie" : "newer", label);
+          continue;
+        }
+        const S1 = (S.created_at || 0) + 1;
+        if ((_lastOk.get(d) || 0) > S1) {
+          out.superseded.push(d);
           continue;
         }
         const cd = heldCare ? "" : careDoc(d);
@@ -21617,7 +21716,7 @@ zoo`.split("\n");
         jobs.push((async () => {
           let tmpl = null;
           try {
-            tmpl = await _carryTemplate(from, !!o.blocked, who);
+            tmpl = await _carryTemplate(from, !!o.blocked, who, pre);
           } catch (e) {
             tmpl = { skip: "error" };
           }
@@ -21630,29 +21729,29 @@ zoo`.split("\n");
             return;
           }
           let ok = false, signedEv = null;
+          const po = {};
           try {
-            let signed = feChurch(tmpl, sk);
-            for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
-              await new Promise((r) => setTimeout(r, 1e3));
-              signed = feChurch({ ...tmpl, created_at: now() }, sk);
-            }
-            if ((signed.created_at || 0) <= (S.created_at || 0)) {
-              notC(d, (signed.created_at || 0) === (S.created_at || 0) ? "tie" : "newer", label);
-              return;
-            }
+            const tags = (tmpl.tags || []).slice();
+            if (tags.some((t) => t[0] === "deleted") && !tags.some((t) => t[0] === "for")) tags.push(["for", "*"]);
+            const signed = finalizeEvent2({ ...tmpl, tags, created_at: S1 }, sk);
             signedEv = signed;
             let tm = null;
-            ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+            ok = await Promise.race([Promise.resolve(publish(signed, po)).catch(() => false), new Promise((r) => {
               tm = setTimeout(() => r("time"), Math.max(0, left()));
             })]);
             if (tm) clearTimeout(tm);
           } catch (e) {
             ok = false;
           }
+          if (ok && ok !== "time" && (_lastOk.get(d) || 0) > S1) {
+            out.superseded.push(d);
+            return;
+          }
           if (ok && ok !== "time") {
+            if ((_lastStamp.get(d) || 0) < S1) _lastStamp.set(d, S1);
             out.carried.push({ d, label, ev: signedEv });
             if (teamGone) (out.notes = out.notes || []).push(teamGone === "none" ? "Their care setting was kept, but your church hasn\u2019t chosen a care team \u2014 help requests go only to you." : "Their care setting was kept, but it names a care team that no longer exists \u2014 help requests go only to you until you choose a team.");
-          } else notC(d, ok === "time" ? "time" : "refused", label);
+          } else notC(d, ok === "time" ? "time" : /newer version/i.test(String(po.reason || "")) ? "newer" : "refused", label);
         })());
       }
       await Promise.all(jobs);

@@ -93,34 +93,190 @@ const churchCopy = async (C, d, relay) => (await copiesAt(C, d, relay)).filter(e
 const churchSent = (eng, C, d) => eng.sent.filter(e => e.pubkey === C.cp && dOf(e) === d);
 const rosterOn = async (C, relay) => { const e = await churchCopy(C, STEWARDS_D + C.cp, relay); return e ? (JSON.parse(e.content).pubkeys || []) : null; };
 
-// ══ F1 — a silent relay must not stop the carry (owner answer k) ═════════════════════════════════════════════════════
-// TODO(F1 round): answer (s) makes rule (k) apply only when every relay in relays() is remembered as running the
-// newest-wins relay build (plan 0d H-s); these fixtures gain that step then.
-async function f1Case(how) {
-  const C = await churchOn(2, 'f1-' + how);
-  const [r1, r2] = C.relays;
+// ══ F1 — a silent relay must not stop the carry (owner answer k), once every relay runs the newest-wins build (s) ══════
+// THE CONSOLE'S MEMORY OF WHICH RELAYS SAID "liveNewest" (owner answer s, plan 0d H-s): the shipped _relayLiveNewest asks
+// each relay's real NIP-11 document; a yes is remembered under the URL and the identity key the admission proof gave it.
+// Here the admission gate's proved key is the relay's own relayPub (what /relay-identity proves on a real console).
+function proveAll(eng, relays) {
+  const keys = new Map(relays.map(r => [r.wsUrl, r.relayPub]));
+  eng._gate = { provedKey: (u) => keys.get(u) || '' };
+  return keys;
+}
+async function sayYes(eng, relays) {
+  proveAll(eng, relays);
+  for (const r of relays) assert.equal(await eng._relayLiveNewest(r.wsUrl), true, 'FIXTURE: ' + r.name + ' did not say liveNewest');
+}
+const silence = async (r, how) => { if (how === 'killed') { r.proc.kill('SIGKILL'); await sleep(200); } else { frozen.add(r); r.proc.kill('SIGSTOP'); } };
+const thaw = (r) => { if (frozen.has(r)) { try { r.proc.kill('SIGCONT'); } catch {} frozen.delete(r); } };
+async function f1Setup(name, { yes = true } = {}) {
+  const C = await churchOn(2, name);
   const eng = owner(C);
   const sam = await newSteward(C);
   await setRoster(eng, [sam.pub], { [sam.pub]: ['content'] });
+  if (yes) await sayYes(eng, C.relays); else proveAll(eng, C.relays);
   const gid = C.cp.slice(0, 16) + '-youth';
   await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Youth Group by Hannah', leaders: [] }, { tagChurch: false }));
   const S = await mustPut(C, raw(C, sam, GROUP_D + gid, { name: 'Youth Group by Sam', leaders: [sam.pub] }));
-  if (how === 'killed') { r2.proc.kill('SIGKILL'); await sleep(200); }
-  else { frozen.add(r2); r2.proc.kill('SIGSTOP'); }
+  return { C, eng, sam, gid, S, r1: C.relays[0], r2: C.relays[1] };
+}
+async function f1Case(how, verb = 'remove') {
+  const { C, eng, sam, gid, S, r1, r2 } = await f1Setup('f1-' + how + '-' + verb);
+  await silence(r2, how);
   try {
     const t0 = Date.now();
-    const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 8000 });
+    let r;
+    if (verb === 'remove') { r = await eng._removeStewardKeeping(sam.pub, { limitMs: 8000 }); assert.ok(r.wrote, 'the roster write did not land on r1'); r = r.carry; }
+    else {
+      eng.window.Steward.setBlocked = async (list) => { const e = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', BLOCKED_D + C.cp], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, C.church.sk); return (await putAll(C, e, [r1]))[0] ? e : false; };
+      eng.window.Steward.stewardRemovalOutcome = async () => 'unknown';
+      const b = await eng._blockStewardKeeping(sam.pub, [], { limitMs: 8000 });
+      assert.ok(b.blocked, 'the block did not land on r1'); r = b.carry;
+    }
     const took = Date.now() - t0;
-    assert.ok(r.wrote, 'the roster write did not land on r1');
     assert.ok(took < 11000, 'the carry was not bounded by its limit: ' + took + ' ms');
     const kept = await churchCopy(C, GROUP_D + gid, r1);
-    assert.ok(kept, 'NOTHING WAS CARRIED with r2 ' + how + ' (sim F1): ' + JSON.stringify(r.carry.notCarried));
+    assert.ok(kept, 'NOTHING WAS CARRIED with r2 ' + how + ' (sim F1): ' + JSON.stringify(r.notCarried));
     assert.equal(JSON.parse(kept.content).name, 'Youth Group by Sam', 'r1 reverted to the church’s older copy');
     assert.equal(kept.created_at, S.created_at + 1, 'the church copy is not dated exactly one second after the helper’s save (answer k)');
-  } finally { if (frozen.has(r2)) { r2.proc.kill('SIGCONT'); frozen.delete(r2); } }
+    if (verb === 'block') assert.deepEqual(JSON.parse(kept.content).leaders, [], 'a BLOCKED person is still a leader (answer f)');
+  } finally { thaw(r2); }
 }
-test('F1 — r2 OFF (connection refused): Remove keeps the helper’s group on r1, dated S+1', { todo: 'F1 round (plan §2, 0d H-s)' }, () => f1Case('killed'));
-test('F1 — r2 ASLEEP (SIGSTOP): the carry finishes inside its limit and keeps the helper’s group on r1, dated S+1', { todo: 'F1 round (plan §2.3)' }, () => f1Case('frozen'));
+test('F1 (T-F1a) — r2 OFF (connection refused): Remove keeps the helper’s group on r1, dated S+1', () => f1Case('killed'));
+test('F1 (T-F1b) — r2 ASLEEP (SIGSTOP): the carry finishes inside its limit and keeps the helper’s group on r1, dated S+1', () => f1Case('frozen'));
+test('F1 (T-F1a) — r2 OFF: Block keeps the helper’s group on r1, dated S+1, without them on it', () => f1Case('killed', 'block'));
+
+// (s): only once EVERY relay has said yes. A relay that never answered the probe → the strict rule.
+test('F1 (s) — a relay that never said liveNewest: r2 off → the STRICT rule (nothing carried from a partial answer, listed)', async () => {
+  const { C, eng, sam, gid, r1, r2 } = await f1Setup('f1-strict', { yes: false });
+  assert.equal(await eng._relayLiveNewest(r1.wsUrl), true, 'FIXTURE: r1 did not answer');   // r1 yes, r2 never asked
+  await silence(r2, 'killed');
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, GROUP_D + gid).length, 0, 'carried from a partial answer although r2 never said it runs newest-wins');
+  assert.deepEqual(why(r.carry, GROUP_D + gid).map(n => n.why), ['incomplete']);
+});
+test('F1 (s) — r2 said yes, then went off, and the console RELOADED: the remembered yes still counts → rule (k)', async () => {
+  const { C, eng, sam, gid, S, r1, r2 } = await f1Setup('f1-reload');
+  const eng2 = owner(C);   // a reload: a fresh engine over the SAME browser storage
+  eng2._ls = eng._ls; proveAll(eng2, C.relays); await setRoster(eng2, [sam.pub], { [sam.pub]: ['content'] });
+  await silence(r2, 'killed');
+  const r = await eng2._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  const kept = await churchCopy(C, GROUP_D + gid, r1);
+  assert.ok(kept && kept.created_at === S.created_at + 1, 'the remembered yes did not survive a reload: ' + JSON.stringify(r.carry.notCarried));
+});
+test('F1 (s) — a probe that gets NO answer is not remembered, and is asked again: frozen → null; thawed → yes', async () => {
+  const C = await churchOn(1, 'f1-retry');
+  const eng = owner(C); proveAll(eng, C.relays);
+  const [r] = C.relays;
+  frozen.add(r); r.proc.kill('SIGSTOP');
+  try { assert.equal(await eng._relayLiveNewest(r.wsUrl), null, 'a silent relay was given an answer'); assert.equal(eng._relaysAllLiveNewest([r.wsUrl]), false); }
+  finally { thaw(r); }
+  assert.equal(await eng._relayLiveNewest(r.wsUrl), true, 'the relay was not asked again once it answered');
+  assert.equal(eng._relaysAllLiveNewest([r.wsUrl]), true);
+});
+test('F1 (s) — a relay answering WITHOUT the field (an older build) clears a remembered yes; another key at that URL inherits nothing', async () => {
+  const C = await churchOn(1, 'f1-clear');
+  const eng = owner(C);
+  const [r] = C.relays;
+  proveAll(eng, [r]); assert.equal(await eng._relayLiveNewest(r.wsUrl), true);
+  // the same address now proving a DIFFERENT identity key: not remembered for it
+  eng._gate = { provedKey: () => 'f'.repeat(64) };
+  assert.equal(eng._relaysAllLiveNewest([r.wsUrl]), false, 'a different box at the address inherited the yes');
+  // an older build at an address that said yes before
+  const old = await H.startOldRelay({ name: 'f1-old', churches: [C.cp] });
+  const keys = new Map([[old.wsUrl, old.relayPub]]);
+  eng._gate = { provedKey: (u) => keys.get(u) || '' };
+  eng._ls.set(eng._liveNewestKey(old.wsUrl, old.relayPub), JSON.stringify({ liveNewest: 1 }));   // remembered from before a downgrade
+  assert.equal(eng._relaysAllLiveNewest([old.wsUrl]), true, 'FIXTURE: the yes was not remembered');
+  assert.equal(await eng._relayLiveNewest(old.wsUrl), false, 'the older build was not read as "no"');
+  assert.equal(eng._relaysAllLiveNewest([old.wsUrl]), false, 'a box that no longer says liveNewest kept its remembered yes');
+});
+
+// T-F1c — THE SAFETY CASE. r2 holds a copy NEWER than the helper's (by a DIFFERENT author: (i) another rostered helper,
+// (ii) a second owner console); r2 is silent during the Remove, which carries S+1 to r1; r2 comes back and the copies
+// meet. The newer copy must govern on BOTH relays — the relay's own decisions (a child's post into the group is
+// accepted only while the governing copy says child-safe), before and after r2 restarts.
+async function safetyCase(rivalBy, { tomb = false } = {}) {
+  const C = await churchOn(2, 'f1c-' + rivalBy + (tomb ? '-tomb' : ''));
+  const [r1, r2] = C.relays;
+  const eng = owner(C);
+  const sam = await newSteward(C), eve = await newSteward(C), child = H.key();
+  await mustPut(C, finalizeEvent({ kind: 30078, created_at: T(), tags: [['d', MEMBER_D + C.cp], ['t', NET]], content: JSON.stringify({ joined: T() }) }, child.sk));
+  await mustPut(C, raw(C, C.church, 'trinityone/minors:' + C.cp, { pubkeys: [child.pub] }, { tagChurch: false }));
+  await setRoster(eng, [sam.pub, eve.pub], { [sam.pub]: ['content'], [eve.pub]: ['content'] });
+  await sayYes(eng, C.relays);
+  const gid = C.cp.slice(0, 16) + '-room';
+  const S = await mustPut(C, tomb ? raw(C, sam, GROUP_D + gid, '', { tags: [['deleted', '1'], ['for', C.cp]] }) : raw(C, sam, GROUP_D + gid, { name: 'Room', childsafe: true }));
+  const rivalAuthor = rivalBy === 'helper' ? eve : C.church;
+  const R = raw(C, rivalAuthor, GROUP_D + gid, { name: 'Room (adults)' }, { at: S.created_at + 5, tagChurch: rivalBy === 'helper' });   // newer, adults-only
+  assert.equal((await putOne(R, r2))[0], true, 'FIXTURE: the rival copy was refused by r2');
+  await silence(r2, 'killed');
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  const carried = churchSent(eng, C, GROUP_D + gid);
+  assert.equal(carried.length, 1, 'FIXTURE: nothing carried to r1: ' + JSON.stringify(r.carry.notCarried));
+  assert.equal(carried[0].created_at, S.created_at + 1);
+  if (tomb) assert.deepEqual(carried[0].tags.find(t => t[0] === 'for'), ['for', '*'], 'the church’s withdrawal does not name every copy');
+  // r2 comes back (same data, new process — started after the last gateway.mjs edit) and the copies meet both ways
+  const r2b = await H.moveRelay(r2);
+  await putOne(carried[0], r2b);
+  await putOne(R, r1);
+  const childPosts = async (relay) => (await putOne(finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [['t', NET], ['t', gid]], content: 'hi ' + Math.random() }, child.sk), relay))[0] === true;
+  for (const [relay, label] of [[r1, 'r1'], [r2b, 'r2']]) assert.equal(await childPosts(relay), false, label + ': THE CARRIED S+1 COPY OVERRODE A NEWER COPY BY ' + rivalBy + (tomb ? ' (withdrawal)' : ''));
+  const r2c = await H.moveRelay(r2b);
+  assert.equal(await childPosts(r2c), false, 'r2 after a restart: the older carried copy governs');
+  return { C, r1, r2: r2c };
+}
+test('F1 (T-F1c) — a NEWER copy by another rostered helper on the silent box wins on both relays after they meet, before and after restart', () => safetyCase('helper'));
+test('F1 (T-F1c) — a NEWER copy by a second owner console on the silent box wins on both relays after they meet', () => safetyCase('church'));
+test('F1 (T-F1c) — tombstone variant: the church’s withdrawal at S+1 (for:*) does not withdraw a newer live copy', () => safetyCase('helper', { tomb: true }));
+
+// T-F1d — a TIE with another author in the answers (exactly S) is never carried, in the partial-answer rule too
+test('F1 (T-F1d) — r2 off, another author’s copy at exactly S on r1: not carried, listed as a tie', async () => {
+  const { C, eng, sam, gid, S, r2 } = await f1Setup('f1d');
+  const eve = await newSteward(C);
+  await setRoster(eng, [sam.pub, eve.pub], { [sam.pub]: ['content'], [eve.pub]: ['content'] });
+  await mustPut(C, raw(C, eve, GROUP_D + gid, { name: 'same second' }, { at: S.created_at }), [C.relays[0]]);
+  await silence(r2, 'killed');
+  const r = await eng._removeStewardKeeping(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, GROUP_D + gid).length, 0);
+  assert.deepEqual(why(r.carry, GROUP_D + gid).map(n => n.why), ['tie']);
+});
+// T-F1e / R-H2 — this console's OWN accepted copy: later than S+1 = the church's newer edit (superseded); exactly S+1 = an
+// earlier attempt of this carry, re-signed (the same event — the relay answers duplicate)
+test('F1 (T-F1e) — _lastOk later than S+1: superseded, not re-signed; exactly S+1: re-signed and kept', async () => {
+  const { C, eng, sam, gid, S } = await f1Setup('f1e');
+  eng._lastOk.set(GROUP_D + gid, S.created_at + 3);
+  const a = await eng._carryOverStewardDocs(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, GROUP_D + gid).length, 0, 'the church’s own newer edit was overwritten by their older one');
+  assert.ok(a.superseded.includes(GROUP_D + gid), JSON.stringify(a));
+  eng._lastOk.set(GROUP_D + gid, S.created_at + 1);
+  const b = await eng._carryOverStewardDocs(sam.pub, { limitMs: 6000 });
+  assert.ok(b.carried.some(c => c.d === GROUP_D + gid && c.ev.created_at === S.created_at + 1), 'an earlier attempt’s own S+1 stopped the carry: ' + JSON.stringify(b));
+});
+// T-F1f / R-H2 — the first attempt's publish is refused; the second Remove still carries
+test('F1 (T-F1f) — first carry’s publish refused, second attempt still carries at S+1', async () => {
+  const { C, eng, sam, gid, S } = await f1Setup('f1f');
+  const real = eng.publish; let refused = 0;
+  eng.publish = async (e, o) => { if (dOf(e) === GROUP_D + gid && e.pubkey === C.cp && !refused++) { if (o) o.reason = 'error: try later'; return false; } return real(e, o); };
+  const a = await eng._carryOverStewardDocs(sam.pub, { limitMs: 6000 });
+  assert.deepEqual(why(a, GROUP_D + gid).map(n => n.why), ['refused']);
+  const b = await eng._carryOverStewardDocs(sam.pub, { limitMs: 6000 });
+  assert.ok(b.carried.some(c => c.d === GROUP_D + gid && c.ev.created_at === S.created_at + 1), JSON.stringify(b));
+});
+// T-F1g — r2 sends the rival copy and then stalls before EOSE: its partial answer still counts as a rival
+test('F1 (T-F1g) — r2 sends a newer rival then stalls before EOSE: not carried (a partial answer’s rival counts)', async () => {
+  const { C, eng, sam, gid, S, r2 } = await f1Setup('f1g');
+  const eve = await newSteward(C);
+  await setRoster(eng, [sam.pub, eve.pub], { [sam.pub]: ['content'], [eve.pub]: ['content'] });
+  await mustPut(C, raw(C, eve, GROUP_D + gid, { name: 'eve, later' }, { at: S.created_at + 2 }), [r2]);
+  const realSub = eng.pool.subscribeMany.bind(eng.pool);
+  eng.pool.subscribeMany = (urls, filters, h) => (urls.length === 1 && urls[0] === r2.wsUrl && (filters[0] || {})['#d'])
+    ? realSub(urls, filters, { ...h, oneose() {} })   // events arrive; the end never does
+    : realSub(urls, filters, h);
+  const r = await eng._carryOverStewardDocs(sam.pub, { limitMs: 6000 });
+  assert.equal(churchSent(eng, C, GROUP_D + gid).length, 0, 'carried over a newer copy a relay showed before it stalled');
+  // Eve is still a helper: her newer copy is honoured as it stands (superseded — nothing of Sam's changes back)
+  assert.ok(r.superseded.includes(GROUP_D + gid), JSON.stringify(r));
+});
 
 // ══ F2b — Block of a current helper takes them off the helper list (owner answer l) ═════════════════════════════════
 // The real DashMembers, its Block pressed, over the engine lifted from the bundle. setBlocked is a stand-in that
@@ -221,7 +377,7 @@ async function f3Case({ heldCare, churchMeals = true }) {
   assert.ok(r.wrote, 'the removal did not land');
   return { C, X, eng, r, careId, kimTeam, ann, mark, mary };
 }
-const why = (r, d) => r.carry.notCarried.filter(n => n.d === d);
+const why = (r, d) => (r.carry || r).notCarried.filter(n => n.d === d);
 
 test('F3 — lost Care: the care team’s roster (and a team she pointed Care at) is NOT re-signed, and is listed', async () => {
   const { C, eng, r, careId, kimTeam } = await f3Case({ heldCare: false });
