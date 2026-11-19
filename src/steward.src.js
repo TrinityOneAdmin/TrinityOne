@@ -8128,6 +8128,22 @@ async function _carryOverStewardDocs(pk, opts) {
   const onRoster = [..._careRoster].some(p => String(p).toLowerCase() === who);
   const capEntry = Object.keys(_stewardCaps || {}).find(k => k.toLowerCase() === who);
   const heldCare = onRoster && (capEntry == null || !Array.isArray(_stewardCaps[capEntry]) || _stewardCaps[capEntry].some(c => String(c).toLowerCase() === 'care'));
+  // OWNER ANSWERS (m), (q), (t), 2026-11-19 — WITHOUT CARE, NOTHING THAT DECIDES WHO THE CARE TEAM IS. A delegated console
+  // never writes careteam: (publishCareTeam is owner-only), so (j) alone never fired (sim F3): what a helper changes is the
+  // care team's ROSTER and the meals/care setting that names it. For a helper who did not hold Care when removed:
+  //   · careteam:, and roster:<id> for every id in careIds, are not carried (listed). careIds = the care team this console
+  //     last read (StewardMeals.careTeamId) ∪ adminGroupId in ANY meals-settings copy of this church the carry sees —
+  //     theirs (a helper who pointed Care at a team of their own) or the church's. None known: none of their rosters is
+  //     carried (plan §4; rare, and listed);
+  //   · meals-settings IS carried (on/off, who sees requests — answer q), with adminGroupId put back to the church's own:
+  //     the newest copy at that address signed by the church key. No church copy: not carried, listed (answer t).
+  // meals-settings is read in the FIRST slice (ds is ordered below), so every later slice knows careIds before it decides.
+  const MEALS_D_ = 'trinityone/meals-settings';
+  const careIds = new Set();
+  try { const ct = window.StewardMeals && window.StewardMeals.careTeamId ? window.StewardMeals.careTeamId() : ''; if (ct) careIds.add(String(ct)); } catch (e) {}
+  const noteCareIds = (content) => { try { const g = JSON.parse(content || ''); if (g && typeof g.adminGroupId === 'string' && g.adminGroupId) careIds.add(g.adminGroupId); } catch (e) {} };
+  let churchMeals = null;   // the newest church-signed meals-settings copy seen: { at, adminGroupId }
+  const careDoc = (d) => d.startsWith('trinityone/careteam:') || (d.startsWith('trinityone/roster:') && (!careIds.size || careIds.has(d.slice('trinityone/roster:'.length))));
   // their newest copy of each carryable address of THIS church (feChurch stamps ['church', <cp>] on every steward write)
   const mine = new Map();
   const keepMine = (e) => {
@@ -8161,7 +8177,8 @@ async function _carryOverStewardDocs(pk, opts) {
   if (!readAll) notC('', 'incomplete', 'anything else they set up that a relay did not show in time');
   // PHASE B, per slice of 60 — every copy at those addresses, any author, no trust predicate — then the rule, then the
   // publish, so the check is as close to the write as it can be.
-  const ds = [...mine.keys()];
+  const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));   // meals-settings first — see careIds
+  if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
     if (left() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
@@ -8171,6 +8188,14 @@ async function _carryOverStewardDocs(pk, opts) {
     for (const a of answers) for (const e of a.evs) {
       const d = dOf(e);
       if (!e || e.kind !== 30078 || slice.indexOf(d) === -1) continue;
+      if (d === MEALS_D_ && (chOf(e) ? chOf(e) === pub : e.pubkey === pub)) {   // this church's copy, by anyone
+        if (!heldCare) noteCareIds(e.content);
+        // the church's NEWEST copy decides; a withdrawn (or unreadable) one means the church has no setting to put back
+        if (e.pubkey === pub && (!churchMeals || (e.created_at || 0) > churchMeals.at)) {
+          let g = null; try { g = (e.content && !(e.tags || []).some(t => t[0] === 'deleted')) ? JSON.parse(e.content) : null; } catch (x) {}
+          churchMeals = { at: e.created_at || 0, adminGroupId: (g && typeof g === 'object') ? String(g.adminGroupId || '') : null };
+        }
+      }
       if (String(e.pubkey).toLowerCase() === who) { keepMine(e); continue; }
       const ch = chOf(e);
       if (ch && ch !== pub) continue;                                                  // tagged for another church
@@ -8190,10 +8215,17 @@ async function _carryOverStewardDocs(pk, opts) {
         else notC(d, rivals.some(x => x.at === (S.created_at || 0)) ? 'tie' : 'newer', label);
         continue;
       }
-      if (d.startsWith('trinityone/careteam:') && !heldCare) { notC(d, 'no-care', 'the care team list (they no longer had the Care permission)'); continue; }
+      if (!heldCare && careDoc(d)) { notC(d, 'no-care', 'the care team list (they no longer had the Care permission)'); continue; }
+      let from = S;
+      if (!heldCare && d === MEALS_D_) {
+        if (!churchMeals || churchMeals.adminGroupId == null) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission)'); continue; }
+        let g = null; try { g = JSON.parse(S.content || ''); } catch (e) {}
+        if (!g || typeof g !== 'object') { notC(d, 'unreadable', label); continue; }
+        from = { ...S, content: JSON.stringify({ ...g, adminGroupId: churchMeals.adminGroupId }) };
+      }
       jobs.push((async () => {
         let tmpl = null;
-        try { tmpl = await _carryTemplate(S, !!o.blocked, who); } catch (e) { tmpl = { skip: 'error' }; }
+        try { tmpl = await _carryTemplate(from, !!o.blocked, who); } catch (e) { tmpl = { skip: 'error' }; }
         if (!tmpl || tmpl.skip) { notC(d, (tmpl && tmpl.skip) || 'error', label); return; }
         if (left() <= 0) { notC(d, 'time', label); return; }   // at the limit nothing more is published
         let ok = false, signedEv = null;

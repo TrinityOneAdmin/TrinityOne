@@ -223,7 +223,7 @@ async function f3Case({ heldCare, churchMeals = true }) {
 }
 const why = (r, d) => r.carry.notCarried.filter(n => n.d === d);
 
-test('F3 — lost Care: the care team’s roster (and a team she pointed Care at) is NOT re-signed, and is listed', { todo: 'batch 1 (F3)' }, async () => {
+test('F3 — lost Care: the care team’s roster (and a team she pointed Care at) is NOT re-signed, and is listed', async () => {
   const { C, eng, r, careId, kimTeam } = await f3Case({ heldCare: false });
   assert.deepEqual(churchSent(eng, C, ROSTER_D + careId).map(e => e.content), [], 'THE CARE TEAM’S ROSTER WAS RE-SIGNED UNDER THE CHURCH (sim F3)');
   assert.deepEqual(churchSent(eng, C, ROSTER_D + kimTeam).map(e => e.content), [], 'the roster of the team she pointed Care at was re-signed');
@@ -234,7 +234,7 @@ test('F3 — lost Care: the care team’s roster (and a team she pointed Care at
   assert.equal(churchSent(eng, C, GROUP_D + C.cp.slice(0, 16) + '-kimgroup').length, 1, 'CONTROL: her ordinary group was carried');
 });
 
-test('F3 — lost Care (answer q): the meals/care setting is kept, with the care team put back to the church’s own', { todo: 'batch 1 (F3)' }, async () => {
+test('F3 — lost Care (answer q): the meals/care setting is kept, with the care team put back to the church’s own', async () => {
   const { C, eng, r, careId } = await f3Case({ heldCare: false });
   const sent = churchSent(eng, C, MEALS_D);
   assert.equal(sent.length, 1, 'the meals/care setting was not carried: ' + JSON.stringify(r.carry));
@@ -245,14 +245,14 @@ test('F3 — lost Care (answer q): the meals/care setting is kept, with the care
   assert.equal(why(r, MEALS_D).length, 0, 'a setting that was kept is also listed as not kept');
 });
 
-test('F3 — lost Care, and the church never saved a care setting of its own (answer t): not kept, and listed', { todo: 'batch 1 (F3)' }, async () => {
+test('F3 — lost Care, and the church never saved a care setting of its own (answer t): not kept, and listed', async () => {
   const { C, eng, r } = await f3Case({ heldCare: false, churchMeals: false });
   assert.equal(churchSent(eng, C, MEALS_D).length, 0, 'a setting naming HER care team was re-signed under the church');
   assert.deepEqual(why(r, MEALS_D).map(n => n.why), ['no-care'], JSON.stringify(r.carry.notCarried));
   assert.match(why(r, MEALS_D)[0].label, /the meals and care setting/);
 });
 
-test('F3 — POINT OF USE: after the removal, the care team list the owner console builds comes from the church’s own roster', { todo: 'batch 1 (F3)' }, async () => {
+test('F3 — POINT OF USE: after the removal, the care team list the owner console builds comes from the church’s own roster', async () => {
   const { C, X, careId, ann } = await f3Case({ heldCare: false });
   // what the console's roster screens read for the care team now: the newest copy the relay serves the church
   const served = (await copiesAt(C, ROSTER_D + careId, X)).sort((a, b) => b.created_at - a.created_at)[0];

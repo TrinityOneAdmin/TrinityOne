@@ -21463,6 +21463,22 @@ zoo`.split("\n");
     const onRoster = [..._careRoster].some((p) => String(p).toLowerCase() === who);
     const capEntry = Object.keys(_stewardCaps || {}).find((k) => k.toLowerCase() === who);
     const heldCare = onRoster && (capEntry == null || !Array.isArray(_stewardCaps[capEntry]) || _stewardCaps[capEntry].some((c) => String(c).toLowerCase() === "care"));
+    const MEALS_D_ = "trinityone/meals-settings";
+    const careIds = /* @__PURE__ */ new Set();
+    try {
+      const ct = window.StewardMeals && window.StewardMeals.careTeamId ? window.StewardMeals.careTeamId() : "";
+      if (ct) careIds.add(String(ct));
+    } catch (e) {
+    }
+    const noteCareIds = (content) => {
+      try {
+        const g = JSON.parse(content || "");
+        if (g && typeof g.adminGroupId === "string" && g.adminGroupId) careIds.add(g.adminGroupId);
+      } catch (e) {
+      }
+    };
+    let churchMeals = null;
+    const careDoc = (d) => d.startsWith("trinityone/careteam:") || d.startsWith("trinityone/roster:") && (!careIds.size || careIds.has(d.slice("trinityone/roster:".length)));
     const mine = /* @__PURE__ */ new Map();
     const keepMine = (e) => {
       if (!e || e.kind !== 30078 || String(e.pubkey).toLowerCase() !== who) return;
@@ -21500,7 +21516,8 @@ zoo`.split("\n");
       }
     }));
     if (!readAll) notC("", "incomplete", "anything else they set up that a relay did not show in time");
-    const ds = [...mine.keys()];
+    const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));
+    if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
     for (let i3 = 0; i3 < ds.length; i3 += 60) {
       const slice = ds.slice(i3, i3 + 60);
       if (left() <= 0) {
@@ -21513,6 +21530,17 @@ zoo`.split("\n");
       for (const a of answers) for (const e of a.evs) {
         const d = dOf(e);
         if (!e || e.kind !== 30078 || slice.indexOf(d) === -1) continue;
+        if (d === MEALS_D_ && (chOf(e) ? chOf(e) === pub : e.pubkey === pub)) {
+          if (!heldCare) noteCareIds(e.content);
+          if (e.pubkey === pub && (!churchMeals || (e.created_at || 0) > churchMeals.at)) {
+            let g = null;
+            try {
+              g = e.content && !(e.tags || []).some((t) => t[0] === "deleted") ? JSON.parse(e.content) : null;
+            } catch (x) {
+            }
+            churchMeals = { at: e.created_at || 0, adminGroupId: g && typeof g === "object" ? String(g.adminGroupId || "") : null };
+          }
+        }
         if (String(e.pubkey).toLowerCase() === who) {
           keepMine(e);
           continue;
@@ -21538,14 +21566,31 @@ zoo`.split("\n");
           else notC(d, rivals.some((x) => x.at === (S.created_at || 0)) ? "tie" : "newer", label);
           continue;
         }
-        if (d.startsWith("trinityone/careteam:") && !heldCare) {
+        if (!heldCare && careDoc(d)) {
           notC(d, "no-care", "the care team list (they no longer had the Care permission)");
           continue;
+        }
+        let from = S;
+        if (!heldCare && d === MEALS_D_) {
+          if (!churchMeals || churchMeals.adminGroupId == null) {
+            notC(d, "no-care", "the meals and care setting (they no longer had the Care permission)");
+            continue;
+          }
+          let g = null;
+          try {
+            g = JSON.parse(S.content || "");
+          } catch (e) {
+          }
+          if (!g || typeof g !== "object") {
+            notC(d, "unreadable", label);
+            continue;
+          }
+          from = { ...S, content: JSON.stringify({ ...g, adminGroupId: churchMeals.adminGroupId }) };
         }
         jobs.push((async () => {
           let tmpl = null;
           try {
-            tmpl = await _carryTemplate(S, !!o.blocked, who);
+            tmpl = await _carryTemplate(from, !!o.blocked, who);
           } catch (e) {
             tmpl = { skip: "error" };
           }
