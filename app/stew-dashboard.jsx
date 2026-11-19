@@ -2678,7 +2678,7 @@ function StewDashboard({ initial = 'overview' }) {
             {actions}
           </div>
           <PublishErrorBanner />
-          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
+          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
           </main>
         </div>
@@ -2770,7 +2770,7 @@ function StewDashboard({ initial = 'overview' }) {
           </div>
           <PublishErrorBanner />
           {/* content — the console's MAIN landmark, so a screen reader can jump past the sidebar to it */}
-          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
+          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: 28, background: 'var(--paper)' }}>
             {content}
           </main>
         </div>
@@ -12399,13 +12399,13 @@ function DashWebsitePanel({ church }) {
   const copy = (val) => { setCopied(copyText(val || url) ? 'Copied' : 'Couldn’t copy — select the address and copy it'); setTimeout(() => setCopied(''), 2500); };
   const row = (checked) => ({ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: checked ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' });
   const [tab, setTab] = React.useState('calendar');
-  const tabStyle = (t) => ({ padding: '8px 16px', fontSize: 13.5, fontWeight: 700, border: 'none', borderBottom: tab === t ? '2px solid var(--clay)' : '2px solid transparent', background: 'none', color: tab === t ? 'var(--clay-ink)' : 'var(--ink-3)', cursor: 'pointer', fontFamily: 'var(--font-ui)' });
+  const tabStyle = (t) => ({ padding: '8px 16px', fontSize: 13.5, fontWeight: 700, border: 'none', borderBottom: tab === t ? '2px solid var(--clay)' : '2px solid transparent', background: 'none', color: tab === t ? 'var(--clay-ink)' : 'var(--ink-3)', cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap', flexShrink: 0 });
   const sermonUrl = url ? url.replace(/\/calendar\.ics$/, '/sermons.xml') : '';
   const plansUrl = url ? url.replace(/\/calendar\.ics$/, '/plans.json') : '';
   const devosUrl = url ? url.replace(/\/calendar\.ics$/, '/devotionals.json') : '';
   return (
     <Panel title="Your website">
-      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--line)', marginBottom: 14 }}>
+      <div className="no-scrollbar" style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--line)', marginBottom: 14, overflowX: 'auto' }}>
         <button onClick={() => setTab('calendar')} style={tabStyle('calendar')}>Calendar</button>
         <button onClick={() => setTab('plans')} style={tabStyle('plans')}>Reading Plans</button>
         <button onClick={() => setTab('sermons')} style={tabStyle('sermons')}>Sermons</button>
