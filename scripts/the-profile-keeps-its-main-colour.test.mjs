@@ -34,6 +34,12 @@ function liftPublishProfile() {
   return { body, fe };
 }
 
+function liftNetShortName() {
+  const m = /\n  function netShortName\([\s\S]*?\n  \}\n/.exec(BUNDLE);
+  assert.ok(m, 'could not lift netShortName from vendor/steward.js -- re-anchor this test');
+  return new Function(m[0] + '\nreturn netShortName;')();
+}
+
 function console_(lastProfile) {
   const { body, fe } = liftPublishProfile();
   const wire = [];
@@ -43,6 +49,8 @@ function console_(lastProfile) {
     publish: (e) => { wire.push(e); return Promise.resolve(e); },
     [fe]: (e) => e, _monotonic: (e) => e, now: () => 1700000000,
     _profileSettle: () => Promise.resolve(), CustomEvent: class {}, window: { dispatchEvent() {} },
+    // module-scope helper publishProfile calls since 2026-11-19 (the network short name): the REAL one, lifted from the bundle
+    netShortName: liftNetShortName(),
   };
   const names = Object.keys(scope);
   const make = new Function(...names, 'let lastProfile = arguments[arguments.length - 1];\nreturn { ' + body + ' };');

@@ -25,7 +25,7 @@ const Stub = (n) => { const f = function () { return null; }; Object.definePrope
 
 async function loadMany(anchors, globals) {
   const names = anchors.map(a => a.name);
-  const src = anchors.map(a => fnBody(STEW, a.anchor, a.name)).join('\n') + `\nexport { ${names.join(', ')} };\n`;
+  const src = anchors.map(a => fnBody(STEW, a.anchor, a.name)).join('\n') + '\n' + fnBody(STEW, 'function stewNetView(', 'stewNetView') + `\nexport { ${names.join(', ')} };\n`;   // + stewNetView (B2a, 2026-11-19: network view = a network identity AND the Networks switch; the lifted code now asks it)
   const tmp = join(tmpdir(), 'brand-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

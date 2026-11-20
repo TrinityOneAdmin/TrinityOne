@@ -2908,6 +2908,7 @@ function TodayScreen({ ctx }) {
                 <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", minWidth: 0 }}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
                   <ServingNewDot n={servNew} />
+                  <NetUnreadDot line={ctx.netLine} />
                   <CareCountBadge ctx={ctx} />
                 </div>
                 <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota<CareLink ctx={ctx} /></div>
@@ -2928,6 +2929,8 @@ function TodayScreen({ ctx }) {
                 {!servPendingN ? <button onClick={dismissServStrip} aria-label="Dismiss" title="Dismiss — it comes back for your next slot" style={{ flexShrink: 0, width: 40, height: 40, margin: "-13px -8px -13px auto", borderRadius: 999, border: "none", background: "transparent", color: "var(--ink-3)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, lineHeight: 1 }}>{"✕"}</button> : null}
               </div>
             ) : null}
+            {/* the network's line goes BELOW the serving line: your own church first */}
+            <NetUpdateLine line={ctx.netLine} ctx={ctx} />
           </div>
         </div>
       )}
@@ -3241,25 +3244,35 @@ function TodayScreen({ ctx }) {
         ))}
       </div>
 
-      {/* Network announcements — a quiet teaser at the bottom; full list lives in Notifications */}
-      {(ctx.netAnnouncements || []).length ? (
-        <div style={{ marginTop: 24, animation: 'trinityFade .5s ease .24s both' }}>
-          <SectionLabel action="See all" onAction={() => ctx.openNotifications()}>From your network</SectionLabel>
-          <button onClick={() => ctx.openNotifications()} style={{ display: 'flex', gap: 12, padding: 14, borderRadius: 18, width: '100%', textAlign: 'left', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-            <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="globe" size={19} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 700 }}>{(ctx.netAnnouncements[0] || {})._network || 'Network'}</span>
-                {ctx.netUnread > 0 ? <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--on-clay)', background: 'var(--clay)', borderRadius: 999, padding: '1px 7px' }}>{ctx.netUnread} new</span> : null}
-              </div>
-              <div style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.45, color: 'var(--ink-2)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{(ctx.netAnnouncements[0] || {}).text}</div>
-            </div>
-            <Icon name="chevR" size={18} color="var(--ink-3)" style={{ alignSelf: 'center' }} />
-          </button>
-        </div>
-      ) : null}
+      {/* (The "From your network" section that sat here is gone -- owner 2026-11-19: Today stays about your own church. A network gets ONE
+          line on the What's happening card above, only while something is unread: NetUpdateLine.) */}
     </ScreenScroll>
   );
 }
 
-Object.assign(window, { TodayScreen, ScreenScroll, ProgressRing, SafetyDock, MyChildrenCard });
+// ── NETWORKS ON THE WHAT'S HAPPENING CARD (member step 1, owner 2026-11-19) ─────────────────────────────────────────────────────────────
+// ONE quiet line, "🌐 <short name> · <newest unread headline> ›", only while a network update is unread, and a dot on the card's title. `line`
+// is ctx.netLine (app/app.jsx): null when nothing is unread, and ALWAYS null with the Networks switch off, for a church in no network, for a
+// member the church marked a child, or before that answer has loaded. Tapping the line opens What's happening on that network's tab, which
+// marks it read (ServingScreen), so the line goes. Callers: TodayScreen's What's happening card, and ServingEntry (screens-chat.jsx).
+function NetUpdateLine({ line, ctx }) {
+  if (!line || window.NETWORKS_ENABLED !== true) return null;
+  const head = String(line.text || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+  const open = (e) => { if (e) e.stopPropagation(); if (ctx && ctx.openServing) ctx.openServing(line.tabKey); };
+  return (
+    <div role="button" tabIndex={0} data-testid="net-line" onClick={open} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') open(e); }}
+      style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0, cursor: 'pointer',
+        background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', color: 'var(--clay-ink)' }}>
+      <span aria-hidden="true" style={{ flexShrink: 0 }}>{'🌐'}</span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}><bdi>{line.title || 'Network'}</bdi>{' · '}<bdi>{head}</bdi></span>
+      <span aria-hidden="true" style={{ marginLeft: 'auto', flexShrink: 0, color: 'var(--ink-3)', fontWeight: 400 }}>{'›'}</span>
+    </div>
+  );
+}
+function NetUnreadDot({ line }) {
+  if (!line || window.NETWORKS_ENABLED !== true) return null;
+  return <span data-testid="net-dot" aria-label={'New from ' + (line.title || 'your network')} title={'New from ' + (line.title || 'your network')}
+    style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', flexShrink: 0, marginLeft: 7, display: 'inline-block' }} />;
+}
+
+Object.assign(window, { TodayScreen, ScreenScroll, ProgressRing, SafetyDock, MyChildrenCard, NetUpdateLine, NetUnreadDot });

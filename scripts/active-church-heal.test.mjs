@@ -162,8 +162,13 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // join answer. With a stale id np is undefined and tourAdmitted is false — the Community part is not queued (the
   // safe direction) — and the heal corrects it. Measured by this test's own method at 7ccd7a76 (47), b6e3ecfb (48),
   // be291200 (49) and fix/walkthrough-audit-2026-11-19 @ 13047889 (49); each of those commits added exactly one.
-  assert.equal(sites.length, 49,
-    `the active-church resolution sites changed (${sites.length} vs 49) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 49 → 50 (bae09729, 2026-11-19, networks port): `_actNpub` in app/app.jsx's network-content block, which resolves the
+  // active church to its npub for Fellowship.subscribeNetworkContent. With a stale or missing id it is '' and the effect's
+  // guard `!_actNpub` returns before subscribing, so no network content is subscribed or shown (the safe direction), and the
+  // heal corrects it on the same pass. Measured by this test's own method (comment-stripped site list diffed): 812f7b51 (49)
+  // vs bae09729 (50) differ by one — the branch's old `np` line became `_netNp` + `_actNpub`, i.e. one added; 98c7143d is 47.
+  assert.equal(sites.length, 50,
+    `the active-church resolution sites changed (${sites.length} vs 50) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

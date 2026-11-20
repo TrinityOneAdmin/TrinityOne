@@ -41,7 +41,7 @@ const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 // stewOnPhoneApp — is ALWAYS lifted here, never stubbed, so the real condition executes against the injected
 // window. Only inert plumbing (the settings page list, localStorage helpers) is stubbed through `globals`.
 function liftFromJsx(anchors, exportNames, globals) {
-  const body = anchors.map(([a, n]) => fnBody(DASH, a, n)).join('\n\n');
+  const body = anchors.map(([a, n]) => fnBody(DASH, a, n)).join('\n\n') + '\n\n' + fnBody(DASH, 'function stewNetView(', 'stewNetView') + '\n\n' + fnBody(DASH, 'function netWord(', 'netWord');   // + stewNetView (B2a, 2026-11-19: network view = a network identity AND the Networks switch; the lifted code now asks it)
   const dir = mkdtempSync(join(tmpdir(), 'qrhide-'));
   const tmp = join(dir, 'lift.jsx');
   let js;

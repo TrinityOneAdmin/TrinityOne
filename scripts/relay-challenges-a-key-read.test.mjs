@@ -33,13 +33,14 @@ import { WebSocket } from 'ws';
 let relay;
 const church = H.key();
 // every document type in the registry that is a KEY ENVELOPE, by the registry's own naming (NAMEKEY, CAREKEY, …)
-const KEY_TYPES = Object.entries(D).filter(([name]) => /KEY$/.test(name));
+// N5a: the hop-2 network envelope is named NETKEYC (the church's copy), which the /KEY$/ naming rule cannot see -- add it by name.
+const KEY_TYPES = [...Object.entries(D).filter(([name]) => /KEY$/.test(name)), ['NETKEYC', D.NETKEYC]];
 
 before(async () => { relay = await H.startRelay({ name: 'keychallenge', churches: [church.pub] }); });
 after(() => { try { H.stopAll(); } catch {} });
 
 test('the registry still has the key-envelope types this relay is expected to challenge (guards the derivation below)', () => {
-  assert.deepEqual(KEY_TYPES.map(([n]) => n).sort(), ['CAREKEY', 'CHECKINKEY', 'FINANCEKEY', 'GROUPKEY', 'MEDIAKEY', 'NAMEKEY'],
+  assert.deepEqual(KEY_TYPES.map(([n]) => n).sort(), ['CAREKEY', 'CHECKINKEY', 'FINANCEKEY', 'GROUPKEY', 'MEDIAKEY', 'NAMEKEY', 'NETKEY', 'NETKEYC'],
     'the registry\'s key-envelope types changed — decide whether the relay should challenge the new one (KEY_ENVELOPE_D in scripts/gateway.mjs) and update this list');
 });
 

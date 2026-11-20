@@ -1591,6 +1591,21 @@ const RELAYS_D = D.RELAYS;   // the church's trusted-relays list (resync): d=tri
 // gate the write, so a member of some church on this box cannot author one.
 const RELAY_NET_D = D.RELAY_NET;
 const NETWORK_D = D.NETWORK;   // the church declares it belongs to a network (the network's pubkey)
+// NETWORK CONTENT (Networks MVP N5a, 2026-10-21; ported onto the 2026-11-18 wall). Four prefixes that are the NETWORK's OWN documents,
+// never a church's: netann/netevent are the content (network-authored, sealed {e}), netkey: the network's hop-1 key envelope
+// (network-authored, one per network), netkeyc: the hop-2 re-seal (CHURCH-authored). Nothing here gives a network key any authority over a
+// church's own documents -- the wall (a joined network key is a stranger to the church) is untouched; these are separate doors.
+const NETANN_D = D.NETANN, NETEVENT_D = D.NETEVENT, NETKEY_D = D.NETKEY, NETKEYC_D = D.NETKEYC;
+// STARTUP LITERAL GUARD. If the registry's spelling and the relay's ever drift, the relay would gate one name while a client wrote another --
+// the failure the registry exists to prevent -- so it refuses to START. (It also keeps the literals in the source for doc-registry.test.mjs.)
+for (const [lit, got] of [['trinityone/netann:', NETANN_D], ['trinityone/netevent:', NETEVENT_D], ['trinityone/netkey:', NETKEY_D], ['trinityone/netkeyc:', NETKEYC_D]]) {
+  if (lit !== got) throw new Error('gateway: the network document registry names drifted: ' + lit + ' vs ' + got);
+}
+const NETCONTENT_CAP = 300;          // distinct netann+netevent documents per network key (tombstones count -- addressable rows are replaced, not culled)
+const NETCONTENT_MAX_BYTES = 16384;  // one sealed announcement / event
+const NETKEY_MAX_BYTES = 262144;     // the hop-1 envelope carries one wrapped ring per joined church
+const NETKEY_MAX_RECIPIENTS = 500;
+const NETDOC_TAGS_MAX_BYTES = 256;   // d (<= ~82 bytes) + t + deleted; anything near this is not a tag the client writes
 const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
 const PINSERMON_D = D.PINSERMON; // the church's currently-featured/pinned sermon — d=pinsermon:<churchpub> (one per church) → member Today card + notification
@@ -1635,7 +1650,7 @@ const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its 
 // children's register). NOT checkinhelper: — that is a per-session grant to a named helper, not a church's key.
 // scripts/relay-challenges-a-key-read.test.mjs derives the same set from the doc registry (every D.*KEY) and
 // fails when a key-envelope type is added there and not here.
-const KEY_ENVELOPE_D = [NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, GROUPKEY_D, FINANCEKEY_D, CHECKINKEY_D];
+const KEY_ENVELOPE_D = [NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, GROUPKEY_D, FINANCEKEY_D, CHECKINKEY_D, NETKEY_D, NETKEYC_D];   // N5a: both network envelopes are auth-gated reads
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable; READ only by that parent, the child, the church and its safeguarding stewards — canRead's GUARDREQ_D branch, 2026-10-10)
 const JOINPOLICY_D = D.JOINPOLICY; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
@@ -2586,6 +2601,11 @@ const BROADCAST = new Set();   // group ids the church marked broadcast
 // content into them. Authority is now scoped to the churches that actually declared it; NETWORKS
 // is kept only as a cheap "is this pubkey a network anywhere" union for church-agnostic call sites.
 const NETWORKS_BY = new Map(); // churchpub -> Set(network pubkeys that church joined)
+// N5a: the consent record in each church's join doc. churchpub -> Map(networkpub -> scopes array | null). `null` (a legacy
+// {joined:true} doc, or one with no usable `scopes`) is the NARROWEST: that church's people receive no network content at all.
+// Filled by note() beside NETWORKS_BY, cleared with it (clearDerivedMaps) and rebuilt by the same hydration pre-pass.
+// READ ONLY BY netReader. It grants nothing on a church's own documents.
+const NETWORK_SCOPES_BY = new Map();
 const NETWORKS = new Set();    // union of the above — NEVER use to authorise access to a specific church
 function rebuildNetworks() { NETWORKS.clear(); for (const s of NETWORKS_BY.values()) for (const p of s) NETWORKS.add(p); }
 // the ONLY correct network check when a church is in scope: is `pub` a network THIS church joined?
@@ -4325,7 +4345,7 @@ let _hydrating = false;
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
-                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
+                   GUARDIANS_BY, NETWORKS_BY, NETWORK_SCOPES_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
                    FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS, PUBVERSE,
                    LIVE_AT, VOID_DEF, VOID_FLOOR, VOID_ROSTER]) { try { m.clear(); } catch {} }
@@ -4474,7 +4494,13 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // grant network authority over itself, never over its neighbours on a shared relay.
     const np = d.slice(NETWORK_D.length), owner = e.pubkey;
     let s = NETWORKS_BY.get(owner); if (!s) { s = new Set(); NETWORKS_BY.set(owner, s); }
-    if (removed) s.delete(np); else s.add(np);
+    let sm = NETWORK_SCOPES_BY.get(owner); if (!sm) { sm = new Map(); NETWORK_SCOPES_BY.set(owner, sm); }
+    if (removed) { s.delete(np); sm.delete(np); }
+    else {
+      s.add(np);
+      let sc = null; try { const j = JSON.parse(e.content); if (j && Array.isArray(j.scopes)) sc = j.scopes.filter(x => typeof x === 'string'); } catch {}
+      sm.set(np, sc);   // N5a: the scopes the church consented to (null = none)
+    }
     if (!_hydrating) rebuildNetworks();
   }
   else if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey)) {   // the church's trusted-relays list (resync peers + full-corpus authorisation)
@@ -5071,6 +5097,73 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 let _lastRefusalDocCap = false;
 let _lastRefusalTooBig = false;   // set when accept() refused a finance/attachment: body over FIN_ATTACHMENT_MAX
+// N5a: WRITE gate for the network's OWN documents (netann / netevent / netkey). Network-authored only -- the church-authored hop-2
+// envelope (netkeyc:) has its own lines in accept(). A key that is a CHURCH here is refused outright (a church speaks as a church,
+// through the church paths). This grants a network key NOTHING on any church's documents: it is the only 30078 door a network key
+// has that a stranger does not, and it opens onto documents nobody but the network ever authors.
+//
+// The relay cannot prove a string IS ciphertext, so the floor is structural: ONLY the sealed shape {e:<base64>} (plus an optional
+// numeric v); NO other top-level field (text/title/body would be cleartext a hostile or modified client could slip in); no tag but
+// d / t=trinityone / deleted; an id of bounded charset and length; a size cap; a per-network document cap. A tombstone (empty
+// content, ['deleted']) is always allowed for an id that is valid -- a network must be able to retract.
+const _B64 = /^[A-Za-z0-9+/=_-]+$/;
+// The NIP-44 v2 envelope fingerprint (from c73123db): version byte 0x02 || nonce(32) || padded ciphertext(>=34) || mac(32). MEASURED in
+// October on 3,033 real nostr-tools nip44 encrypt() outputs: decoded length never below 99 bytes, first byte always 0x02. The floor is
+// 97 (two bytes of margin). The relay holds no key, so this RAISES THE BAR -- it refuses base64-wrapped plaintext -- it does not prove
+// the bytes are ciphertext. Used by netDocWriteOk's netann/netevent `e` only (the feed half of c73123db did not come across).
+// WHAT IT DOES NOT BUY (port audit 2026-11-19): base64-wrapped plaintext that happens to start with byte 0x02 and is at least 97 bytes
+// long PASSES. It stops a careless or naive cleartext post, not a deliberate one -- and the only key that can write here is the network
+// itself, which could just as well publish its own words anywhere else. It raises the bar; it is not a proof.
+const NIP44_MIN_BYTES = 97;
+function isNip44Envelope(b64) {
+  if (typeof b64 !== 'string' || !_B64.test(b64)) return false;
+  const raw = Buffer.from(b64.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  return raw.length >= NIP44_MIN_BYTES && raw[0] === 0x02;
+}
+function netDocWriteOk(e, d) {
+  if (!NETWORKS.has(e.pubkey) || CHURCH_PUBS.has(e.pubkey)) return false;
+  const pfx = d.startsWith(NETANN_D) ? NETANN_D : d.startsWith(NETEVENT_D) ? NETEVENT_D : d.startsWith(NETKEY_D) ? NETKEY_D : '';
+  if (!pfx) return false;
+  const id = d.slice(pfx.length), isKey = pfx === NETKEY_D;
+  if (isKey ? id !== e.pubkey : !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return false;
+  // EVERY TAG IS EXACTLY [name, value], EACH NAME AT MOST ONCE, AND ALL OF THEM SMALL (port audit 2026-11-19). Checking only t[0]/t[1]
+  // let ['t','trinityone','<30 KB of text>'] through: cleartext riding past the sealed-only rule, and past the 16 KB cap. The shipped
+  // client (October N5b) writes ['d', d], ['t', NET] and, on a retraction, ['deleted', '1'] -- exactly that and nothing more.
+  const seen = new Set(); let tagBytes = 0;
+  for (const t of (e.tags || [])) {
+    if (!Array.isArray(t) || t.length !== 2 || typeof t[0] !== 'string' || typeof t[1] !== 'string') return false;
+    if (seen.has(t[0])) return false; seen.add(t[0]);
+    tagBytes += Buffer.byteLength(t[0]) + Buffer.byteLength(t[1]);
+    if (t[0] === 'd') { if (t[1] !== d) return false; }
+    else if (t[0] === 't') { if (t[1] !== NET) return false; }
+    else if (t[0] === 'deleted') { if (t[1] !== '1') return false; }
+    else return false;
+  }
+  if (tagBytes > NETDOC_TAGS_MAX_BYTES) return false;   // DEFENCE IN DEPTH, UNREACHABLE TODAY: the checks above already pin every value (d === the bounded d-tag, t === NET, deleted === '1', each
+  //   name once), so no accepted tag set comes near 256 bytes. Sabotage-confirmed 2026-11-19: removing this line fails no test, and no test can reach it.
+  const hasDel = (e.tags || []).some(t => t[0] === 'deleted'), content = typeof e.content === 'string' ? e.content : '';
+  const tomb = hasDel || !content;
+  if (tomb) { if (content) return false; }   // a "tombstone" carrying content would be a way round the shape check
+  else {
+    if (Buffer.byteLength(content) > (isKey ? NETKEY_MAX_BYTES : NETCONTENT_MAX_BYTES)) return false;
+    let o; try { o = JSON.parse(content); } catch { return false; }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+    if (isKey) {
+      for (const f of Object.keys(o)) if (f !== 'v' && f !== 'rev' && f !== 'keys') return false;
+      if ('v' in o && !Number.isFinite(o.v)) return false;
+      if ('rev' in o && !Number.isFinite(o.rev)) return false;
+      const ks = o.keys; if (!ks || typeof ks !== 'object' || Array.isArray(ks)) return false;
+      const names = Object.keys(ks); if (names.length > NETKEY_MAX_RECIPIENTS) return false;
+      for (const n of names) if (!/^[0-9a-f]{64}$/.test(n) || typeof ks[n] !== 'string' || !ks[n] || !_B64.test(ks[n])) return false;
+    } else {
+      for (const f of Object.keys(o)) if (f !== 'v' && f !== 'e') return false;   // REJECT any plaintext field
+      if ('v' in o && !Number.isFinite(o.v)) return false;
+      if (typeof o.e !== 'string' || !o.e || !_B64.test(o.e) || !isNip44Envelope(o.e)) return false;   // sealed-SHAPED: a NIP-44 v2 fingerprint, so a sentence or ordinary base64-wrapped text is refused (not a proof: see isNip44Envelope)
+    }
+  }
+  if (!isKey && !store.hasDoc(e.pubkey, d) && store.countDocsByAuthor(e.pubkey, [NETANN_D, NETEVENT_D]) >= NETCONTENT_CAP) { _lastRefusalDocCap = true; return false; }
+  return true;
+}
 function accept(e) {
   _lastRefusalDocCap = false;
   _lastRefusalTooBig = false;
@@ -5173,6 +5266,16 @@ function accept(e) {
   }
   if (k === 30078) {
     const d = dtag(e);
+    // N5a: the network's own documents. FIRST in this branch, so no later fall-through (an unknown-owner slot, the member catch-all)
+    // can answer for them -- and so every other d-tag below is decided exactly as it was by the wall: a key that is only a declared
+    // network is a stranger there (isMember has no network term). October's `_pureNet` refusal (and its c5406d72 member:/stewardreq:
+    // exemption) is NOT ported: with the wall, a pure network key already reaches the stranger doors and nothing more, which is what
+    // _pureNet + c5406d72 together were reconstructing.
+    if (d.startsWith(NETANN_D) || d.startsWith(NETEVENT_D) || d.startsWith(NETKEY_D)) return netDocWriteOk(e, d);
+    if (d.startsWith(NETKEYC_D)) {   // hop-2: the CHURCH re-seals the network ring under its own name ring. Church key only, for a network IT joined (a tombstone may outlive the join)
+      const np = d.slice(NETKEYC_D.length);
+      return CHURCH_PUBS.has(e.pubkey) && /^[0-9a-f]{64}$/.test(np) && (networkOf(np, e.pubkey) || (e.tags.some(t => t[0] === 'deleted') && !e.content));
+    }
     // Steward authority is ADDITIVE (see STEWARD-ROSTER-DESIGN.md): isLeader (the church/network key) always
     // passes exactly as before; a rostered steward of the relevant church ALSO passes for DELEGATED ops.
     // OWNER-ONLY ops never consult the roster — so they stay church-key-only automatically.
@@ -5975,6 +6078,7 @@ function accept(e) {
   }
   if (k === 1) {   // chat
     const g = gidOf(e);
+    if (g === 'net-announce') return false;   // N5a: the legacy CLEARTEXT network broadcast is retired at the door for EVERY author (network content is sealed netann now)
     // R-7: refuse new posts into a deleted group. The dialog says "won't be shown", and without this the
     // relay continues to accept writes (the maps that the invite/team gates consult stayed populated in the
     // old code because note() cleared them; now they stay AND GROUP_GONE marks the room as tombstoned).
@@ -6096,6 +6200,26 @@ function minorOf(pub, cp) {
 // asked of ONE named church: they pass for the churches they belong to and fail for the rest.
 function churchWriter(pub, cp) {
   return churchReader(pub, cp);
+}
+// N5a: may `authed` read the network `np`'s OWN content of this `kind` ('announcements' | 'events')? Yes IFF there is a church cp such that
+// cp JOINED np, cp's join doc consented to this scope (absent scopes = the narrowest = nothing), and authed is a reader of cp
+// (churchReader: the church, its stewards, an effective member). A child of that church is NOT served (owner 2026-10-21: trust the
+// church's markings; an outside party's notice is not put in front of a marked young person). Block is re-checked per church.
+//
+// THE DIRECTION MATTERS, AND IT IS WHY THIS DOES NOT BREACH THE WALL: networkOf here asks whether a church's PEOPLE may read the
+// NETWORK's documents. It never lets the network key read anything of the church. This is deliberately a SEPARATE predicate:
+// churchReader / leaderOf / the member catch-all have no network term and must not gain one.
+// Callers: canRead's NETANN_D/NETEVENT_D branch only.
+function netReader(authed, np, kind) {
+  if (!authed || !np || !NETWORKS.has(np) || CHURCH_PUBS.has(np)) return false;
+  for (const [cp, nets] of NETWORKS_BY) {
+    if (!nets.has(np) || !networkOf(np, cp)) continue;
+    const sc = (NETWORK_SCOPES_BY.get(cp) || new Map()).get(np);
+    if (!Array.isArray(sc) || !sc.includes(kind)) continue;
+    if (blockedBy(authed, cp) || minorOf(authed, cp)) continue;
+    if (churchReader(authed, cp)) return true;
+  }
+  return false;
 }
 // BLOCK MEANS NO PRIVATE ACCESS, AND A DIRECT MESSAGE IS PRIVATE ACCESS (owner 2026-10-02 / confirmed on a device 2026-10-14).
 // Commit 32bcd2b (2026-09-15) removed the AUTH-time ban the kind-4 read path silently relied on and never replaced it
@@ -6263,6 +6387,33 @@ function canRead(e, authed) {
     // self-identifying; steward-authored content names it in ['church']; member-authored replies
     // (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:) p-tag it. If none of those resolve, we cannot prove
     // who the doc belongs to, so we cannot prove who may read it → deny.
+    // N5a: NETWORK CONTENT, BEFORE the owningChurch deny below (a network-authored document names no church, so it would be denied there
+    // for everybody). DEFAULT-DENY: served only through netReader. The author already returned at the top of this branch.
+    if (d.startsWith(NETANN_D) || d.startsWith(NETEVENT_D)) {
+      if (!NETWORKS.has(e.pubkey) || CHURCH_PUBS.has(e.pubkey)) return false;
+      return netReader(authed, e.pubkey, d.startsWith(NETANN_D) ? 'announcements' : 'events');
+    }
+    // netkey:<np> -- the network's hop-1 envelope: the author (above) and a CHURCH KEY that joined that network. Never a member, never a
+    // steward (a delegated console has no church key and never needs it), never a different network. A network-authored document.
+    if (d.startsWith(NETKEY_D)) {
+      const np = d.slice(NETKEY_D.length);
+      if (!authed || np !== e.pubkey || !NETWORKS.has(np) || CHURCH_PUBS.has(e.pubkey)) return false;
+      // AND THE CHURCH MUST BE ONE OF THE ENVELOPE'S RECIPIENTS (port audit 2026-11-19). Joining is one-sided -- any church on the box can
+      // publish network:<np> -- so a joined-church test alone let any self-declared joiner read the RECIPIENT LIST (which churches the
+      // network wrapped its key to). A church not in `keys` has nothing in it to unwrap, so this removes nothing it could use.
+      let _hop1 = null; try { _hop1 = (JSON.parse(e.content || '') || {}).keys; } catch {}
+      return networkOf(np, authed) && !!_hop1 && typeof _hop1 === 'object' && Object.prototype.hasOwnProperty.call(_hop1, authed);
+    }
+    // N5c / Option A: a church's JOIN DECLARATION (network:<np>, {joined, v, scopes}) is served to the network key it names. THE ONE AND
+    // ONLY church document a network key may read (owner, 2026-11-18: the wall is final, with this single exception) -- the join fact and
+    // the scopes the church consented to, so the network can learn which churches joined it and wrap its key to them. Every condition is
+    // load-bearing: the reader IS the np in the d-tag, the author is a church key here, and that church's join is live. Otherwise fall
+    // through UNCHANGED (to the ordinary member rule), so this adds a reader and removes none. churchReader / leaderOf / the member
+    // catch-all still have no network term.
+    if (d.startsWith(NETWORK_D)) {
+      const np = d.slice(NETWORK_D.length);
+      if (authed && authed === np && NETWORKS.has(np) && !CHURCH_PUBS.has(np) && CHURCH_PUBS.has(e.pubkey) && networkOf(np, e.pubkey)) return true;   // !CHURCH_PUBS.has(np): a church another church names a "network" is still a church, as in every other network check
+    }
     const cp = owningChurch(e, d);
     if (!cp) return false;
     // A doc carrying ['church',<cp>] is served only while its author is the church or on <cp>'s CURRENT
@@ -6990,6 +7141,10 @@ function canRead(e, authed) {
   // the per-church ephemeral budget bounds it.
   if (e.kind !== 1) return !!authed && authed === e.pubkey;   // default-deny — but your own events stay yours
   const g = gidOf(e);
+  // N5a: THE LEGACY CLEARTEXT 'net-announce' BROADCAST IS RETIRED. It was a plaintext kind-1 a network key posted into a room no church
+  // defined, and the unknown-group branch below served it to ANY member of ANY church on the box. Nothing is served now, to anybody
+  // (the network's announcements are sealed netann documents, read through netReader). Whatever is already stored stays inert.
+  if (g === 'net-announce') return false;
   // SAFEGUARDING: an adults-only group (one the church has NOT marked child-safe) is served only to a reader
   // who has proved they are not a child. Gating on `authed && MINORS.has(authed)` alone would be theatre — a
   // minor closes the loophole by simply not authenticating, and anonymous reads of open groups were allowed.

@@ -140,6 +140,96 @@ const NAV_TIPS = {
   meals: 'Organise meals, practical help and care for people in need',
   settings: 'Church name, relays, backup and other console settings',
 };
+// NETWORK VIEW (Networks port, B2a, 2026-11-19 -- from October's 9d3373db / 6ed485ff / c56c20ee / 9a8617df). It applies only while the console is
+// switched to a network identity AND the Networks switch is on (stewNetView); with the switch off nothing below changes the console. Module scope, so
+// the nav, the tab effects and DashSettings read one fact. Rule 2 -- readers: stewNav, StewDashboard, DashSettings, DashNetworksPanel, NetworkBackBar,
+// DashBrandingPanel, the key panel title, useRegistrationRetry's caller.
+const NETWORK_NAV = [
+  { key: 'overview', label: 'Overview', ic: 'today' },
+  { key: 'settings', label: 'Network settings', ic: 'globe' },
+];
+// THE SETTINGS PAGES THE NETWORK VIEW SHOWS -- AN ALLOW-LIST (B2a audit, 2026-11-19). October hid six pages and kept the rest; the audit found the kept
+// "Network key" page revealing the CHURCH's recovery phrase (exportMnemonic is the church seed), so every page was reviewed and only those that
+// genuinely act on the NETWORK stay. A page added later is hidden here until someone decides otherwise. Per page:
+//   identity  -- KEPT: publishes the ACTIVE identity's profile, which in network view is the network's own (name, picture, branding).
+//   key       -- hidden: Reveal / Copy / Back up export the CHURCH recovery phrase (the HIGH).
+//   stewards  -- hidden: "Hand over the church" hands over the church key.
+//   delegated -- hidden: Helpers are the church's helpers.
+//   voice     -- hidden: the steward by-line on the church's notices.
+//   website   -- hidden: the church's public calendar feed.
+//   backup    -- hidden: the church backup file (it carries the church key).
+//   relays / add-relay / history / ownbox -- hidden: the church's relay set, its history copy, its own box; a network publishes through the
+//                church's relays, so changing them here would silently change the church's.
+//   media / features / rules / tags -- hidden: the church's own members' settings.   network / become -- hidden: circular / a church action.
+//   access    -- hidden: a delegate's page (never shown to an owner anyway).
+//   networds  -- KEPT (added 2026-11-19): the NETWORK's own recovery words (Steward.networkWords), Reveal + Copy only -- never the church's.
+const NETWORK_SETTINGS_PAGES = new Set(['identity', 'networds']);
+// The networds page is NOT in SETTINGS_GROUPS (the church console's page table): DashSettings adds it to the first group in the network view only.
+const NETWORK_WORDS_PAGE = { k: 'networds', n: 'Network recovery words', d: 'The network’s own 12 words' };
+// The name-cleaning regex used by NetShortNameField's `live`, built once. Same text as Steward.netShortName and the member app's netClipText.
+function netFieldRe() {
+  if (netFieldRe._re) return netFieldRe._re;
+  let re;
+  try {
+    // Unicode property escapes need Chrome 64+. Built from a STRING inside try, never written as a regex literal: a literal the engine cannot
+    // parse is a SyntaxError for the WHOLE file (the packaged builds ship this text as-is), a string just throws here and we fall back.
+    re = new RegExp('(\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F})|(?![\\u200C\\u200D\\uFE0F])[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u2800\\p{Default_Ignorable_Code_Point}\\p{Cf}]', 'gu');
+  } catch (e) {
+    // the same sets as explicit ranges, no \p and no u flag (astral ranges as surrogate pairs)
+    re = new RegExp('(\\uD83C\\uDFF4\\uDB40\\uDC67\\uDB40\\uDC62(?:\\uDB40\\uDC65\\uDB40\\uDC6E\\uDB40\\uDC67|\\uDB40\\uDC73\\uDB40\\uDC63\\uDB40\\uDC74|\\uDB40\\uDC77\\uDB40\\uDC6C\\uDB40\\uDC73)\\uDB40\\uDC7F)|(?![\\u200C\\u200D\\uFE0F])(?:[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890\\u0891\\u08E2\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFFB]|\\uD804[\\uDCBD\\uDCCD]|\\uD82F[\\uDCA0-\\uDCA3]|\\uD834[\\uDD73-\\uDD7A]|\\uD80D[\\uDC30-\\uDC3F]|[\\uDB40-\\uDB43][\\uDC00-\\uDFFF])', 'g');
+  }
+  return (netFieldRe._re = re);
+}
+// THE NETWORK'S SHORT NAME (Networks member step 1, owner 2026-11-19): the title of the tab its members see inside What's happening, in place of
+// the word "Network". Network view only (Network identity). Published in the network's kind-0 as `short_name` by Steward.publishProfile, which
+// caps it (netShortName: one line, 16 characters); the field caps with the same rule so what is typed is what is saved. Empty = members see
+// the network's name. Callers: DashSettings' identity page, network view only.
+function NetShortNameField({ church }) {
+  const cap = (v) => (window.Steward && window.Steward.netShortName) ? window.Steward.netShortName(v) : Array.from(String(v || '')).slice(0, 16).join('');
+  // WHILE TYPING: invisible / bidi characters out and at most 16 characters, but NOT trimmed -- trimming each keystroke ate the space between
+  // two words as it was typed. The full rule (trim, collapse) is applied by `cap` on Save.
+  const live = (v) => {
+    const s = String(v == null ? '' : v).replace(netFieldRe(), (m, flag) => flag || '');
+    let parts = null;
+    try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
+    let out = ''; for (const g of (parts || Array.from(s)).slice(0, 16)) { if (out.length + g.length > 64) break; out += g; }
+    return out;
+  };
+  const saved = (church && church.short_name) || '';
+  const [val, setVal] = React.useState(saved);
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState('');
+  React.useEffect(() => { setVal(saved); }, [saved]);
+  const dirty = cap(val) !== saved;
+  const save = async () => {
+    setBusy(true); setNote('');
+    let r = null; try { r = await window.Steward.publishProfile({ short_name: cap(val) }); } catch (e) { r = null; }
+    setBusy(false);
+    setNote(r ? 'Saved' : 'Not saved. Check the network is connected and try again.');
+  };
+  return (
+    <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <label htmlFor="net-short-name" style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Short name (shown as the members' tab title)</label>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <input id="net-short-name" data-testid="net-short-name" value={val} placeholder={(church && church.name) ? Array.from(church.name).slice(0, 16).join('') : 'e.g. BB&RB'}
+          onChange={(e) => { setVal(live(e.target.value)); setNote(''); }}
+          style={{ flex: 1, minWidth: 0, height: 38, padding: '0 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14, fontFamily: 'var(--font-ui)' }} />
+        <button onClick={save} disabled={busy || !dirty} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}>{busy ? 'Saving…' : 'Save'}</button>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6 }}>{note || ('Up to 16 characters. ' + (saved ? '' : 'Until you set one, members see the network’s name.'))}</div>
+    </div>
+  );
+}
+function stewNetView(church) { return !!(church && church.isNetwork) && typeof window !== 'undefined' && window.NETWORKS_ENABLED === true; }
+// THE ONE NAME FOR A NETWORK (B2a). The switcher used the name saved on this device when the network was created or imported; the composer used the
+// network's published profile (kind-0). They disagreed until a profile read happened to rewrite the saved one. Both now show the PUBLISHED name when
+// it is known -- it is what the network chose and what every church sees -- and fall back to this device's saved name only until it arrives.
+function useNetDisplayName(pub, fallback) {
+  const [live, setLive] = React.useState('');
+  React.useEffect(() => { setLive(''); if (!pub || !window.Steward || !window.Steward.subscribeNetworkProfile) return; return window.Steward.subscribeNetworkProfile(pub, (pr) => { if (pr && pr.name) setLive(String(pr.name)); }); }, [pub]);
+  return live || fallback || 'Network';
+}
+function NetName({ pub, fallback }) { return <React.Fragment>{useNetDisplayName(pub, fallback)}</React.Fragment>; }
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
@@ -170,6 +260,7 @@ function stewFinanceOn(church, opts) {
   return !!(opts && opts.financePresent) && opts.capState('finance').allowed && f.finance !== false;
 }
 function stewNav(NAV, church, opts) {
+  if (opts && opts.netView) return NETWORK_NAV;   // NETWORK VIEW: its own Overview + Network settings. No church sections.
   const f = (church && church.features) || {};
   const featOn = (k) => f[k] !== false;   // default-on congregation features
   const GATED = ['rota', 'calendar', 'rooms', 'resources'];   // base-NAV sections a church can hide
@@ -277,7 +368,17 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
   const viewingNetwork = window.Steward.isViewingNetwork && window.Steward.isViewingNetwork();
   const delegated = window.Steward.isDelegated && window.Steward.isDelegated();
   const offChurch = viewingNetwork || delegated;   // not on our own church identity
-  const pick = (pub) => { window.Steward.setActiveIdentity(pub); setOpen(false); };
+  // A SWITCH THAT FAILS SAYS SO (B2a). setActiveIdentity answers false when a network's key cannot be opened here (not held, or its words are sealed
+  // to a church key this console does not have open); this used to close the list and leave the console where it was, silently.
+  const [pickErr, setPickErr] = React.useState('');
+  const pick = (pub) => {
+    let ok = true;
+    try { ok = window.Steward.setActiveIdentity(pub) !== false; } catch (e) { ok = false; }
+    if (ok) { setPickErr(''); setOpen(false); return; }
+    let why = ''; try { why = (window.Steward.networkOpenProblem && window.Steward.networkOpenProblem(pub)) || ''; } catch (e) {}
+    const isNet = ids.some(i => i.pub === pub && i.kind === 'network');   // a failed switch to a CHURCH (e.g. a helper just removed) must say church
+    setPickErr((isNet ? 'Can’t open this network here.' : 'Can’t open this church here.') + (why && isNet ? ' ' + why : ''));
+  };
   // the one-line phone shape: fills the column it is given, the text sits on the bottom edge under the heading
   const compactBtn = { position: 'absolute', inset: 0, width: '100%', display: 'flex', alignItems: 'flex-end', gap: 5, padding: '0 0 3px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', minWidth: 0, fontFamily: 'var(--font-ui)' };
   const compactName = { flexShrink: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
@@ -344,13 +445,14 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
               <button key={idn.pub} onClick={() => pick(idn.pub)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', fontFamily: 'var(--font-ui)' }}>
                 <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={icon} size={15} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{idn.kind === 'network' ? <NetName pub={idn.pub} fallback={label} /> : label}</div>
                   <div style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{subtitle}</div>
                 </div>
                 {on ? <Icon name="check" size={15} stroke={2.6} color="var(--clay)" /> : null}
               </button>
             );
           })}
+          {pickErr ? <div role="alert" data-pick-err="1" style={{ fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45, padding: '6px 10px' }}>{pickErr}</div> : null}
           {!delegated ? <React.Fragment>
           <div style={{ height: 1, background: 'var(--line)', margin: '5px 4px' }} />
           <button onClick={() => { setOpen(false); onEditName(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}><Icon name="pen" size={13} color="var(--ink-3)" /> Rename {viewingNetwork ? 'network' : 'church'}</button>
@@ -604,6 +706,21 @@ function publishErrorMessage(reason, evt, opts) {
 // every group that 26 people could see it. Blocked are excluded always; pending only once the admitted/blocked
 // rosters have actually arrived, because on a hard reload those sets are briefly empty and everyone would
 // momentarily look like they were queuing at the door.
+// "BACK TO YOUR CHURCH" -- network view only (53b2d411). An always-visible one-tap way back; it does exactly what picking the church row does.
+// Callers (rule 2): StewDashboard's phone and desktop layouts.
+function NetworkBackBar({ church }) {
+  if (!stewNetView(church)) return null;
+  const S = window.Steward || {};
+  const own = (S.identities ? S.identities() : []).find(i => i.kind === 'church');
+  const name = (own && own.name) || 'your church';
+  return (
+    <button onClick={() => S.setActiveIdentity(S.churchPub)} aria-label={'Back to ' + name} data-net-back="1"
+      style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, width: '100%', minHeight: 44, padding: '0 14px', border: 'none', borderBottom: '1px solid var(--line)', background: 'var(--clay-soft)', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 800, cursor: 'pointer', textAlign: 'left' }}>
+      <span aria-hidden="true">←</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Back to {name}</span>
+    </button>
+  );
+}
+
 function useRealMemberCount(opts) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const admittedReal = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
@@ -2408,13 +2525,18 @@ function StewDashboard({ initial = 'overview' }) {
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
   // THE MEMO BODY LIVES IN stewNav() (module scope) so a point-of-use test can run it (CLAUDE.md rules 1 & 3).
-  const nav = React.useMemo(() => stewNav(NAV, church, { finOn, mannaOn, mealsOn, checkinOn, capState: stewCapState }),
+  const netView = stewNetView(church);   // B2a: the network view (switch on + a network identity active)
+  const nav = React.useMemo(() => stewNav(NAV, church, { finOn, mannaOn, mealsOn, checkinOn, capState: stewCapState, netView }),
     // THE CAPABILITY LIST AND EVERY FEATURE FLAG ARE DEPENDENCIES. mark() calls stewCapState() for eight tabs
     // and stewNav() filters four sections by church.features; a dep left off here leaves the padlock or the
     // section stale until the console restarts. A delegate given Members once went on seeing "your church
     // hasn't given you Members"; the direction that matters is a withdrawn capability still reading unlocked.
     // The screens re-check, so this was never the security boundary — it is what the person is TOLD.
-    [finOn, mannaOn, mealsOn, checkinOn, rotaNavOn, calNavOn, roomsNavOn, resourcesNavOn, _capsSig]);
+    [finOn, mannaOn, mealsOn, checkinOn, rotaNavOn, calNavOn, roomsNavOn, resourcesNavOn, _capsSig, netView]);
+  // NETWORK VIEW: church-only tabs are not in its nav; a stale one carried in from the church view would still render church content, so fall back.
+  // On entry, land on the network's Overview, and Settings opens on Network identity (the Network page is hidden here) -- 9a1f5595.
+  React.useEffect(() => { if (netView) { setSettingsSection('identity'); setTab('overview'); } }, [netView]);
+  React.useEffect(() => { if (netView && !NETWORK_NAV.some(n => n.key === tab)) setTab('overview'); }, [netView, tab]);
   // A church feature turned OFF while its page is open would leave a blank pane: the nav tab is gone but `tab`
   // still points at it, and the body switch below still renders that section. Snap back to Overview. These
   // keys are church-view only (the network nav has none of them), so this never fires in the network view.
@@ -2484,7 +2606,7 @@ function StewDashboard({ initial = 'overview' }) {
     // "Help run a church" has never named or published one. It is a proxy, not a proof — the honest signal
     // would be asking the relay which churches it hosts, which it does not expose unauthenticated — but it
     // costs nothing when wrong, because the effect re-runs the moment a name arrives.
-    if (!S || S.actingChurch || !S.ensureCapKeyFor) return;
+    if (!S || S.actingChurch || netView || !S.ensureCapKeyFor) return;   // NETWORK VIEW mints no church capability keys (the relay refuses them; the refusal raises the sticky "not saved" alarm)
     if (!church.name) return;   // no church of our own to mint for — see above
     const caps = (S.stewardCaps && S.stewardCaps()) || {};
     let cancelled = false;
@@ -2502,11 +2624,11 @@ function StewDashboard({ initial = 'overview' }) {
       }
     }, 1200);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [_capIdv, _capConn, tick, _stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})]);
+  }, [_capIdv, _capConn, tick, _stewardsForKey.join(','), JSON.stringify((window.Steward && window.Steward.stewardCaps && window.Steward.stewardCaps()) || {}), netView]);   // netView: belt-and-braces (B2a audit) -- leaving the network view re-runs the mint
   // once the church name resolves, re-run self-registration so the pool relays store the readable name
   // Owner consoles only — see the note in selfRegister. A delegate's console fired this with the name of the
   // church they were helping and registered THEIR OWN key under it.
-  useRegistrationRetry(church.name);
+  useRegistrationRetry(netView ? '' : church.name);   // NOT in network view: church.name is then the NETWORK's name, and this registers the CHURCH key (B2a audit)
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
   const editName = () => setRenaming(true);
   // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav
@@ -2593,7 +2715,7 @@ function StewDashboard({ initial = 'overview' }) {
       <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
       {window.StewTourHost ? <window.StewTourHost nav={nav} tab={tab} narrow={narrow} delegate={_delegate} isNetwork={!!church.isNetwork} onTab={setTab} holdTips={wizardDeciding || wizard} /> : null}
-      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />}
+      {tab === 'overview' && (netView ? <DashNetworkOverview /> : <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />)}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
       {tab === 'rota' && (stewCapState('content').allowed ? <DashRota onNewTeam={() => setAddingTeam(true)} /> : <StewCapBlocked cap='content' />)}
@@ -2645,7 +2767,7 @@ function StewDashboard({ initial = 'overview' }) {
         {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
-        <JoinNotifier /><KeyDistributor />
+        {netView ? null : <React.Fragment><JoinNotifier /><KeyDistributor /></React.Fragment>}
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onSettings={openSettings} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
         {/* THE SECTIONS ARE BEHIND ☰ ON A PHONE — one 44px row of chrome, decided by the owner 2026-09-19
@@ -2677,6 +2799,7 @@ function StewDashboard({ initial = 'overview' }) {
             </div>
             {actions}
           </div>
+          <NetworkBackBar church={church} />
           <PublishErrorBanner />
           <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
@@ -2693,7 +2816,7 @@ function StewDashboard({ initial = 'overview' }) {
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
       <RelayPanelHost />
-        <JoinNotifier /><KeyDistributor />
+        {netView ? null : <React.Fragment><JoinNotifier /><KeyDistributor /></React.Fragment>}
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onSettings={openSettings} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
@@ -2722,11 +2845,13 @@ function StewDashboard({ initial = 'overview' }) {
             })}
           </nav>
           <div style={{ flex: 1 }} />
+          {netView ? null : (   /* B2a re-audit: the CHURCH key's lock -- not shown in the network view (it would open the church key page) */
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 24%, transparent)' }}>
             <Icon name="lock" size={16} color="var(--sage)" />
             <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Key on this device</div><div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{(window.Steward.hasPinLock && window.Steward.hasPinLock()) ? 'Stored locally · locked' : <React.Fragment>Stored locally · <span onClick={() => openSettings('key', 'pin')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>lock with a PIN</span></React.Fragment>}</div></div>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)' }} />
           </div>
+          )}
           {/* WHERE THIS CHURCH'S RECORDS ACTUALLY LIVE, said permanently and in plain words.
               The Suite used to let a steward choose this at launch, invisibly and stickily, and two doors into
               this same console pointed at different stores — same key, two churches, and nothing on screen to
@@ -2768,6 +2893,7 @@ function StewDashboard({ initial = 'overview' }) {
             <div style={{ flex: 1 }} />
             {actions}
           </div>
+          <NetworkBackBar church={church} />
           <PublishErrorBanner />
           {/* content — the console's MAIN landmark, so a screen reader can jump past the sidebar to it */}
           <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
@@ -11101,10 +11227,30 @@ function StewBackupModal({ church, onClose }) {
 }
 
 // a single joined-network row that resolves its name from the network's profile
+// PORTED 2026-11-19 (B2a) from October 9a1f5595: NetworkRow, NetworkAnnounceComposer, the two Overview cards, DashNetworkOverview, DashNetworksPanel.
+// Changes from October: no feed anywhere; the join screen also says the church's name and town become visible; a refusal shows the honest reason
+// (incl. a relay without the network safety update); one network name (useNetDisplayName); network view = stewNetView (the switch must be on).
 function NetworkRow({ net, onLeave }) {
   const [name, setName] = React.useState('');
   React.useEffect(() => window.Steward.subscribeNetworkProfile(net.networkPub, (p) => { if (p && p.name) setName(p.name); }), [net.networkPub]);
+  // N5c: what the console last learned about this network (who joined, whether the key has reached this church). Refreshed whenever a sync finishes
+  // (the roster tick runs one); nothing to press. null = not known yet, and then nothing is claimed.
+  const readStatus = () => (window.Steward.networkStatus ? window.Steward.networkStatus(net.networkPub) : null) || null;
+  const [st, setSt] = React.useState(readStatus);
+  React.useEffect(() => {
+    const f = () => setSt(readStatus());
+    f();
+    window.addEventListener('steward-network-status', f);
+    try { window.Steward.syncNetworkKeys && window.Steward.syncNetworkKeys(); } catch (e) {}
+    return () => window.removeEventListener('steward-network-status', f);
+  }, [net.networkPub]);
+  const statusLine = !st ? '' : st.owner
+    ? (typeof st.joiners === 'number' ? st.joiners + (st.joiners === 1 ? ' church has' : ' churches have') + ' joined this network' + (st.joiners === 1 ? ' (yours)' : '') + '.' : 'Checking which churches have joined…')
+    : st.key === 'active' ? 'Active — your members can see what this network shares.'
+    : st.key === 'waiting' ? 'You have joined. Waiting for the network to share its key — nothing more is needed from you.'
+    : (st.reason || 'Your church has joined, but the key could not be shared with your members just now. It will try again.');   // B2a: trouble says WHY (e.g. a relay without the safety update)
   return (
+    <div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
       <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={18} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -11112,6 +11258,8 @@ function NetworkRow({ net, onLeave }) {
         <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{net.npub.slice(0, 22)}…</div>
       </div>
       <button onClick={() => onLeave(net)} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}>Leave</button>
+    </div>
+    {statusLine ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 2px 0' }}>{statusLine}</div> : null}
     </div>
   );
 }
@@ -11125,15 +11273,17 @@ function NetworkAnnounceComposer() {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');   // declared with the other hooks: `if (!net) return null` below is an early return
   const [posts, setPosts] = React.useState([]);
+  const [ev, setEv] = React.useState({ title: '', date: '', time: '', where: '' });
+  const [evBusy, setEvBusy] = React.useState(false);
+  const [evErr, setEvErr] = React.useState('');
   React.useEffect(() => {
     const refresh = () => setOwned(window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []);
     window.addEventListener('steward-networks', refresh);
     return () => window.removeEventListener('steward-networks', refresh);
   }, []);
   const net = owned[0] || null;           // one owned network for now
-  const [liveName, setLiveName] = React.useState('');
-  React.useEffect(() => { if (!net || !window.Steward.subscribeNetworkAnnouncements) return; return window.Steward.subscribeNetworkAnnouncements(net.pub, setPosts); }, [net && net.pub]);
-  React.useEffect(() => { setLiveName(''); if (!net || !window.Steward.subscribeNetworkProfile) return; return window.Steward.subscribeNetworkProfile(net.pub, (p) => { if (p && p.name) setLiveName(p.name); }); }, [net && net.pub]);
+  const shownName = useNetDisplayName(net && net.pub, net && net.name);   // the same name the switcher shows
+  React.useEffect(() => { if (!net || !window.Steward.subscribeNetworkPosts) return; return window.Steward.subscribeNetworkPosts(net.pub, setPosts); }, [net && net.pub]);
   if (!net) return null;
   // …AND THE THIRD OF THE THREE. `publishNetworkAnnouncement` resolves NULL when it has no signing key for
   // this network and `publish()` resolves FALSE when no relay accepted — neither throws. So this cleared the
@@ -11141,28 +11291,47 @@ function NetworkAnnounceComposer() {
   const post = async () => {
     if (!text.trim() || busy) return;
     setBusy(true); setErr('');
-    let ok = null;
-    try { ok = await window.Steward.publishNetworkAnnouncement(net.pub, text.trim()); } catch (e) { ok = null; }
+    let r = null;
+    try { r = await window.Steward.publishNetworkPost(net.pub, 'announcement', { text: text.trim() }); } catch (e) { r = null; }
     setBusy(false);
-    if (!ok) { setErr('That didn’t post — nothing reached the network. What you wrote is still here; check your connection and try again.'); return; }
+    if (!r || !r.ok) { setErr('That didn’t post — nothing reached the network. What you wrote is still here; check your connection and try again.' + (r && r.reason ? ' (' + r.reason + ')' : '')); return; }
     setText(''); setSent(true); setTimeout(() => setSent(false), 1600);
+  };
+  // an EVENT for the whole network: the same fields as a church event, without a group (a network has none)
+  const postEvent = async () => {
+    if (!ev.title.trim() || !ev.date || evBusy) return;
+    setEvBusy(true); setEvErr('');
+    let r = null;
+    try { r = await window.Steward.publishNetworkPost(net.pub, 'event', { title: ev.title.trim(), date: ev.date, time: ev.time, where: ev.where.trim() }); } catch (e) { r = null; }
+    setEvBusy(false);
+    if (!r || !r.ok) { setEvErr('That event didn’t post — nothing reached the network. What you wrote is still here.' + (r && r.reason ? ' (' + r.reason + ')' : '')); return; }
+    setEv({ title: '', date: '', time: '', where: '' });
   };
   return (
     <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <Icon name="globe" size={16} color="var(--clay)" />
-        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Announce to <b>{liveName || net.name}</b></div>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Announce to <b>{shownName}</b></div>
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>Reaches every member of every church in the network.</div>
       <textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="Share news with the whole network…" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, lineHeight: 1.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 9 }} />
       <button onClick={post} disabled={!text.trim() || busy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: (text.trim() && !busy) ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {sent ? 'Sent' : busy ? 'Posting…' : 'Post announcement'}</button>
       {err ? <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', margin: '10px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
+      <div style={{ marginTop: 16, fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Or add an event</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '8px 0' }}>
+        <input value={ev.title} onChange={e => setEv({ ...ev, title: e.target.value })} placeholder="Event title" aria-label="Event title" style={{ gridColumn: '1 / -1', height: 40, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 12px', fontSize: 14, color: 'var(--ink)' }} />
+        <input type="date" value={ev.date} onChange={e => setEv({ ...ev, date: e.target.value })} aria-label="Event date" style={{ height: 40, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 10px', fontSize: 14, color: 'var(--ink)' }} />
+        <input value={ev.time} onChange={e => setEv({ ...ev, time: e.target.value })} placeholder="Time, e.g. 7:30pm" aria-label="Event time" style={{ height: 40, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 12px', fontSize: 14, color: 'var(--ink)' }} />
+        <input value={ev.where} onChange={e => setEv({ ...ev, where: e.target.value })} placeholder="Where" aria-label="Event place" style={{ gridColumn: '1 / -1', height: 40, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 12px', fontSize: 14, color: 'var(--ink)' }} />
+      </div>
+      <button onClick={postEvent} disabled={!ev.title.trim() || !ev.date || evBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 15px', fontSize: 13.5, opacity: (ev.title.trim() && ev.date && !evBusy) ? 1 : 0.55 }}><Icon name="calendar" size={15} /> {evBusy ? 'Adding…' : 'Add event'}</button>
+      {evErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', margin: '10px 0 0', lineHeight: 1.45 }}>{evErr}</div> : null}
       {posts.length ? (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Recent</div>
-          {posts.slice(0, 4).map(p => (
-            <div key={p.id} style={{ padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 7 }}>
-              <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{p.text}</div>
+          {posts.slice(0, 6).map(p => (
+            <div key={p.kind + p.id} style={{ padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 7 }}>
+              <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{p.kind === 'event' ? (p.title + ' · ' + p.date + (p.time ? ' ' + p.time : '')) : p.text}</div>
             </div>
           ))}
         </div>
@@ -11171,8 +11340,159 @@ function NetworkAnnounceComposer() {
   );
 }
 
+// NETWORK OVERVIEW CARDS (network view only). The Overview shows the announcement composer and the event composer as two SEPARATE cards, so they are
+// two components taking the network from DashNetworkOverview. NetworkAnnounceComposer above is left as it was: DashNetworksPanel (Settings) still uses it.
+// Callers (rule 2): DashNetworkOverview only.
+const NET_FIELD = { height: 40, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 12px', fontSize: 14, color: 'var(--ink)', minWidth: 0, boxSizing: 'border-box', width: '100%' };
+function NetworkAnnouncementCard({ net }) {
+  const [text, setText] = React.useState('');
+  const [sent, setSent] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const shownName = useNetDisplayName(net && net.pub, net && net.name);   // the same name the switcher shows
+  const post = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true); setErr('');
+    let r = null;
+    try { r = await window.Steward.publishNetworkPost(net.pub, 'announcement', { text: text.trim() }); } catch (e) { r = null; }
+    setBusy(false);
+    if (!r || !r.ok) { setErr('That didn’t post — nothing reached the network. What you wrote is still here; check your connection and try again.' + (r && r.reason ? ' (' + r.reason + ')' : '')); return; }
+    setText(''); setSent(true); setTimeout(() => setSent(false), 1600);
+  };
+  return (
+    <Panel title="Announcements" style={{ flex: '1 1 300px', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <Icon name="globe" size={16} color="var(--clay)" />
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Announce to <b>{shownName}</b></div>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>Reaches every member of every church in the network.</div>
+      <textarea value={text} onChange={e => setText(e.target.value)} rows={4} placeholder="Share news with the whole network…" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, lineHeight: 1.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 9 }} />
+      <button onClick={post} disabled={!text.trim() || busy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: (text.trim() && !busy) ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {sent ? 'Sent' : busy ? 'Posting…' : 'Post announcement'}</button>
+      {err ? <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', margin: '10px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
+    </Panel>
+  );
+}
+function NetworkEventCard({ net }) {
+  const [ev, setEv] = React.useState({ title: '', date: '', time: '', where: '' });
+  const [evBusy, setEvBusy] = React.useState(false);
+  const [evErr, setEvErr] = React.useState('');
+  const postEvent = async () => {
+    if (!ev.title.trim() || !ev.date || evBusy) return;
+    setEvBusy(true); setEvErr('');
+    let r = null;
+    try { r = await window.Steward.publishNetworkPost(net.pub, 'event', { title: ev.title.trim(), date: ev.date, time: ev.time, where: ev.where.trim() }); } catch (e) { r = null; }
+    setEvBusy(false);
+    if (!r || !r.ok) { setEvErr('That event didn’t post — nothing reached the network. What you wrote is still here.' + (r && r.reason ? ' (' + r.reason + ')' : '')); return; }
+    setEv({ title: '', date: '', time: '', where: '' });
+  };
+  return (
+    <Panel title="Events" style={{ flex: '1 1 300px', minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>An event for the whole network.</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '0 0 10px' }}>
+        <input value={ev.title} onChange={e => setEv({ ...ev, title: e.target.value })} placeholder="Event title" aria-label="Event title" style={{ ...NET_FIELD, flex: '1 1 100%' }} />
+        <input type="date" value={ev.date} onChange={e => setEv({ ...ev, date: e.target.value })} aria-label="Event date" style={{ ...NET_FIELD, flex: '1 1 130px' }} />
+        <input value={ev.time} onChange={e => setEv({ ...ev, time: e.target.value })} placeholder="Time, e.g. 7:30pm" aria-label="Event time" style={{ ...NET_FIELD, flex: '1 1 130px' }} />
+        <input value={ev.where} onChange={e => setEv({ ...ev, where: e.target.value })} placeholder="Where" aria-label="Event place" style={{ ...NET_FIELD, flex: '1 1 100%' }} />
+      </div>
+      <button onClick={postEvent} disabled={!ev.title.trim() || !ev.date || evBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 15px', fontSize: 13.5, opacity: (ev.title.trim() && ev.date && !evBusy) ? 1 : 0.55 }}><Icon name="calendar" size={15} /> {evBusy ? 'Adding…' : 'Add event'}</button>
+      {evErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', margin: '10px 0 0', lineHeight: 1.45 }}>{evErr}</div> : null}
+    </Panel>
+  );
+}
+
+// THE NETWORK'S OWN HOME PAGE (network view only: church.isNetwork). The church Overview is Members/Groups/verse-prompt/sign-ups, none of which a
+// network has. The owner asked for announcements and events to be posted "where the groups/teams box is", so the composer sits in that slot (the big
+// left column), with what has been posted under it, then who has joined and the code others join by. No hook here reads church data.
+// Callers (rule 2): StewDashboard's `content` only, behind `tab === 'overview' && church.isNetwork`.
+function DashNetworkOverview() {
+  const [owned, setOwned] = React.useState(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []));
+  // B2a: the network this console is VIEWING (its active identity), else the first owned one
+  const net = owned.find(n => n.pub === (window.Steward && window.Steward.activePub)) || owned[0] || null;
+  const [posts, setPosts] = React.useState([]);
+  const [st, setSt] = React.useState(null);
+  const [liveJoined, setLiveJoined] = React.useState(null);   // the count read directly as the network key (see networkJoinerCount)
+  const [copied, setCopied] = React.useState(false);
+  const [confirming, setConfirming] = React.useState('');   // kind+id of the post whose Remove is waiting for a second press
+  const [rmErr, setRmErr] = React.useState('');
+  React.useEffect(() => {
+    const refresh = () => setOwned(window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []);
+    window.addEventListener('steward-networks', refresh);
+    return () => window.removeEventListener('steward-networks', refresh);
+  }, []);
+  React.useEffect(() => { setPosts([]); if (!net || !window.Steward.subscribeNetworkPosts) return; return window.Steward.subscribeNetworkPosts(net.pub, setPosts); }, [net && net.pub]);
+  React.useEffect(() => {
+    if (!net) return;
+    const f = () => setSt((window.Steward.networkStatus ? window.Steward.networkStatus(net.pub) : null) || null);
+    f();
+    window.addEventListener('steward-network-status', f);
+    try { window.Steward.syncNetworkKeys && window.Steward.syncNetworkKeys(); } catch (e) {}   // church view only: in network view it answers 'church console only', so the count below is read directly
+    // NETWORK VIEW: this console holds the network key, so ask the relay who joined, AS that key. null/failure = unknown -> keep whatever the status said (never 0).
+    let alive = true;
+    try {
+      const q = window.Steward.networkJoinerCount && window.Steward.networkJoinerCount(net.pub);
+      if (q && q.then) q.then(n => { if (alive && (typeof n === 'number' || (n && typeof n.atLeast === 'number'))) setLiveJoined(n); }).catch(() => {});   // a number, or { atLeast } when not every relay answered
+    } catch (e) {}
+    return () => { alive = false; window.removeEventListener('steward-network-status', f); };
+  }, [net && net.pub]);
+  const remove = async (p) => {
+    const key = p.kind + p.id;
+    if (confirming !== key) { setConfirming(key); return; }
+    setConfirming(''); setRmErr('');
+    let r = null;
+    try { r = await window.Steward.removeNetworkPost(net.pub, p.kind, p.id); } catch (e) { r = null; }
+    // a throw or no answer is NOT a removal: say so too (B2a audit) -- only { ok: true } is success
+    if (!r || r.ok !== true) setRmErr('That didn’t come down — it is still showing to the churches.' + (r && r.reason ? ' (' + r.reason + ')' : ''));
+  };
+  if (!net) {
+    return <Panel title="Network"><div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>This console does not hold a network’s key yet.</div></Panel>;
+  }
+  // A PARTIAL READ IS "AT LEAST", NEVER A CONFIDENT LOW NUMBER (B2a audit): networkJoinerCount answers { atLeast: n } when not every relay answered.
+  const joinedAtLeast = !!(liveJoined && typeof liveJoined === 'object');
+  const joined = typeof liveJoined === 'number' ? liveJoined : joinedAtLeast ? liveJoined.atLeast : (st && typeof st.joiners === 'number' ? st.joiners : null);
+  const when = (p) => p.kind === 'event' ? ((p.date || '') + (p.time ? ' ' + p.time : '') + (p.where ? ' · ' + p.where : '')) : (p.ts ? new Date(p.ts * 1000).toLocaleDateString() : '');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* summary tiles: wrap to one column on a phone (flex-basis + wrap, no media query) */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ flex: '1 1 160px', minWidth: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', padding: '14px 16px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 4 }}>Churches joined</div>
+          <div aria-hidden="true" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 28, lineHeight: 1.1, color: 'var(--ink)' }}>{joined === null ? '…' : joined + (joinedAtLeast ? '+' : '')}</div>
+          <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 3 }}>{joined === null ? 'Checking which churches have joined…' : joinedAtLeast ? 'At least ' + joined + (joined === 1 ? ' church has' : ' churches have') + ' joined this network (not every relay answered).' : joined + (joined === 1 ? ' church has' : ' churches have') + ' joined this network.'}</div>
+        </div>
+        <div style={{ flex: '3 1 280px', minWidth: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', padding: '14px 16px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Network code</div>
+          <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 11.5, wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px' }}>{net.npub}</div>
+            <button onClick={() => { if (copyText(net.npub)) { setCopied(true); setTimeout(() => setCopied(false), 1600); } }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, flexShrink: 0 }}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Copied' : 'Copy'}</button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 7 }}>Give this to a church’s steward. They paste it under Settings → Network → Join.</div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-start' }}>
+        <NetworkAnnouncementCard net={net} />
+        <NetworkEventCard net={net} />
+      </div>
+      <Panel title="What you’ve posted">
+        {posts.length ? posts.map(p => (
+          <div key={p.kind + p.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 7 }}>
+            <Icon name={p.kind === 'event' ? 'calendar' : 'send'} size={15} color="var(--clay)" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{p.kind === 'event' ? p.title : p.text}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 2 }}>{p.kind === 'event' ? 'Event · ' : 'Announcement · '}{when(p)}</div>
+            </div>
+            <button onClick={() => remove(p)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12 }}>{confirming === p.kind + p.id ? 'Really remove?' : 'Remove'}</button>
+          </div>
+        )) : <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>Nothing posted yet. What you announce or add above shows here.</div>}
+        {rmErr ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 6 }}>{rmErr}</div> : null}
+      </Panel>
+    </div>
+  );
+}
+
 function DashNetworksPanel() {
   const networks = window.useStewardNetworks();
+  const church = window.useStewardChurch ? window.useStewardChurch() : {};   // the network itself must not be offered to create/join a network
+  const netView = stewNetView(church);
   const net = networks[0] || null;        // a church belongs to one network for now
   const [draft, setDraft] = React.useState('');
   const [err, setErr] = React.useState('');
@@ -11180,13 +11500,66 @@ function DashNetworksPanel() {
   const [created, setCreated] = React.useState(null);   // { npub, mnemonic } just-created — show to save
   const [naming, setNaming] = React.useState(false);    // the create-network wizard
   const [newName, setNewName] = React.useState('');
-  const join = () => { const r = window.Steward.joinNetwork && window.Steward.joinNetwork(draft.trim()); if (!r) { setErr('Paste the network’s code (npub1…).'); return; } Promise.resolve(r).then(() => { setDraft(''); setErr(''); }); };
-  const leave = (n) => { if (window.confirm('Leave this network? Your members will stop seeing its shared content.')) window.Steward.leaveNetwork(n.networkPub); };
+  // N2/N3. Nothing here says "done" until the console says it IS done: every call returns { ok, reason } and a
+  // failure shows the relay's own words (publishErrorMessage) and leaves what the steward typed where it was.
+  const [pending, setPending] = React.useState(null);   // the join screen: { networkPub, npub } awaiting a typed-or-ticked yes
+  const [netName, setNetName] = React.useState('');
+  const [agreed, setAgreed] = React.useState(false);
+  const [retry, setRetry] = React.useState(false);
+  // A REFUSAL IS SAID, NEVER DRESSED AS SUCCESS (B2a). A relay without the network wall is named in plain words; the console's own reasons (stage
+  // 'start' / 'code' / 'readback') are shown as written; a relay's refusal goes through publishErrorMessage as before.
+  const said = (r) => {
+    if (r && r.stage === 'relay') {
+      // a relay that ANSWERED without the update, versus one that could not be reached (a transient: try again) -- B2a audit
+      const lacking = Array.isArray(r.lacking) ? r.lacking : (Array.isArray(r.missing) ? r.missing : []);
+      const unreachable = Array.isArray(r.unreachable) ? r.unreachable : [];
+      if (lacking.length) { const many = lacking.length > 1; return 'Not joined: ' + lacking.join(', ') + (many ? ' haven’t' : ' hasn’t') + ' confirmed the network safety update. Your church can join once ' + (many ? 'they are' : 'it is') + ' updated.'; }
+      if (unreachable.length) return 'Not joined: couldn’t reach ' + unreachable.join(', ') + ' to check ' + (unreachable.length > 1 ? 'they are' : 'it is') + ' up to date. Try again later.';
+    }
+    const reason = (r && r.reason) || '';
+    if (r && r.stage && r.stage !== 'join' && r.stage !== 'leave' && reason) return reason;
+    let m = ''; try { m = publishErrorMessage(reason, { kind: 30078 }, {}).msg; } catch (e) {} return m || reason || 'That did not go through.';
+  };
+  React.useEffect(() => {
+    setNetName(''); setAgreed(false);
+    if (!pending || !window.Steward.subscribeNetworkProfile) return;
+    return window.Steward.subscribeNetworkProfile(pending.networkPub, (p) => { if (p && p.name) setNetName(String(p.name)); });
+  }, [pending && pending.networkPub]);
+  // Step 1: look the code up and show the screen. Does NOT join.
+  const join = async () => {
+    const r = window.Steward.resolveNetwork ? await window.Steward.resolveNetwork(draft.trim()) : null;
+    if (!r) { setErr('Paste the network’s code (npub1…).'); return; }
+    setErr(''); setPending(r);
+  };
+  // Step 2: only with the box ticked. The draft is cleared only once the join is PROVED stored.
+  const confirmJoin = async () => {
+    if (!agreed || !pending || busy) return;
+    setBusy(true);
+    try {
+      const r = await window.Steward.joinNetwork(draft.trim(), { scopes: ['announcements', 'events'] });
+      if (r && r.ok) { setDraft(''); setErr(''); setPending(null); try { window.Steward.syncNetworkKeys && window.Steward.syncNetworkKeys({ force: true }); } catch (e2) {} } else setErr(said(r));
+    } catch (e) { setErr('Couldn’t join the network.'); }
+    setBusy(false);
+  };
+  const leave = async (n) => {
+    if (!window.confirm('Leave this network? Your members will stop seeing its shared content.')) return;
+    try { const r = await window.Steward.leaveNetwork(n.networkPub); if (r && r.ok) setErr(''); else setErr(said(r)); } catch (e) { setErr('Couldn’t leave the network.'); }
+  };
   const doCreate = async () => {
     if (!newName.trim()) return;
     setBusy(true); setNaming(false);
-    try { const r = await window.Steward.createNetwork(newName.trim()); if (r) setCreated(r); } catch (e) { setErr('Couldn’t create the network.'); }
-    setBusy(false); setNewName('');
+    try {
+      const r = await window.Steward.createNetwork(newName.trim());
+      if (r && r.ok) { setCreated({ ...r, name: newName.trim() }); setErr(''); setNewName(''); try { window.Steward.syncNetworkKeys && window.Steward.syncNetworkKeys({ force: true }); } catch (e2) {} }
+      else { setErr(said(r)); setNaming(true); }   // refused: nothing was created; the dialog reopens with the name still in it
+    } catch (e) { setErr('Couldn’t create the network.'); setNaming(true); }
+    setBusy(false);
+  };
+  const retryProfile = async () => {
+    if (!created) return;
+    setRetry(true);
+    try { const r = await window.Steward.retryNetworkProfile(created.networkPub, created.name || 'Network'); if (r && r.ok) { setCreated({ ...created, partial: false, failed: [], reason: '' }); setErr(''); } else setErr(said(r)); } catch (e) { setErr('Couldn’t publish the name.'); }
+    setRetry(false);
   };
   const namingRef = useStewDialog(() => setNaming(false), naming);   // a11y: Escape + focus (create-network dialog)
   return (
@@ -11211,7 +11584,11 @@ function DashNetworksPanel() {
       {created ? (
         <div style={{ borderRadius: 14, border: '1.5px solid color-mix(in oklab, var(--sage) 40%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', padding: 16, marginBottom: 14 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Network created 🎉</div>
-          <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>Save this recovery phrase — it’s the network’s key. Restore it in a console to post network-wide announcements, events and plans. Share the code with other churches so they can join.</p>
+          {created.partial ? (
+            <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', lineHeight: 1.5, marginBottom: 10 }}>The network exists and your church has joined it, but its name hasn’t been published yet{created.reason ? ' (' + created.reason + ')' : ''}. Keep the phrase below, then try again.{' '}
+              <button onClick={retryProfile} disabled={retry} className="sk-btn sk-btn--ghost" style={{ padding: '4px 10px', fontSize: 12.5 }}>{retry ? 'Trying…' : 'Publish the name'}</button></div>
+          ) : null}
+          <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>Save this recovery phrase — it’s the network’s key. Restore it in a console to post network-wide announcements and events. Share the code with other churches so they can join.</p>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>NETWORK CODE</div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, wordBreak: 'break-all', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 8, padding: '7px 9px', marginBottom: 9 }}>{created.npub}</div>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>RECOVERY PHRASE</div>
@@ -11219,22 +11596,42 @@ function DashNetworksPanel() {
           <button onClick={() => setCreated(null)} className="sk-btn sk-btn--clay" style={{ padding: '8px 14px', fontSize: 13 }}>I’ve saved it</button>
         </div>
       ) : null}
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Belong to a wider group of churches — a region, a denomination, or a family of churches. Your members see its shared announcements, events and plans alongside your own.</div>
-      {net ? (
+      {netView ? null : <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Belong to a wider group of churches — a region, a denomination, or a family of churches. Your members see its announcements and events alongside your own.</div>}
+      {netView ? null : net ? (
         <NetworkRow net={net} onLeave={leave} />
       ) : (
         <React.Fragment>
           <button onClick={() => setNaming(true)} disabled={busy} className="sk-btn sk-btn--clay" style={{ width: '100%', padding: 12, fontSize: 14, marginBottom: 12, opacity: busy ? 0.6 : 1 }}><Icon name="globe" size={16} color="var(--on-clay)" /> {busy ? 'Creating…' : 'Create a network'}</button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink-3)', fontSize: 12, fontWeight: 700, margin: '4px 0 12px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} />OR JOIN ONE<div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
+          {pending ? (
+            <div role="group" aria-label="Before you join" style={{ borderRadius: 14, border: '1.5px solid var(--line)', background: 'var(--surface-2)', padding: 16, marginBottom: 10 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Join {netName || 'this network'}?</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>THE NETWORK CAN</div>
+              <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px' }}>Post announcements and events to your members.</p>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>THE NETWORK CANNOT</div>
+              <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px' }}>See or change anything of your church’s own: your children’s records, guardians, check-in, care and pastoral conversations, your rotas, plans and groups, your members, or your finance.</p>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>WHAT THE NETWORK’S CHURCHES WILL SEE</div>
+              <p data-join-visible="1" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px' }}>The network and its other churches will see that your church has joined, and can see your church’s public profile (its name and picture).</p>
+              <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>You can leave at any time.</p>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: 'var(--ink)', marginBottom: 12, cursor: 'pointer' }}>
+                <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} style={{ marginTop: 3 }} />
+                <span>I understand this, and want my church to join {netName || 'this network'}.</span>
+              </label>
+              <div style={{ display: 'flex', gap: 9 }}>
+                <button onClick={() => { setPending(null); setErr(''); }} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>Cancel</button>
+                <button onClick={confirmJoin} disabled={!agreed || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5, opacity: agreed && !busy ? 1 : 0.55 }}>{busy ? 'Joining…' : 'Join network'}</button>
+              </div>
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 9 }}>
-            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
+            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); setPending(null); }} onKeyDown={e => { if (e.key === 'Enter') join(); }} spellCheck={false} autoCapitalize="none"
               aria-label="Network code (npub) to join"
               placeholder="npub1… (a network’s code)" style={{ flex: 1, height: 44, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', outline: 'none' }} />
             <button onClick={join} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13 }}>Join</button>
           </div>
         </React.Fragment>
       )}
-      {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+      {err ? <div role="alert" data-net-err="1" style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
       <NetworkAnnounceComposer />
     </Panel>
   );
@@ -13712,7 +14109,7 @@ function DashBrandingPanel({ church }) {
   const feats = (church && church.features) || {};
   const hideName = !!feats.hideChurchName;
   return (
-    <Panel title="Church branding">
+    <Panel title={stewNetView(church) ? 'Network branding' : 'Church branding'}>
       {cropFile ? <ImageCropModal file={cropFile} outW={768} outH={256} title="Position your banner" onSave={saveBanner} onClose={() => setCropFile(null)} /> : null}
       <div style={lbl}>Banner</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
@@ -14244,6 +14641,9 @@ const SETTINGS_GROUPS = [
 // has no such page, is caught by resolvePage's group fallback and gets the notice instead.
 // 'branding' was its own page until 2026-11-12, when it was merged into identity; a saved link to the old
 // Branding page lands on the page that now holds it.
+// NETWORK VIEW says "Network" wherever the settings list says "Church". DISPLAY ONLY: the group name stays the key for the collapsed-groups store and
+// element ids. Church view (or the switch off) returns its argument untouched.
+function netWord(isNetwork, label) { return isNetwork ? String(label).replace(/^Church\b/, 'Network') : label; }
 const SETTINGS_PAGE_ALIASES = { church: 'identity', security: 'delegated', branding: 'identity' };
 
 // WHICH PAGE A DEEP LINK OPENS. `visible` is the groups this steward may see and `pages` is those groups
@@ -14323,6 +14723,31 @@ function settingsPageFor(wanted, visible, pages) {
   return (seen && seen.length) ? seen[0].k : (pages.length ? pages[0].k : null);
 }
 
+// THE NETWORK'S OWN RECOVERY WORDS (B2a re-audit, 2026-11-19). They were shown once, at creation, and nowhere after -- lose that screen and the network
+// cannot be run from another console. Network view only. It reads Steward.networkWords(activePub), which returns the words from this console's sealed
+// network-key record and NEVER the church's (exportMnemonic). Reveal + Copy only: there is deliberately no "Back up to a file" -- that file is the
+// CHURCH backup. Callers (rule 2): DashSettings, behind open === 'networds' && stewNetView(church).
+function NetworkWordsPanel() {
+  const [shown, setShown] = React.useState('');
+  const [none, setNone] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const S = window.Steward || {};
+  const reveal = () => { let w = ''; try { w = (S.networkWords && S.networkWords(S.activePub)) || ''; } catch (e) { w = ''; } setShown(w); setNone(!w); };
+  return (
+    <Panel title="Network recovery words">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>These 12 words are the <b>network’s</b> key — not your church’s. They are different from your church’s recovery phrase. Whoever holds them can post as the network and run it from another console, so keep them private.</div>
+      {shown ? (
+        <React.Fragment>
+          <div data-network-words="1" style={{ fontFamily: 'var(--mono)', fontSize: 13, lineHeight: 1.7, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>{shown}</div>
+          <button onClick={() => { if (copyText(shown)) { setCopied(true); setTimeout(() => setCopied(false), 1600); } }} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Copied' : 'Copy the network’s words'}</button>
+        </React.Fragment>
+      ) : (
+        <button onClick={reveal} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 13 }}><Icon name="key" size={15} color="currentColor" /> Reveal the network’s words</button>
+      )}
+      {none ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 9, lineHeight: 1.45 }}>The network’s words can’t be shown here: this console doesn’t hold them, or the console is locked.</div> : null}
+    </Panel>
+  );
+}
 function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed, repicked }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
@@ -14340,8 +14765,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
   // bodies, so the list and the detail cannot disagree: a page missing from this list cannot be opened, and
   // one present in it always has a body.
   const groups = React.useMemo(() => SETTINGS_GROUPS
-    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true))])   // NETWORKS SWITCH: the Network page
-    .filter(([, items]) => items.length), [delegated]);
+    .map(([g, items], gi) => [g, (gi === 0 && stewNetView(church)) ? [...items, NETWORK_WORDS_PAGE] : items])   // the network's own words page: network view only
+    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true) && !(stewNetView(church) && !NETWORK_SETTINGS_PAGES.has(p.k)))])   // NETWORKS SWITCH: the Network page; NETWORK VIEW shows only NETWORK_SETTINGS_PAGES
+    .filter(([, items]) => items.length), [delegated, stewNetView(church)]);   // B2a: the view is a dependency (church <-> network on one mounted page)
   const pages = groups.reduce((a, [, items]) => a.concat(items), []);
   // ON A PHONE THE LIST IS THE FIRST SCREEN and a page opens on tap, so nothing is open to begin with. In a
   // browser the list and the page sit side by side, so a page is always open. A deep link opens its page on
@@ -14565,9 +14991,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
                 raised about an unselected tab. The chevron says open-or-shut without relying on colour. */}
             <button className={'set-grp' + (on ? '' : ' set-grp--off')} id={gid} aria-expanded={on}
               onClick={() => toggleGroup(g)}
-              title={(on ? 'Hide' : 'Show') + ' the ' + g + ' settings'}>
+              title={(on ? 'Hide' : 'Show') + ' the ' + netWord(stewNetView(church), g) + ' settings'}>
               <Icon name={on ? 'chevD' : 'chevR'} size={13} color="currentColor" />
-              <span className="set-grp-n">{g}</span>
+              <span className="set-grp-n">{netWord(stewNetView(church), g)}</span>
               {!on ? <span className="set-grp-c">{items.length}</span> : null}
             </button>
             {on ? (
@@ -14582,7 +15008,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
                         it to anyone who cannot separate clay from ink. */}
                     <button ref={el => { navRefs.current[i] = el; }} onClick={() => openPage(p.k)} onKeyDown={e => onNavKey(e, i)}
                       aria-current={sel ? 'page' : undefined} className={'set-item' + (sel ? ' set-item--on' : '')}>
-                      <span className="set-item-n">{p.n}</span>
+                      <span className="set-item-n">{netWord(stewNetView(church), p.n)}</span>
                       <span className="set-item-d">{p.d}</span>
                     </button>
                   </li>
@@ -14604,7 +15030,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
           No page-level heading: the card below already carries these words as its own <h2>, so the region
           takes the name instead of repeating it on screen. */}
       {cur && (!narrow || open) ? (
-      <section className="set-page" aria-label={cur.n}>
+      <section className="set-page" aria-label={netWord(stewNetView(church), cur.n)}>
       {narrow ? (
         <button onClick={() => setPage(null)} className="set-back"><Icon name="chevL" size={16} color="currentColor" /> All settings</button>
       ) : null}
@@ -14631,6 +15057,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
           </div>
           <button onClick={() => setEditingWeb(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> Edit</button>
         </div>
+        {stewNetView(church) ? <NetShortNameField church={church} /> : null}
       </Panel>
       <DashBrandingPanel church={church} />
       </React.Fragment>
@@ -14664,8 +15091,11 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
       </Panel>
       ) : null}
 
+      {/* KEYED ON THE ACTIVE NETWORK (re-audit): a switch from network A to B must remount the panel, or A's revealed words stay on screen under B.
+          activePub is the identity itself and changes exactly on that switch (the idv counter also moves for other identity events). */}
+      {open === 'networds' && stewNetView(church) ? <NetworkWordsPanel key={(window.Steward && window.Steward.activePub) || ''} /> : null}
       {open === 'key' ? (
-      <Panel title="Church key">
+      <Panel title={stewNetView(church) ? 'Network key' : 'Church key'}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>This church is self-custodial: its identity is one key, held on this device. Whoever holds it can post and manage the church — so keep the recovery phrase safe and private.</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 12 }}>
           <Icon name="lock" size={18} color="var(--sage)" />

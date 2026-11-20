@@ -13907,6 +13907,152 @@ zoo`.split("\n");
     return unpad(padded);
   }
 
+  // src/network-seal.src.js
+  var NETANN_D = "trinityone/netann:";
+  var NETEVENT_D = "trinityone/netevent:";
+  var NETKEY_D = "trinityone/netkey:";
+  var NETKEYC_D = "trinityone/netkeyc:";
+  var NET_RING_MAX = 12;
+  var HEX64 = /^[0-9a-f]{64}$/;
+  var toBytes = (k) => k instanceof Uint8Array ? k : new Uint8Array((String(k).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
+  var toHex = (u) => Array.from(u, (b) => b.toString(16).padStart(2, "0")).join("");
+  function cleanRing(r) {
+    const out = [];
+    for (const k of Array.isArray(r) ? r : []) {
+      const h = typeof k === "string" ? k.toLowerCase() : "";
+      if (HEX64.test(h) && !out.includes(h)) out.push(h);
+    }
+    return out.slice(0, NET_RING_MAX);
+  }
+  function newNetKey(cryptoObj) {
+    return toHex((cryptoObj || globalThis.crypto).getRandomValues(new Uint8Array(32)));
+  }
+  async function firstNetKey(netSk, cryptoObj) {
+    try {
+      if (!(netSk instanceof Uint8Array) && !(typeof netSk === "string" && /^[0-9a-f]{64}$/i.test(netSk))) return null;
+      const ikm = netSk instanceof Uint8Array ? netSk : toBytes(netSk);
+      if (ikm.length !== 32) return null;
+      const subtle = (cryptoObj || globalThis.crypto).subtle;
+      const k = await subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+      const bits2 = await subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("trinityone"), info: new TextEncoder().encode("trinityone/netring/0") }, k, 256);
+      return toHex(new Uint8Array(bits2));
+    } catch (e) {
+      return null;
+    }
+  }
+  function rotateRing(ring, cryptoObj) {
+    return cleanRing([newNetKey(cryptoObj), ...cleanRing(ring)]);
+  }
+  function sealHop1(netSk, ring, churches, rev2) {
+    const r = cleanRing(ring);
+    if (!r.length) return null;
+    const body = JSON.stringify({ k: r }), keys = {};
+    for (const c of [...new Set((churches || []).map((x) => String(x || "").toLowerCase()))]) {
+      if (!HEX64.test(c)) continue;
+      keys[c] = encrypt2(body, getConversationKey(netSk, c));
+    }
+    return JSON.stringify({ v: 1, rev: Number.isFinite(rev2) ? rev2 : r.length, keys });
+  }
+  function openHop1ForChurch(content, churchSk2, churchPub2, networkPub) {
+    try {
+      const env = JSON.parse(content || "{}"), mine = env && env.keys && env.keys[String(churchPub2).toLowerCase()];
+      if (typeof mine !== "string") return null;
+      const r = cleanRing((JSON.parse(decrypt3(mine, getConversationKey(churchSk2, networkPub))) || {}).k);
+      return r.length ? r : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function openHop1AsNetwork(content, netSk) {
+    try {
+      const env = JSON.parse(content || "{}"), ks = env && env.keys || {};
+      for (const c of Object.keys(ks)) {
+        if (!HEX64.test(c) || typeof ks[c] !== "string") continue;
+        try {
+          const r = cleanRing((JSON.parse(decrypt3(ks[c], getConversationKey(netSk, c))) || {}).k);
+          if (r.length) return r;
+        } catch (e) {
+        }
+      }
+    } catch (e) {
+    }
+    return null;
+  }
+  var hop1Recipients = (content) => {
+    try {
+      return Object.keys((JSON.parse(content || "{}") || {}).keys || {}).filter((c) => HEX64.test(c));
+    } catch (e) {
+      return [];
+    }
+  };
+  function sealHop2(ring, nameKey) {
+    const r = cleanRing(ring);
+    if (!r.length || !nameKey) return null;
+    try {
+      return JSON.stringify({ e: encrypt2(JSON.stringify({ k: r }), toBytes(nameKey)) });
+    } catch (e) {
+      return null;
+    }
+  }
+  function sealPost(body, ring) {
+    const r = cleanRing(ring);
+    if (!r.length) return null;
+    try {
+      return JSON.stringify({ v: 1, e: encrypt2(JSON.stringify(body), toBytes(r[0])) });
+    } catch (e) {
+      return null;
+    }
+  }
+  function openPost(content, ring) {
+    let o;
+    try {
+      o = JSON.parse(content || "");
+    } catch (e) {
+      return null;
+    }
+    if (!o || typeof o.e !== "string") return null;
+    for (const k of cleanRing(ring)) {
+      try {
+        const b = JSON.parse(decrypt3(o.e, toBytes(k)));
+        if (b && typeof b === "object") return b;
+      } catch (e) {
+      }
+    }
+    return null;
+  }
+  function churchEventBody(ev) {
+    ev = ev || {};
+    return {
+      date: ev.date || "",
+      time: ev.time || "",
+      title: ev.title || "Event",
+      where: ev.where || "",
+      blurb: ev.blurb || "",
+      accent: ev.accent || "var(--clay)",
+      image: ev.image || "",
+      groupId: ev.groupId || "",
+      recur: ev.recur || "",
+      day: typeof ev.day === "number" ? ev.day : null,
+      nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null
+      // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST)
+    };
+  }
+  function churchEventFields(c) {
+    c = c || {};
+    return { date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null };
+  }
+  function netEventBody(ev) {
+    const b = churchEventBody(ev);
+    delete b.groupId;
+    return b;
+  }
+  function netEventFields(c) {
+    const f = churchEventFields(c);
+    delete f.groupId;
+    return f;
+  }
+  var netAnnounceBody = (text) => ({ text: String(text || "").trim().slice(0, 2e3) });
+
   // src/steward.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
 
@@ -15019,7 +15165,7 @@ zoo`.split("\n");
   }
   function buildCheckinPermission({ person, source, lifetime, from, until }) {
     const who = String(person || "").trim().toLowerCase();
-    if (!HEX64.test(who)) throw new Error("buildCheckinPermission: person must be a 64-hex pubkey");
+    if (!HEX642.test(who)) throw new Error("buildCheckinPermission: person must be a 64-hex pubkey");
     if (!isPermissionSource(source)) throw new Error("buildCheckinPermission: undeclared permission source " + JSON.stringify(source));
     if (!isDeclaredPermissionLifetime(lifetime)) throw new Error("buildCheckinPermission: undeclared lifetime " + JSON.stringify(lifetime));
     const end = until === void 0 ? null : until;
@@ -15037,27 +15183,27 @@ zoo`.split("\n");
     if (!c || typeof c !== "object") return null;
     const person = String(c.person || "").trim().toLowerCase();
     const until = c.until === void 0 ? null : c.until;
-    if (!HEX64.test(person)) return null;
+    if (!HEX642.test(person)) return null;
     if (!isPermissionSource(c.source)) return null;
     if (permissionFault(c.from, until, c.lifetime)) return null;
     return { person, source: c.source, lifetime: c.lifetime, from: c.from, until };
   }
   function permissionAdmits(perm, at) {
     if (!perm || !Number.isFinite(at)) return false;
-    if (!HEX64.test(String(perm.person || ""))) return false;
+    if (!HEX642.test(String(perm.person || ""))) return false;
     if (!isPermissionSource(perm.source)) return false;
     if (permissionFault(perm.from, perm.until == null ? null : perm.until, perm.lifetime)) return false;
     if (at < perm.from) return false;
     if (perm.until != null && at > perm.until) return false;
     return true;
   }
-  var HEX64 = /^[0-9a-f]{64}$/;
+  var HEX642 = /^[0-9a-f]{64}$/;
   var clean4 = (pubs) => {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     for (const p of pubs || []) {
       const h = typeof p === "string" ? p.trim().toLowerCase() : "";
-      if (!HEX64.test(h) || seen.has(h)) continue;
+      if (!HEX642.test(h) || seen.has(h)) continue;
       seen.add(h);
       out.push(h);
     }
@@ -15387,6 +15533,7 @@ zoo`.split("\n");
   var BOOKING_D = "trinityone/booking:";
   var REQUEST_D = "trinityone/request:";
   var REQREPLY_D = "trinityone/reqreply:";
+  var NETWORK_SCOPES = ["announcements", "events"];
   var NETWORK_D = "trinityone/network:";
   var BLOCKED_D = "trinityone/blocked:";
   var MINORS_D = "trinityone/minors:";
@@ -16281,6 +16428,497 @@ zoo`.split("\n");
       }
       return r;
     });
+  }
+  async function _readNetworkJoin(np) {
+    if (!churchPub) return null;
+    try {
+      const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#d": [NETWORK_D + np], limit: 5 }]);
+      const e = (evs || []).filter((x) => x && x.pubkey === churchPub).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+      if (!e || !e.content || (e.tags || []).some((t) => t[0] === "deleted")) return null;
+      return { doc: JSON.parse(e.content), ts: e.created_at };
+    } catch {
+      return null;
+    }
+  }
+  var NET_QUERY_MAX_WAIT = 8e3;
+  async function _queryAsKey(urls, sk2, filters, maxWait = NET_QUERY_MAX_WAIT) {
+    const list = Array.isArray(urls) ? urls.filter(Boolean) : [];
+    if (!list.length || !sk2) return { events: [], complete: false };
+    const p = new SimplePool();
+    p.automaticallyAuth = () => async (authEvent) => finalizeEvent2(authEvent, sk2);
+    const pass = () => new Promise((resolve) => {
+      const events = [];
+      let done = false;
+      const fin = (v) => {
+        if (!done) {
+          done = true;
+          resolve(v);
+        }
+      };
+      const hard = setTimeout(() => fin({ events, complete: false }), maxWait + 2e3);
+      try {
+        p.subscribeEose(list, filters, {
+          maxWait,
+          onevent(e) {
+            events.push(e);
+          },
+          onclose(reasons) {
+            clearTimeout(hard);
+            fin({ events, complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every((r) => r === "closed automatically on eose") });
+          }
+        });
+      } catch (e) {
+        clearTimeout(hard);
+        fin({ events, complete: false });
+      }
+    });
+    try {
+      const first = await pass();
+      const challenged = [];
+      for (const r of p.relays && typeof p.relays.values === "function" ? p.relays.values() : []) if (r && r.challenge) challenged.push(r);
+      if (!challenged.length) return first;
+      const logins = await Promise.race([
+        Promise.all(challenged.map((r) => r.authPromise ? Promise.resolve(r.authPromise).then(() => true, () => false) : Promise.resolve(false))),
+        new Promise((res) => setTimeout(() => res(null), maxWait))
+      ]);
+      if (!logins || logins.some((ok) => !ok)) return { events: first.events, complete: false };
+      const second = await pass();
+      const byId = /* @__PURE__ */ new Map();
+      for (const e of [...first.events, ...second.events]) if (e && e.id) byId.set(e.id, e);
+      return { events: [...byId.values()], complete: second.complete };
+    } catch (e) {
+      return { events: [], complete: false };
+    } finally {
+      try {
+        const pending = [];
+        for (const r of p && p.relays && typeof p.relays.values === "function" ? p.relays.values() : []) if (r && r.authPromise) pending.push(Promise.resolve(r.authPromise).catch(() => {
+        }));
+        if (pending.length) await Promise.race([Promise.all(pending), new Promise((r) => setTimeout(r, 3e3))]);
+      } catch (e) {
+      }
+      try {
+        p.close(list);
+      } catch (e) {
+      }
+    }
+  }
+  function _netPublishSetFor(np) {
+    return relays();
+  }
+  var NETWORK_WALL_CAP = "network-wall-1";
+  var NETRING_MINT_LS = "trinityone.netring.mint.";
+  var NETRING_SEEN_LS = "trinityone.netring.seen.";
+  var _hop2Done = /* @__PURE__ */ new Map();
+  var _netStatus = /* @__PURE__ */ new Map();
+  async function _netWallCheck(urls) {
+    const has = (x) => !!x && Array.isArray(x.capabilities) && x.capabilities.includes(NETWORK_WALL_CAP);
+    const ask = async (url) => {
+      const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+      const http = base.replace(/\/+$/, ""), root = http.replace(/\/relay$/i, "");
+      const get = async (u, accept) => {
+        try {
+          const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+          const to = setTimeout(() => {
+            try {
+              ctrl && ctrl.abort();
+            } catch (e) {
+            }
+          }, 6e3);
+          const res = await Promise.race([
+            fetch(u, { headers: accept ? { Accept: accept } : {}, cache: "no-store", ...ctrl ? { signal: ctrl.signal } : {} }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6500))
+          ]);
+          clearTimeout(to);
+          return res && res.ok ? await res.json() : null;
+        } catch (e) {
+          return null;
+        }
+      };
+      const info = await get(http, "application/nostr+json");
+      if (info && has(info.trinityone)) return "ok";
+      const st = await get(root + "/status", "");
+      if (has(st)) return "ok";
+      return info || st ? "none" : "down";
+    };
+    const got = await Promise.all((urls || []).map((u) => ask(u).catch(() => "down")));
+    const lacking = [], unreachable = [];
+    (urls || []).forEach((u, i3) => {
+      if (got[i3] === "none") lacking.push(u);
+      else if (got[i3] !== "ok") unreachable.push(u);
+    });
+    return { lacking, unreachable };
+  }
+  var _netIsShippedRelay = (u) => {
+    const n = (x) => String(x || "").trim().toLowerCase().replace(/\/+$/, "");
+    return CANONICAL_RELAYS.some((c) => n(c) === n(u));
+  };
+  async function _netWallGate() {
+    const set = relays();
+    if (!set.length) return { waiting: true, missing: [], lacking: [], unreachable: [], reason: "Still connecting \u2014 no relay is ready for this church yet." };
+    const { lacking, unreachable } = await _netWallCheckCached(set);
+    if (!lacking.length && !unreachable.length) return null;
+    const missing = [...lacking, ...unreachable];
+    const list = (a) => a.join(", "), one = (a) => a.length === 1;
+    const reach = unreachable.length ? "Couldn\u2019t reach " + list(unreachable) + " to check " + (one(unreachable) ? "it is" : "they are") + " up to date \u2014 it will try again later." : "";
+    if (!lacking.length) return { waiting: true, missing, lacking, unreachable, reason: "Network keys are waiting. " + reach };
+    const own = lacking.filter((u) => !_netIsShippedRelay(u)), shipped = lacking.filter((u) => _netIsShippedRelay(u));
+    const parts = [];
+    if (own.length) parts.push(list(own) + (one(own) ? " has" : " have") + " not confirmed " + (one(own) ? "it runs" : "they run") + " the software that keeps a network out of your church\u2019s private records. Update " + (one(own) ? "it" : "them") + " or remove " + (one(own) ? "it" : "them") + " from this church\u2019s relays.");
+    if (shipped.length) parts.push("The shared relay " + list(shipped) + (one(shipped) ? " has" : " have") + " not confirmed that update yet; network work waits until it is updated (nothing to change on your side).");
+    if (reach) parts.push(reach);
+    return { waiting: false, missing, lacking, unreachable, reason: "Network keys are paused: " + parts.join(" ") };
+  }
+  var _netWallOk = /* @__PURE__ */ new Set();
+  async function _netWallCheckCached(urls) {
+    const ask = (urls || []).filter((u) => !_netWallOk.has(u));
+    const r = ask.length ? await _netWallCheck(ask) : { lacking: [], unreachable: [] };
+    for (const u of ask) if (!r.lacking.includes(u) && !r.unreachable.includes(u)) _netWallOk.add(u);
+    return r;
+  }
+  var NET_JOIN_READ_LIMIT = 500;
+  async function _netReadJoiners(np) {
+    const nsk = (() => {
+      try {
+        return skFor(np);
+      } catch (e) {
+        return null;
+      }
+    })();
+    if (!nsk || getPublicKey2(nsk) !== np) return { ok: false, joiners: [], authoritative: false };
+    let q;
+    try {
+      q = await _queryAsKey(_netPublishSetFor(np), nsk, [{ kinds: [30078], "#d": [NETWORK_D + np], limit: NET_JOIN_READ_LIMIT }]);
+    } catch (e) {
+      return { ok: false, joiners: [], authoritative: false };
+    }
+    const evs = q && Array.isArray(q.events) ? q.events : [];
+    const newest = /* @__PURE__ */ new Map();
+    for (const e of evs) {
+      if (!e || !/^[0-9a-f]{64}$/.test(e.pubkey || "") || e.pubkey === np) continue;
+      const d = ((e.tags || []).find((t) => t[0] === "d") || [])[1];
+      if (d !== NETWORK_D + np) continue;
+      const prev = newest.get(e.pubkey);
+      if (!prev || (e.created_at || 0) > (prev.created_at || 0)) newest.set(e.pubkey, e);
+    }
+    const joiners = [];
+    for (const [church, e] of newest) {
+      if (!e.content || (e.tags || []).some((t) => t[0] === "deleted")) continue;
+      try {
+        if (JSON.parse(e.content).joined) joiners.push(church);
+      } catch (x) {
+      }
+    }
+    let unsettled = [];
+    try {
+      unsettled = _gate.unsettled(relaysRaw(), pub);
+    } catch (e) {
+      unsettled = [];
+    }
+    return { ok: true, joiners, authoritative: !!(q && q.complete) && joiners.length > 0 && evs.length < NET_JOIN_READ_LIMIT && !unsettled.length };
+  }
+  async function _readNetDoc(author, d, asSk) {
+    let best = null, evs;
+    if (asSk) {
+      let q;
+      try {
+        q = await _queryAsKey(_netPublishSetFor(author), asSk, [{ kinds: [30078], authors: [author], "#d": [d], limit: 5 }]);
+      } catch (e) {
+        return { failed: true };
+      }
+      evs = q && q.events || [];
+      if (!(q && q.complete) && !evs.some((e) => e && e.pubkey === author)) return { failed: true };
+    } else {
+      try {
+        evs = await pool.querySync(_netPublishSetFor(author), [{ kinds: [30078], authors: [author], "#d": [d], limit: 5 }]);
+      } catch (e) {
+        return { failed: true };
+      }
+    }
+    for (const e of evs || []) if (e && e.pubkey === author && (!best || (e.created_at || 0) > (best.created_at || 0))) best = e;
+    if (!best || !best.content || (best.tags || []).some((t) => t[0] === "deleted")) return null;
+    return best;
+  }
+  function _netMintBlockers(np) {
+    let unproved = [];
+    try {
+      unproved = _gate.unsettled(relaysRaw(), pub);
+    } catch (e) {
+      unproved = [];
+    }
+    return { unproved, notAuthed: !_isRelayAuthed(), notFounder: lsGet(NETRING_MINT_LS + np) !== "1" };
+  }
+  async function _netRingFor(np) {
+    const nsk = (() => {
+      try {
+        return skFor(np);
+      } catch (e) {
+        return null;
+      }
+    })();
+    const holder = !!(nsk && getPublicKey2(nsk) === np);
+    const ev = await _readNetDoc(np, NETKEY_D + np, holder ? nsk : null);
+    if (ev && ev.failed) return { ring: null, ev: null, readFailed: true };
+    if (!ev) return { ring: null, ev: null, absent: true };
+    let ring = null;
+    if (holder) ring = openHop1AsNetwork(ev.content, nsk);
+    if (!ring && churchSk && churchPub) ring = openHop1ForChurch(ev.content, churchSk, churchPub, np);
+    if (ring) {
+      try {
+        lsSet(NETRING_SEEN_LS + np, "1");
+      } catch (e) {
+      }
+    }
+    return ring ? { ring, ev } : { ring: null, ev, unreadable: true };
+  }
+  async function _ownJoinLive(np) {
+    const j = await _readNetworkJoin(np);
+    return !!(j && j.doc && j.doc.joined === true);
+  }
+  var _netKeyBusy = /* @__PURE__ */ new Map();
+  async function _netSyncKey(np, opts = {}) {
+    const prev = _netKeyBusy.get(np);
+    const run = (async () => {
+      if (prev) {
+        try {
+          await prev;
+        } catch (e) {
+        }
+      }
+      return _netSyncKeyOnce(np, opts);
+    })();
+    _netKeyBusy.set(np, run);
+    run.then(() => {
+      if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np);
+    }, () => {
+      if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np);
+    });
+    return run;
+  }
+  async function _netSyncKeyOnce(np, opts = {}) {
+    const nsk = (() => {
+      try {
+        return skFor(np);
+      } catch (e) {
+        return null;
+      }
+    })();
+    if (!nsk || getPublicKey2(nsk) !== np) return { ok: false, reason: "This console does not hold that network\u2019s key." };
+    if (!churchSk || !churchPub) return { ok: false, reason: "This console has no church key loaded." };
+    const wall = await _netWallGate();
+    if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+    let joinersRead = null;
+    if (opts.readJoiners) {
+      const jr = await _netReadJoiners(np);
+      joinersRead = jr.ok ? jr.joiners.length : null;
+      opts = jr.authoritative ? { ...opts, joiners: jr.joiners, authoritative: true } : { ...opts, add: [...opts.add || [], ...jr.joiners] };
+    }
+    const r = await _netSyncKeyCore(np, nsk, opts);
+    return joinersRead === null ? r : { ...r, joiners: joinersRead };
+  }
+  async function _netSyncKeyCore(np, nsk, opts) {
+    const cur = await _netRingFor(np);
+    if (cur.readFailed) return { ok: false, waiting: true, reason: "Could not read the current network key just now \u2014 it will try again rather than replace it." };
+    if (cur.unreadable) return { ok: false, reason: "A network key already exists that this console cannot open, so it will not replace it." };
+    let ring = cur.ring, mintedNow = false;
+    const had = cur.ev ? hop1Recipients(cur.ev.content) : [];
+    const want = new Set(had);
+    const ownLive = await _ownJoinLive(np);
+    if (ownLive) want.add(churchPub);
+    for (const c of opts.add || []) {
+      const h = toPubHex(c);
+      if (h) want.add(h);
+    }
+    let dropped = false;
+    const drop = new Set((opts.drop || []).map((c) => toPubHex(c)).filter(Boolean));
+    if (opts.authoritative && Array.isArray(opts.joiners)) {
+      const all = new Set(opts.joiners.map((c) => toPubHex(c)).filter(Boolean));
+      if (ownLive) all.add(churchPub);
+      for (const c of [...want]) if (!all.has(c)) drop.add(c);
+      for (const c of all) want.add(c);
+    }
+    for (const c of drop) if (want.delete(c)) dropped = true;
+    if (!ring) {
+      if (lsGet(NETRING_SEEN_LS + np) === "1") return { ok: false, waiting: true, reason: "The network key could not be read just now; a new one will not be minted over the existing one." };
+      const b = _netMintBlockers(np);
+      if (b.unproved.length || b.notAuthed || b.notFounder) return { ok: false, waiting: true, reason: b.notFounder ? "This console did not create the network and cannot see an existing key, so it will not start a new one." : "Still connecting \u2014 the network key will be set up in a moment." };
+      const k0 = await firstNetKey(nsk);
+      if (!k0) return { ok: false, reason: "Could not make the network key on this device." };
+      ring = cleanRing([k0]);
+      mintedNow = true;
+    } else if (dropped) {
+      ring = rotateRing(ring);
+    }
+    if (!want.size) return { ok: false, reason: "No church has joined this network yet." };
+    if (!mintedNow && !dropped && cur.ev && want.size === had.length && had.every((c) => want.has(c))) {
+      return { ok: true, unchanged: true, recipients: [...want] };
+    }
+    const content = sealHop1(nsk, ring, [...want], ring.length);
+    if (!content) return { ok: false, reason: "Could not seal the network key." };
+    const o = {};
+    const r = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETKEY_D + np], ["t", NET]], content }), nsk), o);
+    if (!r) return { ok: false, reason: o.reason || "No relay accepted it." };
+    try {
+      lsSet(NETRING_SEEN_LS + np, "1");
+    } catch (e) {
+    }
+    _hop2Done.delete(np);
+    return { ok: true, rotated: dropped, minted: mintedNow, recipients: [...want] };
+  }
+  async function _netSyncHop2(np, opts = {}) {
+    if (!churchSk || !churchPub) return { ok: false, reason: "This console has no church key loaded." };
+    if (actingChurch || pub !== churchPub) return { ok: false, reason: "Only the church\u2019s own console re-seals the network key for its members." };
+    const nk = _nameKeyRing[0];
+    if (!nk || !_nameKeyChecked) return { ok: false, waiting: true, reason: "Waiting for this church\u2019s name key." };
+    let unproved = [];
+    try {
+      unproved = _gate.unsettled(relaysRaw(), pub);
+    } catch (e) {
+      unproved = [];
+    }
+    if (unproved.length || !_isRelayAuthed()) return { ok: false, waiting: true, reason: "Still connecting." };
+    const wall = await _netWallGate();
+    if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+    const cur = await _netRingFor(np);
+    if (cur.readFailed) return { ok: false, waiting: true, reason: "Could not read the network key just now \u2014 it will try again." };
+    if (cur.absent) return { ok: false, waiting: true, reason: "Waiting for the network to add this church to its key." };
+    if (cur.unreadable) return { ok: false, reason: "This church\u2019s copy of the network key could not be opened." };
+    const sig = np + "|" + cur.ring.join(",") + "|" + nk;
+    if (!opts.force && _hop2Done.get(np) === sig) return { ok: true, unchanged: true };
+    const content = sealHop2(cur.ring, nk);
+    if (!content) return { ok: false, reason: "Could not seal the network key for members." };
+    const o = {};
+    const r = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETKEYC_D + np], ["t", NET]], content }), churchSk), o);
+    if (!r) return { ok: false, reason: o.reason || "No relay accepted it." };
+    _hop2Done.set(np, sig);
+    return { ok: true };
+  }
+  async function _netWithdrawHop2(np) {
+    _hop2Done.delete(np);
+    if (!churchSk || actingChurch) return false;
+    try {
+      return !!await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETKEYC_D + np], ["t", NET], ["deleted", "1"]], content: "" }), churchSk));
+    } catch (e) {
+      return false;
+    }
+  }
+  var _netSyncBusy = null;
+  var _netSyncAt = 0;
+  var _netRingHooked = false;
+  var _joinedNets = null;
+  var _joinedNetsFor = "";
+  async function _netSyncAll(opts = {}) {
+    if (_netSyncBusy) return _netSyncBusy;
+    if (!opts.force && Date.now() - _netSyncAt < 3e4) return { ok: true, skipped: true };
+    _netSyncAt = Date.now();
+    if (!_netRingHooked) {
+      _netRingHooked = true;
+      try {
+        _onNameKeyRing(() => {
+          _netSyncAll({ force: true });
+        });
+      } catch (e) {
+      }
+    }
+    _netSyncBusy = (async () => {
+      const out = {};
+      try {
+        if (!churchSk || actingChurch || pub !== churchPub) return { ok: false, reason: "church console only" };
+        if (!_joinedNets || _joinedNetsFor !== churchPub || opts.force) {
+          const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#t": [NET] }]);
+          const found = /* @__PURE__ */ new Set();
+          for (const e of evs || []) {
+            const d = ((e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+            if (e.pubkey === churchPub && d.startsWith(NETWORK_D) && e.content && !(e.tags || []).some((t) => t[0] === "deleted")) found.add(d.slice(NETWORK_D.length));
+          }
+          _joinedNets = found;
+          _joinedNetsFor = churchPub;
+        }
+        const joined = _joinedNets;
+        if (joined.size) {
+          const wall = await _netWallGate();
+          if (wall) {
+            if (wall.waiting && !(wall.unreachable && wall.unreachable.length)) _netSyncAt = 0;
+            const ownedNow = new Set(netKeys().map((r) => r.pub));
+            for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: wall.waiting ? "waiting" : "trouble", reason: wall.reason });
+            try {
+              window.dispatchEvent(new CustomEvent("steward-network-status"));
+            } catch (e) {
+            }
+            return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, lacking: wall.lacking, unreachable: wall.unreachable, reason: wall.reason };
+          }
+        }
+        const owned = /* @__PURE__ */ new Set();
+        for (const r of netKeys()) {
+          if (!joined.has(r.pub)) continue;
+          owned.add(r.pub);
+          const hop1 = await _netSyncKey(r.pub, { readJoiners: true });
+          out[r.pub] = { hop1, joiners: typeof hop1.joiners === "number" ? hop1.joiners : null };
+        }
+        for (const np of joined) {
+          out[np] = Object.assign(out[np] || {}, { hop2: await _netSyncHop2(np, opts) });
+        }
+        for (const np of joined) {
+          const o = out[np] || {}, h2 = o.hop2 || {}, h1 = o.hop1 || {};
+          const key = h2.ok === true ? "active" : h2.waiting ? "waiting" : "trouble";
+          _netStatus.set(np, { owner: owned.has(np), joiners: typeof o.joiners === "number" ? o.joiners : null, key, reason: key === "active" ? "" : h2.reason || h1.reason || "" });
+        }
+        try {
+          window.dispatchEvent(new CustomEvent("steward-network-status"));
+        } catch (e) {
+        }
+        return { ok: true, networks: out };
+      } catch (e) {
+        return { ok: false, reason: String(e && e.message || e) };
+      }
+    })();
+    try {
+      return await _netSyncBusy;
+    } finally {
+      _netSyncBusy = null;
+    }
+  }
+  async function _netPublishPost(np, kind, input, id) {
+    const nsk = (() => {
+      try {
+        return skFor(np);
+      } catch (e) {
+        return null;
+      }
+    })();
+    if (!nsk || getPublicKey2(nsk) !== np) return { ok: false, reason: "This console does not hold that network\u2019s key." };
+    const isEvt = kind === "event";
+    if (!isEvt && kind !== "announcement") return { ok: false, reason: "Unknown post type." };
+    const body = isEvt ? netEventBody(input) : netAnnounceBody(input && typeof input === "object" ? input.text : input);
+    if (isEvt ? !(body.title && body.date) : !body.text) return { ok: false, reason: isEvt ? "An event needs a title and a date." : "Write something to post." };
+    const wall = await _netWallGate();
+    if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+    let cur = await _netRingFor(np);
+    if (cur.readFailed) return { ok: false, reason: "Could not read the network key just now, so nothing was posted. Try again." };
+    if (!cur.ring && !cur.unreadable) {
+      const k = await _netSyncKey(np);
+      if (!k.ok) return { ok: false, reason: k.reason };
+      cur = await _netRingFor(np);
+    }
+    if (!cur.ring) return { ok: false, reason: "The network key could not be read, so nothing was posted." };
+    const content = sealPost(body, cur.ring);
+    if (!content) return { ok: false, reason: "Could not seal the post." };
+    const pid = id && /^[A-Za-z0-9_-]{1,64}$/.test(String(id)) ? String(id) : (isEvt ? "e" : "a") + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const o = {};
+    const r = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", (isEvt ? NETEVENT_D : NETANN_D) + pid], ["t", NET]], content }), nsk), o);
+    return r ? { ok: true, id: pid } : { ok: false, reason: o.reason || "No relay accepted it." };
+  }
+  async function _netRemovePost(np, kind, id) {
+    const nsk = (() => {
+      try {
+        return skFor(np);
+      } catch (e) {
+        return null;
+      }
+    })();
+    if (!nsk || getPublicKey2(nsk) !== np || !/^[A-Za-z0-9_-]{1,64}$/.test(String(id || ""))) return { ok: false, reason: "Not possible from this console." };
+    const o = {};
+    const r = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", (kind === "event" ? NETEVENT_D : NETANN_D) + id], ["t", NET], ["deleted", "1"]], content: "" }), nsk), o);
+    return r ? { ok: true } : { ok: false, reason: o.reason || "No relay accepted it." };
   }
   function saveNetKey(rec) {
     const sealed = { pub: rec.pub, name: rec.name };
@@ -19610,6 +20248,31 @@ zoo`.split("\n");
   }
   function _subscribeMany(filters, handlers) {
     return pool.subscribeMany(relays(), filters, handlers);
+  }
+  function netShortName(v) {
+    function netCleanRe() {
+      if (netShortName._re) return netShortName._re;
+      let re;
+      try {
+        re = new RegExp("(\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F})|(?![\\u200C\\u200D\\uFE0F])[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u2800\\p{Default_Ignorable_Code_Point}\\p{Cf}]", "gu");
+      } catch (e) {
+        re = new RegExp("(\\uD83C\\uDFF4\\uDB40\\uDC67\\uDB40\\uDC62(?:\\uDB40\\uDC65\\uDB40\\uDC6E\\uDB40\\uDC67|\\uDB40\\uDC73\\uDB40\\uDC63\\uDB40\\uDC74|\\uDB40\\uDC77\\uDB40\\uDC6C\\uDB40\\uDC73)\\uDB40\\uDC7F)|(?![\\u200C\\u200D\\uFE0F])(?:[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890\\u0891\\u08E2\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFFB]|\\uD804[\\uDCBD\\uDCCD]|\\uD82F[\\uDCA0-\\uDCA3]|\\uD834[\\uDD73-\\uDD7A]|\\uD80D[\\uDC30-\\uDC3F]|[\\uDB40-\\uDB43][\\uDC00-\\uDFFF])", "g");
+      }
+      return netShortName._re = re;
+    }
+    const s = String(v == null ? "" : v).replace(netCleanRe(), (m, flag) => flag || "").replace(/\s+/g, " ").trim();
+    let parts = null;
+    try {
+      if (typeof Intl !== "undefined" && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(void 0, { granularity: "grapheme" }).segment(s), (x) => x.segment);
+    } catch (e) {
+      parts = null;
+    }
+    let out = "";
+    for (const g of (parts || Array.from(s)).slice(0, 16)) {
+      if (out.length + g.length > 64) break;
+      out += g;
+    }
+    return out.trim();
   }
   function _ownOrigin() {
     if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "";
@@ -23455,6 +24118,7 @@ zoo`.split("\n");
       }
     },
     // ---- publish (signed by the church) ----
+    netShortName,
     publishProfile(meta) {
       if (!sk) return Promise.resolve(null);
       const _refuse = (what, message) => {
@@ -23481,7 +24145,7 @@ zoo`.split("\n");
         const host = (CANONICAL_RELAY || "").replace(/^wss?:\/\//i, "").replace(/\/relay\/?$/i, "");
         if (local && host) nip05 = local + "@" + host;
       }
-      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", bannerFade: typeof m.bannerFade === "number" ? m.bannerFade : 16, accent: m.accent || "", mainColor: typeof m.mainColor === "string" && /^#[0-9a-fA-F]{6}$/.test(m.mainColor) ? m.mainColor : "", cardColor: typeof m.cardColor === "string" && /^#[0-9a-fA-F]{6}$/.test(m.cardColor) ? m.cardColor : "", titleColor: m.titleColor || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {} });
+      const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", bannerFade: typeof m.bannerFade === "number" ? m.bannerFade : 16, accent: m.accent || "", mainColor: typeof m.mainColor === "string" && /^#[0-9a-fA-F]{6}$/.test(m.mainColor) ? m.mainColor : "", cardColor: typeof m.cardColor === "string" && /^#[0-9a-fA-F]{6}$/.test(m.cardColor) ? m.cardColor : "", titleColor: m.titleColor || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {}, ...netShortName(m.short_name) ? { short_name: netShortName(m.short_name) } : {} });
       return publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content }), sk));
     },
     // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
@@ -29854,34 +30518,102 @@ zoo`.split("\n");
       };
     },
     // ---- networks: a church declares it belongs to a wider group/network (its own npub) ----
-    // The church publishes network:<networkPub> (p-tagged to the network). Members of the church
-    // discover the network and can follow it — its groups/events/plans load like any church.
-    joinNetwork(input) {
-      if (!sk) return Promise.resolve(null);
-      const np = toPubHex(input);
-      if (!np) return Promise.resolve(null);
-      const content = JSON.stringify({ joined: true });
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }), sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
+    // N2 (SCOPE-NETWORKS-MVP; 64b4d06b, ported 2026-11-18): create / join / leave REPORT WHAT HAPPENED. publish() answers FALSE when no relay
+    // accepted the write, and these used to ignore that. Every one now returns { ok, reason, stage } -- `reason` is the relay's OWN words (publish()
+    // writes them into the opts object it is handed), never an invented explanation.
+    // Callers (rule 2): DashNetworksPanel in app/stew-dashboard.jsx (join / leave / create -- not yet rewritten for these results; behind
+    // NETWORKS_ENABLED=false until Phase B2) and createNetwork -> joinNetwork. Nothing else in src/ or app/ calls them.
+    //
+    // THEY SIGN AS THE CHURCH (churchSk), never the active identity: a console switched to a network identity is still the church that joins.
+    //
+    // THE JOIN DOCUMENT is {joined:true, v:1, scopes:[...]} -- exactly what the relay's NETWORK_SCOPES_BY reads (an array of strings; absent =
+    // the narrowest, nothing). ADD-ONLY: it is read back first and merged over, so a field this build does not know about survives.
+    async resolveNetwork(input) {
+      const np = toPubHex(String(input || "").trim());
+      return np ? { networkPub: np, npub: npubEncode(np) } : null;
     },
-    leaveNetwork(networkPub) {
-      if (!sk) return Promise.resolve(null);
+    async joinNetwork(input, jopts) {
+      if (!churchSk || !churchPub) return { ok: false, stage: "start", reason: "This console has no church key loaded." };
+      if (actingChurch) return { ok: false, stage: "start", reason: "Only the church\u2019s own console can join a network." };
+      const np = toPubHex(String(input || "").trim());
+      if (!np) return { ok: false, stage: "code", reason: "That is not a network code (it starts npub1\u2026)." };
+      if (np === churchPub) return { ok: false, stage: "code", reason: "That is this church\u2019s own code, not a network\u2019s." };
+      const set = relays();
+      if (!set.length) return { ok: false, stage: "relay", reason: "No relay is ready for this church yet, so it cannot join a network." };
+      const { lacking, unreachable } = await _netWallCheck(set);
+      const missing = [...lacking, ...unreachable];
+      if (lacking.length) return { ok: false, stage: "relay", missing, lacking, unreachable, reason: "Not joined. " + (lacking.length === set.length ? "This church\u2019s relays have" : lacking.length + " of this church\u2019s " + set.length + " relays have") + " not confirmed they run the software that keeps a network out of your church\u2019s private records (" + lacking.join(", ") + "). They need updating first." };
+      if (unreachable.length) return { ok: false, stage: "relay", missing, lacking, unreachable, reason: "Not joined: couldn\u2019t reach " + unreachable.join(", ") + " to check " + (unreachable.length === 1 ? "it is" : "they are") + " up to date. Try again later." };
+      const prev = await _readNetworkJoin(np);
+      const base = prev && prev.doc && typeof prev.doc === "object" ? prev.doc : {};
+      const doc = { ...base, joined: true, v: 1 };
+      const want = jopts && Array.isArray(jopts.scopes) ? jopts.scopes.filter((x) => NETWORK_SCOPES.includes(x)) : null;
+      if (want) doc.scopes = want;
+      else if (Array.isArray(doc.scopes)) doc.scopes = doc.scopes.filter((x) => typeof x === "string" && NETWORK_SCOPES.includes(x));
+      const o = {};
+      const r = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content: JSON.stringify(doc) }), churchSk), o);
+      if (!r) return { ok: false, stage: "join", reason: o.reason || "No relay accepted it." };
+      const back = await _readNetworkJoin(np);
+      if (!back || !back.doc || back.doc.joined !== true) return { ok: false, stage: "readback", reason: "A relay accepted it, but it could not be read back, so it may not have been saved. Try again." };
+      try {
+        if (_joinedNets) _joinedNets.add(np);
+      } catch (x) {
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("steward-networks"));
+      } catch (x) {
+      }
+      return { ok: true, networkPub: np, npub: npubEncode(np), scopes: back.doc.scopes };
+    },
+    async leaveNetwork(networkPub) {
+      if (!churchSk || !churchPub) return { ok: false, stage: "start", reason: "This console has no church key loaded." };
+      if (actingChurch) return { ok: false, stage: "start", reason: "Only the church\u2019s own console can leave a network." };
       const np = toPubHex(networkPub) || networkPub;
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }), sk));
+      const o = {};
+      const r = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }), churchSk), o);
+      if (r) {
+        try {
+          if (_joinedNets) _joinedNets.delete(np);
+          await _netWithdrawHop2(np);
+        } catch (x) {
+        }
+      }
+      return r ? { ok: true } : { ok: false, stage: "leave", reason: o.reason || "No relay accepted it." };
     },
-    // create a brand-new network: generate its key, join it (so the relay lets it post here), then
-    // publish the network's profile + a starter announcements channel (signed by the network key).
-    // Returns { npub, mnemonic } — save/share these to run the network's own console later.
+    // create a brand-new network: generate its key, JOIN it first, then publish its profile. NOTHING IS KEPT UNTIL THE JOIN IS PROVED: the key is
+    // generated in memory, and only saved (saveNetKey) once the join document is stored and read back -- so a refused join leaves no orphan.
+    //   { ok:false, stage, reason }                               join refused (incl. stage 'relay': a relay lacks the wall) -- nothing saved
+    //   { ok:true, networkPub, npub, mnemonic }                   fully done
+    //   { ok:true, partial:true, failed:['profile'], …, reason }  joined + key saved, name not published: retryNetworkProfile finishes it
+    // No network-keyed church group is published: network announcements are their own documents (netann:).
     async createNetwork(name) {
-      if (!sk) return null;
+      if (!churchSk || !churchPub) return { ok: false, stage: "start", reason: "This console has no church key loaded." };
+      const nm = name || "Network";
       const m = generateSeedWords();
       const nsk = privateKeyFromSeedWords(m);
       const nPub = getPublicKey2(nsk);
-      saveNetKey({ pub: nPub, mnemonic: m, name: name || "Network" });
-      await window.Steward.joinNetwork(nPub);
-      await publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }), nsk));
-      await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + "net-announce"], ["t", NET]], content: JSON.stringify({ name: "Announcements", kind: "broadcast", sub: "From " + (name || "the network"), icon: "globe", accent: "var(--clay)" }) }, nsk));
-      window.dispatchEvent(new CustomEvent("steward-networks"));
-      return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
+      const j = await window.Steward.joinNetwork(nPub, { scopes: NETWORK_SCOPES.slice() });
+      if (!j.ok) return { ok: false, stage: j.stage === "join" || j.stage === "readback" ? "join" : j.stage, reason: j.reason };
+      saveNetKey({ pub: nPub, mnemonic: m, name: nm });
+      try {
+        lsSet(NETRING_MINT_LS + nPub, "1");
+      } catch (x) {
+      }
+      const base = { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
+      const pr = await window.Steward.retryNetworkProfile(nPub, nm);
+      try {
+        window.dispatchEvent(new CustomEvent("steward-networks"));
+      } catch (x) {
+      }
+      return pr.ok ? { ok: true, ...base } : { ok: true, partial: true, failed: ["profile"], reason: pr.reason, ...base };
+    },
+    // (re)publish an owned network's kind-0 name, signed by the network key. -> { ok, reason }
+    async retryNetworkProfile(networkPub, name) {
+      const signer = skFor(networkPub);
+      if (!signer) return { ok: false, reason: "This console does not hold that network\u2019s key." };
+      const o = {};
+      const r = await publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }), signer), o);
+      return r ? { ok: true } : { ok: false, reason: o.reason || "No relay accepted it." };
     },
     // networks whose signing key is on THIS console -> [{ pub, npub, name }] (publish-as identities)
     ownedNetworks() {
@@ -29910,6 +30642,108 @@ zoo`.split("\n");
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+      };
+    },
+    // ── network announcements + events, SEALED (N5b, ported 2026-11-18). Engine: _netSync* / _netPublishPost above. The cleartext pair above
+    // (publishNetworkAnnouncement / subscribeNetworkAnnouncements) is refused by every walled relay and stays only until Phase B2 rewires the
+    // composer that calls it. kind: 'announcement' | 'event'. -> { ok, id } | { ok:false, reason }
+    publishNetworkPost(networkPub, kind, input, id) {
+      return _netPublishPost(toPubHex(networkPub) || networkPub, kind, input, id);
+    },
+    removeNetworkPost(networkPub, kind, id) {
+      return _netRemovePost(toPubHex(networkPub) || networkPub, kind, id);
+    },
+    // hop-1 (network holder) / hop-2 (joined church) / both -- see the engine. opts: { add:[churchHex], drop:[churchHex], force }
+    syncNetworkKey(networkPub, opts) {
+      return _netSyncKey(toPubHex(networkPub) || networkPub, opts || {});
+    },
+    syncNetworkHop2(networkPub, opts) {
+      return _netSyncHop2(toPubHex(networkPub) || networkPub, opts || {});
+    },
+    syncNetworkKeys(opts) {
+      return _netSyncAll(opts || {});
+    },
+    // what the last sync learned about one network this church is in: { owner, joiners, key:'active'|'waiting'|'trouble', reason } | null
+    networkStatus(networkPub) {
+      return _netStatus.get(toPubHex(networkPub) || networkPub) || null;
+    },
+    // How many churches have joined a network THIS console holds the key of, read live AS that key (c92c6e3a; works in network view, where
+    // syncNetworkKeys is church-only). -> a number >= 1 (a complete read), { atLeast: n } (a partial one), or null = UNKNOWN (never 0). Never throws.
+    // Callers (rule 2): DashNetworkOverview (app/stew-dashboard.jsx) only.
+    async networkJoinerCount(networkPub) {
+      try {
+        const np = toPubHex(networkPub) || networkPub;
+        const jr = await _netReadJoiners(np);
+        if (!(jr && jr.ok && jr.joiners.length > 0)) return null;
+        return jr.authoritative ? jr.joiners.length : { atLeast: jr.joiners.length };
+      } catch (e) {
+        return null;
+      }
+    },
+    // THE NETWORK'S OWN RECOVERY WORDS (B2a re-audit, 2026-11-19), for the network-view settings page. From this console's sealed network-key record
+    // (netKeys), and only while the church key is unlocked (the record is sealed to it). NEVER the church's phrase: this does not call, or fall back
+    // to, exportMnemonic. -> the 12 words | '' (not held here, or locked). Callers (rule 2): NetworkWordsPanel (app/stew-dashboard.jsx) only.
+    networkWords(networkPub) {
+      if (!churchSk) return "";
+      const np = toPubHex(networkPub) || networkPub;
+      const rec = netKeys().find((x) => x.pub === np);
+      return rec && typeof rec.mnemonic === "string" ? rec.mnemonic : "";
+    },
+    // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
+    // Callers (rule 2): IdentitySwitcher.pick (app/stew-dashboard.jsx) only. -> '' when nothing is wrong that it can see.
+    networkOpenProblem(networkPub) {
+      const np = toPubHex(networkPub) || networkPub;
+      const raw = _netKeysRaw().find((x) => x.pub === np);
+      if (!raw) return "This console doesn\u2019t hold that network\u2019s key.";
+      const rec = netKeys().find((x) => x.pub === np);
+      if (!rec || !rec.mnemonic) return "Its recovery words are sealed to a church key this console doesn\u2019t have open \u2014 unlock the console, or restore the network\u2019s words here.";
+      return "Its key could not be opened on this console.";
+    },
+    // a network's posts as the console previews them (newest first): [{ id, kind, text|title|date|…, ts }]. Waits for the ring.
+    subscribeNetworkPosts(networkPub, onPosts) {
+      const np = toPubHex(networkPub) || networkPub;
+      const raw = /* @__PURE__ */ new Map();
+      const dead = /* @__PURE__ */ new Map();
+      let ring = null, closed = false, sub = null;
+      const emit = () => {
+        const out = [];
+        for (const [k, e] of raw) {
+          const body = ring ? openPost(e.content, ring) : null;
+          if (!body) continue;
+          const isEvt = k.startsWith(NETEVENT_D), id = k.slice((isEvt ? NETEVENT_D : NETANN_D).length);
+          out.push(isEvt ? { id, kind: "event", ...netEventFields(body), ts: e.created_at } : { id, kind: "announcement", text: String(body.text || ""), ts: e.created_at });
+        }
+        onPosts(out.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      };
+      (async () => {
+        const cur = await _netRingFor(np);
+        if (closed) return;
+        ring = cur.ring;
+        sub = pool.subscribeMany(_netPublishSetFor(np), [{ kinds: [30078], authors: [np], "#t": [NET] }], {
+          onevent(e) {
+            if (e.pubkey !== np) return;
+            const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
+            const prev = raw.get(d);
+            if (prev && (prev.created_at || 0) >= (e.created_at || 0)) return;
+            if ((dead.get(d) || -1) >= (e.created_at || 0)) return;
+            if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+              raw.delete(d);
+              dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0));
+            } else raw.set(d, e);
+            emit();
+          },
+          oneose() {
+            emit();
+          }
+        });
+      })();
+      return () => {
+        closed = true;
+        try {
+          sub && sub.close();
         } catch {
         }
       };
@@ -30122,9 +30956,9 @@ zoo`.split("\n");
         if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
           if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
           localStorage.removeItem(PENDING_CHURCH_KEY);
-        } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+        } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
           window.Steward.setActiveIdentity(want);
-        } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+        } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
           const first = [...stewardedChurches.keys()].find((cp) => !_ownedPubs.has(cp));
           if (first) window.Steward.setActiveIdentity(first, { persist: false });
         }
@@ -30475,7 +31309,12 @@ zoo`.split("\n");
             emit();
             return;
           }
-          byId.set(np, { networkPub: np, npub: npubEncode(np) });
+          let sc;
+          try {
+            sc = JSON.parse(e.content).scopes;
+          } catch {
+          }
+          byId.set(np, { networkPub: np, npub: npubEncode(np), ...Array.isArray(sc) ? { scopes: sc } : {} });
           emit();
         },
         oneose() {
@@ -30495,6 +31334,7 @@ zoo`.split("\n");
       let latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
         onevent(e) {
+          if (e.pubkey !== np) return;
           if (e.created_at < latest) return;
           latest = e.created_at;
           let prof;

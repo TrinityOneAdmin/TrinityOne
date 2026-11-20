@@ -513,6 +513,8 @@ function EventDetail({ event, open, onClose, ctx }) {
             </div>
           </div>
           {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 4px', textWrap: 'pretty' }}>{e.blurb}</p> : null}
+          {/* A NETWORK EVENT IS ONE-WAY (owner 2026-11-19): it says where it came from and offers no RSVP. */}
+          {e._network ? <div style={{ marginTop: 14 }}><SvNetFrom e={e} /></div> : <React.Fragment>
           <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' }}>Will you be there?{(e.recurring || e.seriesDate) ? <span style={{ textTransform: 'none', fontWeight: 600, letterSpacing: 0, color: 'var(--ink-3)' }}> · this repeats, so your answer covers every date</span> : null}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {[['going', 'Going', 'var(--sage)'], ['maybe', 'Maybe', 'var(--gold)'], ['no', 'Can’t', 'var(--ink-3)']].map(([v, lbl, c]) => {
@@ -520,6 +522,7 @@ function EventDetail({ event, open, onClose, ctx }) {
               return <button key={v} onClick={async () => { if (ctx.setRsvp && await ctx.setRsvp(e.id, v)) onClose && onClose(); }} style={{ flex: 1, padding: '13px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
             })}
           </div>
+          </React.Fragment>}
         </div>
       ) : null}
     </BottomSheet>
@@ -702,7 +705,7 @@ function MyMonth({ ctx, onManage, onRunsheet }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, lineHeight: 1.1 }}>{e.title}</span>
-                    {e._network ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.4px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '1px 6px' }}>{e._network.toUpperCase()}</span> : null}
+                    {e._network ? <SvNetFrom e={e} /> : null}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}><Icon name="clock" size={12} color="var(--ink-3)" /> {e.time}{e.where ? <React.Fragment><span style={{ opacity: .5 }}>·</span> {e.where}</React.Fragment> : null}</div>
                 </div>
@@ -1341,6 +1344,79 @@ function KidsRegister({ ctx }) {
 }
 
 // ════════════════════════ MAIN OVERLAY ════════════════════════
+// ── NETWORKS IN WHAT'S HAPPENING (member step 1, owner decisions 2026-11-19; reference/DOMAIN.md) ─────────────────────────────────────────
+// "🌐 from <short name>": the tag on a network event wherever a member meets it (Events, Calendar, the event sheet). Its NAME is the network's
+// short name, read only from a profile the network key signed (app/app.jsx netProfileOf).
+function SvNetFrom({ e }) {
+  return <span data-testid="net-from" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '1px 8px', whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'🌐 from '}<bdi>{(e && e._network) || 'Network'}</bdi></span>;   /* <bdi>: a network-chosen name cannot reorder the text around it */
+}
+function svNetAgo(ts) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - (ts || 0));
+  if (s < 3600) return s < 120 ? 'just now' : Math.floor(s / 60) + ' min ago';
+  if (s < 86400) { const h = Math.floor(s / 3600); return h + (h === 1 ? ' hour ago' : ' hours ago'); }
+  const d = Math.floor(s / 86400);
+  if (d < 14) return d === 1 ? 'yesterday' : d + ' days ago';
+  try { return new Date(ts * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); } catch { return d + ' days ago'; }
+}
+// The tab body: one joined network's home. `t` is one entry of ctx.netTabs (app/app.jsx), which exists only with the Networks switch on, for a
+// church that joined, for a member this church has NOT marked a child, and only once that answer has loaded.
+function NetworkTab({ t, ctx }) {
+  const initials = (String(t.name || t.title || 'N').split(/\s+/).filter(Boolean).map(w => Array.from(w)[0]).join('').slice(0, 2) || 'N').toUpperCase();
+  const today = svTodayIso();
+  const upcoming = (t.events || []).filter(e => e && (e.date || '') >= today).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const churchName = (ctx.church && ctx.church.name) || '';
+  return (
+    <div data-testid="network-tab">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>{initials}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}><bdi>{t.name || t.title}</bdi></div>
+          {/* "N churches" is left out: the member app has no honest count of who joined (only the network key can read that). */}
+          {churchName ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>{churchName} is a member</div> : null}
+        </div>
+      </div>
+      {t.state === 'locked' ? (
+        <div data-testid="net-locked" style={{ borderRadius: 18, padding: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 14, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+          Waiting for your church to share it with you. Updates from {t.title} will appear here on their own.
+        </div>
+      ) : t.state !== 'ready' ? (
+        <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '8px 2px' }}>Looking for updates…</div>
+      ) : (
+        <React.Fragment>
+          {/* TODO (Networks step 2): "Pray this week" -- the posts whose label is a prayer label. Labels do not exist yet (they travel
+              inside the sealed post, customisable by the network steward), so this section is deliberately absent rather than guessed. */}
+          <SectionLabel>Updates</SectionLabel>
+          {(t.announcements || []).length ? (
+            <div style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 22 }}>
+              {t.announcements.map((a, i) => (
+                <div key={a.id || i} data-testid="net-update" style={{ padding: '13px 15px', borderTop: i ? '1px solid var(--line)' : 'none' }}>
+                  <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700 }}>{svNetAgo(a.ts)}</div>
+                  <div style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink)', marginTop: 3, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{a.text}</div>
+                </div>
+              ))}
+            </div>
+          ) : <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '4px 2px 22px' }}>No updates yet.</div>}
+          <SectionLabel>Coming up</SectionLabel>
+          {upcoming.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {upcoming.map(e => (
+                <button key={e.id} data-testid="net-event" onClick={() => ctx.openEvent && ctx.openEvent(e)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>
+                  <ServDateBlock iso={e.date} accent="var(--clay)" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{e.title}</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{[e.where, e.time].filter(Boolean).join(' · ')}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '4px 2px' }}>Nothing coming up yet.</div>}
+          {/* "Churches in the network" comes in step 2 (the directory, with each church's town and a hide option). */}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
 function ServingScreen({ open, onClose, ctx, docked }) {
   const [tab, setTab] = useSv('serving');
   const [sheet, setSheet] = useSv(null);   // { kind, item }
@@ -1442,7 +1518,15 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   const _svFeat = (ctx.church && ctx.church.features) || {};
   const rotaOn = _svFeat.rota !== false;
   const calOn = _svFeat.calendar !== false;
-  const _tabs = [...(rotaOn ? [['serving', 'Serving', 'hand']] : []), ...(rotaOn && canSeeRota ? [['rota', 'Rota', 'users']] : []), ...(kidsOn ? [['kids', 'Kids', 'child']] : []), ...(calOn ? [['events', 'Events', 'calendar']] : []), ...(calOn ? [['calendar', 'Calendar', 'calCheck']] : []), ...(careOn ? [['care', 'Care', 'heart']] : [])];
+  // NETWORK TAB(S), LAST (Networks member step 1, owner 2026-11-19): one per network this church joined, titled with its short name. ctx.netTabs
+  // is empty unless the switch is on, the church joined, and the member is cleared as not a child (app/app.jsx netCleared); the switch is
+  // checked here too so a stray ctx can never paint one. NOT gated on `calendar`: a church that hid its calendar still receives its network.
+  const _netTabs = window.NETWORKS_ENABLED === true ? (ctx.netTabs || []) : [];
+  const _tabs = [...(rotaOn ? [['serving', 'Serving', 'hand']] : []), ...(rotaOn && canSeeRota ? [['rota', 'Rota', 'users']] : []), ...(kidsOn ? [['kids', 'Kids', 'child']] : []), ...(calOn ? [['events', 'Events', 'calendar']] : []), ...(calOn ? [['calendar', 'Calendar', 'calCheck']] : []), ...(careOn ? [['care', 'Care', 'heart']] : []), ..._netTabs.map(t => [t.key, t.title, 'globe'])];
+  // Looking at a network's tab is what marks its updates read (the Today line and the dot go). New arrivals while it is open are marked too.
+  const _netOn = _netTabs.find(t => t.key === tab) || null;
+  const _netTop = _netOn ? (_netOn.announcements || []).reduce((m, a) => Math.max(m, a.ts || 0), 0) : 0;
+  React.useEffect(() => { if (open && _netOn && ctx.markNetTabSeen) ctx.markNetTabSeen(_netOn.networkPub); }, [open, tab, _netTop]);   // eslint-disable-line
   const _tabKeys = _tabs.map(t => t[0]).join(',');
   React.useEffect(() => {
     // ALL GONE IS A REAL STATE NOW. With rota AND calendar both off and no Kids/Care tab, `_tabs` is empty, and
@@ -1506,7 +1590,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
-                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && (pending.length + swapView.asks.length) ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length + swapView.asks.length}</span> : null}
+                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {k.indexOf('net:') === 0 ? <bdi>{lbl}</bdi> : lbl}{k === 'serving' && (pending.length + swapView.asks.length) ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length + swapView.asks.length}</span> : null}
               </button>
             );
           })}
@@ -1879,15 +1963,14 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                         <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.1 }}>{e.title}</span>
-                        {e._network ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '2px 7px' }}>{e._network.toUpperCase()}</span> : null}
+                        {e._network ? <SvNetFrom e={e} /> : null}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 3 }}><Icon name="clock" size={13} color="var(--ink-3)" /> {e.time}{e.where ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="pin" size={13} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}</div>
                       {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '9px 0 0', textWrap: 'pretty' }}>{e.blurb}</p> : null}
                     </div>
                   </div>
-                  <div style={{ padding: '0 16px 14px' }}>{e._network
-                    ? <div style={{ fontSize: 12, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="globe" size={13} color="var(--ink-3)" /> A {e._network} event</div>
-                    : svEventRsvpRow({ e, rsvps, ctx })}</div>
+                  {/* A NETWORK EVENT HAS NO RSVP (owner 2026-11-19): network posts are one-way, so there is no route from it to a member. */}
+                  {e._network ? null : <div style={{ padding: '0 16px 14px' }}>{svEventRsvpRow({ e, rsvps, ctx })}</div>}
                 </div>
               ))}
             </div>
@@ -1901,6 +1984,8 @@ function ServingScreen({ open, onClose, ctx, docked }) {
           </React.Fragment>
         ) : tab === 'calendar' ? (
           <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} onRunsheet={(it) => setSheet({ kind: 'runsheet', item: it })} />
+        ) : _netOn ? (
+          <NetworkTab t={_netOn} ctx={ctx} />
         ) : null}
       </div>
 

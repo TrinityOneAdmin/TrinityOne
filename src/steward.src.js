@@ -37,6 +37,8 @@ import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
+// (after the nip44 import on purpose: bundle order follows import order, and the tests that lift a module out of the bundle end their slice at the next `// src/` marker)
+import { NETANN_D, NETEVENT_D, NETKEY_D, NETKEYC_D, rotateRing, firstNetKey, cleanRing, sealHop1, openHop1ForChurch, openHop1AsNetwork, hop1Recipients, sealHop2, sealPost, openPost, netEventBody, netEventFields, netAnnounceBody } from './network-seal.src.js';
 import qrcode from 'qrcode-generator';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 // Rules the member app has to agree with, written once. See scripts/trinity-rules.mjs.
@@ -161,6 +163,9 @@ const ROOM_D = 'trinityone/room:';          // a bookable room/space (church)
 const BOOKING_D = 'trinityone/booking:';    // a dated room booking (church)
 const REQUEST_D = 'trinityone/request:';    // steward -> member "can you serve?" (church, p=member)
 const REQREPLY_D = 'trinityone/reqreply:';  // member -> steward accept/decline/swap (member, p=church)
+// What a joined church agreed a network may send its members -- the CONSENT RECORD written into the join document (N2). The relay serves
+// netann: only for 'announcements' and netevent: only for 'events' (gateway.mjs netReader). Owner 2026-11-18: announcements and events ONLY.
+const NETWORK_SCOPES = ['announcements', 'events'];
 const NETWORK_D = 'trinityone/network:';    // church -> network membership ("we belong to X"), p=network
 const BLOCKED_D = 'trinityone/blocked:';    // this church's blocklist (banned member pubkeys), d=blocked:<churchpub>
 const MINORS_D = 'trinityone/minors:';      // safeguarding: this church's minors (children), d=minors:<churchpub>
@@ -1588,6 +1593,446 @@ function netKeys() {
     }
     return r;
   });
+}
+// This church's own join document for a network -> { doc, ts } of the NEWEST copy, or null (none / left / unreadable). Read as the CHURCH
+// key (churchPub), never the active identity: a console switched to a network identity is still the church that joined. (N2, 64b4d06b)
+async function _readNetworkJoin(np) {
+  if (!churchPub) return null;
+  try {
+    const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [NETWORK_D + np], limit: 5 }]);
+    const e = (evs || []).filter(x => x && x.pubkey === churchPub).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+    if (!e || !e.content || (e.tags || []).some(t => t[0] === 'deleted')) return null;
+    return { doc: JSON.parse(e.content), ts: e.created_at };
+  } catch { return null; }
+}
+// READ AS ANOTHER KEY than the one this console's pool is logged in as (N5c, dff88ecf). The relay authenticates a socket as exactly one
+// pubkey, and the pool's sockets are this console's (church / steward) -- but a network's own documents are served to the NETWORK key, and
+// the join declarations a network may read (N5c) only to it. So this opens its own short-lived pool, answers the relay's AUTH challenge with
+// `sk`, asks, and closes. Nothing is cached or reused.
+// -> { events, complete }. `complete` is true only when EVERY relay answered with an end-of-stored-events: an empty list is then "there is
+// none". A relay that would not open, refused, or failed the login makes it false, and callers must treat what they got as PARTIAL --
+// never as "none", and never as the whole list (C4). It never throws, and it never waits longer than `maxWait` (port audit: it had no bound).
+const NET_QUERY_MAX_WAIT = 8000;
+async function _queryAsKey(urls, sk, filters, maxWait = NET_QUERY_MAX_WAIT) {
+  const list = Array.isArray(urls) ? urls.filter(Boolean) : [];
+  if (!list.length || !sk) return { events: [], complete: false };
+  const p = new SimplePool();
+  p.automaticallyAuth = () => async (authEvent) => finalizeEvent(authEvent, sk);
+  const pass = () => new Promise((resolve) => {
+    const events = []; let done = false;
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    const hard = setTimeout(() => fin({ events, complete: false }), maxWait + 2000);   // a backstop if the pool never closes at all
+    try {
+      p.subscribeEose(list, filters, {
+        maxWait,
+        onevent(e) { events.push(e); },
+        onclose(reasons) { clearTimeout(hard); fin({ events, complete: Array.isArray(reasons) && reasons.length === list.length && reasons.every(r => r === 'closed automatically on eose') }); },
+      });
+    } catch (e) { clearTimeout(hard); fin({ events, complete: false }); }
+  });
+  try {
+    const first = await pass();
+    // A SLOW LOGIN MAKES A FALSE "COMPLETE AND EMPTY" (B1 audit, 2026-11-19). A relay that withholds documents from a socket that has not logged
+    // in yet holds its end-of-stored-events for the login -- but only for EOSE_AUTH_GRACE_MS (2.5s, scripts/gateway.mjs). On a slow line the
+    // login finishes after that, and the first answer is what an ANONYMOUS reader gets, marked complete. Chosen fix: RE-ASK once the login has
+    // settled, on the same (now logged-in) sockets, and believe the second answer. (The alternative, marking any challenged relay incomplete,
+    // would make every key-envelope read "unknown" -- the relay challenges those at once -- so a founder could never publish a first key.)
+    // A login that FAILED, or did not settle within maxWait, makes the answer incomplete: what came back may be an anonymous reader's view.
+    const challenged = [];
+    for (const r of ((p.relays && typeof p.relays.values === 'function') ? p.relays.values() : [])) if (r && r.challenge) challenged.push(r);
+    if (!challenged.length) return first;
+    const logins = await Promise.race([
+      Promise.all(challenged.map(r => (r.authPromise ? Promise.resolve(r.authPromise).then(() => true, () => false) : Promise.resolve(false)))),
+      new Promise(res => setTimeout(() => res(null), maxWait)),
+    ]);
+    if (!logins || logins.some(ok => !ok)) return { events: first.events, complete: false };
+    // RESIDUAL (re-audit): a socket that DROPS between the two passes is reported by the second pass's close reasons as incomplete -- unless the pool
+    // silently reconnects anonymously and the relay answers within its grace; not reproduced, not defended beyond the close-reason check.
+    const second = await pass();
+    const byId = new Map(); for (const e of [...first.events, ...second.events]) if (e && e.id) byId.set(e.id, e);
+    return { events: [...byId.values()], complete: second.complete };
+  } catch (e) { return { events: [], complete: false }; }
+  finally {
+    // LET AN IN-FLIGHT LOGIN SETTLE BEFORE CLOSING (found by the real-gateway test, 2026-11-18). A relay challenges a key-envelope read at once
+    // (KEY_ENVELOPE_D) and, when it holds nothing to withhold, answers end-of-stored-events before the login completes. Closing then rejects the
+    // pending AUTH, and nostr-tools RETHROWS that rejection from its own handler -- an unhandled rejection. Bounded: never more than 3s.
+    try {
+      const pending = [];
+      for (const r of ((p && p.relays && typeof p.relays.values === 'function') ? p.relays.values() : [])) if (r && r.authPromise) pending.push(Promise.resolve(r.authPromise).catch(() => {}));
+      if (pending.length) await Promise.race([Promise.all(pending), new Promise(r => setTimeout(r, 3000))]);
+    } catch (e) {}
+    try { p.close(list); } catch (e) {}
+  }
+}
+// ── NETWORK CONTENT, THE CONSOLE HALF (Networks MVP N5b, ported 2026-11-18 onto the relay wall) ─────────────────────────────────────
+// The sealing itself is src/network-seal.src.js (shared with the member app). This block is who publishes what, and when.
+//   • the NETWORK-KEY HOLDER publishes netkey:<np> (hop-1) and netann:/netevent: content.
+//   • each JOINED CHURCH'S console publishes netkeyc:<np> (hop-2): the same ring, re-sealed under the church NAME key.
+// Callers (rule 2): the API methods syncNetworkKey / syncNetworkHop2 / syncNetworkKeys / publishNetworkPost / removeNetworkPost /
+// subscribeNetworkPosts / networkStatus, and joinNetwork / leaveNetwork / createNetwork. No screen calls them yet (Phase B2).
+//
+// THE SEAM: _netPublishSetFor(np) is where cross-relay delivery will plug in (a network whose churches live on different boxes). Today it is
+// this church's own proved relay set -- relays() -- which never widens which relays a church talks to (rule 10). NOT built: delivery to a
+// church on another box (plan audit M2; rule-10 work that needs its own audit).
+function _netPublishSetFor(np) { return relays(); }
+const NETWORK_WALL_CAP = 'network-wall-1';
+const NETRING_MINT_LS = 'trinityone.netring.mint.';   // + <np> -> '1' when THIS console CREATED the network (see _netMintBlockers)
+const NETRING_SEEN_LS = 'trinityone.netring.seen.';   // + <np> -> '1' once this console SAW or PUBLISHED a ring for np. After that an empty read is a false-empty (relay lag / a slow box), NEVER "there is no ring" -- C4 (8390db27): a transient read must not cause a re-mint over the real key.
+const _hop2Done = new Map();                          // np -> signature of the hop-2 this console last published
+const _netStatus = new Map();                         // np -> what the last _netSyncAll learned: { owner, joiners, key: 'active'|'waiting'|'trouble', reason }
+// WHICH OF `urls` DO NOT SAY THEY HOLD THE NETWORK WALL (plan audit H1). A joined network key is kept away from a church's children, care,
+// check-in, finance and room keys by the relay -- each relay, from its own copy -- so a church must not join while any relay it writes to runs
+// software older than that. The marker is an UNAUTHENTICATED claim (NIP-11 `trinityone.capabilities`, else /status `capabilities`), so it is
+// used only to REFUSE: a missing or unreadable marker blocks the join; a present one never admits a relay. `urls` is the set the church
+// already writes to (relays(), the proved publish set) -- this adds no relay and changes no admission (RELAY-ADMISSION.md, rule 10).
+// -> [url, ...] lacking the marker (an unreachable relay counts as lacking it: "could not check" is not "checked").
+// B2a audit (2026-11-19): a relay that ANSWERED without the marker (lacking) is told apart from one that did not answer (unreachable) -- the
+// second is a transient, and a shipped relay must never be called something to remove. -> { lacking: [url], unreachable: [url] }
+async function _netWallCheck(urls) {
+  const has = (x) => !!x && Array.isArray(x.capabilities) && x.capabilities.includes(NETWORK_WALL_CAP);
+  const ask = async (url) => {
+    const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+    const http = base.replace(/\/+$/, ''), root = http.replace(/\/relay$/i, '');
+    const get = async (u, accept) => {
+      try {
+        const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const to = setTimeout(() => { try { ctrl && ctrl.abort(); } catch (e) {} }, 6000);
+        const res = await Promise.race([
+          fetch(u, { headers: accept ? { Accept: accept } : {}, cache: 'no-store', ...(ctrl ? { signal: ctrl.signal } : {}) }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6500)),
+        ]);
+        clearTimeout(to);
+        return res && res.ok ? await res.json() : null;
+      } catch (e) { return null; }
+    };
+    const info = await get(http, 'application/nostr+json');
+    if (info && has(info.trinityone)) return 'ok';
+    const st = await get(root + '/status', '');
+    if (has(st)) return 'ok';
+    return (info || st) ? 'none' : 'down';   // it ANSWERED without the marker, or it did not answer at all
+  };
+  // IN PARALLEL (B1 audit): one at a time, a dead relay cost up to ~13s each. Still fail-closed: an unreachable relay is never "ok".
+  // ⚠ DEVICE CHECK NEEDED: the console's Content-Security-Policy allows no plain `http:` fetch, so in a browser a church relay on plain ws://
+  // (probed over http://) may always fail this probe and block the join. That is the safe direction; it has not been tried on a device.
+  const got = await Promise.all((urls || []).map(u => ask(u).catch(() => 'down')));
+  const lacking = [], unreachable = [];
+  (urls || []).forEach((u, i) => { if (got[i] === 'none') lacking.push(u); else if (got[i] !== 'ok') unreachable.push(u); });
+  return { lacking, unreachable };
+}
+// The relays that did not confirm, for a caller that only needs the union. Callers: none in the engine now (kept for the lifted-code tests).
+async function _netWallMissing(urls) { const r = await _netWallCheck(urls); return [...r.lacking, ...r.unreachable]; }
+// THE WALL CHECK BEFORE NETWORK KEY WORK -- AN ALARM, NOT A GUARD (re-audit 2026-11-19; the B1 comment overclaimed). A relay running software from
+// before the wall decides what a joined network key may read from THAT relay's copy of the church's join document, whatever this console does next;
+// pausing key work here takes nothing back from it. What the pause does: it stops this console adding fresh key material and posts while one of the
+// church's own relays is on old software, and it tells the steward, plainly, which relay -- the remedy is to update or remove that relay (or leave
+// the network). Used by _netSyncAll, _netSyncKeyOnce, _netSyncHop2 and _netPublishPost, so every API way in is covered. Rule 10: relays() only.
+//   -> null (every relay confirmed) | { waiting: true, reason } (no relay ready yet: still connecting) | { waiting: false, missing, reason }
+// A SHIPPED relay (the shared pool every church is on) is never something the steward can remove, so it is never told to (B2a audit).
+const _netIsShippedRelay = (u) => { const n = (x) => String(x || '').trim().toLowerCase().replace(/\/+$/, ''); return CANONICAL_RELAYS.some(c => n(c) === n(u)); };
+async function _netWallGate() {
+  const set = relays();
+  if (!set.length) return { waiting: true, missing: [], lacking: [], unreachable: [], reason: 'Still connecting — no relay is ready for this church yet.' };
+  const { lacking, unreachable } = await _netWallCheckCached(set);
+  if (!lacking.length && !unreachable.length) return null;
+  const missing = [...lacking, ...unreachable];
+  const list = (a) => a.join(', '), one = (a) => a.length === 1;
+  const reach = unreachable.length ? 'Couldn’t reach ' + list(unreachable) + ' to check ' + (one(unreachable) ? 'it is' : 'they are') + ' up to date — it will try again later.' : '';
+  if (!lacking.length) return { waiting: true, missing, lacking, unreachable, reason: 'Network keys are waiting. ' + reach };
+  const own = lacking.filter(u => !_netIsShippedRelay(u)), shipped = lacking.filter(u => _netIsShippedRelay(u));
+  const parts = [];
+  if (own.length) parts.push(list(own) + (one(own) ? ' has' : ' have') + ' not confirmed ' + (one(own) ? 'it runs' : 'they run') + ' the software that keeps a network out of your church’s private records. Update ' + (one(own) ? 'it' : 'them') + ' or remove ' + (one(own) ? 'it' : 'them') + ' from this church’s relays.');
+  if (shipped.length) parts.push('The shared relay ' + list(shipped) + (one(shipped) ? ' has' : ' have') + ' not confirmed that update yet; network work waits until it is updated (nothing to change on your side).');
+  if (reach) parts.push(reach);
+  return { waiting: false, missing, lacking, unreachable, reason: 'Network keys are paused: ' + parts.join(' ') };
+}
+// _netWallMissing with a session cache of the relays that DID confirm the marker (a "missing" answer is never cached: an updated relay passes on the
+// next sync). Callers: _netWallGate only. joinNetwork deliberately asks fresh every time.
+const _netWallOk = new Set();
+async function _netWallCheckCached(urls) {
+  const ask = (urls || []).filter(u => !_netWallOk.has(u));
+  const r = ask.length ? await _netWallCheck(ask) : { lacking: [], unreachable: [] };
+  for (const u of ask) if (!r.lacking.includes(u) && !r.unreachable.includes(u)) _netWallOk.add(u);
+  return r;
+}
+// WHO HAS JOINED the network `np`, as the NETWORK (N5c / Option A). The relay serves a church's join declaration to the key it names and to no
+// one else, so the authors of the live join documents ARE the joined churches. -> { ok, joiners:[churchHex], authoritative }
+// `authoritative` is true ONLY for a read that positively found churches, on a settled relay set, from EVERY relay asked (complete), and was not
+// a full page: an empty or partial answer is a relay that is lagging, a login that failed or a socket that never opened -- UNKNOWN, exactly as
+// in C4 -- and handing _netSyncKey an authoritative short list would drop every recipient it did not name.
+const NET_JOIN_READ_LIMIT = 500;
+// NOT DEFENDED (B1 audit, accepted): this trusts the relay's list -- a HACKED relay could add a fake church (which would then be wrapped the key)
+// or hide a real one. A genuine relay serves this only for join docs authored by configured church keys (gateway.mjs canRead, N5c).
+async function _netReadJoiners(np) {
+  const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
+  if (!nsk || getPublicKey(nsk) !== np) return { ok: false, joiners: [], authoritative: false };
+  let q;
+  try { q = await _queryAsKey(_netPublishSetFor(np), nsk, [{ kinds: [30078], '#d': [NETWORK_D + np], limit: NET_JOIN_READ_LIMIT }]); }
+  catch (e) { return { ok: false, joiners: [], authoritative: false }; }
+  const evs = (q && Array.isArray(q.events)) ? q.events : [];
+  const newest = new Map();
+  for (const e of evs) {
+    if (!e || !/^[0-9a-f]{64}$/.test(e.pubkey || '') || e.pubkey === np) continue;
+    const d = ((e.tags || []).find(t => t[0] === 'd') || [])[1];
+    if (d !== NETWORK_D + np) continue;
+    const prev = newest.get(e.pubkey);
+    if (!prev || (e.created_at || 0) > (prev.created_at || 0)) newest.set(e.pubkey, e);
+  }
+  const joiners = [];
+  for (const [church, e] of newest) {
+    if (!e.content || (e.tags || []).some(t => t[0] === 'deleted')) continue;
+    try { if (JSON.parse(e.content).joined) joiners.push(church); } catch (x) {}
+  }
+  let unsettled = [];
+  try { unsettled = _gate.unsettled(relaysRaw(), pub); } catch (e) { unsettled = []; }
+  return { ok: true, joiners, authoritative: !!(q && q.complete) && joiners.length > 0 && evs.length < NET_JOIN_READ_LIMIT && !unsettled.length };
+}
+// The newest live document at (author, d). `asSk` given: read AS that key on a socket of its own (_queryAsKey) -- the author's own view,
+// which the relay never withholds from it. Otherwise over this console's pool, as whoever it is logged in as.
+//   -> the event | null (none, or a tombstone) | { failed: true } (C4: "I could not look" is never "there is nothing")
+async function _readNetDoc(author, d, asSk) {
+  let best = null, evs;
+  if (asSk) {
+    let q;
+    try { q = await _queryAsKey(_netPublishSetFor(author), asSk, [{ kinds: [30078], authors: [author], '#d': [d], limit: 5 }]); } catch (e) { return { failed: true }; }
+    evs = (q && q.events) || [];
+    // a PARTIAL answer that found nothing is unknown, not absent; a partial answer that found the document is still the document
+    if (!(q && q.complete) && !evs.some(e => e && e.pubkey === author)) return { failed: true };
+  } else {
+    try { evs = await pool.querySync(_netPublishSetFor(author), [{ kinds: [30078], authors: [author], '#d': [d], limit: 5 }]); }
+    catch (e) { return { failed: true }; }
+  }
+  for (const e of (evs || [])) if (e && e.pubkey === author && (!best || (e.created_at || 0) > (best.created_at || 0))) best = e;
+  if (!best || !best.content || (best.tags || []).some(t => t[0] === 'deleted')) return null;
+  return best;
+}
+// WHAT STOPS A NEW RING BEING MINTED -- the sibling of _nameKeyMintBlockers, for the same reason: "I read nothing" is not "there is nothing".
+// Minting replaces the ring, and every post already sealed would stop opening for everyone.
+//   unproved   a relay candidate the gate has no verdict on yet
+//   notAuthed  this console is not logged in on a relay it uses
+//   notFounder this console did not create the network, so an empty read cannot be taken as "no ring"
+// (and, in _netSyncKey, NETRING_SEEN: this console has seen a ring for np before, so an empty read is lag.)
+function _netMintBlockers(np) {
+  let unproved = [];
+  try { unproved = _gate.unsettled(relaysRaw(), pub); } catch (e) { unproved = []; }
+  return { unproved, notAuthed: !_isRelayAuthed(), notFounder: lsGet(NETRING_MINT_LS + np) !== '1' };
+}
+// The ring a console can open for `np`. -> { ring, ev } | { absent } | { unreadable, ev } | { readFailed }
+//
+// ⚠ A KEY HOLDER READS AS THE NETWORK (port 2026-11-18, the fix to the audit's "fix-2" risk). The relay now serves netkey:<np> only to its
+// author and to a church key that is one of its RECIPIENTS (gateway.mjs canRead, bdb0092d). This console's pool is logged in as its CHURCH,
+// so reading through the pool, a founder whose church is not (or not yet, or no longer) a recipient was told "absent" by a relay that holds
+// the real ring -- and "absent" is exactly what lets a founder mint. Reading as the network, the author, the relay never withholds it, so
+// "absent" means absent. A console without the network's key reads as its church (the recipient path) and can never mint.
+async function _netRingFor(np) {
+  const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
+  const holder = !!(nsk && getPublicKey(nsk) === np);
+  const ev = await _readNetDoc(np, NETKEY_D + np, holder ? nsk : null);
+  if (ev && ev.failed) return { ring: null, ev: null, readFailed: true };   // C4: the read failed -- UNKNOWN, not absent
+  if (!ev) return { ring: null, ev: null, absent: true };
+  let ring = null;
+  if (holder) ring = openHop1AsNetwork(ev.content, nsk);
+  if (!ring && churchSk && churchPub) ring = openHop1ForChurch(ev.content, churchSk, churchPub, np);
+  if (ring) { try { lsSet(NETRING_SEEN_LS + np, '1'); } catch (e) {} }   // C4: positive evidence a ring exists for np
+  return ring ? { ring, ev } : { ring: null, ev, unreadable: true };
+}
+// Did THIS church join `np`? (its own join document)
+async function _ownJoinLive(np) {
+  const j = await _readNetworkJoin(np);
+  return !!(j && j.doc && j.doc.joined === true);
+}
+// HOP-1: the network key holder wraps ONE ring to each joined church. Recipients are GROW-ONLY unless the caller passes a join list it
+// vouches is complete (opts.joiners + opts.authoritative) -- because a partial list published as the whole drops churches, and a church
+// absent from hop-1 can never open the ring again. _netSyncAll vouches with _netReadJoiners only on positive, complete evidence (N5c).
+// -> { ok, unchanged?, rotated?, minted?, recipients, reason, waiting? }
+//
+// ONE AT A TIME PER NETWORK (B1 audit, 2026-11-19). Every way in -- _netSyncAll, _netPublishPost, the syncNetworkKey API -- goes through this
+// function, and it queues behind any run already in flight for the same network. Two overlapping runs on a brand-new network both read
+// "absent" and both minted; queued, the second reads what the first published. (Serialised, not merged: each caller's opts -- add / drop --
+// still get their own run.) The first ring is ALSO derived (firstNetKey), so even a mint that slips past this lock makes the same key.
+const _netKeyBusy = new Map();   // np -> the promise of the run in flight (or queued last)
+async function _netSyncKey(np, opts = {}) {
+  const prev = _netKeyBusy.get(np);
+  const run = (async () => { if (prev) { try { await prev; } catch (e) {} } return _netSyncKeyOnce(np, opts); })();
+  _netKeyBusy.set(np, run);
+  run.then(() => { if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np); }, () => { if (_netKeyBusy.get(np) === run) _netKeyBusy.delete(np); });
+  return run;
+}
+async function _netSyncKeyOnce(np, opts = {}) {
+  const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
+  if (!nsk || getPublicKey(nsk) !== np) return { ok: false, reason: 'This console does not hold that network’s key.' };
+  if (!churchSk || !churchPub) return { ok: false, reason: 'This console has no church key loaded.' };
+  const wall = await _netWallGate();
+  if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+  // WHO JOINED, READ INSIDE THE QUEUE (re-audit 2026-11-19). _netSyncAll used to read the join list BEFORE queueing; a church that joined while that
+  // run waited behind another (and was added by it) was then missing from a stale "authoritative" list -- dropped, and the ring rotated. Read here,
+  // the list is as fresh as the envelope it is compared with.
+  let joinersRead = null;
+  if (opts.readJoiners) {
+    const jr = await _netReadJoiners(np);
+    joinersRead = jr.ok ? jr.joiners.length : null;
+    opts = jr.authoritative ? { ...opts, joiners: jr.joiners, authoritative: true } : { ...opts, add: [...(opts.add || []), ...jr.joiners] };
+  }
+  const r = await _netSyncKeyCore(np, nsk, opts);
+  return joinersRead === null ? r : { ...r, joiners: joinersRead };
+}
+async function _netSyncKeyCore(np, nsk, opts) {
+  const cur = await _netRingFor(np);
+  if (cur.readFailed) return { ok: false, waiting: true, reason: 'Could not read the current network key just now — it will try again rather than replace it.' };   // C4
+  if (cur.unreadable) return { ok: false, reason: 'A network key already exists that this console cannot open, so it will not replace it.' };
+  let ring = cur.ring, mintedNow = false;
+  const had = cur.ev ? hop1Recipients(cur.ev.content) : [];
+  const want = new Set(had);
+  const ownLive = await _ownJoinLive(np);
+  if (ownLive) want.add(churchPub);
+  for (const c of (opts.add || [])) { const h = toPubHex(c); if (h) want.add(h); }
+  let dropped = false;
+  const drop = new Set((opts.drop || []).map(c => toPubHex(c)).filter(Boolean));
+  if (opts.authoritative && Array.isArray(opts.joiners)) { const all = new Set(opts.joiners.map(c => toPubHex(c)).filter(Boolean)); if (ownLive) all.add(churchPub); for (const c of [...want]) if (!all.has(c)) drop.add(c); for (const c of all) want.add(c); }
+  for (const c of drop) if (want.delete(c)) dropped = true;
+  if (!ring) {
+    if (lsGet(NETRING_SEEN_LS + np) === '1') return { ok: false, waiting: true, reason: 'The network key could not be read just now; a new one will not be minted over the existing one.' };   // C4: positive evidence a ring exists
+    const b = _netMintBlockers(np);
+    if (b.unproved.length || b.notAuthed || b.notFounder) return { ok: false, waiting: true, reason: b.notFounder ? 'This console did not create the network and cannot see an existing key, so it will not start a new one.' : 'Still connecting — the network key will be set up in a moment.' };
+    // RESIDUAL (re-audit): derivation covers a repeated FIRST mint only. After a rotation the ring head is random; a second console that cannot see
+    // the envelope and still believes it is the founder would mint the derived first key, not the current head -- narrow (needs both the guards
+    // above to fail on a network that has already rotated), not defended further.
+    const k0 = await firstNetKey(nsk);   // DERIVED: every first-mint for this network makes the same key (see firstNetKey)
+    if (!k0) return { ok: false, reason: 'Could not make the network key on this device.' };
+    ring = cleanRing([k0]); mintedNow = true;
+  } else if (dropped) {
+    ring = rotateRing(ring);   // a church left: new posts are sealed under a key it never held
+  }
+  if (!want.size) return { ok: false, reason: 'No church has joined this network yet.' };
+  if (!mintedNow && !dropped && cur.ev && want.size === had.length && had.every(c => want.has(c))) { return { ok: true, unchanged: true, recipients: [...want] }; }
+  const content = sealHop1(nsk, ring, [...want], ring.length);
+  if (!content) return { ok: false, reason: 'Could not seal the network key.' };
+  const o = {};
+  const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETKEY_D + np], ['t', NET]], content }), nsk), o);
+  if (!r) return { ok: false, reason: o.reason || 'No relay accepted it.' };
+  try { lsSet(NETRING_SEEN_LS + np, '1'); } catch (e) {}   // C4: a ring is now published for np -- later empty reads are false-empties
+  _hop2Done.delete(np);
+  return { ok: true, rotated: dropped, minted: mintedNow, recipients: [...want] };
+}
+// HOP-2: a joined church re-seals the network ring under its NAME key, for its members. It never mints anything: the ring comes from hop-1,
+// and the name key is only READ (_nameKeyRing). No name key held yet, or no proved + logged-in relay -> WAIT (never a cleartext publish).
+// `_hop2Done` stops a roster tick republishing an identical document; it is keyed on the ring AND the name key, so a name-key rotation re-seals.
+//
+// "ABSENT" IS TWO THINGS NOW, AND THE WORDS SAY BOTH (port 2026-11-18). The relay serves netkey:<np> to a church only if the network wrapped
+// its key to that church, so a church that has joined but has not been added yet is told exactly what it is told when the network has not
+// published a key at all. Neither is a fault on this side; both are "waiting for the network".
+async function _netSyncHop2(np, opts = {}) {
+  if (!churchSk || !churchPub) return { ok: false, reason: 'This console has no church key loaded.' };
+  if (actingChurch || pub !== churchPub) return { ok: false, reason: 'Only the church’s own console re-seals the network key for its members.' };
+  const nk = _nameKeyRing[0];
+  if (!nk || !_nameKeyChecked) return { ok: false, waiting: true, reason: 'Waiting for this church’s name key.' };
+  let unproved = []; try { unproved = _gate.unsettled(relaysRaw(), pub); } catch (e) { unproved = []; }
+  if (unproved.length || !_isRelayAuthed()) return { ok: false, waiting: true, reason: 'Still connecting.' };
+  const wall = await _netWallGate();
+  if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+  const cur = await _netRingFor(np);
+  if (cur.readFailed) return { ok: false, waiting: true, reason: 'Could not read the network key just now — it will try again.' };   // C4
+  if (cur.absent) return { ok: false, waiting: true, reason: 'Waiting for the network to add this church to its key.' };
+  if (cur.unreadable) return { ok: false, reason: 'This church’s copy of the network key could not be opened.' };
+  const sig = np + '|' + cur.ring.join(',') + '|' + nk;
+  if (!opts.force && _hop2Done.get(np) === sig) return { ok: true, unchanged: true };
+  const content = sealHop2(cur.ring, nk);
+  if (!content) return { ok: false, reason: 'Could not seal the network key for members.' };
+  const o = {};
+  const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETKEYC_D + np], ['t', NET]], content }), churchSk), o);
+  if (!r) return { ok: false, reason: o.reason || 'No relay accepted it.' };
+  _hop2Done.set(np, sig);
+  return { ok: true };
+}
+// A leaving church withdraws its hop-2 (best effort; the relay allows a tombstone to outlive the join).
+async function _netWithdrawHop2(np) {
+  _hop2Done.delete(np);
+  if (!churchSk || actingChurch) return false;
+  try { return !!(await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETKEYC_D + np], ['t', NET], ['deleted', '1']], content: '' }), churchSk))); } catch (e) { return false; }
+}
+let _netSyncBusy = null, _netSyncAt = 0, _netRingHooked = false, _joinedNets = null, _joinedNetsFor = '';   // _joinedNets: the networks this church is in, once read
+// Everything this console owes the networks it is part of: hop-1 for the networks it owns, hop-2 for the ones its church joined.
+// Cheap to call often (a roster tick will): one run at a time, and no more than one per 30s unless forced.
+async function _netSyncAll(opts = {}) {
+  if (_netSyncBusy) return _netSyncBusy;
+  if (!opts.force && Date.now() - _netSyncAt < 30000) return { ok: true, skipped: true };
+  _netSyncAt = Date.now();
+  // A NAME-KEY ROTATION RE-SEALS (hop-2 is sealed under name ring[0]). Hooked once.
+  if (!_netRingHooked) { _netRingHooked = true; try { _onNameKeyRing(() => { _netSyncAll({ force: true }); }); } catch (e) {} }
+  _netSyncBusy = (async () => {
+    const out = {};
+    try {
+      if (!churchSk || actingChurch || pub !== churchPub) return { ok: false, reason: 'church console only' };
+      // WHICH NETWORKS ARE WE IN: one read of the church's own documents, then remembered; joinNetwork / leaveNetwork keep it current; force re-reads.
+      if (!_joinedNets || _joinedNetsFor !== churchPub || opts.force) {
+        const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#t': [NET] }]);
+        const found = new Set();
+        for (const e of (evs || [])) {
+          const d = ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+          if (e.pubkey === churchPub && d.startsWith(NETWORK_D) && e.content && !(e.tags || []).some(t => t[0] === 'deleted')) found.add(d.slice(NETWORK_D.length));
+        }
+        _joinedNets = found; _joinedNetsFor = churchPub;
+      }
+      const joined = _joinedNets;
+      // THE WALL CHECK (an alarm, not a guard -- see _netWallGate). One check for the whole sync; each step below also checks (cached, cheap).
+      // NO RELAY READY (boot) is "still connecting", not trouble -- and it does not count as a sync, so the next call runs at once.
+      if (joined.size) {
+        const wall = await _netWallGate();
+        if (wall) {
+          if (wall.waiting && !(wall.unreachable && wall.unreachable.length)) _netSyncAt = 0;   // boot: retry at once; an unreachable relay waits for the normal tick
+          const ownedNow = new Set(netKeys().map(r => r.pub));
+          for (const np of joined) _netStatus.set(np, { owner: ownedNow.has(np), joiners: null, key: wall.waiting ? 'waiting' : 'trouble', reason: wall.reason });
+          try { window.dispatchEvent(new CustomEvent('steward-network-status')); } catch (e) {}
+          return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, lacking: wall.lacking, unreachable: wall.unreachable, reason: wall.reason };
+        }
+      }
+      const owned = new Set();
+      for (const r of netKeys()) {
+        if (!joined.has(r.pub)) continue;
+        // N5c: the founder asks the relay who joined (as the network) -- INSIDE the per-network queue (readJoiners; see _netSyncKeyOnce). An answer
+        // that is not positive, complete evidence still ADDS the churches it found (grow-only) but drops nobody.
+        owned.add(r.pub);
+        const hop1 = await _netSyncKey(r.pub, { readJoiners: true });
+        out[r.pub] = { hop1, joiners: typeof hop1.joiners === 'number' ? hop1.joiners : null };
+      }
+      for (const np of joined) { out[np] = Object.assign(out[np] || {}, { hop2: await _netSyncHop2(np, opts) }); }
+      for (const np of joined) {
+        const o = out[np] || {}, h2 = o.hop2 || {}, h1 = o.hop1 || {};
+        const key = (h2.ok === true) ? 'active' : h2.waiting ? 'waiting' : 'trouble';
+        _netStatus.set(np, { owner: owned.has(np), joiners: typeof o.joiners === 'number' ? o.joiners : null, key, reason: key === 'active' ? '' : (h2.reason || h1.reason || '') });
+      }
+      try { window.dispatchEvent(new CustomEvent('steward-network-status')); } catch (e) {}
+      return { ok: true, networks: out };
+    } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+  })();
+  try { return await _netSyncBusy; } finally { _netSyncBusy = null; }
+}
+// Publish ONE announcement or event AS an owned network. kind: 'announcement' | 'event'. -> { ok, id } | { ok:false, reason }
+async function _netPublishPost(np, kind, input, id) {
+  const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
+  if (!nsk || getPublicKey(nsk) !== np) return { ok: false, reason: 'This console does not hold that network’s key.' };
+  const isEvt = kind === 'event';
+  if (!isEvt && kind !== 'announcement') return { ok: false, reason: 'Unknown post type.' };
+  const body = isEvt ? netEventBody(input) : netAnnounceBody(input && typeof input === 'object' ? input.text : input);
+  if (isEvt ? !(body.title && body.date) : !body.text) return { ok: false, reason: isEvt ? 'An event needs a title and a date.' : 'Write something to post.' };
+  const wall = await _netWallGate();
+  if (wall) return { ok: false, waiting: wall.waiting, wallMissing: wall.missing, reason: wall.reason };
+  let cur = await _netRingFor(np);
+  if (cur.readFailed) return { ok: false, reason: 'Could not read the network key just now, so nothing was posted. Try again.' };
+  if (!cur.ring && !cur.unreadable) { const k = await _netSyncKey(np); if (!k.ok) return { ok: false, reason: k.reason }; cur = await _netRingFor(np); }
+  if (!cur.ring) return { ok: false, reason: 'The network key could not be read, so nothing was posted.' };
+  const content = sealPost(body, cur.ring);
+  if (!content) return { ok: false, reason: 'Could not seal the post.' };
+  const pid = (id && /^[A-Za-z0-9_-]{1,64}$/.test(String(id))) ? String(id) : ((isEvt ? 'e' : 'a') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
+  const o = {};
+  const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', (isEvt ? NETEVENT_D : NETANN_D) + pid], ['t', NET]], content }), nsk), o);
+  return r ? { ok: true, id: pid } : { ok: false, reason: o.reason || 'No relay accepted it.' };
+}
+async function _netRemovePost(np, kind, id) {
+  const nsk = (() => { try { return skFor(np); } catch (e) { return null; } })();
+  if (!nsk || getPublicKey(nsk) !== np || !/^[A-Za-z0-9_-]{1,64}$/.test(String(id || ''))) return { ok: false, reason: 'Not possible from this console.' };
+  const o = {};
+  const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', (kind === 'event' ? NETEVENT_D : NETANN_D) + id], ['t', NET], ['deleted', '1']], content: '' }), nsk), o);
+  return r ? { ok: true } : { ok: false, reason: o.reason || 'No relay accepted it.' };
 }
 function saveNetKey(rec) {
   const sealed = { pub: rec.pub, name: rec.name };
@@ -5570,6 +6015,36 @@ function _publishSigned(tmpl) {
 function _subscribeMany(filters, handlers) {
   return pool.subscribeMany(relays(), filters, handlers);
 }
+// A network's SHORT NAME: the title of the tab its members see inside What's happening (owner 2026-11-19). One line, at most 16 characters
+// (code points, so an emoji is one). '' = not set. Callers: publishProfile (the kind-0 it writes); the console's Short name field
+// (app/stew-dashboard.jsx NetShortNameField) caps with the same rule through window.Steward.netShortName.
+// Zero-width and bidi-control characters are removed first (C0/C1 controls (except tab/newline, which become a space), U+00AD, U+034F, U+061C, U+115F, U+1160, U+180E, U+200B, U+200E-200F, U+202A-202E, U+2060-206F, U+2800, U+3164, U+FE00-FE0E (variation selectors; U+FE0F is KEPT, it is the emoji form), U+FEFF, U+FFA0 and every other Default_Ignorable_Code_Point / Cf character (tag characters, interlinear annotation, musical and hieroglyph format controls included); ONLY the England, Scotland and Wales flags (U+1F3F4 + tags gbeng/gbsct/gbwls + U+E007F) are KEPT; any other flag-shaped run loses its tag characters, stray tag characters are not; U+200C/200D are KEPT: they join emoji sequences and some scripts: they let a name look like another,
+// or reverse the text around it), and the cap counts grapheme clusters where Intl.Segmenter exists, else code points. The member app applies
+// the same rule on read (app/app.jsx netClipText).
+function netShortName(v) {
+  // built once (memoised on netShortName); nested so the function lifts on its own
+  function netCleanRe() {
+    if (netShortName._re) return netShortName._re;
+    let re;
+    try {
+      // Unicode property escapes need Chrome 64+. Built from a STRING inside try, never written as a regex literal: a literal the engine cannot
+      // parse is a SyntaxError for the WHOLE file (the packaged builds ship this text as-is), a string just throws here and we fall back.
+      re = new RegExp('(\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F})|(?![\\u200C\\u200D\\uFE0F])[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u2800\\p{Default_Ignorable_Code_Point}\\p{Cf}]', 'gu');
+    } catch (e) {
+      // the same sets as explicit ranges, no \p and no u flag (astral ranges as surrogate pairs)
+      re = new RegExp('(\\uD83C\\uDFF4\\uDB40\\uDC67\\uDB40\\uDC62(?:\\uDB40\\uDC65\\uDB40\\uDC6E\\uDB40\\uDC67|\\uDB40\\uDC73\\uDB40\\uDC63\\uDB40\\uDC74|\\uDB40\\uDC77\\uDB40\\uDC6C\\uDB40\\uDC73)\\uDB40\\uDC7F)|(?![\\u200C\\u200D\\uFE0F])(?:[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u0890\\u0891\\u08E2\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFFB]|\\uD804[\\uDCBD\\uDCCD]|\\uD82F[\\uDCA0-\\uDCA3]|\\uD834[\\uDD73-\\uDD7A]|\\uD80D[\\uDC30-\\uDC3F]|[\\uDB40-\\uDB43][\\uDC00-\\uDFFF])', 'g');
+    }
+    return (netShortName._re = re);
+  }
+  const s = String(v == null ? '' : v).replace(netCleanRe(), (m, flag) => flag || '').replace(/\s+/g, ' ').trim();
+  let parts = null;
+  try { if (typeof Intl !== 'undefined' && Intl.Segmenter) parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment); } catch (e) { parts = null; }
+  // and a CODE-UNIT ceiling of 64: one grapheme can be any length (zalgo, a long ZWJ chain), so 16 graphemes alone bound nothing
+  let out = '';
+  for (const g of (parts || Array.from(s)).slice(0, 16)) { if (out.length + g.length > 64) break; out += g; }
+  return out.trim();
+}
+
 // one-shot read of the single NEWEST event matching `filters` (or null), bounded by a short timeout.
 function _one(filters, ms = 4000) {
   return new Promise((resolve) => {
@@ -9863,6 +10338,7 @@ window.Steward = {
   },
 
   // ---- publish (signed by the church) ----
+  netShortName,
   publishProfile(meta) {
     if (!sk) return Promise.resolve(null);
     // NEVER while acting as a DELEGATED steward. setActiveIdentity's delegated branch sets `sk = churchSk`
@@ -9906,7 +10382,9 @@ window.Steward = {
       const host = (CANONICAL_RELAY || '').replace(/^wss?:\/\//i, '').replace(/\/relay\/?$/i, '');
       if (local && host) nip05 = local + '@' + host;
     }
-    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', mainColor: (typeof m.mainColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.mainColor)) ? m.mainColor : '', cardColor: (typeof m.cardColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.cardColor)) ? m.cardColor : '', titleColor: m.titleColor || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {} });
+    const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', mainColor: (typeof m.mainColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.mainColor)) ? m.mainColor : '', cardColor: (typeof m.cardColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(m.cardColor)) ? m.cardColor : '', titleColor: m.titleColor || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {}, ...(netShortName(m.short_name) ? { short_name: netShortName(m.short_name) } : {}) });
+    // short_name (Networks member step 1, 2026-11-19): a NETWORK's tab title in its members' app, set on Network identity. Written only when
+    // non-empty, so a church's kind-0 is unchanged; capped by netShortName (the member app caps it again on read, app/app.jsx netProfileOf).
     // ⚠ NOTHING REGISTERS A BOX FROM HERE, AND THAT IS DELIBERATE. A `_registerOnOwnBox` hook sat on this
     // publish for one day (2cb1582, reverted 2026-09-12). It duplicated `selfRegister(name, {createHere:
     // true})`, which has done this correctly since 2026-09-04 from the setup wizard's name step, on the
@@ -16183,33 +16661,85 @@ window.Steward = {
   },
 
   // ---- networks: a church declares it belongs to a wider group/network (its own npub) ----
-  // The church publishes network:<networkPub> (p-tagged to the network). Members of the church
-  // discover the network and can follow it — its groups/events/plans load like any church.
-  joinNetwork(input) {
-    if (!sk) return Promise.resolve(null);
-    const np = toPubHex(input); if (!np) return Promise.resolve(null);
-    const content = JSON.stringify({ joined: true });
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }), sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
+  // N2 (SCOPE-NETWORKS-MVP; 64b4d06b, ported 2026-11-18): create / join / leave REPORT WHAT HAPPENED. publish() answers FALSE when no relay
+  // accepted the write, and these used to ignore that. Every one now returns { ok, reason, stage } -- `reason` is the relay's OWN words (publish()
+  // writes them into the opts object it is handed), never an invented explanation.
+  // Callers (rule 2): DashNetworksPanel in app/stew-dashboard.jsx (join / leave / create -- not yet rewritten for these results; behind
+  // NETWORKS_ENABLED=false until Phase B2) and createNetwork -> joinNetwork. Nothing else in src/ or app/ calls them.
+  //
+  // THEY SIGN AS THE CHURCH (churchSk), never the active identity: a console switched to a network identity is still the church that joins.
+  //
+  // THE JOIN DOCUMENT is {joined:true, v:1, scopes:[...]} -- exactly what the relay's NETWORK_SCOPES_BY reads (an array of strings; absent =
+  // the narrowest, nothing). ADD-ONLY: it is read back first and merged over, so a field this build does not know about survives.
+  async resolveNetwork(input) {   // pure: is this a network code we can join? -> { networkPub, npub } | null
+    const np = toPubHex(String(input || '').trim()); return np ? { networkPub: np, npub: npubEncode(np) } : null;
   },
-  leaveNetwork(networkPub) {
-    if (!sk) return Promise.resolve(null);
+  async joinNetwork(input, jopts) {
+    if (!churchSk || !churchPub) return { ok: false, stage: 'start', reason: 'This console has no church key loaded.' };
+    if (actingChurch) return { ok: false, stage: 'start', reason: 'Only the church’s own console can join a network.' };
+    const np = toPubHex(String(input || '').trim());
+    if (!np) return { ok: false, stage: 'code', reason: 'That is not a network code (it starts npub1…).' };
+    if (np === churchPub) return { ok: false, stage: 'code', reason: 'That is this church’s own code, not a network’s.' };
+    // THE WALL MUST BE ON EVERY RELAY FIRST (plan audit H1). Each relay enforces from its own copy, so one old relay is enough to hand a joined
+    // network key this church's private records. A missing marker refuses; a present one never admits (rule 10). Nothing is published.
+    const set = relays();
+    if (!set.length) return { ok: false, stage: 'relay', reason: 'No relay is ready for this church yet, so it cannot join a network.' };
+    const { lacking, unreachable } = await _netWallCheck(set);
+    const missing = [...lacking, ...unreachable];
+    if (lacking.length) return { ok: false, stage: 'relay', missing, lacking, unreachable, reason: 'Not joined. ' + (lacking.length === set.length ? 'This church’s relays have' : lacking.length + ' of this church’s ' + set.length + ' relays have') + ' not confirmed they run the software that keeps a network out of your church’s private records (' + lacking.join(', ') + '). They need updating first.' };
+    if (unreachable.length) return { ok: false, stage: 'relay', missing, lacking, unreachable, reason: 'Not joined: couldn’t reach ' + unreachable.join(', ') + ' to check ' + (unreachable.length === 1 ? 'it is' : 'they are') + ' up to date. Try again later.' };
+    const prev = await _readNetworkJoin(np);
+    const base = prev && prev.doc && typeof prev.doc === 'object' ? prev.doc : {};
+    const doc = { ...base, joined: true, v: 1 };
+    const want = jopts && Array.isArray(jopts.scopes) ? jopts.scopes.filter(x => NETWORK_SCOPES.includes(x)) : null;
+    if (want) doc.scopes = want;
+    else if (Array.isArray(doc.scopes)) doc.scopes = doc.scopes.filter(x => typeof x === 'string' && NETWORK_SCOPES.includes(x));   // a stored 'feed' (Oct 2026 builds) is dropped on rewrite
+    const o = {};
+    const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content: JSON.stringify(doc) }), churchSk), o);
+    if (!r) return { ok: false, stage: 'join', reason: o.reason || 'No relay accepted it.' };
+    // EVIDENCE, NOT THE PROMISE: read the document back. A relay acknowledged it; this is the proof it is stored.
+    const back = await _readNetworkJoin(np);
+    if (!back || !back.doc || back.doc.joined !== true) return { ok: false, stage: 'readback', reason: 'A relay accepted it, but it could not be read back, so it may not have been saved. Try again.' };
+    try { if (_joinedNets) _joinedNets.add(np); } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch (x) {}
+    return { ok: true, networkPub: np, npub: npubEncode(np), scopes: back.doc.scopes };
+  },
+  async leaveNetwork(networkPub) {
+    if (!churchSk || !churchPub) return { ok: false, stage: 'start', reason: 'This console has no church key loaded.' };
+    if (actingChurch) return { ok: false, stage: 'start', reason: 'Only the church’s own console can leave a network.' };
     const np = toPubHex(networkPub) || networkPub;
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }), sk));
+    const o = {};
+    const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }), churchSk), o);
+    if (r) { try { if (_joinedNets) _joinedNets.delete(np); await _netWithdrawHop2(np); } catch (x) {} }   // N5b: stop vouching a ring for members of a network we have left
+    return r ? { ok: true } : { ok: false, stage: 'leave', reason: o.reason || 'No relay accepted it.' };
   },
-  // create a brand-new network: generate its key, join it (so the relay lets it post here), then
-  // publish the network's profile + a starter announcements channel (signed by the network key).
-  // Returns { npub, mnemonic } — save/share these to run the network's own console later.
+  // create a brand-new network: generate its key, JOIN it first, then publish its profile. NOTHING IS KEPT UNTIL THE JOIN IS PROVED: the key is
+  // generated in memory, and only saved (saveNetKey) once the join document is stored and read back -- so a refused join leaves no orphan.
+  //   { ok:false, stage, reason }                               join refused (incl. stage 'relay': a relay lacks the wall) -- nothing saved
+  //   { ok:true, networkPub, npub, mnemonic }                   fully done
+  //   { ok:true, partial:true, failed:['profile'], …, reason }  joined + key saved, name not published: retryNetworkProfile finishes it
+  // No network-keyed church group is published: network announcements are their own documents (netann:).
   async createNetwork(name) {
-    if (!sk) return null;
+    if (!churchSk || !churchPub) return { ok: false, stage: 'start', reason: 'This console has no church key loaded.' };
+    const nm = name || 'Network';
     const m = generateSeedWords();
     const nsk = privateKeyFromSeedWords(m);
     const nPub = getPublicKey(nsk);
-    saveNetKey({ pub: nPub, mnemonic: m, name: name || 'Network' });   // keep the key so this console can publish AS the network
-    await window.Steward.joinNetwork(nPub);   // church joins first so the relay whitelists the network key
-    await publish(finalizeEvent(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }), nsk));
-    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + 'net-announce'], ['t', NET]], content: JSON.stringify({ name: 'Announcements', kind: 'broadcast', sub: 'From ' + (name || 'the network'), icon: 'globe', accent: 'var(--clay)' }) }, nsk));
-    window.dispatchEvent(new CustomEvent('steward-networks'));
-    return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
+    const j = await window.Steward.joinNetwork(nPub, { scopes: NETWORK_SCOPES.slice() });
+    if (!j.ok) return { ok: false, stage: j.stage === 'join' || j.stage === 'readback' ? 'join' : j.stage, reason: j.reason };
+    saveNetKey({ pub: nPub, mnemonic: m, name: nm });   // keep the key so this console can publish AS the network
+    try { lsSet(NETRING_MINT_LS + nPub, '1'); } catch (x) {}   // N5b: THIS console founded it, so an empty read of its network key may start the FIRST ring (see _netMintBlockers)
+    const base = { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
+    const pr = await window.Steward.retryNetworkProfile(nPub, nm);
+    try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch (x) {}
+    return pr.ok ? { ok: true, ...base } : { ok: true, partial: true, failed: ['profile'], reason: pr.reason, ...base };
+  },
+  // (re)publish an owned network's kind-0 name, signed by the network key. -> { ok, reason }
+  async retryNetworkProfile(networkPub, name) {
+    const signer = skFor(networkPub); if (!signer) return { ok: false, reason: 'This console does not hold that network’s key.' };
+    const o = {};
+    const r = await publish(finalizeEvent(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }), signer), o);
+    return r ? { ok: true } : { ok: false, reason: o.reason || 'No relay accepted it.' };
   },
   // networks whose signing key is on THIS console -> [{ pub, npub, name }] (publish-as identities)
   ownedNetworks() { return netKeys().map(r => ({ pub: r.pub, npub: npubEncode(r.pub), name: r.name || 'Network' })); },
@@ -16227,6 +16757,78 @@ window.Steward = {
       onevent(e) { byId.set(e.id, { id: e.id, text: e.content, ts: e.created_at }); emit(); }, oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // ── network announcements + events, SEALED (N5b, ported 2026-11-18). Engine: _netSync* / _netPublishPost above. The cleartext pair above
+  // (publishNetworkAnnouncement / subscribeNetworkAnnouncements) is refused by every walled relay and stays only until Phase B2 rewires the
+  // composer that calls it. kind: 'announcement' | 'event'. -> { ok, id } | { ok:false, reason }
+  publishNetworkPost(networkPub, kind, input, id) { return _netPublishPost(toPubHex(networkPub) || networkPub, kind, input, id); },
+  removeNetworkPost(networkPub, kind, id) { return _netRemovePost(toPubHex(networkPub) || networkPub, kind, id); },
+  // hop-1 (network holder) / hop-2 (joined church) / both -- see the engine. opts: { add:[churchHex], drop:[churchHex], force }
+  syncNetworkKey(networkPub, opts) { return _netSyncKey(toPubHex(networkPub) || networkPub, opts || {}); },
+  syncNetworkHop2(networkPub, opts) { return _netSyncHop2(toPubHex(networkPub) || networkPub, opts || {}); },
+  syncNetworkKeys(opts) { return _netSyncAll(opts || {}); },
+  // what the last sync learned about one network this church is in: { owner, joiners, key:'active'|'waiting'|'trouble', reason } | null
+  networkStatus(networkPub) { return _netStatus.get(toPubHex(networkPub) || networkPub) || null; },
+  // How many churches have joined a network THIS console holds the key of, read live AS that key (c92c6e3a; works in network view, where
+  // syncNetworkKeys is church-only). -> a number >= 1 (a complete read), { atLeast: n } (a partial one), or null = UNKNOWN (never 0). Never throws.
+  // Callers (rule 2): DashNetworkOverview (app/stew-dashboard.jsx) only.
+  async networkJoinerCount(networkPub) {
+    // B2a audit: a PARTIAL read (not every relay answered, or a full page) is { atLeast: n } -- never a confident low number. -> n | { atLeast } | null
+    try { const np = toPubHex(networkPub) || networkPub; const jr = await _netReadJoiners(np); if (!(jr && jr.ok && jr.joiners.length > 0)) return null; return jr.authoritative ? jr.joiners.length : { atLeast: jr.joiners.length }; }
+    catch (e) { return null; }
+  },
+  // THE NETWORK'S OWN RECOVERY WORDS (B2a re-audit, 2026-11-19), for the network-view settings page. From this console's sealed network-key record
+  // (netKeys), and only while the church key is unlocked (the record is sealed to it). NEVER the church's phrase: this does not call, or fall back
+  // to, exportMnemonic. -> the 12 words | '' (not held here, or locked). Callers (rule 2): NetworkWordsPanel (app/stew-dashboard.jsx) only.
+  networkWords(networkPub) {
+    if (!churchSk) return '';
+    const np = toPubHex(networkPub) || networkPub;
+    const rec = netKeys().find(x => x.pub === np);
+    return (rec && typeof rec.mnemonic === 'string') ? rec.mnemonic : '';
+  },
+  // WHY a network cannot be opened on this console, in words (B2a) -- for the switcher, which used to swallow setActiveIdentity's false.
+  // Callers (rule 2): IdentitySwitcher.pick (app/stew-dashboard.jsx) only. -> '' when nothing is wrong that it can see.
+  networkOpenProblem(networkPub) {
+    const np = toPubHex(networkPub) || networkPub;
+    const raw = _netKeysRaw().find(x => x.pub === np);
+    if (!raw) return 'This console doesn’t hold that network’s key.';
+    const rec = netKeys().find(x => x.pub === np);
+    if (!rec || !rec.mnemonic) return 'Its recovery words are sealed to a church key this console doesn’t have open — unlock the console, or restore the network’s words here.';
+    return 'Its key could not be opened on this console.';
+  },
+  // a network's posts as the console previews them (newest first): [{ id, kind, text|title|date|…, ts }]. Waits for the ring.
+  subscribeNetworkPosts(networkPub, onPosts) {
+    const np = toPubHex(networkPub) || networkPub;
+    const raw = new Map();
+    const dead = new Map();   // d -> created_at of the newest tombstone seen: an OLDER live copy arriving later (another relay) must not bring a deleted post back
+    let ring = null, closed = false, sub = null;
+    const emit = () => {
+      const out = [];
+      for (const [k, e] of raw) {
+        const body = ring ? openPost(e.content, ring) : null;
+        if (!body) continue;
+        const isEvt = k.startsWith(NETEVENT_D), id = k.slice((isEvt ? NETEVENT_D : NETANN_D).length);
+        out.push(isEvt ? { id, kind: 'event', ...netEventFields(body), ts: e.created_at } : { id, kind: 'announcement', text: String(body.text || ''), ts: e.created_at });
+      }
+      onPosts(out.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    };
+    (async () => {
+      const cur = await _netRingFor(np); if (closed) return;
+      ring = cur.ring;
+      sub = pool.subscribeMany(_netPublishSetFor(np), [{ kinds: [30078], authors: [np], '#t': [NET] }], {
+        onevent(e) {
+          if (e.pubkey !== np) return;
+          const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          if (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
+          const prev = raw.get(d); if (prev && (prev.created_at || 0) >= (e.created_at || 0)) return;
+          if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written. RESIDUAL: a re-post in the SAME second as its deletion is hidden (a tie goes to the deletion)
+          if (e.tags.some(t => t[0] === 'deleted') || !e.content) { raw.delete(d); dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0)); } else raw.set(d, e);
+          emit();
+        },
+        oneose() { emit(); },
+      });
+    })();
+    return () => { closed = true; try { sub && sub.close(); } catch {} };
   },
   // import an existing network's recovery phrase so this console can also publish as it
   importNetworkKey(mnemonic, name) {
@@ -16443,9 +17045,14 @@ window.Steward = {
       if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
         if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
         localStorage.removeItem(PENDING_CHURCH_KEY);
-      } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+      } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want
+        // NEVER OUT OF A NETWORK VIEW (B2a, 2026-11-19). This block re-runs on every relay reconnect (steward-root re-subscribes on `conn`), and a
+        // steward viewing a network has actingChurch === '' -- so a remembered church, or the blank-helper auto-land below, snapped them out of the
+        // network on any blip. A remembered church and the auto-land are boot DEFAULTS; a network view is a choice made since. (The pending-request
+        // branch above, a deliberate join that has just been granted, still opens.) Read through the API so a lifted copy without it behaves as before.
+        && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
         window.Steward.setActiveIdentity(want);
-      } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+      } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size && !(window.Steward && window.Steward.isViewingNetwork && window.Steward.isViewingNetwork())) {
         // PURE HELPER, NO REMEMBERED CHURCH. The own key is only a signing key (createKeyQuiet) and we steward
         // at least one church, so landing on the own key would open the empty "your church" setup beside a
         // church they actually run — round 9's trap. Default into a stewarded church instead. Deterministic:
@@ -16756,7 +17363,7 @@ window.Steward = {
     const byId = new Map();
     const emit = () => onNetworks([...byId.values()]);
     const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
-      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(NETWORK_D)) return; const np = d.slice(NETWORK_D.length); if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(np); emit(); return; } byId.set(np, { networkPub: np, npub: npubEncode(np) }); emit(); },
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(NETWORK_D)) return; const np = d.slice(NETWORK_D.length); if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(np); emit(); return; } let sc; try { sc = JSON.parse(e.content).scopes; } catch {} byId.set(np, { networkPub: np, npub: npubEncode(np), ...(Array.isArray(sc) ? { scopes: sc } : {}) }); emit(); },
       oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
@@ -16766,6 +17373,7 @@ window.Steward = {
     const np = toPubHex(networkPub) || networkPub; let latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [np] }], {
       onevent(e) {
+        if (e.pubkey !== np) return;   // B2a audit: only the network's OWN profile names it (a relay could serve any kind-0; the self-heal below would then rename the saved key)
         if (e.created_at < latest) return; latest = e.created_at;
         let prof; try { prof = JSON.parse(e.content); } catch { return; }
         onProfile(prof);

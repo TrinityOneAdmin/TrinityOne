@@ -27,10 +27,12 @@ const SUBSCRIPTIONS = [
   'subscribeHidden',
   'subscribeGroupEvents',
   'subscribeNetworkAnnouncements',
+  'subscribeNetworkContent',   // Networks N5b (ported 2026-11-18): the sealed reader that replaces the line above in Phase B2
   'subscribeMyServingRequests',
   'subscribeMyReqReplies',
   'subscribeMyRsvps',
   'subscribeChurchProfile',
+  'subscribeNetworkProfile',   // Networks member step 1 (2026-11-19): the network's kind-0, for the members' tab title
 ];
 
 for (const name of SUBSCRIPTIONS) {

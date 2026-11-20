@@ -5407,6 +5407,65 @@
     return unpad(padded);
   }
 
+  // src/network-seal.src.js
+  var NETANN_D = "trinityone/netann:";
+  var NETEVENT_D = "trinityone/netevent:";
+  var NETKEYC_D = "trinityone/netkeyc:";
+  var NET_RING_MAX = 12;
+  var HEX64 = /^[0-9a-f]{64}$/;
+  var toBytes = (k) => k instanceof Uint8Array ? k : new Uint8Array((String(k).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
+  function cleanRing(r) {
+    const out = [];
+    for (const k of Array.isArray(r) ? r : []) {
+      const h = typeof k === "string" ? k.toLowerCase() : "";
+      if (HEX64.test(h) && !out.includes(h)) out.push(h);
+    }
+    return out.slice(0, NET_RING_MAX);
+  }
+  function openHop2(content, nameKeys) {
+    let o;
+    try {
+      o = JSON.parse(content || "");
+    } catch (e) {
+      return null;
+    }
+    if (!o || typeof o.e !== "string") return null;
+    for (const k of nameKeys || []) {
+      try {
+        const r = cleanRing((JSON.parse(decrypt(o.e, toBytes(k))) || {}).k);
+        if (r.length) return r;
+      } catch (e) {
+      }
+    }
+    return null;
+  }
+  function openPost(content, ring) {
+    let o;
+    try {
+      o = JSON.parse(content || "");
+    } catch (e) {
+      return null;
+    }
+    if (!o || typeof o.e !== "string") return null;
+    for (const k of cleanRing(ring)) {
+      try {
+        const b = JSON.parse(decrypt(o.e, toBytes(k)));
+        if (b && typeof b === "object") return b;
+      } catch (e) {
+      }
+    }
+    return null;
+  }
+  function churchEventFields(c) {
+    c = c || {};
+    return { date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null };
+  }
+  function netEventFields(c) {
+    const f = churchEventFields(c);
+    delete f.groupId;
+    return f;
+  }
+
   // node_modules/@noble/hashes/pbkdf2.js
   function pbkdf2Init(hash, _password, _salt, _opts) {
     ahash(hash);
@@ -6429,27 +6488,27 @@
     if (!c || typeof c !== "object") return null;
     const person = String(c.person || "").trim().toLowerCase();
     const until = c.until === void 0 ? null : c.until;
-    if (!HEX64.test(person)) return null;
+    if (!HEX642.test(person)) return null;
     if (!isPermissionSource(c.source)) return null;
     if (permissionFault(c.from, until, c.lifetime)) return null;
     return { person, source: c.source, lifetime: c.lifetime, from: c.from, until };
   }
   function permissionAdmits(perm, at) {
     if (!perm || !Number.isFinite(at)) return false;
-    if (!HEX64.test(String(perm.person || ""))) return false;
+    if (!HEX642.test(String(perm.person || ""))) return false;
     if (!isPermissionSource(perm.source)) return false;
     if (permissionFault(perm.from, perm.until == null ? null : perm.until, perm.lifetime)) return false;
     if (at < perm.from) return false;
     if (perm.until != null && at > perm.until) return false;
     return true;
   }
-  var HEX64 = /^[0-9a-f]{64}$/;
+  var HEX642 = /^[0-9a-f]{64}$/;
   var clean3 = (pubs) => {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     for (const p of pubs || []) {
       const h = typeof p === "string" ? p.trim().toLowerCase() : "";
-      if (!HEX64.test(h) || seen.has(h)) continue;
+      if (!HEX642.test(h) || seen.has(h)) continue;
       seen.add(h);
       out.push(h);
     }
@@ -8570,6 +8629,24 @@
     if (audience === null) return true;
     return audience.length > 0;
   }
+  async function _minorStanding(cp) {
+    if (!cp) return "unknown";
+    const me = _mePub();
+    if (!me) return "unknown";
+    const mine = _sgMine(cp);
+    if (mine && mine.known) return mine.isMinor ? "marked" : "unmarked";
+    try {
+      const v = localStorage.getItem(SG_ASSUME_KEY + cp + "|" + me);
+      if (v === "1") return "marked";
+      if (v === "0") return "unmarked";
+    } catch (e) {
+    }
+    const rec = await _fetchMyClearance(cp);
+    if (!rec) return "unknown";
+    if (rec.found === true) return rec.minor ? "marked" : "unmarked";
+    if (rec.found === false) return "unmarked";
+    return "unknown";
+  }
   async function _careNeedRefusal(cp) {
     const mine = _sgMine(cp);
     if (mine && mine.isMinor) return "minor-cannot-open";
@@ -9045,7 +9122,10 @@
     // careavail: is member-authored rather than church-authored, but it is sealed under the same church name
     // key and therefore has the same late-key problem — without this, "Ready to help" stays empty for a newly
     // admitted member until they restart the app.
-    "trinityone/careavail:"
+    "trinityone/careavail:",
+    // netkeyc: is the CHURCH's hop-2 re-seal of a joined network's ring (Networks N5b, ported 2026-11-18), sealed under this same name key.
+    // Without this a member whose name key lands AFTER the document stays on "locked" until the app restarts.
+    "trinityone/netkeyc:"
   ];
   function _replayReseats(cp, hub) {
     try {
@@ -15094,6 +15174,16 @@
         return true;
       }
     },
+    // 'marked' | 'unmarked' | 'unknown' -- see _minorStanding. A failure is 'unknown', never an answer.
+    async minorStanding(churchNpub) {
+      const cp = toPub(churchNpub);
+      if (!cp) return "unknown";
+      try {
+        return await _minorStanding(cp);
+      } catch (e) {
+        return "unknown";
+      }
+    },
     async canOpenCareNeed() {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
@@ -15703,6 +15793,107 @@
         }
       };
     },
+    // ── a network's announcements + events, SEALED (Networks N5b, 365dff7a; ported 2026-11-18). The cleartext reader above is refused by every
+    // walled relay; since member step 1 (2026-11-19) the member app reads only this, and the one above has no caller in app/.
+    //   REQ authors:[network], kind 30078, t=trinityone -- the d-prefix (netann: / netevent:) is filtered here, because a relay filter matches
+    //   `#d` exactly. The relay serves these to a member of a church that JOINED the network with the matching scope, and never to that
+    //   church's marked children (netReader, scripts/gateway.mjs). The ring that opens them arrives as the CHURCH's hop-2 document
+    //   (netkeyc:<network>, church-authored, sealed under the church name key) through the church-docs hub. Until it has, cb gets state
+    //   'locked' -- never an error, never an empty list dressed up as "nothing posted".
+    // cb({ state: 'locked' | 'ready', announcements: [{id, text, ts, networkPub}], events: [{id, ...event fields, ts, networkPub}], unreadable })
+    // Callers (rule 2): app/app.jsx's network-content effect (behind NETWORKS_ENABLED, and only once the member is cleared as not a child).
+    subscribeNetworkContent(networkNpub, churchNpub, cb) {
+      const np = toPub(networkNpub), cp = toPub(churchNpub);
+      if (!np || !cp) {
+        try {
+          cb({ state: "locked", announcements: [], events: [], unreadable: 0 });
+        } catch {
+        }
+        return () => {
+        };
+      }
+      const raw = /* @__PURE__ */ new Map();
+      const dead = /* @__PURE__ */ new Map();
+      let ring = null, ringAt = 0, eosed = false;
+      const emit = _coalesce(() => {
+        const announcements = [], events = [];
+        let unreadable = 0;
+        if (ring) {
+          for (const [d, e] of raw) {
+            const body = openPost(e.content, ring);
+            if (!body) {
+              unreadable++;
+              continue;
+            }
+            if (d.startsWith(NETEVENT_D)) events.push({ id: d.slice(NETEVENT_D.length), ...netEventFields(body), ts: e.created_at, networkPub: np });
+            else announcements.push({ id: d.slice(NETANN_D.length), text: String(body.text || ""), ts: e.created_at, networkPub: np });
+          }
+        }
+        announcements.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        events.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+        if (!ring && !eosed) return;
+        try {
+          cb({ state: ring ? "ready" : "locked", announcements, events, unreadable });
+        } catch (err) {
+          _featureFailed("network content", np, err);
+        }
+      });
+      const stopKey = _onChurchDocs(cp, {
+        emit,
+        want: [NETKEYC_D],
+        onevent(e, d) {
+          if (d !== NETKEYC_D + np || e.pubkey !== cp) return;
+          if ((e.created_at || 0) < ringAt) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            ringAt = e.created_at || 0;
+            ring = null;
+            emit();
+            return;
+          }
+          const r = openHop2(e.content, _nameKeys.get(cp) || []);
+          if (!r) return;
+          ringAt = e.created_at || 0;
+          ring = r;
+          emit();
+        },
+        oneose() {
+          eosed = true;
+          emit();
+        }
+      });
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [np], "#t": [NET] }], {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (e.pubkey !== np || !d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D)) return;
+          const prev = raw.get(d);
+          if (prev && ((prev.created_at || 0) > (e.created_at || 0) || (prev.created_at || 0) === (e.created_at || 0) && prev.id < e.id)) return;
+          if ((dead.get(d) || -1) >= (e.created_at || 0)) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            raw.delete(d);
+            dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0));
+          } else raw.set(d, e);
+          emit();
+        },
+        oneose() {
+          eosed = true;
+          emit();
+        }
+      });
+      return () => {
+        try {
+          emit.cancel();
+        } catch {
+        }
+        try {
+          stopKey();
+        } catch {
+        }
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
     // ── serving requests the church p-tagged to ME ("can you serve?") ──
     subscribeMyServingRequests(onReqs) {
       const me = window.Fellowship.myPubkey;
@@ -16260,6 +16451,36 @@
       if (answers.some((a) => a.events.some(isPolicy))) return "church";
       if (_getInvitePending().some((p) => p.cp === cp)) return "unknown";
       return answers.every((a) => a.answered) ? "not-found" : "unknown";
+    },
+    // A NETWORK'S PUBLIC PROFILE (kind-0) for the member app's Network tab title (Networks member step 1, 2026-11-19). Hands the RAW newest event
+    // to cb -- the app decides what it may use (app/app.jsx netProfileOf: signed by the network key, short_name capped). Read over the same two
+    // gated sets the member already reads a network from: the shared pool (as subscribeChurchProfile did for a network) and the member's relays
+    // (as subscribeNetworkContent does). An event from any other author is dropped here as well.
+    // Callers (rule 2): app/app.jsx's network-profile effect only.
+    subscribeNetworkProfile(networkNpub, cb) {
+      const np = toPub(networkNpub);
+      if (!np) return () => {
+      };
+      let latest = -1;
+      const relays = [.../* @__PURE__ */ new Set([...groupReadRelays(np), ..._netRelays(window.Fellowship.relays)])];
+      const sub = pool.subscribeMany(relays, [{ kinds: [0], authors: [np] }], {
+        onevent(e) {
+          if (!e || e.pubkey !== np || (e.created_at || 0) <= latest) return;
+          latest = e.created_at || 0;
+          try {
+            cb({ kind: e.kind, pubkey: e.pubkey, created_at: e.created_at, content: e.content });
+          } catch {
+          }
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+      };
     },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

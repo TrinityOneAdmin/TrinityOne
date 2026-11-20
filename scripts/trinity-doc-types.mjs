@@ -121,7 +121,7 @@ export const DOC_TYPES = Object.freeze({
   // and there is no church to scope it to. Sibling of relay-net below, which is owner-only for this reason.
   'trinityone/relays':        { write: 'church',    read: 'members', scope: 'author', note: 'the church\'s trusted-relay list — OWNER-ONLY (CLAUDE.md rule 10): it decides which relay boxes exchange the full corpus' },
   'trinityone/relay-net':     { write: 'church',    read: 'public',  scope: 'author', note: 'closed-network plan C3 — the church\'s own statement of WHICH RELAY BOXES ARE ITS NETWORK, as [{pubkey, alwaysOn, url?}]. NOT trinityone/relays, which means "cross-relay sync is on": syncEnable refuses to write that below two boxes (so a single-relay church could never author its own membership) and syncDisable writes [] to it (which would un-admit a church\'s own relay as a side effect of turning mirroring off). Add, never repurpose. The client matches on PUBKEY ONLY — `url` is an advisory hint about where the box was last seen, because a tunnelled relay changes address on every restart. READ IS PUBLIC (C4): under the client gate a phone will not publish anywhere until it has read this, so a newcomer who has scanned an invite must be able to read it BEFORE joining — the same reason joinpolicy: is public. It carries relay pubkeys and nothing about any person, and kind-10002 already publishes the same church\'s relay addresses to anyone' },
-  'trinityone/network:':      { write: 'church',    read: 'members', scope: 'author', note: 'the church declares it joined a network' },
+  'trinityone/network:':      { write: 'church',    read: 'members', scope: 'author', note: 'the church declares it joined a network, {joined, v, scopes}. N5c (2026-10-21, ported 2026-11-18): ALSO served to the network key it names while the join is live -- the ONE church document a network key may read; the scopes are the consent netReader enforces' },
   // THE CHAT TAG LABELS A CHURCH DEFINES (Prayer request, Testimony, …). UNDECLARED until 2026-09-22.
   // A BARE NAME, so one document per author — the member app takes the NEWEST one it is served, with no
   // author filter of its own (subscribeMessageTags in src/fellowship.src.js, newest-wins over the docs hub,
@@ -185,6 +185,16 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/care:':         { write: 'mixed',     read: 'members', scope: 'tag',    note: 'church/steward/care-admin, or any member when openedBy=member' },
   'trinityone/careslot:':     { write: 'member',    read: 'members', scope: 'tag' },
   'trinityone/careskip:':     { write: 'recipient', read: 'members', scope: 'tag',    note: 'RECIPIENT-only, enforced by a sealed token' },
+  // NETWORK CONTENT (Networks MVP N5a, 2026-10-21; ported 2026-11-18 onto the wall). Authored by a NETWORK key, never a church's and
+  // never a member's; sealed ({e:<NIP-44 v2 envelope>} -- the relay refuses any plaintext field). Read is NOT the ordinary member rule:
+  // canRead's netReader serves it only to a reader of a church that JOINED the network with the matching scope (netann->'announcements',
+  // netevent->'events'), never to a child that church marked. netkey: is the network's ring wrapped per recipient CHURCH key; netkeyc:
+  // is the church re-sealing it under its own name ring. These are the network's own documents: they give a network key NO authority
+  // over a church's (the 2026-11-18 wall).
+  'trinityone/netann:':       { write: 'leader',    read: 'members', scope: 'none',   gatedBy: "netReader(authed, e.pubkey, d.startsWith(NETANN_D) ? 'announcements' : 'events')", note: 'N5a network announcement, d=netann:<id>; network key only (netDocWriteOk); served by netReader to a joined church with scope announcements' },
+  'trinityone/netevent:':     { write: 'leader',    read: 'members', scope: 'none',   gatedBy: "netReader(authed, e.pubkey, d.startsWith(NETANN_D) ? 'announcements' : 'events')", note: 'N5a network event, d=netevent:<id>; network key only (netDocWriteOk); served by netReader to a joined church with scope events' },
+  'trinityone/netkey:':       { write: 'leader',    read: 'author',  scope: 'none',   gatedBy: 'Object.prototype.hasOwnProperty.call(_hop1, authed)', note: 'N5a hop-1 key envelope, d=netkey:<networkpub>; the network key wraps its ring to each joined church key; readable by the network and a joined church KEY that is one of its recipients (keys), never a member or steward' },
+  'trinityone/netkeyc:':      { write: 'church',    read: 'members', scope: 'author', note: 'N5a hop-2 key envelope, d=netkeyc:<networkpub>; authored by a CHURCH key for a network it joined; the network ring re-sealed under the church name ring; reads through the ordinary church member rule, never the network key' },
   'trinityone/careavail:':    { write: 'member',    read: 'members', scope: 'suffix', note: 'non-minors only, on BOTH sides: a minor may not write one, and one written before they were marked is no longer served to ordinary members \u2014 only to the author, the church, its network, its stewards and care admins' },
   'trinityone/carekey:':      { write: 'steward',   read: 'members', scope: 'suffix' },
   // THE SEALED-ROOM KEY, given a rule of its own on 2026-09-17. It was UNDECLARED until then — the entry that
@@ -551,6 +561,10 @@ export const D = Object.freeze({
   SLOT:           k('trinityone/careslot:'),
   SKIP:           k('trinityone/careskip:'),
   AVAIL:          k('trinityone/careavail:'),
+  NETANN:         k('trinityone/netann:'),
+  NETEVENT:       k('trinityone/netevent:'),
+  NETKEY:         k('trinityone/netkey:'),
+  NETKEYC:        k('trinityone/netkeyc:'),
   CAREREQ:        k('trinityone/carereq:'),
   CARETEAM:       k('trinityone/careteam:'),
   CAREREQSTATUS:  k('trinityone/carereqstatus:'),

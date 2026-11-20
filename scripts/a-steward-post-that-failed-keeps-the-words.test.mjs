@@ -6,7 +6,7 @@
 //     try { await window.Steward.publishPost(text.trim(), target); } catch {}
 //     onClose();                                   // ← NewPostModal
 //     window.Steward.publishPost(text.trim(), group.id); setText('');   // ← GroupChatModal
-//     await window.Steward.publishNetworkAnnouncement(net.pub, text.trim()); setText(''); setSent(true);
+//     await window.Steward.publishNetworkPost(net.pub, 'announcement', { text }); setText(''); setSent(true);   (B2a renamed it from publishNetworkAnnouncement)
 //
 // `publishPost` and `publishNetworkAnnouncement` RESOLVE `false` / `null` when the publish set was empty or
 // every relay refused — they do not throw — so a bare try/catch never fires and the success arm is taken over
@@ -35,7 +35,8 @@ const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 // Slice ONE component out of the console and compile it the way the packaged build does. Same recipe as
 // scripts/a-removed-message-can-still-be-put-back.test.mjs and a-dm-that-never-sent-is-not-sent.test.mjs.
 async function loadConsoleComponent(name, anchor, globals) {
-  const src = fnBody(STEW, anchor, name) + '\n' + fnBody(STEW, 'function groupIcon(', 'groupIcon');   // + the shared room-icon helper the component draws through
+  const src = fnBody(STEW, anchor, name) + '\n' + fnBody(STEW, 'function groupIcon(', 'groupIcon')   // + the shared room-icon helper the component draws through
+    + '\n' + fnBody(STEW, 'function useNetDisplayName(', 'useNetDisplayName');   // + the one-network-name hook the network composer reads (B2a, 2026-11-19)
   const tmp = join(tmpdir(), 'keepwords-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -192,8 +193,9 @@ async function netAnnounce({ accepted }) {
   const win = {
     Steward: {
       ownedNetworks: () => [{ pub: 'net-pub', npub: 'npub1net', name: 'Regions Beyond' }],
-      publishNetworkAnnouncement: (p, t) => { posted.push([p, t]); return Promise.resolve(accepted ? { id: 'evt' } : null); },
-      subscribeNetworkAnnouncements: (p, cb) => { cb([]); return () => {}; },
+      // B2a (ported from October 46ea906b): the sealed API. A refusal resolves { ok:false, reason } (the old cleartext call resolved null); an acceptance { ok:true, id }.
+      publishNetworkPost: (p, kind, input) => { posted.push([p, input.text]); return Promise.resolve(accepted ? { ok: true, id: 'evt' } : { ok: false, reason: 'blocked: no relay took it' }); },
+      subscribeNetworkPosts: (p, cb) => { cb([]); return () => {}; },
       subscribeNetworkProfile: (p, cb) => { cb(null); return () => {}; },
     },
     addEventListener() {}, removeEventListener() {},

@@ -17,6 +17,8 @@ import { verifyRelayIdentity, verifyRelayIdentityDetailed } from './relay-identi
 import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { encrypt as nip44e, decrypt as nip44d, getConversationKey as nip44ck } from 'nostr-tools/nip44';
+// (after the nip44 import on purpose: bundle order follows import order, and the tests that lift a module out of the bundle end their slice at the next `// src/` marker)
+import { NETANN_D, NETEVENT_D, NETKEYC_D, openPost as openNetPost, openHop2 as openNetHop2, netEventFields } from './network-seal.src.js';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/nip04';
@@ -2408,6 +2410,32 @@ async function _assumeMinor(cp) {
   if (audience === null) return true;
   return audience.length > 0;
 }
+// HAS THIS CHURCH MARKED ME A CHILD? -- 'marked' | 'unmarked' | 'unknown' (Networks member step 1; audits of 590fa968 and 131b7e4f).
+// Not _assumeMinor: that answers "true" for three different things -- marked, could-not-ask, and "this church uses safeguarding and has not
+// cleared me" (an assume-a-child POLICY). Network content follows the owner's 2026-10-21 rule instead: trust the church's markings, an
+// unmarked member is an adult and is served (the relay's netReader does the same, by minorOf). And the answer must be about THIS MEMBER:
+// the church's list of who it clears (_fetchChildCareAudience) says nothing about whether I am marked, so it is never consulted here --
+// a marked child whose own clearance had not arrived yet read as 'unmarked' through it (audit of 131b7e4f, F1).
+//   my own sealed clearance has arrived (the subscription)   -> marked / unmarked, as it says
+//   a remembered answer for (church, me)                     -> marked / unmarked (written only from that clearance, by _assumeMinor)
+//   my clearance record, FETCHED (_fetchMyClearance):
+//       { found:true }   -> as the record says
+//       { found:false }  -> unmarked: authenticated, and this church has published no marking about me
+//       null / a throw   -> unknown, and the caller shows nothing
+// Callers: Fellowship.minorStanding (app/app.jsx's network child gate only).
+async function _minorStanding(cp) {
+  if (!cp) return 'unknown';
+  const me = _mePub();
+  if (!me) return 'unknown';
+  const mine = _sgMine(cp);
+  if (mine && mine.known) return mine.isMinor ? 'marked' : 'unmarked';
+  try { const v = localStorage.getItem(SG_ASSUME_KEY + cp + '|' + me); if (v === '1') return 'marked'; if (v === '0') return 'unmarked'; } catch (e) {}
+  const rec = await _fetchMyClearance(cp);
+  if (!rec) return 'unknown';
+  if (rec.found === true) return rec.minor ? 'marked' : 'unmarked';
+  if (rec.found === false) return 'unmarked';
+  return 'unknown';
+}
 // MAY THIS PERSON OPEN A PUBLIC NEED? Module scope, not a method, so publishCareNeed reaches the real rule
 // rather than whatever `window.Fellowship` happens to be — and so a test that lifts the publisher lifts this
 // with it instead of stubbing the one decision that matters.
@@ -3026,7 +3054,10 @@ const CHURCH_SEALED_PFXS = ['trinityone/event:', 'trinityone/service:', 'trinity
   // careavail: is member-authored rather than church-authored, but it is sealed under the same church name
   // key and therefore has the same late-key problem — without this, "Ready to help" stays empty for a newly
   // admitted member until they restart the app.
-  'trinityone/careavail:'];
+  'trinityone/careavail:',
+  // netkeyc: is the CHURCH's hop-2 re-seal of a joined network's ring (Networks N5b, ported 2026-11-18), sealed under this same name key.
+  // Without this a member whose name key lands AFTER the document stays on "locked" until the app restarts.
+  'trinityone/netkeyc:'];
 
 // Re-open every sealed CALENDAR document already buffered for a church, once its name key is usable.
 //
@@ -8880,6 +8911,12 @@ window.Fellowship = {
     const cp = toPub(churchNpub) || window.Fellowship.churchPub;
     try { return await _assumeMinor(cp); } catch (e) { return true; }
   },
+  // 'marked' | 'unmarked' | 'unknown' -- see _minorStanding. A failure is 'unknown', never an answer.
+  async minorStanding(churchNpub) {
+    const cp = toPub(churchNpub);
+    if (!cp) return 'unknown';
+    try { return await _minorStanding(cp); } catch (e) { return 'unknown'; }
+  },
   async canOpenCareNeed() {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch (e) {} }
@@ -9371,6 +9408,65 @@ window.Fellowship = {
     });
     return () => { try { sub.close(); } catch {} };
   },
+  // ── a network's announcements + events, SEALED (Networks N5b, 365dff7a; ported 2026-11-18). The cleartext reader above is refused by every
+  // walled relay; since member step 1 (2026-11-19) the member app reads only this, and the one above has no caller in app/.
+  //   REQ authors:[network], kind 30078, t=trinityone -- the d-prefix (netann: / netevent:) is filtered here, because a relay filter matches
+  //   `#d` exactly. The relay serves these to a member of a church that JOINED the network with the matching scope, and never to that
+  //   church's marked children (netReader, scripts/gateway.mjs). The ring that opens them arrives as the CHURCH's hop-2 document
+  //   (netkeyc:<network>, church-authored, sealed under the church name key) through the church-docs hub. Until it has, cb gets state
+  //   'locked' -- never an error, never an empty list dressed up as "nothing posted".
+  // cb({ state: 'locked' | 'ready', announcements: [{id, text, ts, networkPub}], events: [{id, ...event fields, ts, networkPub}], unreadable })
+  // Callers (rule 2): app/app.jsx's network-content effect (behind NETWORKS_ENABLED, and only once the member is cleared as not a child).
+  subscribeNetworkContent(networkNpub, churchNpub, cb) {
+    const np = toPub(networkNpub), cp = toPub(churchNpub);
+    if (!np || !cp) { try { cb({ state: 'locked', announcements: [], events: [], unreadable: 0 }); } catch {} return () => {}; }
+    const raw = new Map();   // d -> the newest event for it
+    const dead = new Map();  // d -> created_at of the newest tombstone seen: an OLDER live copy arriving later (another relay) must not bring a deleted post back
+    let ring = null, ringAt = 0, eosed = false;
+    const emit = _coalesce(() => {
+      const announcements = [], events = []; let unreadable = 0;
+      if (ring) {
+        for (const [d, e] of raw) {
+          const body = openNetPost(e.content, ring);
+          if (!body) { unreadable++; continue; }
+          if (d.startsWith(NETEVENT_D)) events.push({ id: d.slice(NETEVENT_D.length), ...netEventFields(body), ts: e.created_at, networkPub: np });
+          else announcements.push({ id: d.slice(NETANN_D.length), text: String(body.text || ''), ts: e.created_at, networkPub: np });
+        }
+      }
+      announcements.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      // sticky: until the relay has answered, do not tell the screen "locked" about a ring that is simply on its way
+      if (!ring && !eosed) return;
+      try { cb({ state: ring ? 'ready' : 'locked', announcements, events, unreadable }); } catch (err) { _featureFailed('network content', np, err); }
+    });
+    // HOP-2: the church's re-seal of the network ring. Church key only (the relay refuses any other author for netkeyc:), newest wins.
+    const stopKey = _onChurchDocs(cp, {
+      emit,
+      want: [NETKEYC_D],
+      onevent(e, d) {
+        if (d !== NETKEYC_D + np || e.pubkey !== cp) return;
+        if ((e.created_at || 0) < ringAt) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { ringAt = e.created_at || 0; ring = null; emit(); return; }
+        const r = openNetHop2(e.content, _nameKeys.get(cp) || []);
+        if (!r) return;   // sealed under a name key this phone does not hold YET: the hub replays it when the key lands (CHURCH_SEALED_PFXS)
+        ringAt = e.created_at || 0; ring = r; emit();
+      },
+      oneose() { eosed = true; emit(); },
+    });
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [np], '#t': [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (e.pubkey !== np || (!d.startsWith(NETANN_D) && !d.startsWith(NETEVENT_D))) return;
+        const prev = raw.get(d);
+        if (prev && ((prev.created_at || 0) > (e.created_at || 0) || ((prev.created_at || 0) === (e.created_at || 0) && prev.id < e.id))) return;
+        if ((dead.get(d) || -1) >= (e.created_at || 0)) return;   // deleted at or after this copy was written (B1 audit). RESIDUAL: a re-post in the SAME second as its deletion is hidden (a tie goes to the deletion)
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { raw.delete(d); dead.set(d, Math.max(dead.get(d) || 0, e.created_at || 0)); } else raw.set(d, e);
+        emit();
+      },
+      oneose() { eosed = true; emit(); },
+    });
+    return () => { try { emit.cancel(); } catch {} try { stopKey(); } catch {} try { sub.close(); } catch {} };
+  },
 
   // ── serving requests the church p-tagged to ME ("can you serve?") ──
   subscribeMyServingRequests(onReqs) {
@@ -9803,6 +9899,22 @@ window.Fellowship = {
     return answers.every(a => a.answered) ? 'not-found' : 'unknown';
   },
 
+  // A NETWORK'S PUBLIC PROFILE (kind-0) for the member app's Network tab title (Networks member step 1, 2026-11-19). Hands the RAW newest event
+  // to cb -- the app decides what it may use (app/app.jsx netProfileOf: signed by the network key, short_name capped). Read over the same two
+  // gated sets the member already reads a network from: the shared pool (as subscribeChurchProfile did for a network) and the member's relays
+  // (as subscribeNetworkContent does). An event from any other author is dropped here as well.
+  // Callers (rule 2): app/app.jsx's network-profile effect only.
+  subscribeNetworkProfile(networkNpub, cb) {
+    const np = toPub(networkNpub);
+    if (!np) return () => {};
+    let latest = -1;
+    const relays = [...new Set([...groupReadRelays(np), ..._netRelays(window.Fellowship.relays)])];
+    const sub = pool.subscribeMany(relays, [{ kinds: [0], authors: [np] }], {
+      onevent(e) { if (!e || e.pubkey !== np || (e.created_at || 0) <= latest) return; latest = e.created_at || 0; try { cb({ kind: e.kind, pubkey: e.pubkey, created_at: e.created_at, content: e.content }); } catch {} },
+      oneose() {},
+    });
+    return () => { try { sub.close(); } catch {} };
+  },
   subscribeChurchProfile(churchNpub, onProfile) {
     const pubk = toPub(churchNpub);
     if (!pubk) { onProfile(null); return () => {}; }

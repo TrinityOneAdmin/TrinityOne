@@ -62,6 +62,12 @@ const DEFERRED = new Set([]);
 // Prefixes written by the member app rather than the console.
 const MEMBER_SIDE = new Set(['trinityone/careavail:']);
 
+// netkeyc: (Networks N5b, ported 2026-11-18) is sealed by the SHARED module's sealHop2 (src/network-seal.src.js, under the church name key), not
+// by _sealChurchDoc, and its d-constant is imported rather than declared here -- so the console-constant search below cannot find it. Its sealing
+// is proved by RUNNING the shipped engine in scripts/a-network-announcement-is-sealed-two-hops.test.mjs (the published hop-2 document is the
+// {e} shape only and carries no readable ring key); this line only stops the declaration and the publisher drifting apart.
+const SEALED_BY_SHARED_MODULE = new Set(['trinityone/netkeyc:']);
+
 for (const pfx of prefixes) {
   const CONST = constFor(pfx);
   test(`${pfx} is published SEALED`, { todo: DEFERRED.has(pfx) ? 'deferred: sealing this blinds the relay\'s careAdmin() grant until it moves to the careteam: doc' : false }, () => {
@@ -71,6 +77,10 @@ for (const pfx of prefixes) {
     if (MEMBER_SIDE.has(pfx)) {
       assert.match(FEL, /_sealChurchDocMember\(/,
         `${pfx} is member-authored and must seal with the member-side helper`);
+      return;
+    }
+    if (SEALED_BY_SHARED_MODULE.has(pfx)) {
+      assert.match(STW, /sealHop2\(/, `${pfx} is declared sealed but the console no longer calls the shared sealHop2`);
       return;
     }
     assert.ok(CONST, `re-anchor: no console constant found for ${pfx}`);
