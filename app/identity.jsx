@@ -16,7 +16,7 @@ const scrollFocusCenter = e => { const t = e.target; setTimeout(() => { try { t.
 // tap on a grey link permanently closed the only door back into an existing account, while two other screens
 // went on telling the member to "restore your 12-word phrase". The other restore pane (NostrSheet) has never
 // had a caller at all; see the note at the top of this file.
-function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, suggestedName }) {
+function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, suggestedName, followChurch }) {
   const D = window.TrinityData;
   const [step, setStep] = useId(0);   // 0 name, 1 back up the 12 words, 2 confirm a couple
   // A11Y: THIS WIZARD COVERS THE WHOLE APP AND WAS JUST A STACK OF <div>s.
@@ -340,13 +340,20 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   //
   // The code is a link carrying the seed in its FRAGMENT (#invite=…), which never reaches a server. We accept
   // that, and a bare 12-word phrase, and nothing else — a QR is scanned from across a room by whoever is
-  // holding the camera, so anything we cannot recognise is refused rather than guessed at.
+  // holding the camera, so anything we cannot recognise is refused rather than guessed at. The same link is
+  // what a steward's "Set up accounts" slip prints, so this route serves both hand-offs.
   //
   // rTypedWords stays FALSE here: this route does not prove the person has their recovery phrase, so the
   // backup nudge must still fire. Only typing the words earns its dismissal.
+  // Returns { seed, src } — src is the link WITHOUT its fragment when the link also names the church
+  // (?follow=…), '' otherwise. The query is passed through verbatim because it may carry ?relayname=, the
+  // stable directory name a printed slip needs once its tunnel ?relay= has rotated — rebuilding the string
+  // from parts dropped it. The fragment is stripped because the seed must NEVER reach followChurch /
+  // adoptInviteRelays: the engine's [?&]relay= matcher reads to the next '&', so on a link whose relay=
+  // is the last query param an un-stripped fragment would ride along inside the relay address.
   const seedFromScan = (text) => {
     const raw = String(text || '').trim();
-    if (!raw) return '';
+    if (!raw) return { seed: '' };
     // a link with the seed in the fragment (or, for older links, the query)
     try {
       const u = new URL(raw);
@@ -358,16 +365,19 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       // rather than that it was not a TrinityOne code at all. Refuse early and say the right thing.
       if (v) {
         const w = decodeURIComponent(v).trim().toLowerCase().replace(/\s+/g, ' ');
-        return w.split(' ').length === 12 ? w : '';
+        if (w.split(' ').length !== 12) return { seed: '' };
+        const follow = u.searchParams.get('follow') || '';
+        return { seed: w, src: follow ? (u.origin + u.pathname + u.search) : '' };
       }
     } catch (e) {}
     // or the bare phrase
     const words = raw.toLowerCase().replace(/\s+/g, ' ');
-    if (words.split(' ').length === 12) return words;
-    return '';
+    if (words.split(' ').length === 12) return { seed: words, src: '' };
+    return { seed: '' };
   };
   const doScanSignIn = async (text) => {
-    const seed = seedFromScan(text);
+    const scanned = seedFromScan(text);
+    const seed = scanned.seed;
     // QRScanner is SINGLE-SHOT: its loop calls onResult and stops rescheduling, relying on the caller to
     // unmount it. Re-rendering the same instance leaves a live preview with a dead decoder — so scanning
     // anything unrecognised (a church join QR, a Wi-Fi code, a poster) killed the camera silently and only
@@ -386,17 +396,29 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     try { existing = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || []; } catch (e) {}
     const warn = existing.length
       ? 'This REPLACES the account already on this phone.\n\nMake sure its 12 words are written down first — without them it cannot be recovered.'
-      : 'This signs you in to an account someone ELSE created, using a key they know.\n\nThat is how a parent sets up a child\u2019s phone. Only continue if you are expecting this and you trust whoever showed you the code.';
+      : 'This signs you in to an account someone ELSE created, using a key they know.\n\nThat is how a steward or parent sets up an account for you. Only continue if you are expecting this and you trust whoever showed you the code.';
     if (!window.confirm(warn)) { setRMode('choose'); return; }
     setRBusy('Signing in…'); setRErr(''); rTypedWords.current = false;
     try {
       await window.TrinityIdentity.importMnemonic(seed);
     } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That code carried an invalid phrase.'); setRMode('choose'); return; }
-    await finishRestore();
+    // The slip also NAMES the church (?follow=, with its relay and stable relay name) — follow it now,
+    // exactly as the deep-link path does (app.jsx), so the lookup below has the church's own relay to ask.
+    // A self-hosted church is invisible to a fresh install otherwise: the relays a new phone knows are the
+    // shared ones, and this church may be on none of them. followChurch is a PROP from app.jsx (the same
+    // lesson as saveIdentity below — it is a local inside App and is NOT in scope here), may be absent in
+    // an older host, and a throw from it must not strand "Signing in…" — hence the fence.
+    let followed = false;
+    if (scanned.src && typeof followChurch === 'function') {
+      try { followed = followChurch(scanned.src) !== false; } catch (e) { followed = false; }
+    }
+    await finishRestore({ followed });
   };
   // Shared tail of EVERY way back in — typed words, a transfer from the old phone, or (later) a steward
   // re-seat. By this point the key is already in place; all that remains is to find out what it belongs to.
-  const finishRestore = async () => {
+  // `opts.followed` — the scan route has ALREADY followed the church the slip named (above), so an empty
+  // lookup is first-contact with a church whose relay is still being proved, not a dead end.
+  const finishRestore = async (opts) => {
     // Ask the relay what this identity already IS.
     //
     // This lookup used to be deliberately skipped here, on the theory that a seconds-old key on an unsettled
@@ -444,6 +466,20 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       if (rTypedWords.current) localStorage.setItem('trinityone.backedup.' + ((window.TrinityIdentity.current || {}).npub || ''), '1');
     } catch (e) {}
     if (!found.churches.length) {
+      // …BUT THE SCANNED SLIP ALREADY NAMED THE CHURCH, and doScanSignIn followed it before calling here —
+      // app.jsx has it in state (persisted by its followedChurches effect while the lookup above ran) and
+      // its relay address is being proved by adoptInviteRelays. For a self-hosted church that proof can
+      // outlast the lookup's two passes, so an empty answer here is EXPECTED first contact, not a dead end —
+      // and the no-church screen would tell the member to go and scan the code they are holding. Reload into
+      // the followed church; the membership documents were published by the steward and arrive as the relay
+      // connects. restorePending stays CLEARED: a later boot has nothing more to retry that the follow has
+      // not already set in motion.
+      if (opts && opts.followed) {
+        try { localStorage.removeItem('trinityone.restorePending'); } catch (e) {}
+        setRBusy('Connecting you to your church — reopening…');
+        setTimeout(() => { try { location.reload(); } catch (e) {} }, 1600);
+        return;
+      }
       // NOTHING FOUND — and this is a legitimate outcome, not only a failure. A church that runs its OWN relay
       // is invisible to a fresh install, which only knows the shared ones; so is a member whose join predates
       // the membership document. Leave restorePending set so a later boot retries automatically, but do NOT

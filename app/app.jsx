@@ -533,7 +533,7 @@ function App() {
   const [bootReady, setBootReady] = useA(false);   // true once the church's core data has arrived — holds the splash until the cards are ready
   const onboardParam = new URLSearchParams(location.search).get('onboard');
   const [showOnboarding, setShowOnboarding] = useA(
-    onboardParam === '1' || (!lsGet('trinityone.onboarded', false) && (!deepLinked || !!followParam))   // a FOLLOW link is the moment a NEW member sets up → show the wizard. An INVITE link (guardian→child) adopts a parent-owned, already-named identity, so it must NOT re-onboard. An already-onboarded profile always skips it.
+    onboardParam === '1' || (!lsGet('trinityone.onboarded', false) && (!deepLinked || !!followParam))   // a FOLLOW link is the moment a NEW member sets up → show the wizard. An INVITE link (guardian→child, or a steward's Set up accounts slip) adopts a handed-over, already-named identity, so it must NOT re-onboard. An already-onboarded profile always skips it.
   );
   // identity surfaces (ProfileSheet hub + the focused sheets)
   const [profile, setProfile] = useA(idParam === 'profile');
@@ -1196,16 +1196,17 @@ function App() {
       try { const u = new URL(location.href); ['invite', 'follow', 'relay', 'name'].forEach(k => u.searchParams.delete(k)); let hash = u.hash; try { if (/[#&]invite=/.test(hash)) { const hp = new URLSearchParams(hash.replace(/^#/, '')); hp.delete('invite'); const hs = hp.toString(); hash = hs ? '#' + hs : ''; } } catch (e) {} const q = u.searchParams.toString(); history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + hash); } catch (e) {}   // SECURITY-AUDIT-2026-07-18: also strip #invite= from the fragment
       // a steward invite hands the recipient a ready-made anonymous identity — adopt it first, then join
       if (inviteParam && window.TrinityIdentity && window.TrinityIdentity.importMnemonic) {
-        // SECURITY-AUDIT-2026-07-06 L4: a seed-carrying `?invite=` is now ONLY the guardian→child handoff — a
-        // parent setting up an account they OWN on the child's device. (Friend invites are follow-only join links
+        // SECURITY-AUDIT-2026-07-06 L4: a seed-carrying `?invite=`/`#invite=` is a HANDED-OVER account — the
+        // guardian→child handoff, or a steward's "Set up accounts" slip; whoever made the link knows the key.
+        // (Friend invites are follow-only join links
         // that mint the joiner's own key.) Adopting a handed key is deliberate, so CONFIRM in BOTH cases — so a
         // crafted link can never silently take over a device, whether replacing an existing identity OR seeding a
         // fresh phone. This closes the old gap where a fresh device adopted an invite seed with no prompt.
         const _ID = window.TrinityIdentity;
         const _curNpub = (_ID && ((_ID.current && _ID.current.npub) || _ID.npub)) || '';
         const _msg = _curNpub
-          ? ('This link will REPLACE your current TrinityOne identity with a different one.\n\nCurrent: ' + _curNpub.slice(0, 18) + '…\n\nOnly continue if someone you trust gave you this link to set up a specific account (e.g. a parent setting up a child’s account). Otherwise cancel.\n\nContinue?')
-          : ('This link sets up a TrinityOne account that someone ELSE created — its key is known to whoever made the link (this is how a parent sets up a child’s account). Only continue if you were handed this link directly and trust them.\n\nIf you just want to join a church, cancel and use a normal join link instead.\n\nContinue?');
+          ? ('This link will REPLACE your current TrinityOne identity with a different one.\n\nCurrent: ' + _curNpub.slice(0, 18) + '…\n\nOnly continue if someone you trust gave you this link to set up a specific account (e.g. a steward or parent setting up an account for you). Otherwise cancel.\n\nContinue?')
+          : ('This link sets up a TrinityOne account that someone ELSE created — its key is known to whoever made the link (this is how a steward or parent sets up an account for you). Only continue if you were handed this link directly and trust them.\n\nIf you weren’t expecting this, cancel.\n\nContinue?');
         if (!window.confirm(_msg)) { return; }   // bail the entire follow+name flow too
         const before = (window.Fellowship && window.Fellowship.myPubkey) || '';
         const _freshPhone = !lsGet('trinityone.onboarded', false);   // never set up: this IS its first run
@@ -1222,7 +1223,8 @@ function App() {
       if (/npub1[0-9a-z]{20,}/.test(src)) {
         // S2: on a not-yet-onboarded device a PLAIN follow link defers its join+announce until the wizard
         // completes — so opening a link never publishes a membership doc before the person consents/names.
-        // (An invite link already adopted a consented, parent-owned identity above, so it joins now.)
+        // (An invite link already adopted a consented, handed-over identity above — guardian→child, or a
+        // steward's Set up accounts slip — so it joins now.)
         if (followParam && !inviteParam && !lsGet('trinityone.onboarded', false)) pendingFollowRef.current = src;
         else { const off = followChurch(src); if (typeof off === 'function') cleanup = off; }
       }
@@ -2988,13 +2990,15 @@ function App() {
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--clay)' }}>Unlock</span>
           </div>
         ) : null}
-        {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity} suggestedName={pendingNameRef.current}
+        {!showSplash && showOnboarding ? <IdentityOnboarding open={true} identity={identity} suggestedName={pendingNameRef.current} followChurch={followChurch}
           onSave={(p) => { saveIdentity(p); try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); memberTourAsk('onboarding'); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }}
           onSkip={() => { try { lsSet('trinityone.onboarded', true); } catch (e) {} setShowOnboarding(false); memberTourAsk('onboarding'); const pf = pendingFollowRef.current; pendingFollowRef.current = null; if (pf) followChurch(pf); else promptFollowChurch(); }} /> : null}
         {/* U1: the SAME restore flow, opened from settings rather than only from first-run. Deliberately its
             OWN handlers: this member is already set up, so it must not re-write trinityone.onboarded or
-            re-prompt them to follow a church — it just closes when they are done. */}
-        {idSheet === 'restore' ? <IdentityOnboarding open={true} identity={identity} initialRestore
+            re-prompt them to follow a church — it just closes when they are done. followChurch IS passed:
+            that is not a re-prompt, it is the scan route honouring a slip that names a church (decided with
+            the Set up accounts feature — a slip scanned from Settings behaves exactly as on a fresh phone). */}
+        {idSheet === 'restore' ? <IdentityOnboarding open={true} identity={identity} initialRestore followChurch={followChurch}
           onSave={(p) => { saveIdentity(p); setIdSheet(null); }}
           onSkip={() => setIdSheet(null)} /> : null}
       </PhoneFrame>
