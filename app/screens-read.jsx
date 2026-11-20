@@ -1028,7 +1028,7 @@ function CommentaryEdge({ open, onToggle }) {
 // A cross-reference preview: read the verse in place, then choose to open it in the reader (owner 2026-10-14,
 // consistent with the Library page's preview-then-jump). Text comes from the active translation if it has that
 // chapter loaded; a same-chapter range shows all its verses. Never fabricates — an empty result says so.
-function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
+function XrefPreviewSheet({ refStr, open, onClose, onGo, onShare, version }) {
   const loc = refStr ? window.Bible.parseRef(refStr) : null;
   let text = '';
   if (loc) {
@@ -1054,12 +1054,19 @@ function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
           {text
             ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>{text}</p>
             : <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>Open it in the reader to read the full verse.</p>}
-          <button onClick={() => onGo(loc)} style={{
-            width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 18px',
-            borderRadius: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <Icon name="book" size={16} color="currentColor" /> Open in reader
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => onGo(loc)} style={{
+              flex: 1, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 18px',
+              borderRadius: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <Icon name="book" size={16} color="currentColor" /> Open in reader
+            </button>
+            {text && onShare ? <button onClick={() => onShare({ ref: refStr, text, version: version || '' })} aria-label={'Share ' + refStr} style={{
+              border: 'none', background: 'var(--surface-2)', color: 'var(--ink-2)', padding: '12px 14px',
+              borderRadius: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="share" size={18} />
+            </button> : null}
+          </div>
         </React.Fragment>
       )}
     </BottomSheet>
@@ -1500,7 +1507,8 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
       </div>
       <XrefPreviewSheet refStr={xrefPreview} open={!!xrefPreview} version={ctx.version}
         onClose={() => setXrefPreview(null)}
-        onGo={(t) => { setXrefPreview(null); onClose(); ctx.gotoRef(t.book, t.chap, t.verse); }} />
+        onGo={(t) => { setXrefPreview(null); onClose(); ctx.gotoRef(t.book, t.chap, t.verse); }}
+        onShare={(s) => { setXrefPreview(null); ctx.openShareSheet(s); }} />
     </React.Fragment>
   );
 }
