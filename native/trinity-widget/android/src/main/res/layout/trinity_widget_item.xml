@@ -61,7 +61,7 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:layout_marginTop="6dp"
-            android:autoSizeMaxTextSize="16sp"
+            android:autoSizeMaxTextSize="26sp"
             android:autoSizeMinTextSize="12sp"
             android:autoSizeStepGranularity="1sp"
             android:autoSizeTextType="uniform"
