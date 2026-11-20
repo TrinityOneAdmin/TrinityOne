@@ -7853,7 +7853,13 @@ window.DashResources = DashResources;
 // `realName` is the member's ACTUAL display name or '' — deliberately separate from `memberName`, which
 // falls back to "this member" for the prose. Only a real name may be vouched across with the seat; writing
 // a placeholder into the re-seat doc would publish "this member" as somebody's profile name.
-function ReseatModal({ member, memberName, realName, isMinor, admittedList, onClose }) {
+function ReseatModal({ member, memberName: memberNameNow, realName: realNameNow, isMinor, admittedList, onClose }) {
+  // THE NAME AS IT WAS WHEN THE MODAL OPENED (F4b, sim of 98c7143d: every done screen said "Done. this member…"). The
+  // caller works the name out from its member list on every render, and once the re-seat lands the console folds the old
+  // key OUT of that list — so the title and the done screen fell back to "this member". The last real name seen is kept.
+  const nameSeen = React.useRef({ shown: memberNameNow, real: realNameNow });
+  if (realNameNow) nameSeen.current = { shown: memberNameNow, real: realNameNow };
+  const memberName = nameSeen.current.shown, realName = nameSeen.current.real;
   // A re-seat is a SEAT MOVING, and everything attached to the seat has to move with it — the child marking,
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
@@ -7942,6 +7948,9 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
           Done. {memberName} is back in their place on the new phone, and the old entry is folded into it.
           {realName ? ' Their name goes with them — it will appear on the new phone shortly.' : ''}
         </p>
+        {/* WHAT THE OLD KEY'S CHURCH SETTINGS CAME TO, when it was a steward's (owner answer d): kept under the church,
+            with the new key in the old one's place on group leaders/members — or which could not be kept. */}
+        {res && res.carry && stewCarryNote(res.carry) ? <p role={stewCarryNote(res.carry).tone === 'fail' ? 'alert' : 'status'} style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 0 14px' }}>{stewCarryNote(res.carry).text}</p> : null}
         {/* Say the part the product does NOT do, here, where it can still be acted on. Invite-only group
             membership is a list of pubkeys on each group document; a re-seat does not rewrite those, so the
             new key is not in them. Telling the steward now costs one sentence; leaving them to find out means
@@ -7967,8 +7976,14 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             : 'The phones of ' + res.childrenNotTold + ' of their children have not been told about the new key yet, so they can’t message each other until they have — open Members to send it again. '}</b> : null}
           {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
-          One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
-          again. Ordinary groups need nothing — they are already back in those.
+          {/* the swap covers every group that NAMED them (led or only a member of — audit of 98ab7e38, item 1), so it names exactly those */}
+          {res && res.carry && (res.carry.swapped || []).length ? 'Groups that named them now name their new key: ' + res.carry.swapped.join(', ') + '. ' : ''}
+          {res && res.carry && (res.carry.swapFailed || []).length ? <b>{'Couldn’t put their new key on ' + res.carry.swapFailed.join(', ') + ' — open Groups and add them. '}</b> : null}
+          {res && res.carry && (res.carry.swapOther || []).length ? <b>{'Another steward has changed ' + res.carry.swapOther.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
+          {res && res.carry && (res.carry.swapOtherSomeone || []).length ? <b>{'Someone else has changed ' + res.carry.swapOtherSomeone.join(', ') + ' since, and it still names their old key — check it by hand. '}</b> : null}
+          {res && res.carry && (res.carry.swapUnchecked || []).length ? <b>{'Couldn’t check ' + res.carry.swapUnchecked.join(', ') + ' — open Groups and check whether they should be on ' + (res.carry.swapUnchecked.length > 1 ? 'them' : 'it') + '. '}</b> : null}
+          One thing to finish by hand: if they were in any <b>{res && res.carry && (res.carry.swapped || []).length ? 'other ' : ''}invite-only</b> groups, open Groups and add them
+          again.{res && res.carry && (res.carry.swapAnyUnanswered || (res.carry.swapFailed || []).length || (res.carry.swapOther || []).length || (res.carry.swapOtherSomeone || []).length || (res.carry.swapUnchecked || []).length) ? '' : ' Ordinary groups need nothing — they are already back in those.'}
         </p>
         {/* The stolen-phone block had NO sentence here at all — the one write whose silent failure leaves a
             thief reading the church for ever, and the screen said nothing either way. It can only be true
@@ -8013,7 +8028,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} className="sk-btn" style={{ flex: 1, padding: '10px 14px' }}>Cancel</button>
           <button onClick={confirm} disabled={!newPub || same || busy} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: '10px 14px', opacity: (!newPub || same || busy) ? .5 : 1 }}>
-            {busy ? 'Reconnecting…' : 'Yes — this is ' + memberName}</button>
+            {busy ? (taken && window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(member) ? 'Reconnecting… keeping what they set up' : 'Reconnecting…') : 'Yes — this is ' + memberName}</button>
         </div>
       </React.Fragment>)}
     </CkModal>
@@ -8355,6 +8370,8 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
   return Promise.all(jobs).then(() => [...new Set(failed)]);
 }
 
+// who DashMembers is blocking right now — module scope so it survives the tab unmounting (see blockOnce)
+const _blockingInFlight = { pks: new Set(), subs: new Set() };
 function DashMembers({ dmConvos: dmConvosProp }) {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
@@ -9073,6 +9090,13 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const [showInactive, setShowInactive] = React.useState(false);
   const [showBlocked, setShowBlocked] = React.useState(false);
   const [confirmBlock, setConfirmBlock] = React.useState(null);
+  const [blockCarryNote, setBlockCarryNote] = React.useState(null);   // what Blocking a (former) steward kept of what they saved — see block()
+  React.useEffect(() => {   // "everything kept" is a moment, as on the Stewards panel; a list of what was not kept stays
+    if (!blockCarryNote || blockCarryNote.tone !== 'ok') return undefined;
+    const t = setTimeout(() => setBlockCarryNote(cur => (cur === blockCarryNote ? null : cur)), 8000);
+    return () => clearTimeout(t);
+  }, [blockCarryNote]);
+  const wasStewardHere = (pk) => { const l = String(pk || '').toLowerCase(); return !!((window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(pk)) || (stewardRoster || []).some(p => String(p || '').toLowerCase() === l)); };
   const [blockWarn, setBlockWarn] = React.useState('');   // a rotation that did not land — the member may still hold the key
   // THE BANNER SAYS WHAT THE ENGINE'S RECORDS SAY (round 3g). A Block or a removal whose keys did not all change at once
   // keeps { pk, verb, pre, post } here; the words are worked out on every render from Steward.rotationStatus(pk) — per
@@ -9137,74 +9161,151 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       setBlockWarn('Only the church owner can block someone. Nothing was changed — ask them to block ' + who + ' from their own console.');
       return;
     }
-    // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
-    // out of the click, and not a key rotation for a block that was never written.
-    let wrote;
-    try { wrote = Promise.resolve(window.Steward.setBlocked([...blockedList, pk])); } catch (e) { return; }
-    // AWAIT THE WRITE BEFORE ROTATING, and read it. This dropped the promise, rotated, and showed "Removed them from
-    // the church" whatever the relay said. `null` = nothing was written (no signing key): nothing changed, say so.
-    // `false` = every relay refused it or only SOME took it (setBlocked answers false for both): the block may be in force
-    // on one relay and this console holds them as blocked either way, so keys are STILL rotated away from them — that is
-    // the safe direction — and the steward is told it may be only partly saved, not that it worked.
-    return wrote.then((ok) => {
-      if (ok == null) { setBlockWarn('Couldn’t block ' + who + ' — this console isn’t signed in to your church, so nothing was changed. Try again.'); return; }
-      const saveNote = ok === false
-        ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
-        : '';
-      if (saveNote) setBlockWarn(saveNote);
-      // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
-      // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
-      // …but the NAME key goes to everyone who stays, approved or not (round 3c, HIGH 1), and every current holder of the
-      // other keys who stays keeps them — see rotateChurchKeys (`keepIf`).
-      const everyone = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
-      const known = dmKr.approved(everyone);
-      const remaining = known || dmKr.orAdmitted(everyone);
-      // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
-      // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
-      // …and once the member list is a genuine read (not the cache), a holder no longer on it has LEFT and is let go (round 3d)
-      const keepOnly = (window.Steward.listIsFresh && window.Steward.listIsFresh(members)) ? new Set(everyone.map(p => String(p).toLowerCase())) : null;
-      const rotating = rotateChurchKeys({ memberPubs: remaining, namePubs: everyone, keepKr: dmKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
-      // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
-      // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
-      const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
-      // BLOCK WITHDRAWS YOUTH CLEARANCE TOO (sim finding 1; owner, 2026-10-02: "Block means NO private access of any
-      // kind"). A blocked adult stayed on the cleared list, and the child's phone seals its plea for help to that list.
-      // Same rule as the teams: only for a Block that landed. No _reseal for them: a blocked person is told nothing.
-      const clearing = (ok === false || !approvedSet.has(pk)) ? Promise.resolve([]) : (() => {
-        try {
-          return Promise.resolve(window.Steward.setApproved((sg.approved || []).filter(p => String(p).toLowerCase() !== String(pk).toLowerCase()), { listKnown: !!sg.clearedKnown }))
-            .then((r) => ((r === false || r == null) ? ['their youth clearance'] : []));
-        } catch (e) { return Promise.resolve(['their youth clearance']); }
-      })().catch(() => ['their youth clearance']);
-      // CAPABILITY KEYS (finance, check-in): re-wrap them without the blocked steward now rather than on the next roster
-      // change — the engine leaves anyone this console holds as blocked out of the wrap, and rotates when that shrinks it.
-      // Not awaited or reported: ensureCapKeyFor answers false for "nothing to change" as well as for a failure, and the
-      // dashboard's own effect repeats it on every key delivery until the blocked steward is out of the envelope.
-      if (window.Steward.ensureCapKeyFor) for (const kind of ['finance', 'checkin']) {
-        try { Promise.resolve(window.Steward.ensureCapKeyFor(kind, stewardRoster || [], (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})).catch(() => {}); } catch (e) {}
-      }
-      // A TEAM THIS CONSOLE CANNOT READ YET (its roster is sealed under a name key that has not landed) cannot be
-      // checked or rewritten, so it is counted and said — never silently skipped, never published from empty.
-      const lockedTeams = ok === false ? 0 : (Array.isArray(rostersAll) ? rostersAll : []).filter(r => r && r._locked && r.team).length;
-      const lockedNote = lockedTeams ? 'Couldn\u2019t remove them from ' + lockedTeams + ' team' + (lockedTeams === 1 ? '' : 's') + ' \u2014 try again shortly.' : '';
-      return Promise.all([rotating, teams, clearing]).then(([failed, teamFailed, clearFailed]) => {
-        const offFailed = [...teamFailed, ...clearFailed];
-        const teamNote = [offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '', lockedNote].filter(Boolean).join(' ');
-        // WHAT IS TRUE, SAID (round 3e, MED 1; audit of b102dc6). This said "Try blocking them again — and if it keeps
-        // failing, your church may have grown past what one key document can hold": the person is already on the
-        // Blocked list, which offers only Unblock, and the cause was almost always a key read still settling, not size.
-        //   · a key WAITING for its read (failed.pending): the engine runs it when the read settles — say that, and the
-        //     confirmation follows (the engine records it — blockWarnView, round 3g);
-        //   · a key that truly could not change: say so, with "Try again" (Steward.retryPendingRotations — rotateChurchKeys
-        //     remembered it).
-        // the words come from the engine's records for this person (round 3g) — see blockWarnView
-        const pend = failed.pending || [];
-        const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
-        if (failed.length || pend.length) setBlockWarn({ pk, verb: 'block', pre: saveNote ? saveNote + ' ' : '', post: teamNote ? ' ' + teamNote : '', failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });
-        else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
-      });
-    }).catch(() => {});
+    // BLOCKING SOMEONE WHO IS OR WAS A STEWARD KEEPS THE CHURCH SETTINGS THEY SAVED (owner answer d, 2026-11-17). Once the
+    // block is published the relay hides every event they wrote, from the church too, so the carry-over runs FIRST and
+    // must finish or reach its limit before setBlocked. It takes them off every leaders/members list in the group
+    // definitions it carries (owner answer f); takeOffEveryTeam, below, still runs after it, so its later church copies
+    // of the rosters and rotas win. A carry that fails never stops the Block. Anyone never on the roster: unchanged.
+    const lowPk = String(pk || '').toLowerCase();
+    const onRosterHere = (stewardRoster || []).some(p => String(p || '').toLowerCase() === lowPk);
+    const stewardish = !!((window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(pk)) || onRosterHere);
+    // `given` is what Steward.blockStewardKeeping answered (it has already published the block): its `blocked` is used,
+    // and setBlocked is NOT called a second time. Without it (someone who never was a helper) the block is written here.
+    const blockNow = (carry, given) => {
+      // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
+      // out of the click, and not a key rotation for a block that was never written.
+      let wrote;
+      if (given) wrote = Promise.resolve(given.blocked);
+      else { try { wrote = Promise.resolve(window.Steward.setBlocked([...blockedList, pk])); } catch (e) { return; } }
+      // AWAIT THE WRITE BEFORE ROTATING, and read it. This dropped the promise, rotated, and showed "Removed them from
+      // the church" whatever the relay said. `null` = nothing was written (no signing key): nothing changed, say so.
+      // `false` = every relay refused it or only SOME took it (setBlocked answers false for both): the block may be in force
+      // on one relay and this console holds them as blocked either way, so keys are STILL rotated away from them — that is
+      // the safe direction — and the steward is told it may be only partly saved, not that it worked.
+      return wrote.then((ok) => {
+        // NEVER SILENT (owner answer a; sim F2): what could NOT be kept is said whatever the block answered — the carry has
+        // already run. "Everything … stays" is said only for a block that saved (audit, 2026-11-18).
+        const keptNote = carry ? stewCarryNote(carry) : null;
+        if (keptNote && (keptNote.tone !== 'ok' || ok)) setBlockCarryNote(keptNote);
+        if (ok == null) { setBlockWarn('Couldn’t block ' + who + ' — this console isn’t signed in to your church, so nothing was changed. Try again.'); return; }
+        // OFF THE HELPER LIST (owner answer l): the engine took them off after the block. If that write did not land, or the
+        // roster had not been read yet, they are blocked but still listed — said, with what to do.
+        // A LOST OK IS NOT "STILL LISTED" (audit of 1fc01a16, MED): 'unknown' means the relays could not say, so it is said
+        // as exactly that; 'not-landed', or a roster write never made (roster unread), is "still listed".
+        const rosterLine = !given ? ''
+          : given.onRoster ? (given.outcome === 'landed' ? '' : given.outcome === 'unknown' ? 'Couldn’t confirm they were taken off the helper list — check Helpers.' : 'Blocked, but still listed as a helper — remove them from Helpers.')
+          : (given.rosterUnknown && onRosterHere ? 'Blocked, but still listed as a helper — remove them from Helpers.' : '');
+        // OWNER ANSWER (r): their name taken off the church's groups — and what could not be, said. The engine hands the
+        // take-off back UNFINISHED (`groupsOffDone`, audit of 98ab7e38 item 2) so the keys below are rotated at once,
+        // not behind it; its line is added when it settles.
+        const lineOf = (go) => !go ? '' : [
+          // a block that did not save changes no group (owner, re-audit of ab82f16d item 4) — as the teams and clearance below
+          go.notRun === 'block-not-saved' ? 'Their groups were left unchanged because the block didn’t save.' : '',
+          (go.failed || []).length ? 'Couldn’t take them off ' + go.failed.join(', ') + ' — open Groups and take them off by hand.' : '',
+          (go.unchecked || []).length ? 'Couldn’t check ' + go.unchecked.join(', ') + ' — open Groups and check whether they are still on ' + (go.unchecked.length > 1 ? 'them' : 'it') + '.' : '',
+          (go.other || []).length ? 'Another helper has changed ' + go.other.join(', ') + ' since, and it still names them — check it by hand.' : '',
+          (go.otherSomeone || []).length ? 'Someone else has changed ' + go.otherSomeone.join(', ') + ' since, and it still names them — check it by hand.' : '',
+        ].filter(Boolean).join(' ');
+        const groupsP = (given && given.groupsOffDone)
+          ? Promise.resolve(given.groupsOffDone).then(lineOf, () => lineOf({ unchecked: ['the groups they may have been on'] }))
+          : Promise.resolve(lineOf((given && given.groupsOff) || null));
+        const saveNote = [ok === false
+          ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
+          : '', rosterLine].filter(Boolean).join(' ');
+        if (saveNote) setBlockWarn(saveNote);
+        // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
+        // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
+        // …but the NAME key goes to everyone who stays, approved or not (round 3c, HIGH 1), and every current holder of the
+        // other keys who stays keeps them — see rotateChurchKeys (`keepIf`).
+        const everyone = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
+        const known = dmKr.approved(everyone);
+        const remaining = known || dmKr.orAdmitted(everyone);
+        // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
+        // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
+        // …and once the member list is a genuine read (not the cache), a holder no longer on it has LEFT and is let go (round 3d)
+        const keepOnly = (window.Steward.listIsFresh && window.Steward.listIsFresh(members)) ? new Set(everyone.map(p => String(p).toLowerCase())) : null;
+        const rotating = rotateChurchKeys({ memberPubs: remaining, namePubs: everyone, keepKr: dmKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
+        // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
+        // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
+        const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
+        // BLOCK WITHDRAWS YOUTH CLEARANCE TOO (sim finding 1; owner, 2026-10-02: "Block means NO private access of any
+        // kind"). A blocked adult stayed on the cleared list, and the child's phone seals its plea for help to that list.
+        // Same rule as the teams: only for a Block that landed. No _reseal for them: a blocked person is told nothing.
+        const clearing = (ok === false || !approvedSet.has(pk)) ? Promise.resolve([]) : (() => {
+          try {
+            return Promise.resolve(window.Steward.setApproved((sg.approved || []).filter(p => String(p).toLowerCase() !== String(pk).toLowerCase()), { listKnown: !!sg.clearedKnown }))
+              .then((r) => ((r === false || r == null) ? ['their youth clearance'] : []));
+          } catch (e) { return Promise.resolve(['their youth clearance']); }
+        })().catch(() => ['their youth clearance']);
+        // CAPABILITY KEYS (finance, check-in): re-wrap them without the blocked steward now rather than on the next roster
+        // change — the engine leaves anyone this console holds as blocked out of the wrap, and rotates when that shrinks it.
+        // Not awaited or reported: ensureCapKeyFor answers false for "nothing to change" as well as for a failure, and the
+        // dashboard's own effect repeats it on every key delivery until the blocked steward is out of the envelope.
+        if (window.Steward.ensureCapKeyFor) for (const kind of ['finance', 'checkin']) {
+          try { Promise.resolve(window.Steward.ensureCapKeyFor(kind, stewardRoster || [], (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})).catch(() => {}); } catch (e) {}
+        }
+        // A TEAM THIS CONSOLE CANNOT READ YET (its roster is sealed under a name key that has not landed) cannot be
+        // checked or rewritten, so it is counted and said — never silently skipped, never published from empty.
+        const lockedTeams = ok === false ? 0 : (Array.isArray(rostersAll) ? rostersAll : []).filter(r => r && r._locked && r.team).length;
+        const lockedNote = lockedTeams ? 'Couldn\u2019t remove them from ' + lockedTeams + ' team' + (lockedTeams === 1 ? '' : 's') + ' \u2014 try again shortly.' : '';
+        let allDone = false;
+        groupsP.then((gl) => { if (gl && !allDone) setBlockWarn([saveNote, gl].filter(Boolean).join(' ')); });
+        return Promise.all([rotating, teams, clearing, groupsP]).then(([failed, teamFailed, clearFailed, groupsLine]) => {
+          allDone = true;
+          const said = [saveNote, groupsLine].filter(Boolean).join(' ');
+          const offFailed = [...teamFailed, ...clearFailed];
+          const teamNote = [offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '', lockedNote].filter(Boolean).join(' ');
+          // WHAT IS TRUE, SAID (round 3e, MED 1; audit of b102dc6). This said "Try blocking them again — and if it keeps
+          // failing, your church may have grown past what one key document can hold": the person is already on the
+          // Blocked list, which offers only Unblock, and the cause was almost always a key read still settling, not size.
+          //   · a key WAITING for its read (failed.pending): the engine runs it when the read settles — say that, and the
+          //     confirmation follows (the engine records it — blockWarnView, round 3g);
+          //   · a key that truly could not change: say so, with "Try again" (Steward.retryPendingRotations — rotateChurchKeys
+          //     remembered it).
+          // the words come from the engine's records for this person (round 3g) — see blockWarnView
+          const pend = failed.pending || [];
+          const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
+          if (failed.length || pend.length) setBlockWarn({ pk, verb: 'block', pre: said ? said + ' ' : '', post: teamNote ? ' ' + teamNote : '', failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });
+          else if (teamNote) setBlockWarn((said ? said + ' ' : '') + teamNote);
+        });
+      }).catch(() => {});
+    };
+    // ANYONE WHO IS OR WAS A HELPER: the engine keeps what they saved, publishes the block, then takes a current helper off
+    // the helper list (owner answer l; plan 0b/0c R-M4: carry → block → roster). A former helper: carry and block only.
+    if (stewardish && window.Steward.blockStewardKeeping) {
+      setBlockCarryNote(null);
+      let p;
+      try { p = window.Steward.blockStewardKeeping(pk, blockedList); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
+      return Promise.resolve(p).catch(() => null).then((r) => (r
+        ? blockNow(r.carry, r)
+        : blockNow({ carried: [], notCarried: [{ d: '', why: 'error', label: 'anything they set up (the carry-over failed)' }], superseded: [], refused: '' }, { blocked: null })));
+    }
+    return blockNow();
   };
+  // ONE BLOCK AT A TIME PER PERSON, AND SAID (audit round 5, MED). Blocking someone who is or was a steward first carries
+  // what they set up, for up to ~20 s; without this the row went on offering Block, closing the console meant they were
+  // never blocked, and a second press started a second carry and a second setBlocked from a stale list. Every Block
+  // control calls this, not block() directly: the row reads "Blocking… keeping what they set up" until block() settles,
+  // and presses in between are ignored. block() itself is unchanged (its own lines say how it ended).
+  // The in-flight set lives at MODULE scope (_blockingInFlight, above DashMembers), not in this component: leaving the
+  // Members tab unmounts it, and a guard held here reset on return and offered Block again mid-carry (audit round 6,
+  // LOW-2; the same reason as F9's clearanceBackfillLastSig). Each mounted copy re-renders when the set changes.
+  const [, setBlockingTick] = React.useState(0);
+  React.useEffect(() => {
+    const f = () => setBlockingTick(t => t + 1);
+    _blockingInFlight.subs.add(f);
+    return () => { _blockingInFlight.subs.delete(f); };
+  }, []);
+  const blocking = _blockingInFlight.pks;
+  const blockOnce = (pk) => {
+    if (_blockingInFlight.pks.has(pk)) return undefined;
+    const ping = () => { for (const f of [..._blockingInFlight.subs]) { try { f(); } catch (e) {} } };
+    _blockingInFlight.pks.add(pk); ping();
+    const done = () => { _blockingInFlight.pks.delete(pk); ping(); };
+    let r; try { r = block(pk); } catch (e) { done(); return undefined; }
+    return Promise.resolve(r).then(done, done);
+  };
+  const blockingLine = (pk) => (wasStewardHere(pk) ? 'Blocking… keeping what they set up' : 'Blocking…');
   // Letting someone back in is a decision too, and it is made from a list that until now would not even
   // say who they were. Two taps, and read the result — setBlocked goes through _publishToRelays and returns
   // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
@@ -9235,8 +9336,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     const minor = minorsSet.has(pk), cleared = approvedSet.has(pk), linked = !!(guardians[pk] && guardians[pk].length);
     const out = [];
     out.push({ key: 'copy', icon: copied === m.npub ? 'check' : 'link', label: copied === m.npub ? 'Copied ✓' : 'Copy npub', title: 'Copy npub', keep: true, onPick: () => doCopy(m.npub) });
-    if (confirmBlock === pk) {
-      out.push({ key: 'block', icon: 'shield', tone: 'clay', label: 'Block ' + who, sub: 'Bans them from posting and hides their messages', aria: 'Confirm: block ' + who, title: 'Confirm — bans them from posting & hides their messages', onPick: () => block(pk) });
+    if (blocking.has(pk)) {
+      out.push({ key: 'block', icon: 'shield', label: blockingLine(pk), title: blockingLine(pk), keep: true, onPick: () => {} });
+    } else if (confirmBlock === pk) {
+      out.push({ key: 'block', icon: 'shield', tone: 'clay', label: 'Block ' + who, sub: 'Bans them from posting and hides their messages' + (wasStewardHere(pk) ? '. What they set up stays as it is.' : ''), aria: 'Confirm: block ' + who, title: 'Confirm — bans them from posting & hides their messages', onPick: () => blockOnce(pk) });
       out.push({ key: 'block-cancel', icon: 'x', label: 'Cancel', title: 'Cancel', keep: true, onPick: () => setConfirmBlock(null) });
     } else {
       out.push({ key: 'block', icon: 'shield', label: 'Remove / block', aria: 'Remove / block ' + who + ' — asks you to confirm', title: 'Remove / block this member', keep: true, onPick: () => setConfirmBlock(pk) });
@@ -9356,10 +9459,12 @@ function DashMembers({ dmConvos: dmConvosProp }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, order: 3 }}>
             <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
               <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
-            {confirmBlock === m.pubkey
+            {blocking.has(m.pubkey) ? <span role="status" style={{ fontSize: 12, color: 'var(--ink-2)', fontWeight: 600, alignSelf: 'center' }}>{blockingLine(m.pubkey)}</span>
+              : confirmBlock === m.pubkey
               ? <React.Fragment>
-                  <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                  <button onClick={() => blockOnce(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                   <button onClick={() => setConfirmBlock(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="x" size={15} color="currentColor" /></button>
+                  {wasStewardHere(m.pubkey) ? <span style={{ fontSize: 12, color: 'var(--ink-2)', alignSelf: 'center' }}>What they set up stays as it is.</span> : null}
                 </React.Fragment>
               : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="shield" size={15} color="currentColor" />Block</button>}
           </div>
@@ -9531,9 +9636,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
                       did. Audit 2026-09-02 #5.
                       `confirmBlock` is shared with the members list, so opening one closes the other —
                       two Confirms on screen at once is exactly the confusion this is meant to remove. */}
-                  {confirmBlock === m.pubkey
+                  {blocking.has(m.pubkey) ? <span role="status" style={{ fontSize: 12, color: 'var(--ink-2)', fontWeight: 600, alignSelf: 'center' }}>{blockingLine(m.pubkey)}</span>
+                    : confirmBlock === m.pubkey
                     ? <React.Fragment>
-                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => blockOnce(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                         <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
                       </React.Fragment>
                     : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
@@ -9568,6 +9674,12 @@ function DashMembers({ dmConvos: dmConvosProp }) {
           which has already closed by the time the publish resolves — the same mistake that made the safety
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
           is out, and this is the one thing that says otherwise. */}
+      {blockCarryNote ? (
+        <div role={blockCarryNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: blockCarryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (blockCarryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0 }}>{blockCarryNote.text}</div>
+          <button onClick={() => setBlockCarryNote(null)} title="Dismiss" aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+        </div>
+      ) : null}
       {blockWarnView ? (
         <div role={(blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'status' : 'alert'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: (blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--surface-2)' : 'var(--clay-soft)', border: '1px solid ' + ((blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--line)' : 'var(--clay)') }}>
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{typeof blockWarnView === 'string' ? blockWarnView : blockWarnView.text}
@@ -11228,7 +11340,9 @@ function pendingHelperRequests(requests, stewards, ownerPub, ...handledMaps) {
 // requester-clock value never lowers an old one and nothing already hidden comes back. A bare `1`/`true` here is
 // replaced by a real time on the next answer, as eb5c10eb did — it is the only way it ever stops hiding re-requests.
 // CALLERS of markHandled: the × (decline), add() and remove() in DashStewardsPanel — add()/remove() ONLY once the
-// roster write has landed (M1).
+// roster write has landed (M1). remove() passes { localOnly: true }: the engine already recorded the answer on the relay
+// when the removal landed (_settleStewardRemoval, shared with Block — plan 0d N2), so only this browser's copy is written
+// here, and the relay document is not written twice.
 function useHelperRequests() {
   const requests = window.usePendingStewards ? window.usePendingStewards() : [];
   const stewards = window.useStewardStewards ? window.useStewardStewards() : [];
@@ -11246,7 +11360,7 @@ function useHelperRequests() {
     if (!seen) return 0;
     return t >= 1e9 ? Math.floor(t) : Math.floor(Date.now() / 1000);
   };
-  const markHandled = (pk, at) => {
+  const markHandled = (pk, at, opts) => {
     const when = Math.floor(Number(at));
     if (!pk || !Number.isFinite(when) || when < 1e9) return;
     setLocal(h => {
@@ -11254,6 +11368,7 @@ function useHelperRequests() {
       if (Number.isFinite(cur) && cur >= 1e9 && cur >= when) return h;   // the later answer stands, as on the relay
       const n = { ...h, [pk]: when }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n;
     });
+    if (opts && opts.localOnly) return;
     try { if (window.Steward && window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(pk, when)).catch(() => {}); } catch (e) {}
   };
   return { pending, markHandled, answeredAt };
@@ -11261,6 +11376,28 @@ function useHelperRequests() {
 // Delegated stewards — the OWNER (this church key) names co-stewards by promoting members. The relay grants
 // those keys day-to-day church powers (NOT roster/blocklist/relay-policy) and revocation is instant. The
 // roster is owner-signed via Steward.setStewards; see STEWARD-ROSTER-DESIGN.md. Phase 2a: owner-side control.
+// WHAT A REMOVAL OR A BLOCK KEPT OF WHAT THE PERSON SAVED (owner, 2026-11-17; plan §3.7), from the engine's carry-over
+// result ({ carried, notCarried, superseded, refused }). Everything kept: one sentence. Something not kept: the list, by
+// plain name, and it stays on screen. Nothing of theirs to keep: nothing said. No "Try again": once the roster or block
+// lands, those documents are hidden even from the church (owner answer b).
+// Callers: DashStewardsPanel.remove and .setCaps, DashMembers.block, ReseatModal. A list of what was NOT kept is shown
+// whatever happened to the removal or the block itself (owner answer a; sim F2) — the carry already ran.
+// `carry.notes` (owner answer t, 2026-11-19): something that WAS kept but needs the owner — said after the rest, and the
+// line then stays until dismissed, like a not-kept list.
+function stewCarryNote(carry) {
+  if (!carry || carry.refused) return null;
+  const n = Array.isArray(carry.carried) ? carry.carried.length : 0;
+  const lost = [...new Set((Array.isArray(carry.notCarried) ? carry.notCarried : []).map(x => x && x.label).filter(Boolean))];
+  const notes = [...new Set((Array.isArray(carry.notes) ? carry.notes : []).filter(x => typeof x === 'string' && x))];
+  const tail = notes.length ? ' ' + notes.join(' ') : '';
+  if (!lost.length) {
+    if (notes.length) return { tone: 'fail', text: (n > 0 ? 'Everything they set up stays as they left it, now saved under the church.' : '').concat(tail).trim() };
+    return n > 0 ? { tone: 'ok', text: 'Everything they set up stays as they left it, now saved under the church.' } : null;
+  }
+  const shown = lost.slice(0, 6), more = lost.length - shown.length;
+  return { tone: 'fail', text: (n > 0 ? 'The rest of what they set up stays as they left it, now saved under the church. ' : '')
+    + 'These couldn’t be kept and may change back: ' + shown.join(', ') + (more > 0 ? ' and ' + more + ' more' : '') + '.' + tail };
+}
 function DashStewardsPanel({ church }) {
   // OWNER-ONLY, AND SAID SO RATHER THAN DISCOVERED. Only the church key may edit this roster — the relay
   // enforces it (STEWARDS_D is signed by the church and nothing else is accepted), which is precisely what
@@ -11348,13 +11485,37 @@ function DashStewardsPanel({ church }) {
   // could not be confirmed — the real relay ack (setStewards + stewardRemovalOutcome) decides, and the EXISTING
   // fail note is shown. Reconciled (entry dropped) once the relay-confirmed roster no longer lists them. A pk that
   // is already dropping is a no-op, which also disables the control while its write is in flight.
+  //
+  // …AND SINCE A REMOVAL KEEPS WHAT THE PERSON SAVED (owner, 2026-11-17), THE ROW STAYS UNTIL THE ROSTER WRITE LANDS.
+  // The carry-over runs first, for up to ~20 seconds; a console closed in that window has removed nobody, and a row that
+  // had already left would say it had. So `pendingRemoval` is "in flight" (the row reads "Removing… keeping what they
+  // set up" and its controls are spent) and `goneRemoval` is "landed" (the row leaves).
   const [pendingRemoval, setPendingRemoval] = React.useState(() => new Set());
+  const [goneRemoval, setGoneRemoval] = React.useState(() => new Set());
   const dropOptimistic = (pk) => setPendingRemoval(s => { const n = new Set(s); n.add(pk); return n; });
   const restoreOptimistic = (pk) => setPendingRemoval(s => { if (!s.has(pk)) return s; const n = new Set(s); n.delete(pk); return n; });
+  const landedRemoval = (pk) => setGoneRemoval(s => { const n = new Set(s); n.add(pk); return n; });
   React.useEffect(() => {   // reconcile: a landed removal drops the pk from the roster, which spends its optimistic entry
     setPendingRemoval(s => { if (!s.size) return s; let ch = false; const n = new Set(s); for (const pk of n) if (!stewardSet.has(pk)) { n.delete(pk); ch = true; } return ch ? n : s; });
+    setGoneRemoval(s => { if (!s.size) return s; let ch = false; const n = new Set(s); for (const pk of n) if (!stewardSet.has(pk)) { n.delete(pk); ch = true; } return ch ? n : s; });
   }, [stewards]);
-  const visibleStewards = stewards.filter(pk => !pendingRemoval.has(pk));   // the board hides a row the moment its Revoke is confirmed
+  const visibleStewards = stewards.filter(pk => !goneRemoval.has(pk));   // the board drops a row once its removal has landed
+  // WHAT THE CARRY-OVER KEPT (plan §3.7). Its own lines beside the removal note, ONE PER STEWARD and each naming them, so a
+  // list of what could NOT be kept is never cleared by a confirmation — its own timing out, or another steward's result
+  // arriving (audit round 3, N2: a second untick-all used to overwrite the first one's list).
+  const [carryNotes, setCarryNotes] = React.useState({});   // pk -> { tone, text }
+  const setCarryNote = (pk, note) => setCarryNotes(m => { const n = { ...m }; if (note) n[pk] = note; else delete n[pk]; return n; });
+  const carryNoteOf = (pk, who, carry) => { const v = stewCarryNote(carry); return v ? { ...v, text: who + ': ' + v.text } : null; };
+  // whose permissions are being cleared (untick-all) — see setCaps. A SET: the engine runs them one at a time anyway, so a
+  // second steward's untick queues behind the first instead of silently doing nothing (audit round 2, nit).
+  const [capsClearing, setCapsClearing] = React.useState(() => new Set());
+  const capsClearOn = (pk, on) => setCapsClearing(s => { const n = new Set(s); if (on) n.add(pk); else n.delete(pk); return n; });
+  // "everything kept" is a confirmation, so a moment; a list of what was not kept stays. EACH NOTE ITS OWN 8 s, from when it
+  // was set (audit round 4: one shared timer restarted whenever any note changed, so an all-kept line could outlive 8 s).
+  const setCarryNoteTimed = (pk, note) => {
+    setCarryNote(pk, note);
+    if (note && note.tone === 'ok') setTimeout(() => setCarryNotes(m => { if (m[pk] !== note) return m; const n = { ...m }; delete n[pk]; return n; }), 8000);
+  };
   // WOULD-BE HELPERS STILL WAITING, and the record of the owner's answers — one hook, shared with the Overview banner
   // (useHelperRequests / pendingHelperRequests above), so the banner's count and this list are the same list.
   // markHandled(pk, at) records "the owner answered this person's request of time `at`" — on approve (add), remove, and
@@ -11409,6 +11570,29 @@ function DashStewardsPanel({ church }) {
     sealedrooms: 'Lock a room so only its members can read it. Whoever locks one holds its key, so they can SEE everything said in it.',
   };
   const setCaps = (pk, list) => {
+    // UNTICKING EVERY CAPABILITY IS A REMOVAL (owner answer c, 2026-11-17): the relay retracts nothing for a narrowing
+    // (it reads 'any'), but an empty list takes everything they saved off every phone — so it runs the same carry-over
+    // first, in the engine's one-at-a-time queue, which writes caps[pk] = [] from its own current roster.
+    if (Array.isArray(list) && list.length === 0) {
+      if (capsClearing.has(pk)) return;   // already clearing this one; the editor says so
+      const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
+      // NEVER SILENT (owner answer a; sim F2): the carry may have run before the write failed — what it could not keep is
+      // said with the failure, in the same line (one line per steward)
+      const failed = (why, carry) => { const lost = carry ? stewCarryNote(carry) : null; setCarryNote(pk, { tone: 'fail', text: (why === 'roster-unknown'
+        ? 'Couldn’t change what ' + who + ' may do yet — this console hasn’t finished reading who your stewards are. Nothing was changed. Try again in a moment.'
+        : 'Couldn’t remove ' + who + '’s permissions — the change didn’t save. Nothing was changed. Try again.') + (lost && lost.tone === 'fail' ? ' ' + lost.text : '') }); };
+      setCarryNote(pk, null);
+      let p;
+      try { p = Promise.resolve(window.Steward.removeStewardKeeping(pk, { capsOnly: true })); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
+      capsClearOn(pk, true);
+      p.then((r) => {
+        capsClearOn(pk, false);
+        if (!r || r.refused) { failed(r && r.refused, r && r.carry); return; }
+        if (!r.wrote) { failed('', r.carry); return; }
+        setCarryNoteTimed(pk, carryNoteOf(pk, who, r.carry));
+      }, () => { capsClearOn(pk, false); failed(''); });
+      return;
+    }
     const next = { ...caps };
     if (list === null) delete next[pk]; else next[pk] = list;
     try { window.Steward.setStewards(stewards, next); } catch (e) {}   // a refusal is on the banner (_requireTrustedView)
@@ -11477,40 +11661,54 @@ function DashStewardsPanel({ church }) {
   const spKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
   const remove = (pk) => {
     if (pendingRemoval.has(pk)) return;   // already revoking this one — the control is spent until the write settles
-    setConfirmRemove(null); setRemoveNote(null);
-    dropOptimistic(pk);   // the row leaves the board at once; restored below if the write did not land (no false "removed")
-    const next = stewards.filter(p => p !== pk);
+    setConfirmRemove(null); setRemoveNote(null); setCarryNote(pk, null);
+    dropOptimistic(pk);   // the row reads "Removing…" until the roster write lands; restored below if it did not (no false "removed")
+    let next = stewards.filter(p => p !== pk);
     const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
-    let wrote;
-    try { wrote = Promise.resolve(window.Steward.setStewards(next)); } catch (e) { restoreOptimistic(pk); return; }   // a refusal is on the banner (_requireTrustedView)
+    // KEEP WHAT THEY SAVED, THEN WRITE THE ROSTER (owner, 2026-11-17). The engine carries every church setting they were
+    // the last to save over to the church key, inside a fixed limit, and then writes the roster it rebuilds from its OWN
+    // current copy (one removal at a time) — never this screen's `stewards`, which a second removal pressed during the
+    // carry would still hold the first person in. A carry that fails or runs out of time never stops the removal.
+    // THE ENGINE SETTLES IT (plan 0b R-M4, shared with Block): whether the roster write landed (`outcome` — a lost OK is
+    // checked against what the relays hold), and, once it has, telling their console (the revoke notice) and recording
+    // their old request as answered. This screen acts on `outcome` and keeps its own browser copy of that answer.
+    let wrote, carried = null, refusedWhy = '', outcome = 'unknown';
+    try {
+      wrote = Promise.resolve(window.Steward.removeStewardKeeping(pk)).then((r) => {
+        carried = (r && r.carry) || null;   // kept on EVERY path: a refusal after the carry ran still says what was not kept (R-M5)
+        if (!r || r.refused) { refusedWhy = (r && r.refused) || 'unknown'; return null; }
+        if (Array.isArray(r.next)) next = r.next;
+        outcome = r.outcome || (r.wrote ? 'landed' : 'unknown');
+        return r.wrote;
+      });
+    } catch (e) { restoreOptimistic(pk); return; }   // a refusal is on the banner (_requireTrustedView)
     const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
     const isBlocked = (p) => blockedSet.has(String(p || '').toLowerCase());
     const alsoMember = !!(byPub.get(pk) && byPub.get(pk).joined);
     // "NO OK" IS NOT "REFUSED". The relay's OK can be lost with the socket (the app was in the background when Revoke
-    // was pressed) while the roster was written. So a false answer is checked against what the relays actually hold,
-    // and the re-key follows THAT: landed -> re-key; definitely not -> say so; cannot tell -> say that, change nothing.
-    const settle = (ok) => {
-      if (ok) return Promise.resolve('landed');
-      return Promise.resolve().then(() => window.Steward.stewardRemovalOutcome(pk)).catch(() => 'unknown');
-    };
+    // was pressed) while the roster was written. So a false answer is checked against what the relays actually hold
+    // (the engine does it — _settleStewardRemoval), and the re-key follows THAT: landed -> re-key; definitely not -> say
+    // so; cannot tell -> say that, change nothing.
+    const settle = () => (refusedWhy ? 'refused' : outcome);
+    // NEVER SILENT (owner answer a; sim F2 — the offline Revoke whose queued write landed later): whatever happened to the
+    // roster write, the carry already ran, so what it could not keep is said beside the failure
+    const lostToo = () => { const v = carryNoteOf(pk, who, carried); if (v && v.tone === 'fail') setCarryNote(pk, v); };
     let landed = false;
     wrote.then(settle).then((outcome) => {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
       // the relay still honours would only lock out the wrong person. One we cannot confirm rotates nothing either.
       // Either way the optimistic row must come BACK — the relay refused, so the UI must not keep claiming "removed".
-      if (outcome === 'not-landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
-      if (outcome !== 'landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
+      if (outcome === 'refused') { restoreOptimistic(pk); lostToo(); setRemoveNote({ tone: 'fail', text: refusedWhy === 'roster-unknown' ? 'Couldn’t remove ' + who + ' yet — this console hasn’t finished reading who your stewards are, so nothing was changed. Try again in a moment.' : 'Couldn’t remove ' + who + ' — nothing was changed. Try again.' }); return null; }
+      if (outcome === 'not-landed') { restoreOptimistic(pk); lostToo(); setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
+      if (outcome !== 'landed') { restoreOptimistic(pk); lostToo(); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
       landed = true;
-      // TELL THE REMOVED HELPER (2026-11-05, helper-delegation). ONLY here, in the landed branch — never before
-      // `settle` — because the relay stops serving them the stewards: roster the instant they are off it, so a
-      // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>
-      // is the one document they can still read; their subscribeStewardedChurches drops the ghost church on it.
-      try { if (window.Steward.publishStewardRevoke) window.Steward.publishStewardRevoke(pk); } catch (e) {}
-      // REMOVED = ANSWERED, ONLY NOW IT LANDED (audit of eb5c10eb, M1) — keeps their never-consumed old request out of
-      // "Requests to help". The time is when they were put ON the roster (`since`, from the roster document): the
-      // request that got them there is older, and a genuine new one, made after this removal, is newer. Their request
-      // is not in the stream while they are a steward, so it cannot be read here; no `since` = record nothing.
-      try { markHandled(pk, Number(since[pk]) || 0); } catch (e) {}
+      landedRemoval(pk);   // the row leaves now, not before
+      setCarryNoteTimed(pk, carryNoteOf(pk, who, carried));
+      // TELL THE REMOVED HELPER (2026-11-05, helper-delegation) and RECORD THEIR OLD REQUEST AS ANSWERED (audit of
+      // eb5c10eb, M1): both done by the engine once the removal LANDED (_settleStewardRemoval, shared with Block), never
+      // for a removal that did not. This screen keeps its own browser copy of the answer — the time they were put ON the
+      // roster (`since`); no `since` = nothing recorded.
+      try { markHandled(pk, Number(since[pk]) || 0, { localOnly: true }); } catch (e) {}
       const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
@@ -11572,6 +11770,8 @@ function DashStewardsPanel({ church }) {
             </span>
           </label>
         ))}
+        {capsClearing.has(pk) ? <div role="status" style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8, fontWeight: 600 }}>Removing their permissions… keeping what they set up</div>
+          : cur !== null && cur.length <= 1 ? <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.45, marginTop: 8 }}>Unticking everything removes all their permissions. What they set up stays as it is.</div> : null}
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginTop: 10 }}>
           Your relay enforces this. A relay running an older version does not know about it yet and will keep
           giving this steward everything — so check your relay is up to date before relying on it.
@@ -11585,16 +11785,19 @@ function DashStewardsPanel({ church }) {
     // The owner's own label first — then a member name if this key is also a member, and only then the
     // invented one. The invented name is a fallback, never the identity.
     const label = labels[pk] || m.name || niceName(pk);
+    const removing = pendingRemoval.has(pk);
     return (
-      <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: removing ? 0.7 : 1 }}>
         <SkBadge initials={label.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={34} radius={11} accent={SK_TINT.gold.fg} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub || ''}>{m.npub ? shortNpub(m.npub) : (pk.slice(0, 10) + '…' + pk.slice(-4))}</div>
           {sinceText(pk) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>helping since {sinceText(pk)}</div> : null}
+          {removing ? <div role="status" style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 3, fontWeight: 600 }}>Removing… keeping what they set up</div> : null}
+          {confirmRemove === pk && !removing ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 3 }}>What they set up stays as it is.</div> : null}
         </div>
-        {confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this helper may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{'Permissions · ' + (Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything')}</button>}
-        {confirmRemove === pk
+        {removing ? null : confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this helper may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{'Permissions · ' + (Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything')}</button>}
+        {removing ? null : confirmRemove === pk
           ? <React.Fragment>
               <button onClick={() => remove(pk)} title="Confirm — revoke this helper immediately" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
               <button onClick={() => setConfirmRemove(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>
@@ -11676,6 +11879,12 @@ function DashStewardsPanel({ church }) {
           <button onClick={() => setRemoveNote(null)} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}
+      {Object.entries(carryNotes).map(([npk, carryNote]) => carryNote ? (
+        <div key={'carry:' + npk} role={carryNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)', background: carryNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (carryNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0 }}>{carryNote.text}</div>
+          <button onClick={() => setCarryNote(npk, null)} title="Dismiss" aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+        </div>
+      ) : null)}
       {visibleStewards.length === 0
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No helpers yet.</div>
         : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{visibleStewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}

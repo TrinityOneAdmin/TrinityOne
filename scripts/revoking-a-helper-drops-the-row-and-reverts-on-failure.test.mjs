@@ -1,5 +1,11 @@
-// REVOKING A HELPER drops their row AT ONCE (no laggy miss-click target through several relay round-trips), but
-// RESTORES it if the write did not land — the relay ack decides, never the click.
+// REVOKING A HELPER spends their row's controls AT ONCE (no laggy miss-click target through several relay round-trips),
+// but RESTORES them if the write did not land — the relay ack decides, never the click.
+//
+// CHANGED 2026-11-17 (removing a steward keeps what they saved): the removal now carries the person's settings over to
+// the church first, for up to ~20 s, so the row no longer LEAVES at once — it stays, reads "Removing… keeping what they
+// set up", and its Revoke/Permissions controls are gone until the roster write lands (a console closed mid-carry has
+// removed nobody, and a row that had left would say it had). `hasRow` below reads the row's Revoke control, so the
+// assertions are unchanged in substance; test 1's name and messages say what is now true.
 // Run: node --test scripts/revoking-a-helper-drops-the-row-and-reverts-on-failure.test.mjs
 //
 // POINT OF USE (CLAUDE.md rules 1 & 3). This MOUNTS the real DashStewardsPanel out of app/stew-dashboard.jsx
@@ -28,6 +34,8 @@ function setup({ setStewardsResult = true, outcome = 'unknown' } = {}) {
     stewardLabels: () => ({ [HELPER]: 'Ruth Bexley' }), stewardCaps: () => ({}), stewardSince: () => ({}),
     subscribeStewardRequests: (cb) => { cb([]); return () => {}; },
     setStewards: (pubkeys) => { wrote.push(pubkeys); return Promise.resolve(setStewardsResult); },
+    // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
+    removeStewardKeeping: (pk) => { const next = state.roster.filter(p => p !== pk); wrote.push(next); return Promise.resolve(setStewardsResult).then(async w => ({ wrote: w, carry: null, next, outcome: w ? 'landed' : await outcome })); },   // the engine settles the outcome (_settleStewardRemoval, 2026-11-19)
     stewardRemovalOutcome: () => outcome,
     // The landed path rotates keys; give it a clean no-op so a SUCCESSFUL revoke resolves instead of throwing.
     publishStewardRevoke: () => Promise.resolve(true), listIsFresh: () => false,
@@ -62,13 +70,14 @@ test('anchor: a steward row with a Revoke control renders', () => {
     'no Revoke control on the helper row — re-anchor');
 });
 
-test('confirming Revoke drops the row immediately (optimistic)', () => {
+test('confirming Revoke spends the row’s controls at once, and the row says it is being removed', () => {
   const h = setup();                                    // setStewards resolves true -> lands
   assert.ok(h.hasRow(), 'staging: the helper row should be present before Revoke');
   h.press((n) => n.props && n.props.title === 'Revoke this helper');   // arm
   h.press('Revoke');                                   // confirm -> remove(HELPER)
   assert.ok(!h.hasRow(),
-    'the helper row was still shown right after Revoke — the optimistic drop did not run');
+    'the helper row still offered Revoke right after Revoke was confirmed — the in-flight state did not run');
+  assert.match(h.words(), /Removing… keeping what they set up/, 'the row does not say the removal is in progress');
   assert.equal(h.wrote.length, 1, 'the roster write was not attempted');
 });
 
@@ -76,7 +85,7 @@ test('NO FALSE SUCCESS: a write that did not land brings the row BACK with the f
   const h = setup({ setStewardsResult: false, outcome: 'not-landed' });
   h.press((n) => n.props && n.props.title === 'Revoke this helper');   // arm
   h.press('Revoke');                                   // confirm -> optimistic drop
-  assert.ok(!h.hasRow(), 'staging: the row should drop optimistically on confirm');
+  assert.ok(!h.hasRow(), 'staging: the row’s controls should be spent on confirm');
   await new Promise(r => setImmediate(r));              // let settle() resolve to 'not-landed'
   h.draw();
   assert.ok(h.hasRow(),

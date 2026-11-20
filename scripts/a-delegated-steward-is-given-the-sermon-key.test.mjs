@@ -342,7 +342,7 @@ async function blockOnMembersPage() {
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
   const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers(', 'DashMembers')
-    + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared filter Block rotates to (round 3a)
+    + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0] + '\n' + (DASH.match(/^const _blockingInFlight = .*;$/m) || [''])[0]   /* DashMembers' module-scope Block in-flight set (2026-11-18) */;   // + the shared filter Block rotates to (round 3a)
   const tmp = join(tmpdir(), 'dm-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

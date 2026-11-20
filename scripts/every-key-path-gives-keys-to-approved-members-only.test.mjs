@@ -42,6 +42,11 @@ function world({ approval = true, fresh = true } = {}) {
     createEncryptedGroup: rec('createEncryptedGroup', (g) => ({ ok: true, group: { ...g, id: 'new' }, skipped: [] })),
     sealGroup: rec('sealGroup', { sealed: true, skipped: [] }),
     setBlocked: rec('setBlocked', true), setStewards: rec('setStewards', true),
+    // WHO IS OR WAS A HELPER, said (2026-11-19): left to the Proxy below it answered a Promise — truthy — so every Block
+    // took the helper path (Steward.blockStewardKeeping), which the Proxy then answered with nothing
+    isOrWasSteward: (pk) => (lists.stewards || []).includes(pk),
+    // REMOVE KEEPS WHAT THEY SAVED (2026-11-17): Remove asks the engine to carry + write the roster; here, the roster write alone
+    removeStewardKeeping: (pk) => { const next = (lists.stewards || []).filter(p => p !== pk); return Promise.resolve(Steward.setStewards(next)).then(w => ({ wrote: w, carry: null, next, outcome: w ? 'landed' : 'unknown' })); },   // the engine settles the outcome (2026-11-19)
     rotateCareKey: rec('rotateCareKey', true), rotateMediaKey: rec('rotateMediaKey', true),
     ensureNameKeyForMembers: rec('ensureNameKeyForMembers', { rotated: true }), publishGroupKey: rec('publishGroupKey', true),
     publishGroup: rec('publishGroup', (g) => ({ ...g, ts: 1 })), publishProfile: rec('publishProfile', true),

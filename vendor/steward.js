@@ -15531,6 +15531,7 @@ zoo`.split("\n");
   var _careKeyAt = 0;
   var _careKeyMine = false;
   var _careRoster = /* @__PURE__ */ new Set();
+  var _justRemoved = /* @__PURE__ */ new Map();
   var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
   function _exStewardSet() {
     try {
@@ -18386,6 +18387,7 @@ zoo`.split("\n");
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
     _careRosterSeen = false;
+    _justRemoved.clear();
     _stewardCaps = {};
     _stewardNames = {};
     _stewardNamesCt = "";
@@ -21228,6 +21230,823 @@ zoo`.split("\n");
     }
     return String(r || "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
   }
+  var STEWARD_CARRY = Object.freeze({
+    // church SETTINGS, carried verbatim (tombstones included)
+    carry: Object.freeze([
+      "trinityone/group:",
+      "trinityone/category:",
+      "trinityone/plan:",
+      "trinityone/devotional:",
+      "trinityone/service:",
+      "trinityone/request:",
+      "trinityone/room:",
+      "trinityone/booking:",
+      "trinityone/runsheet:",
+      "trinityone/rota:",
+      "trinityone/roster:",
+      "trinityone/msgtags",
+      "trinityone/rota-settings",
+      "trinityone/verse-prompt",
+      "trinityone/pinsermon:",
+      "trinityone/sermon:",
+      "trinityone/event:",
+      "trinityone/pin:",
+      "trinityone/hidden:",
+      "trinityone/nophoto:",
+      "trinityone/joinpolicy:",
+      "trinityone/reseat:",
+      "trinityone/careteam:",
+      "trinityone/meals-settings",
+      "trinityone/carereqstatus:"
+    ]),
+    // carried with the skip part RE-MADE under the church (owner answer g): a need's skip secret is sealed to its AUTHOR,
+    // so a verbatim church copy would break the recipient's "I don't need help that day". Days already marked are forgotten.
+    remint: Object.freeze(["trinityone/care:"]),
+    // never carried, and why
+    never: Object.freeze([
+      "trinityone/admitted:",
+      // one list per author; a church re-sign would REPLACE the church's own list
+      "trinityone/clearance:",
+      // sealed per member; the owner's back-fill rewrites it from minors/approved
+      "trinityone/safetycheck:",
+      // owner answer (e): settings only
+      "trinityone/groupkey:",
+      "trinityone/carekey:",
+      "trinityone/namekey:",
+      // rotated, never copied (Remove / Block)
+      "trinityone/checkin:",
+      // safeguarding record, exempt on both sides
+      "trinityone/fund:",
+      // the church key (or its network) only, at the relay — gateway.mjs leaderOf; a fund is the church's
+      //   payment destination (SECURITY-AUDIT-2026-07-06 M4). A delegated steward can never have written
+      //   one, and re-signing one a lax relay served would put the church's signature on a steward's
+      //   Lightning address. Owner answer (h) held back pending the owner.
+      "trinityone/blocked:",
+      // the church key's alone
+      "finance/"
+      // single-writer, sequence-pinned; the relay and console keep them anyway
+    ])
+  });
+  var _CARRY_BARE = ["trinityone/rota-settings", "trinityone/verse-prompt", "trinityone/meals-settings", "trinityone/msgtags"];
+  var STEWARD_CARRY_LIMIT_MS = 2e4;
+  var _CARRY_WORDS = {
+    "trinityone/group:": "a group",
+    "trinityone/category:": "a group category",
+    "trinityone/plan:": "a reading plan",
+    "trinityone/devotional:": "a devotional",
+    "trinityone/service:": "a service",
+    "trinityone/request:": "a request",
+    "trinityone/room:": "a room",
+    "trinityone/booking:": "a booking",
+    "trinityone/runsheet:": "a running order",
+    "trinityone/rota:": "a rota",
+    "trinityone/roster:": "a team list",
+    "trinityone/msgtags": "the chat labels",
+    "trinityone/rota-settings": "who can see the rota",
+    "trinityone/verse-prompt": "the verse prompt",
+    "trinityone/pinsermon:": "the featured sermon",
+    "trinityone/sermon:": "a sermon",
+    "trinityone/event:": "an event",
+    "trinityone/pin:": "a pinned message",
+    "trinityone/hidden:": "a hidden message",
+    "trinityone/nophoto:": "a photo setting",
+    "trinityone/joinpolicy:": "the joining setting",
+    "trinityone/reseat:": "a reconnected member",
+    "trinityone/careteam:": "the care team",
+    "trinityone/meals-settings": "the meals setting",
+    "trinityone/carereqstatus:": "a help request",
+    "trinityone/care:": "a care need"
+  };
+  function _carryPrefix(d, list) {
+    for (const p of list) if (d === p || d.startsWith(p)) return p;
+    return "";
+  }
+  function _carryLabel(d, content) {
+    const p = _carryPrefix(d, [...STEWARD_CARRY.carry, ...STEWARD_CARRY.remint]);
+    if (p === "trinityone/group:") {
+      try {
+        const g = JSON.parse(content || "");
+        if (g && typeof g.name === "string" && g.name.trim()) return "the group \u201C" + g.name.trim().slice(0, 60) + "\u201D";
+      } catch (e) {
+      }
+    }
+    return _CARRY_WORDS[p] || "a church setting";
+  }
+  async function _carryTemplate(S, blocked, who, pre) {
+    let tags = (S.tags || []).filter((t) => Array.isArray(t) && t[0] !== "for");
+    let content = typeof S.content === "string" ? S.content : "";
+    const d = (tags.find((t) => t[0] === "d") || [])[1] || "";
+    const dead = tags.some((t) => t[0] === "deleted") || !content;
+    if (!dead && blocked && d.startsWith("trinityone/group:")) {
+      let g;
+      try {
+        g = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (g && typeof g === "object") {
+        const keep = (x) => String(x || "").toLowerCase() !== who;
+        if (Array.isArray(g.leaders)) g.leaders = g.leaders.filter(keep);
+        if (Array.isArray(g.members)) g.members = g.members.filter(keep);
+        content = JSON.stringify(g);
+      }
+    }
+    if (!dead && d.startsWith("trinityone/careteam:")) {
+      let body;
+      try {
+        body = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (!body || typeof body !== "object" || !Array.isArray(body.pubs)) return { skip: "unreadable" };
+      const m = pre && "minors" in pre ? pre.minors : window.Steward && window.Steward.readMinors ? await window.Steward.readMinors() : null;
+      if (!m || !m.known) return { skip: "children-unread" };
+      const minors = new Set((m.list || []).map((p) => String(p || "").toLowerCase()));
+      content = JSON.stringify({ ...body, pubs: body.pubs.filter((p) => !minors.has(String(p || "").toLowerCase())) });
+    }
+    if (!dead && d.startsWith("trinityone/care:")) {
+      let body;
+      try {
+        body = JSON.parse(content);
+      } catch (e) {
+        return { skip: "unreadable" };
+      }
+      if (!body || typeof body !== "object") return { skip: "unreadable" };
+      if (body.recipient) return { skip: "cleartext" };
+      if (body.skipEnc || tags.some((t) => t[0] === "skiphash")) {
+        const S_ = window.Steward;
+        const opened = body.enc && S_ && S_.careOpen ? S_.careOpen(body.enc) : null;
+        const recipient = opened && typeof opened.recipient === "string" && /^[0-9a-f]{64}$/i.test(opened.recipient) ? opened.recipient.toLowerCase() : "";
+        if (!recipient) return { skip: "care-key" };
+        const sb = new Uint8Array(32);
+        crypto.getRandomValues(sb);
+        const secret = Array.from(sb).map((x) => x.toString(16).padStart(2, "0")).join("");
+        const to = S_.careSealTo ? S_.careSealTo(recipient, { s: secret }) : null;
+        if (!to) return { skip: "care-key" };
+        let days = tags.filter((t) => t[0] === "skiphash" && t.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(t[1] || "")).map((t) => t[1]);
+        if (!days.length && Array.isArray(body.dates)) days = body.dates.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(String(x || "")));
+        const te2 = new TextEncoder();
+        tags = tags.filter((t) => t[0] !== "skiphash");
+        for (const day of [...new Set(days)]) {
+          const tokDay = await _sha256hex(te2.encode(secret + ":" + day));
+          tags.push(["skiphash", day, await _sha256hex(te2.encode(tokDay))]);
+        }
+        content = JSON.stringify({ ...body, skipEnc: to });
+      }
+    }
+    return { kind: 30078, created_at: now(), tags, content };
+  }
+  async function _carryOverStewardDocs(pk, opts) {
+    const o = opts || {};
+    const who = String(pk || "").toLowerCase();
+    const out = { carried: [], notCarried: [], superseded: [], refused: "" };
+    if (actingChurch) {
+      out.refused = "delegated";
+      return out;
+    }
+    if (!sk || !pub || !/^[0-9a-f]{64}$/.test(who) || who === pub) {
+      out.refused = "no-key";
+      return out;
+    }
+    const deadline = Date.now() + (typeof o.limitMs === "number" && o.limitMs > 0 ? o.limitMs : STEWARD_CARRY_LIMIT_MS);
+    const left = () => deadline - Date.now();
+    const dOf = (e) => ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+    const chOf = (e) => ((e && e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+    const notC = (d, why, label) => out.notCarried.push({ d, why, label: label || _carryLabel(d, null) });
+    const urls = relays();
+    if (!urls.length) {
+      notC("", "no-relay", "anything they set up (no relay could be reached)");
+      return out;
+    }
+    const ask = (url, filter) => new Promise((resolve) => {
+      const evs = [];
+      let done = false, sub = null;
+      const ms = left();
+      const finish = (complete) => {
+        if (done) return;
+        done = true;
+        try {
+          if (sub) sub.close();
+        } catch (e) {
+        }
+        let authed = false;
+        try {
+          authed = _keyReadAuthedOn(url);
+        } catch (e) {
+          authed = false;
+        }
+        resolve({ evs, complete: !!complete && authed });
+      };
+      if (ms <= 0) {
+        finish(false);
+        return;
+      }
+      try {
+        sub = pool.subscribeMany([url], [filter], { onevent(e) {
+          evs.push(e);
+        }, oneose() {
+          finish(true);
+        }, maxWait: ms + 5e3 });
+      } catch (e) {
+        finish(false);
+        return;
+      }
+      if (done) {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+      }
+      setTimeout(() => finish(false), ms);
+    });
+    const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
+    const onRoster = [..._careRoster].some((p) => String(p).toLowerCase() === who);
+    const capEntry = Object.keys(_stewardCaps || {}).find((k) => k.toLowerCase() === who);
+    const heldCare = onRoster && (capEntry == null || !Array.isArray(_stewardCaps[capEntry]) || _stewardCaps[capEntry].some((c) => String(c).toLowerCase() === "care"));
+    const MEALS_D_ = "trinityone/meals-settings";
+    const careIds = /* @__PURE__ */ new Set();
+    try {
+      const ct = window.StewardMeals && window.StewardMeals.careTeamId ? window.StewardMeals.careTeamId() : "";
+      if (ct) careIds.add(String(ct));
+    } catch (e) {
+    }
+    const noteCareIds = (content) => {
+      try {
+        const g = JSON.parse(content || "");
+        if (g && typeof g.adminGroupId === "string" && g.adminGroupId) careIds.add(g.adminGroupId);
+      } catch (e) {
+      }
+    };
+    let churchMeals = null;
+    let mealsReadWhole = false;
+    const careKnown = () => mealsReadWhole;
+    const careDoc = (d) => {
+      if (d.startsWith("trinityone/careteam:")) return "care";
+      if (!d.startsWith("trinityone/roster:")) return "";
+      if (careIds.has(d.slice("trinityone/roster:".length))) return "care";
+      return !careKnown() ? "unknown" : "";
+    };
+    const mine = /* @__PURE__ */ new Map();
+    const keepMine = (e) => {
+      if (!e || e.kind !== 30078 || String(e.pubkey).toLowerCase() !== who) return;
+      const d = dOf(e);
+      if (!d || !carryable(d) || chOf(e) !== pub) return;
+      const cur = mine.get(d);
+      if (!cur || (e.created_at || 0) > (cur.created_at || 0)) mine.set(d, e);
+    };
+    let readAll = true;
+    await Promise.all(urls.map(async (url) => {
+      const ids = /* @__PURE__ */ new Set();
+      let until = null;
+      for (let page = 0; ; page++) {
+        if (page >= 40) {
+          readAll = false;
+          return;
+        }
+        const f = { kinds: [30078], authors: [who], "#t": [NET], limit: 500 };
+        if (until != null) f.until = until;
+        const r = await ask(url, f);
+        let fresh = 0, oldest = until;
+        for (const e of r.evs) {
+          if (!e || ids.has(e.id)) continue;
+          ids.add(e.id);
+          fresh++;
+          keepMine(e);
+          if (oldest == null || (e.created_at || 0) < oldest) oldest = e.created_at || 0;
+        }
+        if (!r.complete) {
+          readAll = false;
+          return;
+        }
+        if (!fresh) return;
+        until = oldest;
+      }
+    }));
+    if (!readAll) notC("", "incomplete", "anything else they set up that a relay did not show in time");
+    const ds = [...mine.keys()].sort((x, y) => (y === MEALS_D_) - (x === MEALS_D_));
+    const pre = {};
+    if (ds.some((d) => d.startsWith("trinityone/careteam:")) && window.Steward && window.Steward.readMinors) {
+      pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise((r) => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
+    }
+    if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
+    for (let i3 = 0; i3 < ds.length; i3 += 60) {
+      const slice = ds.slice(i3, i3 + 60);
+      if (left() <= 0) {
+        for (const d of slice) notC(d, "time", _carryLabel(d, mine.get(d).content));
+        continue;
+      }
+      const asked = i3 === 0 && slice.indexOf(MEALS_D_) === -1 ? [...slice, MEALS_D_] : slice;
+      const answers = await Promise.all(urls.map((u) => ask(u, { kinds: [30078], "#d": asked, limit: asked.length * 50 })));
+      const whole = answers.every((a) => a.complete);
+      if (i3 === 0) mealsReadWhole = whole;
+      const others = /* @__PURE__ */ new Map();
+      for (const a of answers) for (const e of a.evs) {
+        const d = dOf(e);
+        if (!e || e.kind !== 30078) continue;
+        if (d === MEALS_D_ && (chOf(e) ? chOf(e) === pub : e.pubkey === pub)) {
+          if (!heldCare) noteCareIds(e.content);
+          if (e.pubkey === pub && (!churchMeals || (e.created_at || 0) > churchMeals.at)) {
+            let g = null;
+            try {
+              g = e.content && !(e.tags || []).some((t) => t[0] === "deleted") ? JSON.parse(e.content) : null;
+            } catch (x) {
+            }
+            churchMeals = { at: e.created_at || 0, adminGroupId: g && typeof g === "object" ? String(g.adminGroupId || "") : null };
+          }
+        }
+        if (slice.indexOf(d) === -1) continue;
+        if (String(e.pubkey).toLowerCase() === who) {
+          keepMine(e);
+          continue;
+        }
+        const ch = chOf(e);
+        if (ch && ch !== pub) continue;
+        if (!ch && e.pubkey !== pub && _carryPrefix(d, _CARRY_BARE)) continue;
+        const l = others.get(d) || [];
+        l.push({ at: e.created_at || 0, church: e.pubkey === pub, steward: [..._careRoster].some((p) => String(p).toLowerCase() === String(e.pubkey).toLowerCase()) });
+        others.set(d, l);
+      }
+      const jobs = [];
+      for (const d of slice) {
+        const S = mine.get(d), label = _carryLabel(d, S.content);
+        if (!whole) {
+          notC(d, "incomplete", label);
+          continue;
+        }
+        const rivals = (others.get(d) || []).filter((x) => x.at >= (S.created_at || 0));
+        if (rivals.length) {
+          if (rivals.every((x) => x.church && x.at > (S.created_at || 0))) out.superseded.push(d);
+          else if (rivals.every((x) => x.at > (S.created_at || 0) && (x.church || x.steward))) out.superseded.push(d);
+          else notC(d, rivals.some((x) => x.at === (S.created_at || 0)) ? "tie" : "newer", label);
+          continue;
+        }
+        const cd = heldCare ? "" : careDoc(d);
+        if (cd === "care") {
+          notC(d, "no-care", "the care team list (they no longer had the Care permission)");
+          continue;
+        }
+        if (cd === "unknown") {
+          notC(d, "no-care", "a team list (they no longer had the Care permission, and this console had not yet read which team is the care team)");
+          continue;
+        }
+        let from = S, teamGone = false;
+        if (!heldCare && d === MEALS_D_) {
+          if (!churchMeals || churchMeals.adminGroupId == null) {
+            notC(d, "no-care", "the meals and care setting (they no longer had the Care permission)");
+            continue;
+          }
+          if (!S.content || (S.tags || []).some((t) => t[0] === "deleted")) {
+            notC(d, "no-care", "the meals and care setting (they no longer had the Care permission)");
+            continue;
+          }
+          let g = null;
+          try {
+            g = JSON.parse(S.content || "");
+          } catch (e) {
+          }
+          if (!g || typeof g !== "object") {
+            notC(d, "unreadable", label);
+            continue;
+          }
+          from = { ...S, content: JSON.stringify({ ...g, adminGroupId: churchMeals.adminGroupId }) };
+          const aid = churchMeals.adminGroupId;
+          let gl = null;
+          try {
+            gl = _lastGroups.cp === pub && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+          } catch (e) {
+            gl = null;
+          }
+          teamGone = !aid ? "none" : !!gl && !gl.some((x) => x && x.id === aid) ? "gone" : false;
+        }
+        jobs.push((async () => {
+          let tmpl = null;
+          try {
+            tmpl = await _carryTemplate(from, !!o.blocked, who, pre);
+          } catch (e) {
+            tmpl = { skip: "error" };
+          }
+          if (!tmpl || tmpl.skip) {
+            notC(d, tmpl && tmpl.skip || "error", label);
+            return;
+          }
+          if (left() <= 0) {
+            notC(d, "time", label);
+            return;
+          }
+          let ok = false, signedEv = null;
+          try {
+            let signed = feChurch(tmpl, sk);
+            for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
+              await new Promise((r) => setTimeout(r, 1e3));
+              signed = feChurch({ ...tmpl, created_at: now() }, sk);
+            }
+            if ((signed.created_at || 0) <= (S.created_at || 0)) {
+              notC(d, (signed.created_at || 0) === (S.created_at || 0) ? "tie" : "newer", label);
+              return;
+            }
+            signedEv = signed;
+            let tm = null;
+            ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+              tm = setTimeout(() => r("time"), Math.max(0, left()));
+            })]);
+            if (tm) clearTimeout(tm);
+          } catch (e) {
+            ok = false;
+          }
+          if (ok && ok !== "time") {
+            out.carried.push({ d, label, ev: signedEv });
+            if (teamGone) (out.notes = out.notes || []).push(teamGone === "none" ? "Their care setting was kept, but your church hasn\u2019t chosen a care team \u2014 help requests go only to you." : "Their care setting was kept, but it names a care team that no longer exists \u2014 help requests go only to you until you choose a team.");
+          } else notC(d, ok === "time" ? "time" : "refused", label);
+        })());
+      }
+      await Promise.all(jobs);
+    }
+    return out;
+  }
+  var SWAP_PUBLISH_MS = 8e3;
+  var SWAP_QUIET_MS = 8e3;
+  var SWAP_READ_CAP_MS = 45e3;
+  var SWAP_FIND_LIMIT = 2e3;
+  async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
+    const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
+    const out = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false };
+    if (!from || from === to || !carry || !sk || !pub) return out;
+    const isGroup = (d) => String(d || "").startsWith("trinityone/group:");
+    const dOf = (e) => ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+    const namesOld = (g) => [...Array.isArray(g.leaders) ? g.leaders : [], ...Array.isArray(g.members) ? g.members : []].some((x) => String(x || "").toLowerCase() === from);
+    const labelOf = /* @__PURE__ */ new Map();
+    for (const c of carry.carried || []) if (c && isGroup(c.d)) labelOf.set(c.d, c.label);
+    for (const d of carry.superseded || []) if (isGroup(d) && !labelOf.has(d)) labelOf.set(d, "");
+    let gl = null;
+    try {
+      gl = _lastGroups.cp === pub && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+    } catch (e) {
+      gl = null;
+    }
+    if (gl) {
+      for (const g of gl) {
+        if (!g || !g.id) continue;
+        const d = "trinityone/group:" + g.id;
+        if (namesOld(g) && !labelOf.has(d)) labelOf.set(d, g.name ? "the group \u201C" + String(g.name).slice(0, 60) + "\u201D" : "");
+      }
+    }
+    const urls = relays();
+    const ask = (url, filters) => new Promise((resolve) => {
+      const evs = [];
+      let done = false, sub = null, quiet = null, cap = null;
+      const finish = (complete) => {
+        if (done) return;
+        done = true;
+        clearTimeout(quiet);
+        clearTimeout(cap);
+        try {
+          if (sub) sub.close();
+        } catch (e) {
+        }
+        let a = false;
+        try {
+          a = _keyReadAuthedOn(url);
+        } catch (e) {
+          a = false;
+        }
+        resolve({ evs, complete: !!complete && a });
+      };
+      const hush = () => {
+        clearTimeout(quiet);
+        quiet = setTimeout(() => finish(false), SWAP_QUIET_MS);
+      };
+      hush();
+      cap = setTimeout(() => finish(false), SWAP_READ_CAP_MS);
+      try {
+        sub = pool.subscribeMany([url], filters, { onevent(e) {
+          if (done) return;
+          evs.push(e);
+          hush();
+        }, oneose() {
+          finish(true);
+        }, maxWait: SWAP_READ_CAP_MS + 5e3 });
+      } catch (e) {
+        finish(false);
+        return;
+      }
+      if (done) {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+      }
+    });
+    const LIM = SWAP_FIND_LIMIT;
+    const found = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], authors: [pub], "#t": [NET], limit: LIM }, { kinds: [30078], "#church": [pub], "#t": [NET], limit: LIM }]))) : [];
+    const foundWhole = found.length > 0 && found.every((a) => a.complete && a.evs.filter((e) => e.pubkey === pub).length < LIM && a.evs.filter((e) => e.pubkey !== pub).length < LIM);
+    if (!foundWhole) {
+      out.unchecked.push("the groups they may have been on");
+      out.anyUnanswered = true;
+    }
+    for (const a of found) for (const e of a.evs) {
+      const d = dOf(e);
+      if (!isGroup(d) || labelOf.has(d) || !e.content || (e.tags || []).some((t) => t[0] === "deleted")) continue;
+      const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+      if (ch && ch !== pub) continue;
+      let g;
+      try {
+        g = JSON.parse(e.content);
+      } catch (x) {
+        continue;
+      }
+      if (g && typeof g === "object" && namesOld(g)) labelOf.set(d, "");
+    }
+    const ds = [...labelOf.keys()];
+    if (!ds.length) return out;
+    const readNewest = async (dl) => {
+      const answers = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], "#d": dl, limit: dl.length * 50 }]))) : [];
+      const newest = /* @__PURE__ */ new Map();
+      for (const a of answers) for (const e of a.evs) {
+        const d = dOf(e);
+        if (dl.indexOf(d) === -1) continue;
+        const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+        if (ch && ch !== pub) continue;
+        const cur = newest.get(d);
+        if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
+      }
+      return { whole: answers.length > 0 && answers.every((a) => a.complete), newest };
+    };
+    const first = await readNewest(ds);
+    const whole = first.whole;
+    if (!whole) out.anyUnanswered = true;
+    const isHelper = (pk) => {
+      try {
+        return [..._careRoster].some((p) => String(p || "").toLowerCase() === String(pk || "").toLowerCase());
+      } catch (e) {
+        return false;
+      }
+    };
+    const decide = (ev) => {
+      if (!ev || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) return { what: "none" };
+      let g;
+      try {
+        g = JSON.parse(ev.content);
+      } catch (e) {
+        return { what: "none" };
+      }
+      if (!g || typeof g !== "object") return { what: "none" };
+      if (ev.pubkey !== pub) return namesOld(g) ? { what: isHelper(ev.pubkey) ? "other" : "otherSomeone" } : { what: "none" };
+      let changed = false;
+      const swap = (arr) => {
+        const o = [];
+        for (const x of arr) {
+          const hit = String(x || "").toLowerCase() === from;
+          if (hit) changed = true;
+          const v = hit ? to : x;
+          if (v && !o.some((y) => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v);
+        }
+        return o;
+      };
+      if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
+      if (Array.isArray(g.members)) g.members = swap(g.members);
+      return changed ? { what: "write", g } : { what: "none" };
+    };
+    const inFlight = (d) => {
+      const o = [];
+      try {
+        for (const [k, v] of _pubLatest) if (k.indexOf("30078|") === 0 && k.slice(-(d.length + 1)) === "|" + d) o.push(v);
+      } catch (e) {
+      }
+      return o;
+    };
+    for (const d of ds) {
+      let ev = first.newest.get(d);
+      const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
+      if (!whole) {
+        out.unchecked.push(label);
+        continue;
+      }
+      let dec = decide(ev);
+      if (dec.what === "other" || dec.what === "otherSomeone") {
+        out[dec.what].push(label);
+        continue;
+      }
+      if (dec.what !== "write") continue;
+      let result = "unchecked";
+      for (let k = 0; k < 3; k++) {
+        for (const w of inFlight(d)) {
+          try {
+            await w.done;
+          } catch (e) {
+          }
+        }
+        const seen = inFlight(d).map((w) => w.done);
+        const again = await readNewest([d]);
+        if (!again.whole) {
+          result = "unchecked";
+          break;
+        }
+        ev = again.newest.get(d);
+        dec = decide(ev);
+        if (dec.what !== "write") {
+          result = dec.what;
+          break;
+        }
+        let ok = false, signed = null;
+        try {
+          const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(dec.g) };
+          signed = feChurch(tmpl, sk);
+          for (let j = 0; (signed.created_at || 0) <= (ev.created_at || 0) && j < 4; j++) {
+            await new Promise((r) => setTimeout(r, 1e3));
+            signed = feChurch({ ...tmpl, created_at: now() }, sk);
+          }
+        } catch (e) {
+          signed = null;
+        }
+        if (!signed || (signed.created_at || 0) <= (ev.created_at || 0)) {
+          result = "failed";
+          break;
+        }
+        const now_ = inFlight(d).map((w) => w.done);
+        if (now_.length !== seen.length || now_.some((x, i3) => x !== seen[i3])) {
+          result = "unchecked";
+          continue;
+        }
+        try {
+          let tm = null;
+          ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+            tm = setTimeout(() => r(false), SWAP_PUBLISH_MS);
+          })]);
+          if (tm) clearTimeout(tm);
+        } catch (e) {
+          ok = false;
+        }
+        result = ok ? "swapped" : "failed";
+        break;
+      }
+      if (result === "unchecked") out.anyUnanswered = true;
+      if (result === "swapped" || result === "failed" || result === "unchecked" || result === "other" || result === "otherSomeone") out[result].push(label);
+    }
+    return out;
+  }
+  var _rosterTurn = Promise.resolve();
+  function _dropJustRemoved(list, rosterAt) {
+    if (!_justRemoved.size) return list;
+    const out = [];
+    for (const p of list) {
+      const k = String(p || "").toLowerCase(), at = _justRemoved.get(k);
+      if (at == null) {
+        out.push(p);
+        continue;
+      }
+      if (rosterAt != null && rosterAt >= at) {
+        _justRemoved.delete(k);
+        out.push(p);
+        continue;
+      }
+    }
+    return out;
+  }
+  async function _settleStewardRemoval(who, o) {
+    let outcome = o.wrote ? "landed" : "unknown";
+    if (!o.wrote && !o.capsOnly) {
+      try {
+        outcome = window.Steward && window.Steward.stewardRemovalOutcome ? await window.Steward.stewardRemovalOutcome(who) : "unknown";
+      } catch (e) {
+        outcome = "unknown";
+      }
+    }
+    if (outcome === "landed") {
+      const at = o.wrote && typeof o.wrote === "object" && Number(o.wrote.created_at) || now();
+      const kept = {};
+      for (const p of o.next) if (Array.isArray(o.caps[p])) kept[p] = o.caps[p].filter((c) => typeof c === "string" && c).map((c) => c.toLowerCase());
+      _careRoster = new Set(o.next);
+      _stewardCaps = kept;
+      if (o.before.length !== o.next.length) _rememberExStewards(o.before, o.next, at);
+      if (!o.capsOnly) _justRemoved.set(who, at);
+    }
+    if (outcome === "landed" && !o.capsOnly) {
+      try {
+        if (window.Steward.publishStewardRevoke) Promise.resolve(window.Steward.publishStewardRevoke(who)).catch(() => {
+        });
+      } catch (e) {
+      }
+      const at = Math.floor(Number(o.since));
+      if (Number.isFinite(at) && at >= 1e9) {
+        try {
+          if (window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(who, at)).catch(() => {
+          });
+        } catch (e) {
+        }
+      }
+    }
+    return outcome;
+  }
+  function _stewardSinceOf(who) {
+    const k = Object.keys(_stewardSince || {}).find((x) => x.toLowerCase() === who);
+    return k ? _stewardSince[k] : void 0;
+  }
+  function _removeStewardKeeping(pk, opts) {
+    _requireTrustedView("steward roster");
+    const o = opts || {};
+    const who = String(pk || "").toLowerCase();
+    const turn = async () => {
+      if (actingChurch) return { wrote: null, carry: null, next: null, refused: "delegated" };
+      if (!_careRosterKnown) return { wrote: null, carry: null, next: null, refused: "roster-unknown" };
+      let carry;
+      try {
+        carry = await _carryOverStewardDocs(who, { limitMs: o.limitMs });
+      } catch (e) {
+        carry = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
+      }
+      if (!_careRosterKnown) return { wrote: null, carry, next: null, refused: "roster-unknown" };
+      const before = [..._careRoster];
+      const caps = { ..._stewardCaps };
+      const since = _stewardSinceOf(who);
+      let next;
+      if (o.capsOnly) {
+        next = before.slice();
+        caps[before.find((p2) => String(p2).toLowerCase() === who) || who] = [];
+      } else {
+        next = before.filter((p2) => String(p2).toLowerCase() !== who);
+        for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k];
+      }
+      const wrote = await window.Steward.setStewards(next, caps);
+      const outcome = await _settleStewardRemoval(who, { wrote, before, next, caps, capsOnly: !!o.capsOnly, since });
+      return { wrote, carry, next, refused: "", outcome };
+    };
+    const p = _rosterTurn.then(turn, turn);
+    _rosterTurn = p.catch(() => {
+    });
+    return p;
+  }
+  function _blockStewardKeeping(pk, blockedList, opts) {
+    _requireTrustedView("blocked list");
+    const o = opts || {};
+    const who = String(pk || "").toLowerCase();
+    return (async () => {
+      const out = { carry: null, blocked: null, wrote: null, outcome: "", onRoster: false, rosterUnknown: false, refused: "" };
+      if (actingChurch) {
+        out.refused = "delegated";
+        return out;
+      }
+      try {
+        out.carry = await _carryOverStewardDocs(who, { blocked: true, limitMs: o.limitMs });
+      } catch (e) {
+        out.carry = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
+      }
+      let b;
+      try {
+        b = await window.Steward.setBlocked([...blockedList || [], pk]);
+      } catch (e) {
+        b = null;
+      }
+      out.blocked = b;
+      if (b == null) return out;
+      const turn = async () => {
+        if (!_careRosterKnown) {
+          out.rosterUnknown = true;
+          return;
+        }
+        const before = [..._careRoster];
+        if (!before.some((p) => String(p).toLowerCase() === who)) return;
+        out.onRoster = true;
+        const caps = { ..._stewardCaps };
+        for (const k of Object.keys(caps)) if (k.toLowerCase() === who) delete caps[k];
+        const next = before.filter((p) => String(p).toLowerCase() !== who);
+        const since = _stewardSinceOf(who);
+        let wrote;
+        try {
+          wrote = await window.Steward.setStewards(next, caps);
+        } catch (e) {
+          wrote = null;
+        }
+        out.wrote = wrote;
+        out.outcome = await _settleStewardRemoval(who, { wrote, before, next, caps, capsOnly: false, since });
+      };
+      const q = _rosterTurn.then(turn, turn);
+      _rosterTurn = q.catch(() => {
+      });
+      try {
+        await q;
+      } catch (e) {
+      }
+      const notRun = (extra) => {
+        out.groupsOff = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false, ...extra };
+        out.groupsOffDone = Promise.resolve(out.groupsOff);
+      };
+      if (b === false) notRun({ notRun: "block-not-saved" });
+      else if (out.onRoster && out.outcome !== "landed") notRun({ unchecked: ["the groups they may have been on"], anyUnanswered: true });
+      else {
+        out.groupsOffDone = (async () => {
+          let r;
+          try {
+            r = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, "");
+          } catch (e) {
+            r = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: ["the groups they may have been on"], anyUnanswered: true };
+          }
+          out.groupsOff = r;
+          return r;
+        })();
+      }
+      return out;
+    })();
+  }
   window.Steward = {
     pubkey: null,
     npub: null,
@@ -22371,7 +23190,8 @@ zoo`.split("\n");
     // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
     // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
     // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
-    // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add(), remove()).
+    // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add()), and _settleStewardRemoval (a Remove
+    // or a Block of a current helper that landed — plan 0d N2).
     markStewardRequestHandled(pk, at) {
       const who = String(pk || "").toLowerCase();
       const cp = _hhScope();
@@ -23258,7 +24078,7 @@ zoo`.split("\n");
     // copy is one the member honours. A genuine removal arrives through the subscription, which does set it
     // empty. AUDIT-8.
     setCareRoster(list) {
-      const next = new Set((list || []).filter(Boolean));
+      const next = new Set(_dropJustRemoved((list || []).filter(Boolean), null));
       if (next.size || !_careRosterKnown) _careRoster = next;
       _reCheckCareKeyPending();
       try {
@@ -25839,9 +26659,33 @@ zoo`.split("\n");
       if (!/^[0-9a-f]{64}$/.test(oldH) || !/^[0-9a-f]{64}$/.test(newH)) throw new Error("That doesn\u2019t look like a member code.");
       if (oldH === newH) throw new Error("That is the same key they already have.");
       const low = (a) => (a || []).map((x) => String(x || "").toLowerCase()).filter(Boolean);
+      let carryOld = null;
       if (o.blockOld) {
+        try {
+          if (window.Steward.isOrWasSteward && window.Steward.isOrWasSteward(oldH)) carryOld = await _carryOverStewardDocs(oldH, {});
+        } catch (e) {
+          carryOld = { carried: [], notCarried: [{ d: "", why: "error", label: "anything they set up (the carry-over failed)" }], superseded: [], refused: "" };
+        }
         const blocked = await w(() => window.Steward.setBlocked([.../* @__PURE__ */ new Set([...low(o.blocked), oldH])]));
         if (!blocked) throw new Error("Couldn\u2019t block the old phone, so nothing was changed \u2014 they are still in your Members list. Check your connection and try again.");
+        if (carryOld && !carryOld.refused) {
+          try {
+            const sw = await _swapKeyInChurchGroups(carryOld, oldH, newH);
+            carryOld.swapped = sw.swapped;
+            carryOld.swapFailed = sw.failed;
+            carryOld.swapOther = sw.other;
+            carryOld.swapOtherSomeone = sw.otherSomeone || [];
+            carryOld.swapUnchecked = sw.unchecked;
+            carryOld.swapAnyUnanswered = !!sw.anyUnanswered;
+          } catch (e) {
+            carryOld.swapped = [];
+            carryOld.swapFailed = [];
+            carryOld.swapOther = [];
+            carryOld.swapOtherSomeone = [];
+            carryOld.swapUnchecked = ["the groups they may have been on"];
+            carryOld.swapAnyUnanswered = true;
+          }
+        }
       }
       const mins = low(o.minors), appr = low(o.approved);
       const wasMinor = mins.indexOf(oldH) !== -1, wasCleared = appr.indexOf(oldH) !== -1;
@@ -25973,6 +26817,8 @@ zoo`.split("\n");
         else failed.push("rota:" + r.service);
       }
       return {
+        carry: carryOld,
+        // what the old key's church settings came to (null: not a steward's key, or no block)
         minorCarried: wasMinor,
         clearedCarried: wasCleared,
         guardiansCarried: !!nextG,
@@ -26060,6 +26906,8 @@ zoo`.split("\n");
             }
           }
           const _rosterBefore = _careRoster;
+          cur = _dropJustRemoved(cur, e.created_at);
+          for (const [k, at] of [..._justRemoved]) if ((e.created_at || 0) >= at) _justRemoved.delete(k);
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
           _careRosterSeen = true;
@@ -26131,6 +26979,27 @@ zoo`.split("\n");
       }
       return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
     },
+    // REMOVE A STEWARD AND KEEP WHAT THEY SAVED (owner, 2026-11-17) — see _removeStewardKeeping. Called by
+    // DashStewardsPanel.remove and, with { capsOnly: true }, by its setCaps when every capability is unticked.
+    removeStewardKeeping(pk, opts) {
+      return _removeStewardKeeping(pk, opts);
+    },
+    // BLOCK AND KEEP, THEN OFF THE HELPER LIST (owner answer l) — see _blockStewardKeeping. Called by DashMembers.block.
+    blockStewardKeeping(pk, blockedList, opts) {
+      return _blockStewardKeeping(pk, blockedList, opts);
+    },
+    // the carry alone. DashMembers.block now goes through blockStewardKeeping (which runs this first, with { blocked: true });
+    // kept for the tests that drive the carry on its own. reseatMember calls _carryOverStewardDocs directly.
+    carryOverStewardDocs(pk, opts) {
+      return _carryOverStewardDocs(pk, opts);
+    },
+    // is this key on the roster now, or was it ever on it as far as this console has seen?
+    isOrWasSteward(pk) {
+      const p = String(pk || "").toLowerCase();
+      if (!p) return false;
+      for (const x of _careRoster) if (String(x).toLowerCase() === p) return true;
+      return _exStewardSet().has(p);
+    },
     // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). When the owner takes a helper off the roster the
     // relay (correctly) stops serving them the church's documents — INCLUDING the stewards: roster event that would
     // tell their app it was dropped — so their console kept a dead "ghost" church on screen. This writes a dedicated
@@ -26141,7 +27010,8 @@ zoo`.split("\n");
     // setStewards above), so the helper's handler can take `e.pubkey` as the authority and refuse a forgery. CONTENT IS
     // NON-EMPTY on purpose: the relay-wide convention (and the helper's handler) treats empty content OR a ['deleted']
     // tag as a tombstone, so a live revoke must carry content or it would read as its own cancellation. Called ONLY from
-    // DashStewardsPanel.remove, and ONLY after the roster removal is confirmed landed (app/stew-dashboard.jsx).
+    // _settleStewardRemoval (Remove, and Block of a current helper — owner answer l), and ONLY once the roster removal is
+    // confirmed landed.
     publishStewardRevoke(pk) {
       if (!sk || !pk) return Promise.resolve(null);
       return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREVOKE_D + pk], ["t", NET], ["p", pk]], content: JSON.stringify({ revoked: pk }) }), sk));
@@ -26159,7 +27029,7 @@ zoo`.split("\n");
     //   'landed'     the newest roster any relay holds no longer lists them;
     //   'not-landed' EVERY relay answered, and every one still lists them;
     //   'unknown'    anything else (a relay silent, nothing found). Callers must not claim either way.
-    // Callers: DashStewardsPanel.remove (app/stew-dashboard.jsx), the only one.
+    // Callers: _settleStewardRemoval (Remove and Block of a current helper, when setStewards' OK was lost), the only one.
     async stewardRemovalOutcome(pk) {
       const want = String(pk || "").toLowerCase();
       if (!want || !pub) return "unknown";
@@ -28957,6 +29827,7 @@ zoo`.split("\n");
       _careRoster = /* @__PURE__ */ new Set();
       _careRosterKnown = false;
       _careRosterSeen = false;
+      _justRemoved.clear();
       _stewardCaps = {};
       _stewardNames = {};
       _stewardNamesCt = "";
