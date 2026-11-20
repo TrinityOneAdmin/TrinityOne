@@ -8775,9 +8775,6 @@ async function _carryOverStewardDocs(pk, opts) {
     pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
   }
   if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
-  // the children list a carried care-team list is filtered by: read once, now, inside the read deadline (R-L1)
-  const pre = {};
-  if (ds.some(d => d.startsWith('trinityone/careteam:'))) { try { pre.minors = await minorsRead; } catch (e) { pre.minors = null; } }
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
     if (readLeft() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
@@ -9206,6 +9203,7 @@ function _blockStewardKeeping(pk, blockedList, opts) {
     }
     return out;
   })();
+}
 
 // ── QUIET PUBLISH for the Set up accounts flow (plan v3, 2026-11-20) ─────────────────────────────────────
 // publish() raises the console-wide red "could not be saved" banner per failed event; a 200-slip batch must

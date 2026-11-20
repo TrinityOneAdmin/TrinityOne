@@ -22326,14 +22326,6 @@ zoo`.split("\n");
       pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise((r) => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
     }
     if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
-    const pre = {};
-    if (ds.some((d) => d.startsWith("trinityone/careteam:"))) {
-      try {
-        pre.minors = await minorsRead;
-      } catch (e) {
-        pre.minors = null;
-      }
-    }
     for (let i3 = 0; i3 < ds.length; i3 += 60) {
       const slice = ds.slice(i3, i3 + 60);
       if (readLeft() <= 0) {
@@ -22862,7 +22854,7 @@ zoo`.split("\n");
       }
       return out;
     })();
-
+  }
   async function _quietSend(evt) {
     let urls = [];
     try {
