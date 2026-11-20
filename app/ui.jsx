@@ -28,7 +28,16 @@ function churchOnColor(hex) {
 function churchMainGradient(hex, deg) {
   return `linear-gradient(${deg}deg, ${hex} 0%, color-mix(in oklab, ${hex} 62%, #16120c) 100%)`;
 }
-window.churchMainColor = churchMainColor; window.churchOnColor = churchOnColor; window.churchMainGradient = churchMainGradient;
+// THE CHURCH'S CARD COLOUR (owner 2026-11-19). A third colour that paints the devotional, reading plan
+// and verse-prompt cards. Falls back to sage green when unset. Same strict #RRGGBB rule as mainColor.
+function churchCardColor(church) {
+  const v = church && church.cardColor;
+  return (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) ? v : null;
+}
+function churchCardGradient(hex, deg) {
+  return `linear-gradient(${deg}deg, ${hex} 0%, color-mix(in oklab, ${hex} 62%, #16120c) 100%)`;
+}
+window.churchMainColor = churchMainColor; window.churchOnColor = churchOnColor; window.churchMainGradient = churchMainGradient; window.churchCardColor = churchCardColor; window.churchCardGradient = churchCardGradient;
 
 // Name-clash disambiguation: identity is the pubkey, names are free-text labels, so two members
 // (or churches) can share a name. Build a labeller over a list that appends a discriminator ONLY to

@@ -2542,6 +2542,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const [comment, setComment] = useC('');   // optional "add thoughts" that rides with the shared verse
   // live church groups + member directory (the old code listed mock D.GROUPS, so a real church showed nothing)
   useCE(() => {
+    if (open && window.shareCardFontsEager) window.shareCardFontsEager();
     setGroups([]); setMembers([]); setComment('');
     if (!open || !churchNpub || !FS) return;
     const offs = [];

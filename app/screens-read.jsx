@@ -615,12 +615,18 @@ function CrossRefSheet({ loc, v, label, open, onClose, ctx }) {
         <IconBtn name="x" onClick={onClose} />
       </div>
       {refs.length ? refs.map((r, i) => (
-        <div key={i} onClick={() => ctx.toast('Opening ' + r.ref)} style={{
+        <div key={i} onClick={() => {
+          const t = window.Bible.parseRef(r.ref);
+          if (t) { onClose(); ctx.gotoRef(t.book, t.chap, t.verse); }
+        }} style={{
           padding: '14px 0', borderTop: i ? '1px solid var(--line)' : 'none', cursor: 'pointer',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: 700, color: 'var(--clay)', fontSize: 14 }}>{r.ref}</span>
-            <Icon name="chevR" size={16} color="var(--ink-3)" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              <button onClick={(e) => { e.stopPropagation(); ctx.openShareSheet({ ref: r.ref, text: r.text, version: ctx.version || '' }); }} aria-label={'Share ' + r.ref} style={{ width: 36, height: 36, margin: '-6px 0', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}><Icon name="share" size={15} /></button>
+              <Icon name="chevR" size={16} color="var(--ink-3)" />
+            </div>
           </div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.5, color: 'var(--ink)', margin: '5px 0 0' }}>{r.text}</p>
         </div>
