@@ -9671,9 +9671,18 @@ window.Steward = {
     // A SETTING NOBODY ACCEPTED IS NOT A SETTING. Audit 2026-09-02 #17.
     // This awaited the publish and discarded it, so "✓ Sync on" appeared over a document no relay took —
     // and the church believed its two boxes were mirroring each other when nothing had been told to.
-    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }), sk));
-    if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
-    return { relays: trusted.length };
+    //
+    // THE SIGN + PUBLISH HALF HOLDS THE ONE SIGNING QUEUE (A4, 2026-11-20). Every writer of a church-signed
+    // relay document goes through enrolSerial (enrolRelayNet, signRelay, unsignRelay, syncHeal, syncDisable
+    // and this), so a heal pass can never interleave with a toggle and re-sign over it. The per-relay PROBE
+    // half above (relayIdentities — one identity proof per relay, seconds each) deliberately runs BEFORE
+    // entering the queue, so a slow probe never starves every other signing (the enrol no-nesting rule:
+    // nothing already inside the queue may await enrolSerial again — that deadlocks it).
+    return enrolSerial(async () => {
+      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }), sk));
+      if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
+      return { relays: trusted.length };
+    });
   },
   // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
   // and whether cross-relay sync is currently published ON. boxes < 2 = single point of failure → the console
@@ -9703,11 +9712,17 @@ window.Steward = {
     //     when ANY relay answered, but the box that holds the doc may be the one still authing — so require the
     //     FULL asked set to have answered (askedUrls ⊆ answeredUrls), the same "nobody is login-pending" test
     //     syncEnable's nothingAnywhere() rests on.
-    let syncOn = null;
+    // `docExists` (A4, 2026-11-20) rides the SAME three-state read: true when a signed copy from the church
+    // key was read (a `[]` Turn-off is a copy that EXISTS — syncOn false, docExists true); false ONLY on a
+    // fully-answered read that found no doc ("no doc has ever existed"); null when the read was inconclusive.
+    // autoSyncIfRedundant branches on it: default-on fires only over docExists === false, so it can never
+    // resurrect a deliberate Turn-off and never acts on an unknown read. No existing field changed meaning.
+    let syncOn = null, docExists = null;
     try {
       const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true);
       const ev = r && r.ev;
       if (ev && ev.pubkey === pub) {
+        docExists = true;
         let arr = [];
         try { arr = JSON.parse(ev.content || '[]'); } catch { arr = []; }
         syncOn = Array.isArray(arr) && arr.length >= 2;
@@ -9716,9 +9731,10 @@ window.Steward = {
         const said = new Set((r && r.answeredUrls) || []);
         const fullyAnswered = asked.length > 0 && asked.every((u) => said.has(u));
         syncOn = fullyAnswered ? false : null;
+        docExists = fullyAnswered ? false : null;
       }
-    } catch { syncOn = null; }
-    return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn };
+    } catch { syncOn = null; docExists = null; }
+    return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn, docExists };
   },
   // PER-RELAY SYNC INDICATOR (plan §3, work item A). Classify a relay's PUBLIC /status.sync block into a
   // "synced ✓ / catching up…" label for the Relays list — the visible half, where a steward actually looks.
@@ -9826,7 +9842,14 @@ window.Steward = {
     if (actingChurch) return { enabled: false, delegated: true };
     try {
       const st = await window.Steward.backupState();
-      if (st.boxes >= 2 && !st.syncOn) { await window.Steward.syncEnable(); return { enabled: true, boxes: st.boxes }; }
+      // ONLY WHEN NO DOC HAS EVER EXISTED (A4, 2026-11-20). This fired on `!st.syncOn`, which is also true
+      // over a deliberate `[]` Turn-off — so the 5-second boot timer silently switched sync back ON on the
+      // next console launch after every Turn-off, and over an UNKNOWN read it could re-enable during an
+      // outage. `docExists === false` is backupState's fully-answered "the church has never written this
+      // doc": the one state in which default-on is a default and not an override. A `[]` doc (docExists
+      // true, syncOn false) and an inconclusive read (docExists null) are both left alone; turning sync
+      // back on after a Turn-off is the steward's toggle, and healing an existing list is syncHeal's job.
+      if (st.boxes >= 2 && st.docExists === false) { await window.Steward.syncEnable(); return { enabled: true, boxes: st.boxes }; }
       return { enabled: false, boxes: st.boxes, already: st.syncOn };
     } catch { return { enabled: false }; }
   },
@@ -9838,9 +9861,13 @@ window.Steward = {
     // other while the console said they had stopped. That is the wrong direction to be wrong in — this is
     // pressed when a church is decommissioning a relay or reacting to a seizure, and believing mirroring has
     // stopped when it has not is the whole harm.
-    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }), sk));
-    if (!ev) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
-    return { relays: 0 };
+    // QUEUED LIKE EVERY OTHER SIGNING (A4, 2026-11-20): the `[]` holds the enrolSerial slot, so a syncHeal
+    // already queued behind it reads the `[]` back and aborts rather than "repairing" the Turn-off away.
+    return enrolSerial(async () => {
+      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }), sk));
+      if (!ev) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
+      return { relays: 0 };
+    });
   },
   // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
   // church key if sealed, then import into a relay — THIS one (default) or `relayUrl` (clone onto another relay).

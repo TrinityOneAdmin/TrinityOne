@@ -70,8 +70,10 @@ test('switching sync ON over a document nobody accepted throws', async () => {
   // esbuild renames the import to finalizeEvent2 in the bundle — inject both names.
   // …and `_monotonic`, which stage 3 of SCOPE-RELAY-CORRECTED-TIME-2026-09-26 put every raw publisher
   // through. Identity here: that is what the shipped one returns for a first write of a document.
+  // A4 (2026-11-20): syncEnable's sign+publish half now holds the enrolSerial queue slot — pass-through
+  // here (queue ordering is sync-default-on-cannot-undo-a-turn-off.test.mjs's subject).
   const mk = (accepted) => new Function('sk', 'pub', 'window', 'publish', 'finalizeEvent2', 'now', 'JSON',
-    '_monotonic',
+    '_monotonic', 'enrolSerial',
     'return ({ ' + body + ' })')(
     'sk', 'pub',
     { Steward: { relayIdentities: async () => ([
@@ -79,7 +81,7 @@ test('switching sync ON over a document nobody accepted throws', async () => {
         { url: 'wss://b/relay', pubkey: 'b'.repeat(64), online: true },
       ]) } },
     async () => (accepted ? { id: 'evt' } : null),
-    (e) => e, () => 1, JSON, (t) => t,
+    (e) => e, () => 1, JSON, (t) => t, (fn) => fn(),
   ).syncEnable;
   await assert.rejects(() => mk(false)(),
     /no relay accepted/i,

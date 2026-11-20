@@ -343,6 +343,9 @@ function liftBootTimer({ actingChurch }) {
     // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put syncEnable's write through
     // _monotonic(). Identity, which is what the shipped one returns for a first write of a document.
     _monotonic: (t) => t,
+    // A4 (2026-11-20) moved syncEnable's sign+publish half into the one enrolSerial signing queue.
+    // Pass-through here: queue ordering is sync-default-on-cannot-undo-a-turn-off.test.mjs's subject.
+    enrolSerial: (fn) => fn(),
     // The shipped publish() dispatches steward-publish-error with `background: !!(opts && opts.background)`
     // on a total refusal and returns false. That is all this needs it to be.
     publish: async (evt, opts) => {
@@ -368,7 +371,10 @@ function liftBootTimer({ actingChurch }) {
   scope.window = { Steward: { ...api,
     relayIdentities: async () => ([{ base: 'https://a', pubkey: 'boxA', online: true },
                                    { base: 'https://b', pubkey: 'boxB', online: true }]),
-    backupState: async () => ({ boxes: 2, online: 2, entries: 2, syncOn: false }) } };
+    // docExists:false — the fully-answered "no doc has ever existed" read. A4 made autoSyncIfRedundant
+    // fire ONLY in that state (never over a `[]` Turn-off, never over an unknown read); this harness keeps
+    // staging the state in which the boot timer DOES write, which is what both tests here are about.
+    backupState: async () => ({ boxes: 2, online: 2, entries: 2, syncOn: false, docExists: false }) } };
   return { api, attempts, fired };
 }
 

@@ -23341,9 +23341,11 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
-      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }), sk));
-      if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
-      return { relays: trusted.length };
+      return enrolSerial(async () => {
+        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }), sk));
+        if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
+        return { relays: trusted.length };
+      });
     },
     // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
     // and whether cross-relay sync is currently published ON. boxes < 2 = single point of failure → the console
@@ -23352,11 +23354,12 @@ zoo`.split("\n");
       const ids = await window.Steward.relayIdentities();
       const boxes = new Set(ids.filter((r) => r.pubkey).map((r) => r.pubkey));
       const online = new Set(ids.filter((r) => r.pubkey && r.online).map((r) => r.pubkey));
-      let syncOn = null;
+      let syncOn = null, docExists = null;
       try {
         const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
         const ev = r && r.ev;
         if (ev && ev.pubkey === pub) {
+          docExists = true;
           let arr = [];
           try {
             arr = JSON.parse(ev.content || "[]");
@@ -23369,11 +23372,13 @@ zoo`.split("\n");
           const said = new Set(r && r.answeredUrls || []);
           const fullyAnswered = asked.length > 0 && asked.every((u) => said.has(u));
           syncOn = fullyAnswered ? false : null;
+          docExists = fullyAnswered ? false : null;
         }
       } catch {
         syncOn = null;
+        docExists = null;
       }
-      return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn };
+      return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn, docExists };
     },
     // PER-RELAY SYNC INDICATOR (plan §3, work item A). Classify a relay's PUBLIC /status.sync block into a
     // "synced ✓ / catching up…" label for the Relays list — the visible half, where a steward actually looks.
@@ -23479,7 +23484,7 @@ zoo`.split("\n");
       if (actingChurch) return { enabled: false, delegated: true };
       try {
         const st = await window.Steward.backupState();
-        if (st.boxes >= 2 && !st.syncOn) {
+        if (st.boxes >= 2 && st.docExists === false) {
           await window.Steward.syncEnable();
           return { enabled: true, boxes: st.boxes };
         }
@@ -23491,9 +23496,11 @@ zoo`.split("\n");
     // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
     async syncDisable() {
       if (!sk || !pub) throw new Error("No church key on this device");
-      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }), sk));
-      if (!ev) throw new Error("Sync could not be switched off \u2014 no relay accepted the change, so your relays are STILL mirroring each other. Try again.");
-      return { relays: 0 };
+      return enrolSerial(async () => {
+        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }), sk));
+        if (!ev) throw new Error("Sync could not be switched off \u2014 no relay accepted the change, so your relays are STILL mirroring each other. Try again.");
+        return { relays: 0 };
+      });
     },
     // RESTORE / CLONE: read a backup file (encrypted envelope, plaintext zip, or plaintext jsonl), decrypt with the
     // church key if sealed, then import into a relay — THIS one (default) or `relayUrl` (clone onto another relay).
