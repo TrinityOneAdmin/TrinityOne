@@ -8127,6 +8127,235 @@ function BulkInviteModal({ onClose }) {
 }
 window.BulkInviteModal = BulkInviteModal;
 
+// ═══ SET UP ACCOUNTS — pre-minted member accounts handed over as printed QR sign-in slips (plan v3) ═══
+// The steward types one name or many (or imports a CSV), optionally marks children, and the ENGINE
+// (Steward.createMemberAccounts) mints nothing itself: every key is minted HERE, before confirming, so a
+// retry finishes the same accounts instead of starting new ones. The slip's QR is the ordinary join link
+// with the key in its fragment — "Someone set this up for me" on the member app consumes it.
+//
+// CSV: header-aware, quoted fields. There is deliberately NO age column — TrinityOne does not decide who
+// is a child, the steward marks and the software enforces (reference/DOMAIN.md, mechanism not policy).
+// Auto-detection only PRE-FILLS the child toggles; the steward sees every row and can change any of them.
+function parseAccountsCsv(txt) {
+  const splitLine = (line) => {
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+      else if (c === '"') q = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  };
+  const lines = String(txt || '').split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const NAME_COLS = ['name', 'first name', 'full name', 'member', 'person'];
+  const CHILD_COLS = ['child', 'minor', 'young person', 'youth'];
+  const YES = ['yes', 'y', 'true', '1', 'x', '✓'];
+  const head = splitLine(lines[0]).map(s => s.toLowerCase());
+  const nameAt = head.findIndex(h => NAME_COLS.includes(h));
+  // no recognisable header: every line is a bare name (quoted "Smith, John" stays one name)
+  if (nameAt === -1) return lines.map(l => ({ name: splitLine(l)[0] || '', isChild: false })).filter(r => r.name);
+  const childAt = head.findIndex(h => CHILD_COLS.includes(h));
+  return lines.slice(1)
+    .map(l => { const f = splitLine(l); return { name: f[nameAt] || '', isChild: childAt !== -1 && YES.includes(String(f[childAt] || '').toLowerCase()) }; })
+    .filter(r => r.name);
+}
+function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegated }) {
+  const church = window.useStewardChurch ? window.useStewardChurch() : {};
+  const gate = useGoPublicGate();   // handing out slips before the relay is public would hand out dead QR codes
+  const [stage, setStage] = React.useState('input');   // input → confirm → running → done
+  const [names, setNames] = React.useState('');
+  const [childMarks, setChildMarks] = React.useState({});   // name → true; CSV pre-fills, the steward decides
+  const [entries, setEntries] = React.useState([]);         // frozen at confirm, keys minted: [{ name, isChild, mnemonic }]
+  const [results, setResults] = React.useState(null);       // kept (keys included) until the modal CLOSES — reprint stays possible (I6)
+  const [progressLog, setProgressLog] = React.useState([]);
+  const [printed, setPrinted] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [closing, setClosing] = React.useState(false);      // the close-without-print warning
+  const [cleaning, setCleaning] = React.useState(false);
+  // Moment-of-use gates for the UI; the ENGINE re-reads auth and both lists again when it runs, so these
+  // only decide what the screen offers, never what is written.
+  const authed = !!(window.Steward.relayAuthed && window.Steward.relayAuthed());
+  const childrenBlocked = delegated
+    ? 'Only the main steward can set up children’s accounts — the relay only accepts the children’s list from the church’s own key.'
+    : (!authed ? 'Mark children once this console has connected to your church’s relay — until then a child’s protection couldn’t be saved, so children’s accounts are not offered.' : '');
+  const rows = names.split('\n').map(n => n.trim()).filter(Boolean).slice(0, 200)
+    .map(n => ({ name: n, isChild: !childrenBlocked && !!childMarks[n] }));
+  const existingLower = React.useMemo(() => new Set(Object.values(nameByPub || {}).map(n => String(n).toLowerCase())), [nameByPub]);
+  const dupInBatch = (() => { const seen = new Set(), d = new Set(); rows.forEach(r => { const k = r.name.toLowerCase(); if (seen.has(k)) d.add(k); seen.add(k); }); return d; })();
+  const onFile = (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const rdr = new FileReader();
+    rdr.onload = () => {
+      const parsed = parseAccountsCsv(String(rdr.result || ''));
+      setNames(parsed.map(r => r.name).join('\n'));
+      const marks = {}; parsed.forEach(r => { if (r.isChild) marks[r.name] = true; });
+      setChildMarks(marks);
+    };
+    rdr.readAsText(f);
+  };
+  // leaving mid-batch, or with unprinted slips, loses the only copies of the keys — warn on tab close too
+  React.useEffect(() => {
+    const need = stage === 'running' || (stage === 'done' && (results || []).some(r => r.attempted) && !printed);
+    if (!need) return undefined;
+    const h = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [stage, results, printed]);
+  const toConfirm = () => {
+    if (!rows.length) return;
+    setErr('');
+    setEntries(rows.map(r => ({ ...r, mnemonic: window.Steward.mintAccountKey() })));   // minted ONCE; retry re-uses these
+    setStage('confirm');
+  };
+  const run = async () => {
+    setStage('running'); setErr(''); setProgressLog([]);
+    let out = null;
+    try { out = await window.Steward.createMemberAccounts(entries, { onProgress: (p) => setProgressLog(log => [...log, p]) }); }
+    catch (e) { out = { results: [], refused: (e && e.message) || 'Something went wrong before anything was published.' }; }
+    if (out.refused) { setErr(out.refused); setStage('confirm'); return; }   // the engine stops BEFORE publishing when it refuses
+    setResults(out.results);
+    if (out.childrenRefused) setErr('Children: ' + out.childrenRefused + '.');
+    // THE OWNER'S RULE: a marked child goes on the no-photo list (unless this church allows children's
+    // photos). Gated on sg.loaded exactly like the DashMembers reconcile effect, which is the standing
+    // backstop for this write either way — a cold list must never be replaced (audit 2026-10-13).
+    try {
+      const okKids = out.results.filter(r => r.ok && r.isChild && r.pubkey).map(r => r.pubkey);
+      if (okKids.length && !kidPhotosAllowed && sg && sg.loaded) {
+        const have = new Set(sg.nophoto || []);
+        const add = okKids.filter(p => !have.has(p));
+        if (add.length) window.Steward.setNoPhoto([...(sg.nophoto || []), ...add]);
+      }
+    } catch (e) {}
+    setStage('done');
+  };
+  const print = async () => {
+    const ok = (results || []).filter(r => r.ok);
+    if (!ok.length || !window.Steward.memberInviteUrl) return;
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+    const acc = (typeof church.accent === 'string' && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(church.accent.trim())) ? church.accent.trim() : '#b4533f';
+    const mark = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });
+    const markImg = mark ? `<img class="mark" src="${esc(mark)}" alt="">` : '';
+    const slips = ok.map(r => {
+      const qr = window.Steward.qrSVG ? window.Steward.qrSVG(window.Steward.memberInviteUrl(r.mnemonic)) : '';
+      return `<div class="slip">${markImg}<div class="qr">${qr}</div><div class="nm">${esc(r.name)}</div>`
+        + `<div class="ch">Welcome to ${esc(church.name || 'our church')} on TrinityOne</div>`
+        + `<div class="hint">Open TrinityOne on your phone, choose “I’ve used it before” → “Someone set this up for me”, and point the camera at this code. You’re in — nothing to type.</div>`
+        + `<div class="sec">Keep this slip private — it IS your sign-in.</div>`
+        + (r.isChild ? `<div class="sec kid">This account is for a young person. Keep this slip especially secure.</div>` : '')
+        + `</div>`;
+    }).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Sign-in slips · ${esc(church.name || '')}</title><style>`
+      + `body{font-family:system-ui,sans-serif;margin:0;padding:14px;color:#1b1714}`
+      + `.bar{background:#f4efe6;border:1px solid #e6ddcb;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;display:flex;gap:12px;align-items:center}`
+      + `.bar button{font:inherit;background:${acc};color:#fff;border:none;border-radius:8px;padding:7px 13px;cursor:pointer;font-weight:700}`
+      + `.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}`
+      + `.slip{border:1px dashed #bbb;border-top:4px solid ${acc};border-radius:12px;padding:16px 14px;text-align:center;page-break-inside:avoid;display:flex;flex-direction:column;align-items:center;gap:6px}`
+      + `.mark{width:46px;height:46px;border-radius:999px;object-fit:cover}`
+      + `.qr{width:160px;height:160px}.qr svg{width:100%;height:100%}`
+      + `.nm{font-weight:800;font-size:18px;margin-top:2px}.ch{font-size:12px;color:${acc};font-weight:600}`
+      + `.hint{font-size:11px;color:#555;max-width:240px;line-height:1.35;margin-top:4px}`
+      + `.sec{font-size:11px;font-weight:700;color:#8a2f1f;max-width:240px}.sec.kid{color:#5c2a84}`
+      + `@media print{.bar{display:none}}`
+      + `</style></head><body><div class="bar"><span>${ok.length} sign-in slip${ok.length === 1 ? '' : 's'} for ${esc(church.name || 'your church')}. Print, cut along the dashes, and hand each slip to its person — don’t keep copies.</span><button onclick="window.print()">Print / Save as PDF</button></div><div class="grid">${slips}</div></body></html>`;
+    if (window.skPrintable) window.skPrintable(html);
+    setPrinted(true);   // results stay until the modal closes, so printing again stays possible (I6)
+  };
+  const requestClose = () => {
+    if (stage === 'running' || cleaning) return;   // the batch cannot be abandoned half-made
+    if (stage === 'done' && (results || []).some(r => r.attempted) && !printed) { setClosing(true); return; }
+    onClose();
+  };
+  // CLOSE WITHOUT PRINTING = nobody will ever hold these keys. Every ATTEMPTED row is withdrawn — a send
+  // that timed out may still have landed (N6) — and only then does the modal close and drop the keys.
+  const closeAnyway = async () => {
+    setCleaning(true);
+    try { for (const r of (results || [])) { if (r.attempted && r.mnemonic) { try { await window.Steward.tombstoneMemberAccount(r.mnemonic); } catch (e) {} } } }
+    finally { setCleaning(false); onClose(); }
+  };
+  if (gate.blocking) return (
+    <CkModal title="Set up accounts" onClose={onClose}>
+      <GoPublicPanel gate={gate} />
+    </CkModal>
+  );
+  const kids = rows.filter(r => r.isChild), adults = rows.length - kids.length;
+  const ekids = entries.filter(r => r.isChild);
+  return (
+    <CkModal title="Set up accounts" onClose={requestClose}>
+      {stage === 'input' ? <React.Fragment>
+        <GoPublicNote gate={gate} />
+        <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Create ready-made accounts — one, or a whole list. Each person gets a printed <b>sign-in slip</b>: they scan it with “Someone set this up for me” and they’re in, named and joined, nothing to type.</div>
+        {!authed && !delegated ? <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div>This console hasn’t finished connecting to your church’s relay. Accounts made now aren’t let in by you — in a church that approves joiners they will wait in the join queue — and children’s accounts can’t be made yet.</div></div> : null}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
+          <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>
+          <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{rows.length} name{rows.length === 1 ? '' : 's'}{rows.length ? ` · ${kids.length} child${kids.length === 1 ? '' : 'ren'}` : ''}</span>
+        </div>
+        <textarea value={names} onChange={e => setNames(e.target.value)} placeholder={'Maria Gonzalez\nJohn Park\nGrace Okafor\n…'} style={{ width: '100%', boxSizing: 'border-box', minHeight: 120, border: '1px solid var(--line)', borderRadius: 12, padding: 12, fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
+        {rows.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10, maxHeight: 200, overflowY: 'auto' }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '5px 8px', borderRadius: 9, background: 'var(--surface-2)' }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+              {existingLower.has(r.name.toLowerCase()) ? <span title="A member with this name already exists — you can still continue" style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>already a member?</span> : null}
+              {dupInBatch.has(r.name.toLowerCase()) ? <span title="This name appears more than once in your list" style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>duplicate</span> : null}
+              <button onClick={() => setChildMarks(m => ({ ...m, [r.name]: !m[r.name] }))} disabled={!!childrenBlocked} title={childrenBlocked || 'Mark this account as a young person’s — their protection is saved before the account is made'}
+                style={{ flexShrink: 0, border: '1px solid ' + (r.isChild ? 'var(--clay)' : 'var(--line)'), background: r.isChild ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: r.isChild ? 'var(--clay-ink)' : 'var(--ink-2)', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, fontWeight: 700, cursor: childrenBlocked ? 'not-allowed' : 'pointer', opacity: childrenBlocked ? 0.5 : 1, fontFamily: 'var(--font-ui)' }}>{r.isChild ? 'Child ✓' : 'Child?'}</button>
+            </div>
+          ))}
+        </div> : null}
+        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+          <button onClick={requestClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
+          <button onClick={toConfirm} disabled={!rows.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: rows.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Continue with {rows.length || ''}</button>
+        </div>
+      </React.Fragment> : null}
+      {stage === 'confirm' ? <React.Fragment>
+        <div style={{ display: 'flex', gap: 9, padding: '11px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 12, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.5 }}>
+          <Icon name="shield" size={16} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div><b>Important:</b> you will hold the sign-in code for every account you create here. Anyone with a sign-in code can use that person’s account and read their messages.
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}><li>Print the slips and hand them out individually</li><li>Don’t keep copies of the slips</li><li>Shred any unclaimed slips</li></ul>
+            A member can later ask you to reconnect them to a key they made themselves — but anything already sealed to this one stays readable by whoever kept the slip.</div>
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>You’re about to create {entries.length} account{entries.length === 1 ? '' : 's'}{ekids.length ? ` — ${entries.length - ekids.length} adult${entries.length - ekids.length === 1 ? '' : 's'}, ${ekids.length} child${ekids.length === 1 ? '' : 'ren'}` : ''}.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6, maxHeight: 180, overflowY: 'auto', marginBottom: 10 }}>
+          {entries.filter(r => !r.isChild).map(r => r.name).join(', ')}
+          {ekids.length ? <div style={{ marginTop: 6 }}><b>Children:</b> {ekids.map(r => r.name).join(', ')}</div> : null}
+        </div>
+        {err ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 10 }}>{err}</div> : null}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={() => { setStage('input'); setErr(''); }} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Back</button>
+          <button onClick={run} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11 }}>Create {entries.length} account{entries.length === 1 ? '' : 's'}</button>
+        </div>
+      </React.Fragment> : null}
+      {stage === 'running' ? <React.Fragment>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Creating accounts… {progressLog.length} of {entries.length}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 240, overflowY: 'auto' }}>
+          {progressLog.map((p, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{p.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{p.current}</span>{!p.ok && p.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{p.reason}</span> : null}</div>)}
+        </div>
+      </React.Fragment> : null}
+      {stage === 'done' ? (() => {
+        const ok = (results || []).filter(r => r.ok), failed = (results || []).filter(r => !r.ok);
+        return <React.Fragment>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{ok.length} account{ok.length === 1 ? '' : 's'} created{failed.length ? ` · ${failed.length} failed` : ''}.</div>
+          {err ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 8 }}>{err}</div> : null}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 10 }}>
+            {(results || []).map((r, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{r.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{r.name}{r.isChild ? ' (child)' : ''}</span>{!r.ok && r.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{r.reason}</span> : null}</div>)}
+          </div>
+          {closing ? <SkConfirm icon="shield" title="Close without printing?" confirmLabel={cleaning ? 'Withdrawing…' : 'Close anyway'}
+            body={'You haven’t printed the slips. If you close now, nobody will ever have these accounts’ sign-in codes — so the ' + (results || []).filter(r => r.attempted).length + ' account(s) just made will be withdrawn from your church’s relays.'}
+            busy={cleaning} onConfirm={closeAnyway} onCancel={() => { if (!cleaning) setClosing(false); }} /> : null}
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={requestClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>{printed ? 'Done' : 'Close'}</button>
+            <button onClick={print} disabled={!ok.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: ok.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> {printed ? 'Print again' : ('Print ' + ok.length + ' slip' + (ok.length === 1 ? '' : 's'))}</button>
+          </div>
+        </React.Fragment>;
+      })() : null}
+    </CkModal>
+  );
+}
+window.SetupAccountsModal = SetupAccountsModal;
+
 // Survives DashMembers unmounting when the steward leaves the Members tab — see the back-fill effect below.
 // (These files are classic scripts sharing ONE global scope, so this name must stay unique across app/*.jsx;
 // scripts/bundle-free-globals.test.mjs is the guard.)
@@ -8916,6 +9145,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const joinNarrow = useStewNarrow();                       // the two-row join card (phones only)
   const [moreFor, setMoreFor] = React.useState(null);       // whose ⋯ sheet (StewMemberSheet) is open, by pubkey
   const [bulkOpen, setBulkOpen] = React.useState(false);   // bulk-invite (print join slips) — bring a congregation across
+  const [setupOpen, setSetupOpen] = React.useState(false); // Set up accounts — pre-minted keys handed over as sign-in slips
   // safeguarding (child marking, youth clearance, parent links) is OWNER-ONLY at the relay — a delegated
   // steward's writes are rejected. Hide those actions when acting as someone else's steward, so the UI
   // matches the relay instead of silently no-op'ing. (Pills stay visible so they can still SEE the state.)
@@ -9552,7 +9782,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
               );
   };
   return (
-    <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below). "Set up accounts" reverses that decision for the pre-minted flow (owner, plan v3 2026-11-20). */}<button onClick={() => setSetupOpen(true)} className="sk-btn sk-btn--ghost" title="Create ready-made accounts and print their sign-in slips" style={{ padding: '5px 11px', fontSize: 12 }}><Icon name="qr" size={13} color="currentColor" /> Set up accounts</button><SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* 3fr, NOT 2fr (owner, 2026-10-13). The ratio is load-bearing, not taste: at 1280x900 the member row
           needs 671.5px of content to put the avatar, the whole name, the controls and copy + Block on one line,
           and 2fr gave it 594px — which cut "Persephone Wilde" to 104.5px and the @handle to 0px. 3fr gives
@@ -9746,6 +9976,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       {linkChild ? <GuardianLinkModal child={linkChild} childName={nameByPub[linkChild]} members={members} guardians={guardians} minorsSet={minorsSet} onLink={linkParent} onUnlink={unlinkParent} onClose={() => setLinkChild(null)} /> : null}
       {reseatFor ? <ReseatModal member={reseatFor} memberName={nameByPub[reseatFor] || 'this member'} realName={nameByPub[reseatFor] || ''} isMinor={minorsSet.has(reseatFor)} admittedList={admittedList} onClose={() => setReseatFor(null)} /> : null}
       {bulkOpen ? <BulkInviteModal onClose={() => setBulkOpen(false)} /> : null}
+      {setupOpen ? <SetupAccountsModal onClose={() => setSetupOpen(false)} sg={sg} kidPhotosAllowed={kidPhotosAllowed} nameByPub={nameByPub} delegated={delegated} /> : null}
     </Panel>
   );
 }
