@@ -8182,8 +8182,14 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   const childrenBlocked = delegated
     ? 'Only the main steward can set up children’s accounts — the relay only accepts the children’s list from the church’s own key.'
     : (!authed ? 'Mark children once this console has connected to your church’s relay — until then a child’s protection couldn’t be saved, so children’s accounts are not offered.' : '');
+  // THE MARK IS THE STEWARD'S, NOT OURS (reference/DOMAIN.md: mechanism, not policy) — so a console that
+  // cannot SAVE a child's mark (helper key, or not yet authed) must never silently unmake it: a CSV child
+  // column dropped here would publish those children as ADULTS. Marked rows keep their mark on screen and
+  // are LEFT OUT of the batch instead; the banner below says so, and the confirm step repeats it.
   const rows = names.split('\n').map(n => n.trim()).filter(Boolean).slice(0, 200)
-    .map(n => ({ name: n, isChild: !childrenBlocked && !!childMarks[n] }));
+    .map(n => ({ name: n, isChild: !!childMarks[n], blocked: !!childrenBlocked && !!childMarks[n] }));
+  const blockedKids = rows.filter(r => r.blocked);
+  const eligible = rows.filter(r => !r.blocked);
   const existingLower = React.useMemo(() => new Set(Object.values(nameByPub || {}).map(n => String(n).toLowerCase())), [nameByPub]);
   const dupInBatch = (() => { const seen = new Set(), d = new Set(); rows.forEach(r => { const k = r.name.toLowerCase(); if (seen.has(k)) d.add(k); seen.add(k); }); return d; })();
   const onFile = (e) => {
@@ -8206,9 +8212,9 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     return () => window.removeEventListener('beforeunload', h);
   }, [stage, results, printed]);
   const toConfirm = () => {
-    if (!rows.length) return;
+    if (!eligible.length) return;
     setErr('');
-    setEntries(rows.map(r => ({ ...r, mnemonic: window.Steward.mintAccountKey() })));   // minted ONCE; retry re-uses these
+    setEntries(eligible.map(r => ({ name: r.name, isChild: r.isChild, mnemonic: window.Steward.mintAccountKey() })));   // minted ONCE; retry re-uses these
     setStage('confirm');
   };
   const run = async () => {
@@ -8289,6 +8295,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
         <GoPublicNote gate={gate} />
         <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Create ready-made accounts — one, or a whole list. Each person gets a printed <b>sign-in slip</b>: they scan it with “Someone set this up for me” and they’re in, named and joined, nothing to type.</div>
         {!authed && !delegated ? <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div>This console hasn’t finished connecting to your church’s relay. Accounts made now aren’t let in by you — in a church that approves joiners they will wait in the join queue — and children’s accounts can’t be made yet.</div></div> : null}
+        {blockedKids.length ? <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--clay-soft)', border: '1px solid var(--clay)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="var(--clay-ink)" style={{ flexShrink: 0, marginTop: 1 }} /><div><b>{blockedKids.length === 1 ? '1 name in your list is' : blockedKids.length + ' names in your list are'} marked as children, and will be left out.</b> {childrenBlocked}</div></div> : null}
         <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
           <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>
           <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{rows.length} name{rows.length === 1 ? '' : 's'}{rows.length ? ` · ${kids.length} child${kids.length === 1 ? '' : 'ren'}` : ''}</span>
@@ -8300,6 +8307,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
               {existingLower.has(r.name.toLowerCase()) ? <span title="A member with this name already exists — you can still continue" style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>already a member?</span> : null}
               {dupInBatch.has(r.name.toLowerCase()) ? <span title="This name appears more than once in your list" style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>duplicate</span> : null}
+              {r.blocked ? <span title={childrenBlocked} style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>left out</span> : null}
               <button onClick={() => setChildMarks(m => ({ ...m, [r.name]: !m[r.name] }))} disabled={!!childrenBlocked} title={childrenBlocked || 'Mark this account as a young person’s — their protection is saved before the account is made'}
                 style={{ flexShrink: 0, border: '1px solid ' + (r.isChild ? 'var(--clay)' : 'var(--line)'), background: r.isChild ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: r.isChild ? 'var(--clay-ink)' : 'var(--ink-2)', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, fontWeight: 700, cursor: childrenBlocked ? 'not-allowed' : 'pointer', opacity: childrenBlocked ? 0.5 : 1, fontFamily: 'var(--font-ui)' }}>{r.isChild ? 'Child ✓' : 'Child?'}</button>
             </div>
@@ -8307,7 +8315,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
         </div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
           <button onClick={requestClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Cancel</button>
-          <button onClick={toConfirm} disabled={!rows.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: rows.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Continue with {rows.length || ''}</button>
+          <button onClick={toConfirm} disabled={!eligible.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: eligible.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Continue with {eligible.length || ''}</button>
         </div>
       </React.Fragment> : null}
       {stage === 'confirm' ? <React.Fragment>
@@ -8322,6 +8330,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
           {entries.filter(r => !r.isChild).map(r => r.name).join(', ')}
           {ekids.length ? <div style={{ marginTop: 6 }}><b>Children:</b> {ekids.map(r => r.name).join(', ')}</div> : null}
         </div>
+        {blockedKids.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}><b>Left out (marked as children):</b> {blockedKids.map(r => r.name).join(', ')}. {childrenBlocked}</div> : null}
         {err ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 10 }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={() => { setStage('input'); setErr(''); }} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Back</button>

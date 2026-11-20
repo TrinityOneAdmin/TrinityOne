@@ -345,6 +345,9 @@ function loadModal({ steward, gate, skPrintableLog }) {
     Icon: () => null,
     useGoPublicGate: () => gate || { blocking: false },
     churchMarkDataUrl: async () => '',
+    // Node has no FileReader; a synchronous stand-in lets a test drive the REAL onFile -> parseAccountsCsv
+    // -> childMarks path instead of poking state. The fake file carries its text as `__csv`.
+    FileReader: class { readAsText(f) { this.result = String((f && f.__csv) || ''); if (this.onload) this.onload(); } },
     window: {
       Steward: steward,
       addEventListener: () => {}, removeEventListener: () => {},
@@ -471,6 +474,65 @@ test('POINT OF USE: a helper console offers no child toggle it can use', async (
   assert.ok(toggles.length, 'the toggle should render (disabled), so the reason can sit in its tooltip');
   assert.ok(toggles.every(b => b.props.disabled), 'the relay only accepts the children’s list from the church key — a helper’s toggle must be disabled');
   assert.ok(toggles.some(b => /main steward/.test(b.props.title || '')), 'and the tooltip must say why');
+});
+
+// ── a CSV's child marks on a console that cannot save them: said and left out, never silently adults ─────
+const MARKED_CSV = 'name,child\nAna Adult,\nLittle Ben,yes\nLittle Cara,yes';
+const feedCsv = (tree, csv) => {
+  const fi = find(tree, n => n.type === 'input' && n.props && n.props.type === 'file');
+  assert.ok(fi.length, 'the CSV import input is gone from the modal');
+  fi[0].props.onChange({ target: { files: [{ __csv: csv }] } });
+};
+
+test('POINT OF USE: a blocked console (helper, or unauthed) LEAVES OUT CSV-marked children — never creates them as adults', async () => {
+  for (const variant of ['helper', 'unauthed']) {
+    const log = [];
+    const steward = stewardSpy(log);
+    if (variant === 'unauthed') steward.relayAuthed = () => false;
+    const { draw, load } = loadModal({ steward });
+    const { SetupAccountsModal } = await load;
+    const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: false, nameByPub: {}, delegated: variant === 'helper' };
+    let tree = draw(SetupAccountsModal, props);
+    feedCsv(tree, MARKED_CSV);
+    tree = draw(SetupAccountsModal, props);
+    const all = texts(tree).join(' ');
+    assert.ok(/marked as children, and will be left out/.test(all),
+      variant + ': dropping a file’s child marks must be SAID on screen, not silent — the mark is the steward’s, this console just cannot save it');
+    assert.equal(button(tree, 'Child ✓').length, 2, variant + ': the file’s marks must stay VISIBLE on their rows');
+    assert.equal(find(tree, n => n.type === 'span' && texts(n).includes('left out')).length, 2, variant + ': each excluded row must say so');
+    const cont = button(tree, 'Continue with');
+    assert.ok(cont.length && texts(cont[0]).join(' ').includes('1'), variant + ': the batch must count ONLY the unmarked rows');
+    press(tree, 'Continue with');
+    tree = draw(SetupAccountsModal, props);
+    assert.ok(/Left out \(marked as children\):\s+Little Ben, Little Cara/.test(texts(tree).join(' ')),
+      variant + ': the confirm step must state the exclusion by name');
+    await press(tree, 'Create');
+    const call = log.find(l => l[0] === 'createMemberAccounts');
+    assert.ok(call, variant + ': control — the adult row must still go through');
+    assert.deepEqual(call[1], [{ name: 'Ana Adult', isChild: false, hasKey: true }],
+      variant + ': ONLY unmarked rows may reach the engine — a CSV-marked child created as an adult is the I3 gap');
+  }
+});
+
+test('POINT OF USE: the same CSV on an authed main console creates the marked children AS children (control)', async () => {
+  const log = [];
+  const steward = stewardSpy(log);
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  feedCsv(tree, MARKED_CSV);
+  tree = draw(SetupAccountsModal, props);
+  assert.ok(!/left out/.test(texts(tree).join(' ')), 'nothing is excluded on a console that can save the marks');
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  const call = log.find(l => l[0] === 'createMemberAccounts');
+  assert.deepEqual(call[1], [
+    { name: 'Ana Adult', isChild: false, hasKey: true },
+    { name: 'Little Ben', isChild: true, hasKey: true },
+    { name: 'Little Cara', isChild: true, hasKey: true },
+  ], 'the file’s marks must arrive at the engine as CHILD entries');
 });
 
 // ── reachability (existence only — the behaviour above is proved by DRIVING the real modal) ──────────────
