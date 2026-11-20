@@ -22800,6 +22800,26 @@ zoo`.split("\n");
     signerPub() {
       return _myOwnPub();
     },
+    // WHERE DID MY LAST WRITE LAND? The honest-partial surface for this console's own replaceable documents
+    // (sim 2026-11-20, fixes F3/F7): _publishToRelays records per-relay spread for every write (_noteSpread);
+    // this exposes the one the caller names, beside the CONFIGURED relay list (relaysRaw). The distinction the
+    // callers need: a relay that is DOWN leaves relays() entirely, so it appears in neither `landed` nor
+    // `missed` — only `configured` still remembers it, which is exactly the outage the N-of-M lines exist to
+    // say out loud. `landed: null` = this console has not written that document this session.
+    // CALLERS: approveGuardian (app/stew-dashboard.jsx, honest-partial wording) and the two child-mark success
+    // surfaces (toggleMinor's notice + SetupAccountsModal's done state).
+    writeSpread(which) {
+      const d = which === "guardians" ? GUARDIANS_D + pub : which === "minors" ? MINORS_D + pub : "";
+      if (!d) return null;
+      let configured = [];
+      try {
+        configured = relaysRaw().slice();
+      } catch (e) {
+        configured = [];
+      }
+      const s = _spreadOf(d);
+      return s ? { landed: s.landed, missed: s.missed, configured, at: s.at } : { landed: null, missed: null, configured, at: 0 };
+    },
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
     // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
     // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console

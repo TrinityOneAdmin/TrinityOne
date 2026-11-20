@@ -753,3 +753,41 @@ test('both IdentityOnboarding render sites pass followChurch', () => {
   const sites = APP.match(/<IdentityOnboarding[^>]*followChurch=\{followChurch\}/g) || [];
   assert.equal(sites.length, 2, 'BOTH IdentityOnboarding render sites must pass followChurch, or the scan route silently stops following (the saveIdentity lesson)');
 });
+
+test('POINT OF USE: a batch that created a CHILD while a configured relay was away says so on the done screen (F7)', async () => {
+  const log = [];
+  const steward = { ...stewardSpy(log), writeSpread: (which) => which === 'minors'
+    ? { landed: ['ws://a/relay'], missed: [], configured: ['ws://a/relay', 'ws://b/relay'], at: 1 } : null };
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: false, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  typeNames(tree, 'Olive Oak');
+  tree = draw(SetupAccountsModal, props);
+  press(tree, 'Child?');
+  tree = draw(SetupAccountsModal, props);
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  tree = draw(SetupAccountsModal, props);
+  const all = texts(tree).join(' ');
+  assert.match(all, /reached 1 of your 2 relay machines/,
+    'the owner’s N-of-M line is missing from the batch done screen — a child made in an outage stays silent (sim D3)');
+  assert.match(all, /back and in sync/);
+});
+
+test('POINT OF USE: an adults-only batch with the same gap stays quiet — the line is about children (F7 control)', async () => {
+  const log = [];
+  const steward = { ...stewardSpy(log), writeSpread: () => ({ landed: ['ws://a/relay'], missed: [], configured: ['ws://a/relay', 'ws://b/relay'], at: 1 }) };
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: false, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  typeNames(tree, 'Adam Ash');
+  tree = draw(SetupAccountsModal, props);
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  tree = draw(SetupAccountsModal, props);
+  assert.doesNotMatch(texts(tree).join(' '), /relay machines/, 'the child line fired for a batch with no children');
+});
