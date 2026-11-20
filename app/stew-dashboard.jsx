@@ -2777,7 +2777,7 @@ function StewDashboard({ initial = 'overview' }) {
     return (
       <ConsoleChrome accentStyle={accentStyle}>
         {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
-        {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
+        {posting ? (stewNetView(church) ? <NetworkHeaderPostModal onClose={() => setPosting(false)} /> : <NewPostModal onClose={() => setPosting(false)} />) : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
         {netView ? null : <React.Fragment><JoinNotifier /><KeyDistributor /></React.Fragment>}
@@ -2825,7 +2825,7 @@ function StewDashboard({ initial = 'overview' }) {
   return (
     <ConsoleChrome accentStyle={accentStyle}>
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
-      {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
+      {posting ? (stewNetView(church) ? <NetworkHeaderPostModal onClose={() => setPosting(false)} /> : <NewPostModal onClose={() => setPosting(false)} />) : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
       <RelayPanelHost />
@@ -3687,6 +3687,26 @@ function JoinModal({ onClose }) {
 }
 
 // post a signed announcement to the church (kind-1), targeting a broadcast room
+// THE HEADER'S "New post" IN NETWORK VIEW (sim 2026-11-20 D1). It opened the generic NewPostModal, whose
+// publishPost emits a kind-1 signed by the ACTIVE key — in network view that is the NETWORK key, and the
+// relay refuses it ("not a member or not permitted for this group"): the legacy cleartext net-announce path
+// was RETIRED by the N5a port, and network content is the SEALED kind-30078 netann:/netevent: documents
+// that publishNetworkPost writes. So in network view the header button opens the network composer — the
+// same NetworkAnnounceComposer the Settings network panel uses — and the church view keeps NewPostModal
+// byte-for-byte as it was. CLIENT ROUTING ONLY; the relay's acceptance is deliberately unchanged (rule 10 —
+// accepting network-key kind-1s would re-open the retired cleartext door).
+function NetworkHeaderPostModal({ onClose }) {
+  const dlgRef = useStewDialog(onClose, true);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', overflowY: 'auto' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Post to the network" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '93%', maxHeight: '90%', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, marginBottom: 6 }}>Post to the network</div>
+        <NetworkAnnounceComposer />
+        <div style={{ display: 'flex', marginTop: 14 }}><button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Close</button></div>
+      </div>
+    </div>
+  );
+}
 function NewPostModal({ onClose }) {
   const groups = window.useStewardGroups();
   const targets = groups;   // post to any chat group or team (not only Announcements)
