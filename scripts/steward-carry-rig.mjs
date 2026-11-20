@@ -104,6 +104,15 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     // the console's group list as subscribeGroups last emitted it, and whether that list is a genuine read (2026-11-19: the
     // carry asks it whether the church's care team still exists). Not loaded unless a test says so.
     _lastGroups: { cp: '', list: null }, _listIsFresh: (l) => !!(l && l._fresh),
+    // what publish() records (F1 round): _lastOk = the created_at of the last copy a relay ACCEPTED per d-tag; _lastStamp =
+    // the last stamp this console used. The admission gate's proved keys (none unless a test proves one) and a
+    // localStorage of the console's own — the liveNewest memory lives there (owner answer s).
+    _lastOk: new Map(), _lastStamp: new Map(), _gate: { provedKey: () => '' },
+    // the CONFIGURED relay list (relaysRaw): every one must be admitted AND remembered for rule (k) — by default the same as relays()
+    relaysRaw: () => scope.relays(),
+    _ls: new Map(), lsGet: (k) => (scope._ls.has(k) ? scope._ls.get(k) : null), lsSet: (k, v) => { scope._ls.set(k, String(v)); },
+    localStorage: { getItem: (k) => (scope._ls.has(k) ? scope._ls.get(k) : null), setItem: (k, v) => { scope._ls.set(k, String(v)); }, removeItem: (k) => { scope._ls.delete(k); } },
+    fetch: (...a) => fetch(...a), AbortController,
     _reCheckCareKeyPending: () => {}, _webQueueSync: () => {},
     // the console's register of its writes in flight, per document (_publishToRelays / publish fill it on the real console)
     _pubLatest: new Map(),
@@ -117,7 +126,13 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     now: () => Math.floor(Date.now() / 1000), _sha256hex,
     relays: () => [relayUrl], pool, _keyReadAuthedOn: (u) => pool.authedOn(u),
     sent: [], refused: '',
-    publish: async (evt) => { scope.sent.push(evt); const [ok, why] = await publishTo(evt); if (!ok) scope.refused = why; return ok ? evt : false; },
+    publish: async (evt, opts) => {
+      scope.sent.push(evt); const [ok, why] = await publishTo(evt);
+      const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
+      if (!ok) { scope.refused = why; try { if (opts && typeof opts === 'object') opts.reason = why; } catch {} return false; }
+      if (d) scope._lastOk.set(d, evt.created_at || 0);
+      return evt;
+    },
     _publishToRelays: async (evt) => { scope.sent.push(evt); const [ok, why] = await publishTo(evt); if (!ok) scope.refused = why; return ok ? evt : null; },
     window: { Steward: {}, dispatchEvent: () => true },
     CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
@@ -146,11 +161,14 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
   // ROUND 2 (2026-11-19, plan PLAN-removed-steward-fixes-F1-F4): Block of a current helper (owner answer l) and the
   // landed side effects Remove and Block share. Lifted WHEN THE BUNDLE HAS THEM, so the Step 0 tests run on the tree
   // before the fix (where the screen still calls carryOverStewardDocs + setBlocked) and on the fixed one alike.
-  const OPT_TOPS = [['async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval'], ['function _blockStewardKeeping(pk, blockedList, opts) {', '_blockStewardKeeping'], ['function _stewardSinceOf(who) {', '_stewardSinceOf']]
+  const OPT_TOPS = [['async function _settleStewardRemoval(who, o) {', '_settleStewardRemoval'], ['function _blockStewardKeeping(pk, blockedList, opts) {', '_blockStewardKeeping'], ['function _stewardSinceOf(who) {', '_stewardSinceOf'],
+    // F1 round: which relays run the newest-wins build (owner answer s)
+    ['function _liveNewestKey(url, key) {', '_liveNewestKey'], ['function _liveNewestRemembered(url) {', '_liveNewestRemembered'],
+    ['function _relaysAllLiveNewest(urls) {', '_relaysAllLiveNewest'], ['async function _relayLiveNewest(url) {', '_relayLiveNewest']]
     .filter(([a]) => STEWARD.includes(a));
   for (const [a] of OPT_TOPS) tops.push(fnBody(STEWARD, a, a));
   const optNames = OPT_TOPS.map(([, n]) => n);
-  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = ', ...['var SWAP_QUIET_MS = ', 'var SWAP_READ_CAP_MS = ', 'var SWAP_FIND_LIMIT = '].filter(a => STEWARD.includes(a))].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
+  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = ', 'var LIVE_NEWEST_LS = ', 'var STEWARD_CARRY_RULE = ', ...['var SWAP_QUIET_MS = ', 'var SWAP_READ_CAP_MS = ', 'var SWAP_FIND_LIMIT = '].filter(a => STEWARD.includes(a))].filter(a => STEWARD.includes(a)).map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
   const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {', 'blockStewardKeeping(pk, blockedList, opts) {']

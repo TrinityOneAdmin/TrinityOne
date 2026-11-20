@@ -2279,6 +2279,57 @@ function _relayInfo(wssUrl) {
   _relayInfoCache.set(wssUrl, p);
   return p;
 }
+// DOES THIS RELAY RUN THE NEWEST-WINS BUILD? (owner answers p and s, 2026-11-19; plan §0c (s), §0d H-s). A removed
+// helper's settings are carried from a PARTIAL answer (owner answer k: one box asleep) only once EVERY relay in relays()
+// has said, in its NIP-11 `trinityone` block, that it keeps only the newest copy at an address (liveNewest); until then
+// the carry keeps the strict rule. An unauthenticated claim — it decides how cautious the carry is, never admission
+// (rule 10); a relay lying about it harms only its own copies.
+//   · probed for every relay in relays() at console start and whenever a relay comes back (steward-relay-returned);
+//     _relayInfo is NOT used — it caches a failure for the page's life, and this must be retried;
+//   · a positive answer is REMEMBERED (localStorage) under the relay's URL AND the identity key the admission proof
+//     established for it (_gate.provedKey) — a different box answering at that address does not inherit it; no proved key
+//     = nothing remembered;
+//   · no answer (down, asleep, timeout) changes nothing — a relay silent NOW that said yes before still counts as yes;
+//   · an answer WITHOUT the field, or without a trinityone block at all, clears it (a box downgraded, once next seen up);
+//   · the carry counts EVERY CONFIGURED relay (relaysRaw), not only the proved ones: one that is configured but not
+//     admitted, or admitted but not remembered, means the strict rule (Fable audit MED-1; it dials nothing new);
+//   · read synchronously at carry time: _relaysAllLiveNewest(urls).
+// Stated limit: a relay at a URL path other than /relay never answers (NIP-11 is served there only) → strict.
+const LIVE_NEWEST_LS = 'trinityone.steward.livenewest:';
+function _liveNewestKey(url, key) { return LIVE_NEWEST_LS + String(url || '').replace(/\/+$/, '') + '|' + key; }
+function _liveNewestRemembered(url) {
+  let key = ''; try { key = _gate.provedKey(url, pub); } catch (e) { key = ''; }
+  if (!key) return false;
+  try { const v = JSON.parse(lsGet(_liveNewestKey(url, key)) || 'null'); return !!(v && v.liveNewest === 2); } catch (e) { return false; }
+}
+function _relaysAllLiveNewest(urls) { return Array.isArray(urls) && urls.length > 0 && urls.every(_liveNewestRemembered); }
+async function _relayLiveNewest(url) {
+  let info = null;
+  try {
+    const httpUrl = String(url).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/+$/, '');
+    const ctrl = new AbortController(); const to = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
+    info = await Promise.race([
+      (async () => { const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' }, signal: ctrl.signal }); return res.ok ? res.json() : null; })(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('relay-info timeout')), 6500)),
+    ]);
+    clearTimeout(to);
+  } catch (e) { info = null; }
+  if (!info || typeof info !== 'object') return null;   // no answer: nothing changes
+  const tri = (info.trinityone && typeof info.trinityone === 'object') ? info.trinityone : {};   // no trinityone block: a no
+  let key = ''; try { key = _gate.provedKey(url, pub); } catch (e) { key = ''; }
+  if (!key) return null;
+  const k = _liveNewestKey(url, key);
+  // the build is not stored: nothing would read it back (Fable audit NIT); a downgrade is caught by its next answer
+  // 2 = newest-wins + the void floor + (bb)/(cc); a 3dc90605-era box answers 1 and keeps the strict rule (plan 0e rev 8)
+  if (tri.liveNewest === 2) { lsSet(k, JSON.stringify({ liveNewest: 2, at: now() })); return true; }
+  try { localStorage.removeItem(k); } catch (e) {}
+  return false;
+}
+function _probeLiveNewestAll() { let urls = []; try { urls = relays(); } catch (e) { urls = []; } for (const u of urls) _relayLiveNewest(u).catch(() => {}); }
+try {
+  setTimeout(_probeLiveNewestAll, 3000);
+  window.addEventListener('steward-relay-returned', () => { setTimeout(_probeLiveNewestAll, 3000); });
+} catch (e) {}
 // find relays that OFFERED to host new churches: enforcing + open + not full + reachable. Ranked region-first,
 // then lightest load. Empty when nothing is open (e.g. the pilot today, where a8 doesn't advertise an offer).
 // bootstrap discovery seed: relays to PROBE for offers that a new church doesn't already know. Kept small +
@@ -8009,6 +8060,26 @@ const STEWARD_CARRY = Object.freeze({
     'finance/',                 // single-writer, sequence-pinned; the relay and console keep them anyway
   ]),
 });
+// WHICH CARRIED TYPES MAY BE KEPT FROM A PARTIAL ANSWER (owner answer u, 2026-11-19, after the Fable audit of the F1
+// round). Rule (k) — the church's copy dated one second after theirs, carried while a box is silent — is safe only where
+// BOTH the relay and the readers keep the newest copy at an address, so a later change sitting on the silent box still
+// wins when it wakes. Every carried type is in exactly one list (removing-a-steward-round-2.test.mjs checks it):
+//   newest  relay map newest-wins (group, roster, meals-settings — gateway LIVE_AT; rota-settings — ROTA_VIS by ts) or no
+//           relay map at all, and every reader newest-first (the shared document store, or its own newest check)
+//   strict  a relay map or a reader that still follows the last arrival — not carried while any relay is silent, listed
+// Until their maps/readers are made newest-wins in a later branch, the strict ones keep the strict rule.
+const STEWARD_CARRY_RULE = Object.freeze({
+  newest: Object.freeze([
+    'trinityone/group:', 'trinityone/category:', 'trinityone/service:', 'trinityone/room:', 'trinityone/booking:',
+    'trinityone/runsheet:', 'trinityone/rota:', 'trinityone/roster:', 'trinityone/msgtags', 'trinityone/rota-settings',
+    'trinityone/verse-prompt', 'trinityone/pinsermon:', 'trinityone/pin:', 'trinityone/hidden:', 'trinityone/reseat:',
+    'trinityone/careteam:', 'trinityone/meals-settings', 'trinityone/carereqstatus:',
+  ]),
+  strict: Object.freeze([
+    'trinityone/joinpolicy:', 'trinityone/nophoto:', 'trinityone/sermon:', 'trinityone/plan:', 'trinityone/devotional:',
+    'trinityone/event:', 'trinityone/care:', 'trinityone/request:',
+  ]),
+});
 // d-tags with no id or church suffix: the SAME string in every church, so another church's own (untagged) copy is
 // not a copy of this one's
 const _CARRY_BARE = ['trinityone/rota-settings', 'trinityone/verse-prompt', 'trinityone/meals-settings', 'trinityone/msgtags'];
@@ -8056,7 +8127,7 @@ async function _carryTemplate(S, blocked, who, pre) {
   if (!dead && d.startsWith('trinityone/careteam:')) {
     let body; try { body = JSON.parse(content); } catch (e) { return { skip: 'unreadable' }; }
     if (!body || typeof body !== 'object' || !Array.isArray(body.pubs)) return { skip: 'unreadable' };
-    // read ONCE by the carry, bounded inside its limit (pre.minors) — a read that never answers must not hold the removal
+    // read ONCE by the carry before its read deadline (pre.minors) so it cannot eat the publish window (plan R-L1)
     const m = (pre && 'minors' in pre) ? pre.minors : ((window.Steward && window.Steward.readMinors) ? await window.Steward.readMinors() : null);
     if (!m || !m.known) return { skip: 'children-unread' };
     const minors = new Set((m.list || []).map(p => String(p || '').toLowerCase()));
@@ -8097,18 +8168,32 @@ async function _carryOverStewardDocs(pk, opts) {
   const out = { carried: [], notCarried: [], superseded: [], refused: '' };
   if (actingChurch) { out.refused = 'delegated'; return out; }   // the relay accepts the roster and blocklist from the church only
   if (!sk || !pub || !/^[0-9a-f]{64}$/.test(who) || who === pub) { out.refused = 'no-key'; return out; }
-  const deadline = Date.now() + ((typeof o.limitMs === 'number' && o.limitMs > 0) ? o.limitMs : STEWARD_CARRY_LIMIT_MS);
+  const limit = (typeof o.limitMs === 'number' && o.limitMs > 0) ? o.limitMs : STEWARD_CARRY_LIMIT_MS;
+  const deadline = Date.now() + limit;
   const left = () => deadline - Date.now();
+  // THE LAST 5 s ARE FOR PUBLISHING (plan §2.3): every read — phase A, phase B, the children list — ends at the read
+  // deadline, and a relay still silent then is "unanswered", so a frozen box cannot starve the publish. A limit shorter
+  // than 20 s keeps a quarter of itself for publishing instead.
+  const readDeadline = deadline - Math.min(5000, Math.floor(limit / 4));
+  const readLeft = () => readDeadline - Date.now();
   const dOf = (e) => ((e && e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
   const chOf = (e) => ((e && e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
   const notC = (d, why, label) => out.notCarried.push({ d, why, label: label || _carryLabel(d, null) });
   const urls = relays();   // the proof-gated set publish() uses — no new candidates (CLAUDE.md rule 10)
   if (!urls.length) { notC('', 'no-relay', 'anything they set up (no relay could be reached)'); return out; }
+  // OWNER ANSWERS (k) and (s): carry from the relays that answered only once EVERY relay is remembered as running the
+  // newest-wins build (_relaysAllLiveNewest); otherwise the strict rule — every relay must answer a slice completely.
+  const _rk = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  let configured = []; try { configured = relaysRaw(); } catch (e) { configured = []; }
+  if (!Array.isArray(configured) || !configured.length) configured = urls;
+  const admitted = new Set(urls.map(_rk));
+  const liveRule = configured.every(u => admitted.has(_rk(u))) && _relaysAllLiveNewest(urls);
+  const rulek = (d) => liveRule && !!_carryPrefix(d, STEWARD_CARRY_RULE.newest);   // owner answer (u): only these types
   // ONE question to ONE relay: what it sent, and whether it FINISHED — an EOSE inside the limit, on a socket the relay
   // accepted the church's login on (an unauthenticated read is answered with the private documents withheld).
-  const ask = (url, filter) => new Promise((resolve) => {
+  const ask = (url, filter, until) => new Promise((resolve) => {
     const evs = []; let done = false, sub = null;
-    const ms = left();
+    const ms = Math.min(readLeft(), until ? until - Date.now() : Infinity);
     const finish = (complete) => {
       if (done) return; done = true;
       try { if (sub) sub.close(); } catch (e) {}
@@ -8119,8 +8204,12 @@ async function _carryOverStewardDocs(pk, opts) {
     try { sub = pool.subscribeMany([url], [filter], { onevent(e) { evs.push(e); }, oneose() { finish(true); }, maxWait: ms + 5000 }); }
     catch (e) { finish(false); return; }
     if (done) { try { sub.close(); } catch (e) {} }
-    setTimeout(() => finish(false), ms);
+    setTimeout(() => { if (!done) silent.add(url); finish(false); }, ms);
   });
+  // A RELAY THAT RAN OUT THE CLOCK ONCE IS NOT WAITED ON AGAIN (Fable audit MED-2): every later question to it is answered
+  // "unanswered" at once, so one frozen box cannot cut a helper with more than 60 documents down to the first slice.
+  const silent = new Set();
+  const askOrSilent = (url, filter, until) => (silent.has(url) ? Promise.resolve({ evs: [], complete: false }) : ask(url, filter, until));
   const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
   // OWNER ANSWER (j), 2026-11-18: a care-team list is carried only if its author HELD 'care' when removed — phones (and the
   // relay) already ignored the list of a steward without it, so carrying it would switch back on a list the owner had
@@ -8174,13 +8263,21 @@ async function _carryOverStewardDocs(pk, opts) {
   // PHASE A — what did they write? Paged backwards; `until` is inclusive, so pages are deduped by id and paging stops
   // when a page brings nothing new (L1). A relay cut short by the limit or the page cap is incomplete.
   let readAll = true;
+  // phase A gets HALF of what is left for reading, so a relay that never answers cannot leave phase B nothing (§2.3)
+  const phaseAUntil = Date.now() + Math.max(0, Math.floor(readLeft() / 2));
+  // THE CHILDREN LIST a carried care-team list is filtered by (R-L1), asked NOW, beside phase A, and bounded by phase A's
+  // share: its own read waits _KEY_READ_LONG_WAIT on a frozen box, which must not eat phase B (Fable audit LOW). Used only
+  // if a careteam: document turns up.
+  const minorsRead = (window.Steward && window.Steward.readMinors)
+    ? Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, phaseAUntil - Date.now())))])
+    : Promise.resolve(null);
   await Promise.all(urls.map(async (url) => {
     const ids = new Set(); let until = null;
     for (let page = 0; ; page++) {
       if (page >= 40) { readAll = false; return; }
       const f = { kinds: [30078], authors: [who], '#t': [NET], limit: 500 };
       if (until != null) f.until = until;
-      const r = await ask(url, f);
+      const r = await askOrSilent(url, f, phaseAUntil);
       let fresh = 0, oldest = until;
       for (const e of r.evs) {
         if (!e || ids.has(e.id)) continue;
@@ -8203,14 +8300,21 @@ async function _carryOverStewardDocs(pk, opts) {
     pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
   }
   if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
+  // the children list a carried care-team list is filtered by: read once, now, inside the read deadline (R-L1)
+  const pre = {};
+  if (ds.some(d => d.startsWith('trinityone/careteam:'))) { try { pre.minors = await minorsRead; } catch (e) { pre.minors = null; } }
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
-    if (left() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
+    if (readLeft() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
     // the first slice always carries the meals-settings question — see careKnown
     const asked = (i === 0 && slice.indexOf(MEALS_D_) === -1) ? [...slice, MEALS_D_] : slice;
-    const answers = await Promise.all(urls.map(u => ask(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 })));
+    // EACH SLICE GETS ITS OWN SHARE of the read time left (Fable audit MED-2): a relay that freezes during phase B cannot
+    // spend every later slice's time on this one
+    const sliceUntil = Date.now() + Math.max(0, Math.floor(readLeft() / Math.ceil((ds.length - i) / 60)));
+    const answers = await Promise.all(urls.map(u => askOrSilent(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 }, sliceUntil)));
     const whole = answers.every(a => a.complete);   // H1 wording: EVERY relay in relays() answered this slice completely
-    if (i === 0) mealsReadWhole = whole;
+    const someWhole = answers.some(a => a.complete);   // rule (k): at least ONE relay answered it completely
+    if (i === 0) mealsReadWhole = whole;   // the care team is known only from EVERY relay (batch gate) — whatever the rule
     const others = new Map();                       // d -> [{ at, church }]
     for (const a of answers) for (const e of a.evs) {
       const d = dOf(e);
@@ -8233,7 +8337,8 @@ async function _carryOverStewardDocs(pk, opts) {
     const jobs = [];
     for (const d of slice) {
       const S = mine.get(d), label = _carryLabel(d, S.content);
-      if (!whole) { notC(d, 'incomplete', label); continue; }
+      if (rulek(d) ? !someWhole : !whole) { notC(d, 'incomplete', label); continue; }
+      // a copy by anyone else at S or later, in ANY answer received — complete or partial — blocks (rule k)
       const rivals = (others.get(d) || []).filter(x => x.at >= (S.created_at || 0));
       if (rivals.length) {
         // the church itself saved it AFTER them: nothing of theirs is showing, so nothing changes back
@@ -8243,11 +8348,21 @@ async function _carryOverStewardDocs(pk, opts) {
         else notC(d, rivals.some(x => x.at === (S.created_at || 0)) ? 'tie' : 'newer', label);
         continue;
       }
+      // THE CHURCH'S COPY IS DATED EXACTLY ONE SECOND AFTER THEIRS (owner answer k): a change anyone made on a box that
+      // did not answer, after their save, is dated S+2 or later and still wins there and everywhere it syncs. This console
+      // already had a copy ACCEPTED (_lastOk — never _lastStamp, which is bumped at creation) dated after S+1: that is the
+      // church's own newer edit, not something of theirs to keep. Exactly S+1 is ours from an earlier attempt: re-signed
+      // (same content and tags → the same event → the relay answers duplicate) — plan 0b R-H2.
+      const S1 = (S.created_at || 0) + 1;
+      if ((_lastOk.get(d) || 0) > S1) { out.superseded.push(d); continue; }
       const cd = heldCare ? '' : careDoc(d);
       if (cd === 'care') { notC(d, 'no-care', 'the care team list (they no longer had the Care permission)'); continue; }
       if (cd === 'unknown') { notC(d, 'no-care', 'a team list (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
       let from = S, teamGone = false;
       if (!heldCare && d === MEALS_D_) {
+        // the church's pointer only from a COMPLETE answer set (every relay answered the slice that read it): under rule (k)
+        // a silent box may hold the church's newer choice (Fable audit LOW), so then the "not yet read" path
+        if (!mealsReadWhole) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
         if (!churchMeals || churchMeals.adminGroupId == null) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission)'); continue; }
         // THEIR WITHDRAWN SETTING (tombstone / empty) is not carried, and listed as no-care (audit of 1fc01a16, LOW 6): a
         // church copy of the withdrawal would withdraw the church's own setting too — and with it the church's care team
@@ -8268,30 +8383,32 @@ async function _carryOverStewardDocs(pk, opts) {
         if (!tmpl || tmpl.skip) { notC(d, (tmpl && tmpl.skip) || 'error', label); return; }
         if (left() <= 0) { notC(d, 'time', label); return; }   // at the limit nothing more is published
         let ok = false, signedEv = null;
+        const po = {};
         try {
-          // STRICTLY NEWER THAN THEIRS, CHECKED ON THE SIGNED EVENT (owner, 2026-11-18, answer i). feChurch runs _monotonic,
-          // which shifts by the measured relay clock offset and can fall back at its ceiling, so what `created_at` will be
-          // is only known after signing. A copy that ties (or trails) theirs is a coin toss on phones and on a restarted
-          // relay (it replays ties in arrival order), so wait a second and sign again, a bounded number of times, inside the
-          // limit; still not newer: listed as a tie, never published.
-          let signed = feChurch(tmpl, sk);
-          for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
-            await new Promise(r => setTimeout(r, 1000));
-            signed = feChurch({ ...tmpl, created_at: now() }, sk);
-          }
-          // could not catch up: a tie when the stamps are equal, 'newer' when theirs is still ahead of every re-sign
-          if ((signed.created_at || 0) <= (S.created_at || 0)) { notC(d, (signed.created_at || 0) === (S.created_at || 0) ? 'tie' : 'newer', label); return; }
+          // SIGNED AT EXACTLY S+1, WITHOUT _monotonic (plan §2.2): _monotonic shifts by the measured relay offset (S is
+          // already in the author's relay-corrected time) and bumps past _lastStamp — a copy dated later than S+1 could
+          // overwrite a newer change on a silent box. Owner answer (i) holds by construction (S+1 > S). The church's
+          // tombstone names every copy (for:'*'), exactly as feChurch stamps it for the owner console — repeated here, not
+          // shared, because eleven test harnesses lift feChurch on its own and a helper it called would break them all.
+          const tags = (tmpl.tags || []).slice();
+          if (tags.some(t => t[0] === 'deleted') && !tags.some(t => t[0] === 'for')) tags.push(['for', '*']);
+          const signed = finalizeEvent({ ...tmpl, tags, created_at: S1 }, sk);
           signedEv = signed;
           let tm = null;
-          ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
+          ok = await Promise.race([Promise.resolve(publish(signed, po)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
           if (tm) clearTimeout(tm);
         } catch (e) { ok = false; }
+        // publish() answers on the FIRST relay that accepts (Promise.any). A "newer version already stored" refusal is told
+        // apart (plan 0b R-L2): when the newer stored copy is the church's own (publish answers it as ours, _lastOk is
+        // newer than S+1) it is superseded; anyone else's is not kept ('newer'); never "kept".
+        if (ok && ok !== 'time' && (_lastOk.get(d) || 0) > S1) { out.superseded.push(d); return; }
         if (ok && ok !== 'time') {
+          if ((_lastStamp.get(d) || 0) < S1) _lastStamp.set(d, S1);   // a later owner edit of d is stamped after it
           out.carried.push({ d, label, ev: signedEv });
           if (teamGone) (out.notes = out.notes || []).push(teamGone === 'none'
             ? 'Their care setting was kept, but your church hasn’t chosen a care team — help requests go only to you.'
             : 'Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team.');
-        } else notC(d, ok === 'time' ? 'time' : 'refused', label);
+        } else notC(d, ok === 'time' ? 'time' : (/newer version/i.test(String(po.reason || '')) ? 'newer' : 'refused'), label);
       })());
     }
     await Promise.all(jobs);
@@ -14289,12 +14406,16 @@ window.Steward = {
     // the banner. Write on SETTLE; CLEAR the seed only on a GENUINE delete (sawDelete), never a transient empty.
     const VP_KEY = 'trinityone.steward.versebanner.' + (pub || '');
     const _vpSeedRow = (v) => ({ ref: v.ref || '', schedule: Array.isArray(v.schedule) ? v.schedule : [], ts: v.ts || 0, id: v.id || '' });
-    let current = null, eosed = false, sawDelete = false;
+    let current = null, eosed = false, sawDelete = false, newest = null;   // newest: { ts, id } of the newest copy seen, live or withdrawn
     try { const c = JSON.parse(lsGet(VP_KEY) || 'null'); if (c && c.ref) current = { ref: c.ref, note: '', schedule: Array.isArray(c.schedule) ? c.schedule : [], ts: c.ts || 0, id: c.id || '' }; } catch {}
     const _vpWrite = () => { if (!eosed) return; if (!current && !sawDelete) return; try { if (current) lsSet(VP_KEY, JSON.stringify(_vpSeedRow(current))); else localStorage.removeItem(VP_KEY); } catch {} };
     if (current) cb(current);   // paint the last-known prompt instantly
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [VERSE_PROMPT_D] }, { kinds: [30078], '#church': [pub], '#d': [VERSE_PROMPT_D] }], {
       onevent(e) {
+        // NEWEST WINS, WITHDRAWALS INCLUDED (Fable audit of c9f355eb, MED-3 — the member app's reader got this in R-M1): a
+        // withdrawal cleared the prompt whatever its date, and an older live copy could then come back.
+        if (newest && (newest.ts > e.created_at || (newest.ts === e.created_at && String(newest.id || '') <= String(e.id || '')))) return;
+        newest = { ts: e.created_at, id: e.id };
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { sawDelete = true; if (current) { current = null; cb(null); } _vpWrite(); return; }
         // NEVER let an OLDER copy overwrite a newer one. On an exact same-second tie the RELAY keeps the lowest
         // event id (its replaceable-event rule), so do the same here: a tie between two DIFFERENT events (two

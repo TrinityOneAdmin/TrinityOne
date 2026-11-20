@@ -13243,6 +13243,7 @@
         };
       }
       let approval = false;
+      let policyNewest = null;
       const admittedByAuthor = /* @__PURE__ */ new Map();
       const _admittedUnion = () => {
         const all = /* @__PURE__ */ new Set();
@@ -13306,6 +13307,10 @@
           }
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
           if (d === "trinityone/joinpolicy:" + pubk) {
+            const at = e.created_at || 0, id = String(e.id || "");
+            const pv = policyNewest, pvOk = !!pv && (pv.by === pubk || !!(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(pv.by)));
+            if (pvOk && id !== pv.id && (at < pv.at || at === pv.at && !(id < pv.id))) return;
+            policyNewest = { at, id, by: e.pubkey };
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
             else {
               try {
@@ -13406,13 +13411,15 @@
         return () => {
         };
       }
-      let current = null;
+      let current = null, newest = null;
       const _trust = (e) => _churchVoice(pubk, { _by: e.pubkey });
       const stop = _onChurchDocs(pubk, {
         want: ["trinityone/verse-prompt"],
         onevent(e, d) {
           if (d !== "trinityone/verse-prompt") return;
           if (!_trust(e)) return;
+          if (newest && (newest.ts > e.created_at || newest.ts === e.created_at && String(newest.id || "") <= String(e.id || ""))) return;
+          newest = { ts: e.created_at, id: e.id };
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             if (current) {
               current = null;
@@ -13420,7 +13427,6 @@
             }
             return;
           }
-          if (current && (current.ts > e.created_at || current.ts === e.created_at && String(current.id || "") <= String(e.id || ""))) return;
           try {
             const j = JSON.parse(e.content);
             current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at, id: e.id };
@@ -14635,6 +14641,13 @@
       let _trust = () => true;
       const rosterPeople = /* @__PURE__ */ new Map();
       let openedBy = "steward", adminGroupId = "", eosed = false;
+      const _newestAt = /* @__PURE__ */ new Map();
+      const _isNewest = (k, e) => {
+        const p = _newestAt.get(k), at = e.created_at || 0, id = String(e.id || "");
+        if (p && p.id !== id && _churchVoice(pubk, { _by: p.by }) && (at < p.at || at === p.at && !(id < p.id))) return false;
+        _newestAt.set(k, { at, id, by: e.pubkey });
+        return true;
+      };
       const careTrusted = (by) => _churchVoice(pubk, { _by: by }) || openedBy === "member" || !!adminGroupId && !!rosterPeople.get(adminGroupId) && rosterPeople.get(adminGroupId).has(by);
       _trust = (rec) => careTrusted(rec && rec._by);
       const tombs = /* @__PURE__ */ new Map();
@@ -14657,7 +14670,7 @@
         // so the hub can cancel a queued emit when this handler tears down
         onevent(e, d) {
           if (d === MEALS_SETTINGS_D) {
-            if (_churchVoice(pubk, { _by: e.pubkey })) {
+            if (_churchVoice(pubk, { _by: e.pubkey }) && _isNewest("meals", e)) {
               try {
                 const c = JSON.parse(e.content || "{}");
                 openedBy = c.openedBy === "member" ? "member" : "steward";
@@ -14670,7 +14683,7 @@
             return;
           }
           if (d.startsWith(ROSTER_PFX)) {
-            if (_churchVoice(pubk, { _by: e.pubkey })) {
+            if (_churchVoice(pubk, { _by: e.pubkey }) && _isNewest("roster:" + d.slice(ROSTER_PFX.length), e)) {
               const team = d.slice(ROSTER_PFX.length);
               const set = /* @__PURE__ */ new Set();
               try {

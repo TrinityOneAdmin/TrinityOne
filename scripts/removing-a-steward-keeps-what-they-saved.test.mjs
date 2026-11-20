@@ -507,14 +507,19 @@ test('nit 5 (round 6) — a swap re-save that never answers is bounded, and the 
   assert.deepEqual(sw.failed, ['the group “Hangs”']);
 });
 
-test('nit 5 — a steward copy far ahead of the clock (the re-sign cannot catch up) is listed as "newer", not "tie"', async () => {
+// CHANGED IN THE F1 ROUND (owner answer k): the church's copy is dated EXACTLY one second after theirs, never "now", so a
+// copy ahead of the clock (within the relay's future allowance) is carried at S+1 — strictly newer by construction — where
+// it used to be listed "newer" because a now-stamped re-sign could not catch up. One beyond the allowance cannot be
+// written to the relay at all, so it never reaches a carry.
+test('nit 5 — a steward copy 30 s ahead of the clock is carried at exactly S+1 (strictly newer by construction)', async () => {
   const eng = owner(); const dana = await newSteward();
   await setRoster(eng, [dana.pub], { [dana.pub]: ['content'] });
   const d = GROUP_D + cp.slice(0, 16) + '-farahead';
-  await mustPut(raw(dana, d, { name: 'thirty seconds ahead' }, { at: Math.floor(Date.now() / 1000) + 30 }));
+  const S = await mustPut(raw(dana, d, { name: 'thirty seconds ahead' }, { at: Math.floor(Date.now() / 1000) + 30 }));
   const r = await eng._carryOverStewardDocs(dana.pub);
-  assert.equal(churchSent(eng, d).length, 0, 'a copy that is not strictly newer was published');
-  assert.deepEqual(r.notCarried.filter(x => x.d === d).map(x => x.why), ['newer']);
+  const sent = churchSent(eng, d);
+  assert.equal(sent.length, 1, JSON.stringify(r.notCarried));
+  assert.equal(sent[0].created_at, S.created_at + 1);
 });
 
 // ══ CARE NEEDS (owner answer g): carried, the skip part re-made under the church ════════════════════════════════════
