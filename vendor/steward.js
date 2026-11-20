@@ -17487,69 +17487,6 @@ zoo`.split("\n");
     _relayInfoCache.set(wssUrl, p);
     return p;
   }
-  var LIVE_NEWEST_LS = "trinityone.steward.livenewest:";
-  function _liveNewestKey(url, key) {
-    return LIVE_NEWEST_LS + String(url || "").replace(/\/+$/, "") + "|" + key;
-  }
-  async function _relayLiveNewest(url) {
-    let info = null;
-    try {
-      const httpUrl = String(url).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/+$/, "");
-      const ctrl = new AbortController();
-      const to = setTimeout(() => {
-        try {
-          ctrl.abort();
-        } catch (e) {
-        }
-      }, 6e3);
-      info = await Promise.race([
-        (async () => {
-          const res = await fetch(httpUrl, { headers: { Accept: "application/nostr+json" }, signal: ctrl.signal });
-          return res.ok ? res.json() : null;
-        })(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("relay-info timeout")), 6500))
-      ]);
-      clearTimeout(to);
-    } catch (e) {
-      info = null;
-    }
-    if (!info || typeof info !== "object") return null;
-    const tri = info.trinityone && typeof info.trinityone === "object" ? info.trinityone : {};
-    let key = "";
-    try {
-      key = _gate.provedKey(url, pub);
-    } catch (e) {
-      key = "";
-    }
-    if (!key) return null;
-    const k = _liveNewestKey(url, key);
-    if (tri.liveNewest === 2) {
-      lsSet(k, JSON.stringify({ liveNewest: 2, at: now() }));
-      return true;
-    }
-    try {
-      localStorage.removeItem(k);
-    } catch (e) {
-    }
-    return false;
-  }
-  function _probeLiveNewestAll() {
-    let urls = [];
-    try {
-      urls = relays();
-    } catch (e) {
-      urls = [];
-    }
-    for (const u of urls) _relayLiveNewest(u).catch(() => {
-    });
-  }
-  try {
-    setTimeout(_probeLiveNewestAll, 3e3);
-    window.addEventListener("steward-relay-returned", () => {
-      setTimeout(_probeLiveNewestAll, 3e3);
-    });
-  } catch (e) {
-  }
   var _discoverySeed = [];
   function _probeRelayEnforces(wssUrl, timeoutMs) {
     return new Promise((resolve) => {
@@ -23584,8 +23521,30 @@ zoo`.split("\n");
       const m = currentMnemonic || lsGet(KEY_LS);
       return m ? "trinityone-church:" + m : "";
     },
+    // A NETWORK'S RECOVERY WORDS ARE NOT A CHURCH'S. Restoring them through the church flow used to boot a
+    // plain church console ON THE NETWORK KEY — `_viewingNetwork()` is `pub !== churchPub`, which can never be
+    // true when the network key IS the church — and that console then published church artifacts as the
+    // network (joinpolicy, checkinkey, kind-0) and self-registered the network npub as a church (sim
+    // 2026-11-20, D2; the create panel itself pointed people down this road). The right door is the founder
+    // console's "Tap to switch view → Network console". Detection: every created network has at least its
+    // founder's `network:<np>` join declaration, and the relay's N5c gate serves those to the authed network
+    // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
+    // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
+    // check and unreachable publishes fail together; the flap window between them is the accepted residual.
+    async _phraseIsNetworkKey(m) {
+      try {
+        const nsk = privateKeyFromSeedWords(m);
+        const np = getPublicKey2(nsk);
+        const q = await _queryAsKey(relays(), nsk, [{ kinds: [30078], "#d": [NETWORK_D + np], limit: 8 }], 4e3);
+        return !!(q && Array.isArray(q.events) && q.events.length > 0);
+      } catch (e) {
+        return false;
+      }
+    },
     // adopt a church from a scanned QR / pasted code / link → restore its key on THIS device.
-    adoptChurch(payload) {
+    // ASYNC since 2026-11-20 (the network-words refusal above needs a relay read): callers await inside their
+    // own try/catch — a sync try around a bare call no longer catches the refusal or a bad phrase.
+    async adoptChurch(payload) {
       let m = (payload || "").trim();
       const q = m.match(/[?&#](?:adopt|church)=([^&#\s]+)/);
       if (q) {
@@ -23595,6 +23554,11 @@ zoo`.split("\n");
         }
       }
       m = m.replace(/^trinityone-church:/i, "").trim();
+      if (await window.Steward._phraseIsNetworkKey(m)) {
+        const err2 = new Error("These are a NETWORK\u2019s recovery words, not a church\u2019s \u2014 nothing has been restored. To manage the network, open your church\u2019s console and use \u2018Tap to switch view\u2019 \u2192 Network console.");
+        err2.networkKey = true;
+        throw err2;
+      }
       return window.Steward.restoreKey(m);
     },
     // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes

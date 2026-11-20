@@ -143,3 +143,36 @@ test('a delegated steward is told what happened, never to restore the church key
     if (had) globalThis.window = prev; else delete globalThis.window;
   }
 });
+
+test('another identity’s refused event never raises the church banner (network view, sim 2026-11-20)', () => {
+  // In the network view the console signs as the NETWORK key. Its refused write must not become the
+  // church-level "Changes weren't saved" alarm — the sim watched that banner sit beside a network-settings
+  // save that had SUCCEEDED. The carve-out keys off evt.pubkey vs the church key and the console's signer.
+  const CP = 'c'.repeat(64), NP = 'f'.repeat(64);
+  globalThis.window = { Steward: { churchPub: CP, signerPub: () => CP } };
+  try {
+    const net = map('blocked: not a member or not permitted for this group', { kind: 1, pubkey: NP });
+    assert.equal(net.msg, '', 'a network-key refusal raised the church banner');
+    assert.equal(net.wrongChurch, false, 'a network-key refusal was diagnosed as the wrong church');
+    // CONTROL — the same refusal of the church's own event must still alarm exactly as before.
+    const own = map('blocked: not a member or not permitted for this group', { kind: 30078, pubkey: CP });
+    assert.equal(own.wrongChurch, true, 'control: the church key’s own refusal no longer alarms');
+    // CONTROL — a delegate's own-signed refusal keeps its softened branch (not swallowed by the carve-out).
+    globalThis.window = { Steward: { churchPub: CP, signerPub: () => NP, actingChurch: CP } };
+    const del = map('blocked: not a member or not permitted for this group', { kind: 30078, pubkey: NP });
+    assert.notEqual(del.msg, '', 'a delegate’s own refusal became invisible');
+  } finally { delete globalThis.window; }
+});
+
+test('no screen points at the retired "Settings → Security" path (sim 2026-11-20 D6)', () => {
+  // The Security SECTION was split into Master key + Helpers (2ebaba59); eleven user-facing strings kept
+  // sending people to the old door. Comments that DESCRIBE the delegate alias are allowed; user-facing
+  // strings are not. This greps the shipped app sources, which ship unbundled — deleting a fix re-adds
+  // the string and fails here honestly (the assertion is about the copy itself, which IS the behaviour).
+  for (const f of ['../app/stew-dashboard.jsx', '../app/steward-root.jsx', '../app/help-data.jsx']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    const hits = src.split('\n').map((l, i) => [i + 1, l])
+      .filter(([, l]) => l.includes('Settings → Security') && !/^\s*(\/\/|\{\/\*|\*)/.test(l) && !/delegates.{0,2} page/.test(l));
+    assert.deepEqual(hits.map(([n]) => n), [], f + ' still points at Settings → Security on lines ' + hits.map(([n]) => n));
+  }
+});

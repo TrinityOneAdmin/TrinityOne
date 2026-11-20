@@ -580,7 +580,7 @@ window.HelpData = {
         { type: 'p', text: 'There are two sets of twelve words in your life here, and they do very different jobs. The ones in your own member app are your personal account. These are the church’s — and whoever holds them is the church: they can post in its name, admit and remove people, and open what it has sealed.' },
         { type: 'callout', tone: 'clay', text: 'Lose your own words and you are locked out of one account. Lose the church’s and the church is not locked — it is gone. There is no way to move a church onto a new key, so you would be starting a different one: every member joins again from scratch, and anything sealed to the old key — private group chat, the books, sealed care records — stays sealed for good.' },
         { type: 'steps', label: 'Write them down — once, today', items: [
-          'Settings → Security → Church key → “Reveal recovery phrase”.',
+          'Settings → Master key → Church key → “Reveal recovery phrase”.',
           'Write the twelve words on paper, in order, by hand.',
           'Put the paper where your church already keeps the things it cannot replace — the safe, the deeds, the insurance file.',
           'Press “Hide”, and close the console.',
@@ -606,7 +606,7 @@ window.HelpData = {
         { type: 'p', text: 'Three different things go wrong here and they are often muddled together: the console moving to another computer, a relay starting empty, and a member losing their own twelve words. Only the last one is about somebody else.' },
         { type: 'steps', label: 'Put the church on another computer', items: [
           'Before you leave the old one: Settings → Church → Backup & data → “Back up church data”. That file is your messages, groups, plans and records.',
-          'On the new computer: Settings → Security → Church key → “Restore from a recovery phrase”, and type the twelve words. This computer is now the church — the same church, not a copy of it.',
+          'On the new computer: Settings → Master key → Church key → “Restore from a recovery phrase”, and type the twelve words. This computer is now the church — the same church, not a copy of it.',
           'If the relay here is starting empty, Settings → Infrastructure → Move or copy history → “Copy your history to…” brings the past across. The phrase brings back who you are; this brings back what was said.',
           'Set a console lock on the new computer while you are there — the same Church key panel.',
         ] },
@@ -632,7 +632,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'You do not have to run everything, and you do not have to hand over the church to get help. A helper signs in with their own key and does only what you have given them. Take it back and it stops immediately.' },
         { type: 'steps', label: 'Add a helper', items: [
-          'Settings → Security → Helpers, then “Add a helper”. This shows an invite — a QR, or “Copy invite” to send as a short code.',
+          'Settings → Helpers, then “Add a helper”. This shows an invite — a QR, or “Copy invite” to send as a short code.',
           'They open their own app and tap “Help run a church”, then scan or enter the invite. It is a public invite: no key of yours or theirs changes hands, and the app makes them their own key.',
           'They appear under “Requests to help”. Check the code is who you expect, then tap “Approve…”.',
           'Give them a name in your own words — the console won’t let you approve someone without one — and pick what they may do: a preset, or Custom to tick each capability. The default, General helper, covers care, groups & rotas and members, with no money, safeguarding or sealed rooms.',
@@ -649,7 +649,7 @@ window.HelpData = {
         ] },
         { type: 'note', text: 'A helper is not a second you. They cannot add other helpers, block or remove anyone, or change your relay settings — those stay with the key. So if you hand the welcoming to a volunteer, keep yourself reachable for the times it has to go the other way.' },
         { type: 'note', text: 'These limits are enforced by your church’s relay, each time it is asked — not by the app on a steward’s phone. That is what makes them hold even against a tampered app, but it also means they need a relay that knows how to check them. A relay running very old software may not check capabilities at all, and would quietly hand a helper everything regardless of what you ticked. The shared TrinityOne relay is always kept current; if your church runs its own, keeping it updated is what keeps these limits real.' },
-        { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Security → Hand over the church is where that lives, and it says so at the moment you would do it.' },
+        { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Master key → Hand over the church is where that lives, and it says so at the moment you would do it.' },
         { type: 'rule', text: 'If you might ever want it back, it is a helper. The phrase is for someone you would trust to be the church.' },
       ],
     },
@@ -708,7 +708,7 @@ window.HelpData = {
         { type: 'list', items: [
           { lead: 'Nobody legitimate ever asks for it remotely.', text: 'Not TrinityOne, not support, not a relay operator, not the diocese, not an email signed by the archdeacon. A handoff happens in person, to someone you already know, because you decided to do it — never because a message arrived asking for it.' },
           { lead: 'Urgency is the tell.', text: 'Every version of this comes with a deadline: an account closing, a migration tonight, a service that won’t run on Sunday. Nothing here has a deadline. A church that waits until Monday loses nothing.' },
-          { lead: 'A helper does not need the key.', text: 'If someone genuinely needs to help you run the church, Settings → Security → Helpers gives them their own access that you can take back. Anyone who tells you that won’t do, and it has to be the phrase, has just told you what they are after.' },
+          { lead: 'A helper does not need the key.', text: 'If someone genuinely needs to help you run the church, Settings → Helpers gives them their own access that you can take back. Anyone who tells you that won’t do, and it has to be the phrase, has just told you what they are after.' },
           { lead: 'Check on a channel they did not choose.', text: 'Ring the person back on the number you already had for them. A reply to the message, or a number printed inside it, proves nothing.' },
         ] },
         { type: 'rule', text: 'The phrase leaves this room one way only: on paper, to a person standing in front of you, because you decided to hand over the church.' },
@@ -732,7 +732,7 @@ window.HelpData = {
           { lead: 'Export for your accountant', text: 'Export the full ledger as a CSV whenever you need it.' },
         ] },
         { type: 'callout', tone: 'gold', text: 'The books are your church’s private bookkeeping, encrypted to a key of their own — the relay only ever holds unreadable ciphertext. The people who can open them are you and anyone you have given <b>Finance</b> to; nobody else, including whoever runs the relay. A statement you choose to share carries totals only, never member names, so it’s safe to hand out or post.' },
-        { type: 'note', text: 'Finance is one of the grants under Settings → Security → Helpers. Whoever holds it can see every entry the church has ever recorded — giving, salaries, benevolence — and add more. That is the right grant for a treasurer and a heavy one for anybody else.' },
+        { type: 'note', text: 'Finance is one of the grants under Settings → Helpers. Whoever holds it can see every entry the church has ever recorded — giving, salaries, benevolence — and add more. That is the right grant for a treasurer and a heavy one for anybody else.' },
         { type: 'note', text: 'More is on the way, all free: a balance sheet and trustees’ report, budgets, and regional giving-relief packs (like UK Gift Aid). Giving straight from a member’s own phone wallet is a separate idea we’re still building — nothing to set up for it yet.' },
       ],
     },

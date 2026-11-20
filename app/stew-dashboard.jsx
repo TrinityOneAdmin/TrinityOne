@@ -620,6 +620,19 @@ function publishErrorMessage(reason, evt, opts) {
   // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
   // their key, which overwrites it. Only the church's own documents can imply a key mismatch.
   if (evt && evt.kind === 10002) return { wrongChurch: false, sticky: false, msg: '' };
+  // ANOTHER IDENTITY'S REFUSED EVENT IS NOT THIS CHURCH'S FAILED CHANGE. In the network view this console
+  // signs as the NETWORK key; a refused network write must not raise the church-level "Changes weren't
+  // saved" banner (sim 2026-11-20: a refused network post raised it beside a network-settings save that had
+  // SUCCEEDED). Only an event signed by the church key — or by this console's own signer, a delegate's
+  // refusals being handled in their own branch below — may speak for the church. Not silence: the network
+  // surfaces report their own failures inline, and the log line below keeps the refusal visible to anyone
+  // reading the console.
+  const cpOwn = (typeof window !== 'undefined' && window.Steward && window.Steward.churchPub) || '';
+  const spOwn = (typeof window !== 'undefined' && window.Steward && window.Steward.signerPub) ? window.Steward.signerPub() : '';
+  if (evt && evt.pubkey && cpOwn && evt.pubkey !== cpOwn && (!spOwn || evt.pubkey !== spOwn)) {
+    try { console.warn('[console] a write by another identity was refused (not shown as a church failure):', r); } catch (x) {}
+    return { wrongChurch: false, sticky: false, msg: '' };
+  }
   // A CAPABILITY REFUSAL IS NOT A WRONG KEY EITHER — and for a DELEGATED steward it never can be.
   // "not a member or not permitted" is also what the relay says when a delegate writes something their
   // grant does not cover, and a delegate signs with their OWN key by design: they do not hold the church
@@ -2076,7 +2089,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       <div style={{ ...lbl, marginTop: 12 }}>CONFIRM</div>
       <input aria-label="Repeat the PIN or passphrase" type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
       {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
-      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Security</b>.</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Master key → Church key</b>.</div>
     </WizShell>
   );
 
@@ -4066,7 +4079,7 @@ function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={22} color="#fff" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
-        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Security → Helpers.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Helpers.</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
@@ -9966,7 +9979,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
         They sign in with their own keys, not yours. {delegated
           ? 'Only whoever holds the church key can change what they may do, or remove them.'
-          : 'Change what they may do, or remove them, under Settings → Security → Helpers.'}
+          : 'Change what they may do, or remove them, under Settings → Helpers.'}
       </div>
     </div>
   ) : null;
@@ -15164,8 +15177,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
     // SO THE HAZARD A RELOAD CAUSES IS THE OPPOSITE ONE, AND QUIETER: the restored seed is lost, the OLD key
     // is still there, and the console comes back looking perfectly normal as the church it was before. The
     // steward believes they adopted a church and did not. Same rule, right reason. Audit item 13, 2026-09-14.
-    try { window.Steward.adoptChurch(payload); }
-    catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
+    // adoptChurch is ASYNC since 2026-11-20 (network-words refusal reads the relays first).
+    Promise.resolve().then(() => window.Steward.adoptChurch(payload))
+      .catch((e) => { window.alert((e && e.networkKey && e.message) || 'That QR isn’t a valid church handoff.'); });
   };
   const doRestore = () => {
     setRestoreErr('');
@@ -15180,7 +15194,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
       // deleting the eager wipe. Describing the fixed code as though it were still broken is worse than
       // saying nothing: the next reader looks for a wipe that is not there, or restores one thinking it was
       // an oversight. Audit item 13, 2026-09-14 — checked against setKey(), which touches memory only.
-      window.Steward.restoreKey(restorePhrase);
+      // THROUGH adoptChurch since 2026-11-20, not restoreKey directly: a bare phrase passes through
+      // unchanged, and the network-words refusal (async) covers this door too — sim D2's fifth door.
+      Promise.resolve().then(() => window.Steward.adoptChurch(restorePhrase))
+        .catch((e) => setRestoreErr((e && e.message) || 'That phrase isn’t valid.'));
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
   // 1 · read and recognise the file first, so a wrong one costs the steward nothing.
