@@ -8316,6 +8316,9 @@ const SWAP_PUBLISH_MS = 8000;   // one group's re-save in the re-seat swap; a sl
 // waited for. SWAP_READ_CAP_MS is the overall cap, so a relay that trickles for ever cannot hold the screen.
 const SWAP_QUIET_MS = 8000;
 const SWAP_READ_CAP_MS = 45000;
+// The "which groups" read asks each relay for at most this many copies per filter; a relay that sends this many may have
+// left older ones out (it keeps the newest), so that is not a whole answer (re-audit of ab82f16d, item 1).
+const SWAP_FIND_LIMIT = 2000;
 // F4 (plan rev 4 §5, answers o and r, 2026-11-19). WHICH GROUPS NAME THE OLD KEY is asked of EVERY RELAY directly (audit of
 // 98ab7e38, item 1): the church's group copies, and every copy tagged with the church, each relay judged on its own. The
 // console's Groups list (_lastGroups) is no evidence of completeness: it is marked fresh only by the read subscribeGroups
@@ -8354,7 +8357,7 @@ async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     if (done) { try { sub.close(); } catch (e) {} }
   });
   // WHICH GROUPS — every relay. A relay that hit the asked limit is not a whole answer (the relay keeps the newest).
-  const LIM = 2000;
+  const LIM = SWAP_FIND_LIMIT;
   const found = urls.length ? await Promise.all(urls.map(u => ask(u, [{ kinds: [30078], authors: [pub], '#t': [NET], limit: LIM }, { kinds: [30078], '#church': [pub], '#t': [NET], limit: LIM }]))) : [];
   const foundWhole = found.length > 0 && found.every(a => a.complete && a.evs.filter(e => e.pubkey === pub).length < LIM && a.evs.filter(e => e.pubkey !== pub).length < LIM);
   if (!foundWhole) { out.unchecked.push('the groups they may have been on'); out.anyUnanswered = true; }
@@ -8368,52 +8371,87 @@ async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
   }
   const ds = [...labelOf.keys()];
   if (!ds.length) return out;
-  const answers = urls.length ? await Promise.all(urls.map(u => ask(u, [{ kinds: [30078], '#d': ds, limit: ds.length * 50 }]))) : [];
-  const whole = answers.length > 0 && answers.every(a => a.complete);
+  // The newest copy of each address, from every relay's answer to `dl` — and whether every relay answered whole.
+  const readNewest = async (dl) => {
+    const answers = urls.length ? await Promise.all(urls.map(u => ask(u, [{ kinds: [30078], '#d': dl, limit: dl.length * 50 }]))) : [];
+    const newest = new Map();
+    for (const a of answers) for (const e of a.evs) {
+      const d = dOf(e);
+      if (dl.indexOf(d) === -1) continue;
+      const ch = ((e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
+      if (ch && ch !== pub) continue;
+      const cur = newest.get(d);
+      if (!cur || (e.created_at || 0) > (cur.created_at || 0) || ((e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub)) newest.set(d, e);   // a tie with someone else is not the church's to settle
+    }
+    return { whole: answers.length > 0 && answers.every(a => a.complete), newest };
+  };
+  const first = await readNewest(ds);
+  const whole = first.whole;
   if (!whole) out.anyUnanswered = true;
-  const newest = new Map();
-  for (const a of answers) for (const e of a.evs) {
-    const d = dOf(e);
-    if (!labelOf.has(d)) continue;
-    const ch = ((e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
-    if (ch && ch !== pub) continue;
-    const cur = newest.get(d);
-    if (!cur || (e.created_at || 0) > (cur.created_at || 0) || ((e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub)) newest.set(d, e);   // a tie with someone else is not the church's to settle
-  }
   const isHelper = (pk) => { try { return [..._careRoster].some(p => String(p || '').toLowerCase() === String(pk || '').toLowerCase()); } catch (e) { return false; } };
+  // WHAT TO DO WITH ONE COPY: nothing; report another author's newer copy (and WHO — "another helper" only for a helper on
+  // this console's roster, audit of 98ab7e38 item 6); or the church's copy with the key swapped (`g`).
+  const decide = (ev) => {
+    if (!ev || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) return { what: 'none' };   // no live copy anywhere: nothing names anyone
+    let g; try { g = JSON.parse(ev.content); } catch (e) { return { what: 'none' }; }
+    if (!g || typeof g !== 'object') return { what: 'none' };
+    // SOMEONE ELSE'S COPY IS NEWEST: never re-saved over — but if it still names the old key, say so (L1 a)
+    if (ev.pubkey !== pub) return namesOld(g) ? { what: isHelper(ev.pubkey) ? 'other' : 'otherSomeone' } : { what: 'none' };
+    let changed = false;
+    const swap = (arr) => { const o = []; for (const x of arr) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !o.some(y => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v); } return o; };   // to '' → removed
+    if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
+    if (Array.isArray(g.members)) g.members = swap(g.members);
+    return changed ? { what: 'write', g } : { what: 'none' };   // the old key is not on it: nothing to do, nothing to report
+  };
+  // THIS CONSOLE'S OWN WRITES OF ONE ADDRESS STILL IN FLIGHT (the register publish()/_publishToRelays() keep, _pubLatest):
+  // the Block screen's own re-save of an invite-only room (rotateChurchKeys → publishGroup) runs alongside the take-off.
+  const inFlight = (d) => { const o = []; try { for (const [k, v] of _pubLatest) if (k.indexOf('30078|') === 0 && k.slice(-(d.length + 1)) === '|' + d) o.push(v); } catch (e) {} return o; };
   for (const d of ds) {
-    const ev = newest.get(d);
+    let ev = first.newest.get(d);
     const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
     // NOT EVERY RELAY ANSWERED (timed out, not logged in): what we hold may not be the newest copy, and silence is not
     // "nothing to do" — listed, so the screen can say it (audit round 4, L1 b / L2)
     // listed as UNCHECKED, not failed: we do not know they were on it, and "add them" could put someone on a group they
     // were never in — a youth group, say (audit round 5)
     if (!whole) { out.unchecked.push(label); continue; }
-    if (!ev || !ev.content || (ev.tags || []).some(t => t[0] === 'deleted')) continue;   // no live copy anywhere: nothing names anyone
-    let g; try { g = JSON.parse(ev.content); } catch (e) { continue; }
-    if (!g || typeof g !== 'object') continue;
-    // SOMEONE ELSE'S COPY IS NEWEST: never re-saved over — but if it still names the old key, say so (L1 a), and say WHO:
-    // "another helper" only when its author is on this console's helper list (audit of 98ab7e38, item 6)
-    if (ev.pubkey !== pub) { if (namesOld(g)) (isHelper(ev.pubkey) ? out.other : out.otherSomeone).push(label); continue; }
-    let changed = false;
-    const swap = (arr) => { const o = []; for (const x of arr) { const hit = String(x || '').toLowerCase() === from; if (hit) changed = true; const v = hit ? to : x; if (v && !o.some(y => String(y).toLowerCase() === String(v).toLowerCase())) o.push(v); } return o; };   // to '' → removed
-    if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
-    if (Array.isArray(g.members)) g.members = swap(g.members);
-    if (!changed) continue;                                   // the old key is not on it: nothing to do, nothing to report
-    let ok = false;
-    try {
-      // strictly newer than the copy it replaces, checked on the SIGNED event (owner answer i, as the carry does)
-      const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter(t => t[0] !== 'for'), content: JSON.stringify(g) };
-      let signed = feChurch(tmpl, sk);
-      for (let k = 0; (signed.created_at || 0) <= (ev.created_at || 0) && k < 4; k++) { await new Promise(r => setTimeout(r, 1000)); signed = feChurch({ ...tmpl, created_at: now() }, sk); }
-      // bounded: a relay that never answers must not keep the Reconnect screen busy for ever (audit round 5)
-      let tm = null;
-      ok = (signed.created_at || 0) > (ev.created_at || 0)
-        ? await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r(false), SWAP_PUBLISH_MS); })])
-        : false;
-      if (tm) clearTimeout(tm);
-    } catch (e) { ok = false; }
-    (ok ? out.swapped : out.failed).push(label);
+    let dec = decide(ev);
+    if (dec.what === 'other' || dec.what === 'otherSomeone') { out[dec.what].push(label); continue; }
+    if (dec.what !== 'write') continue;
+    // NEVER WRITE FROM A STALE COPY (re-audit of ab82f16d, item 2). The first read may be older than a write made since —
+    // the Block screen's own re-save of an invite-only room drops the blocked person AND anyone else held as blocked, and a
+    // take-off signed from the earlier copy would put them back. So, just before signing: wait for this console's own
+    // writes of the room still in flight, read the newest copy from every relay again, and decide from THAT; and if a new
+    // write of it was started meanwhile, do it all again. Not settled in three goes, or a relay silent: listed, not written.
+    let result = 'unchecked';
+    for (let k = 0; k < 3; k++) {
+      for (const w of inFlight(d)) { try { await w.done; } catch (e) {} }
+      const seen = inFlight(d).map(w => w.done);
+      const again = await readNewest([d]);
+      if (!again.whole) { result = 'unchecked'; break; }
+      ev = again.newest.get(d);
+      dec = decide(ev);
+      if (dec.what !== 'write') { result = dec.what; break; }
+      let ok = false, signed = null;
+      try {
+        // strictly newer than the copy it replaces, checked on the SIGNED event (owner answer i, as the carry does)
+        const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter(t => t[0] !== 'for'), content: JSON.stringify(dec.g) };
+        signed = feChurch(tmpl, sk);
+        for (let j = 0; (signed.created_at || 0) <= (ev.created_at || 0) && j < 4; j++) { await new Promise(r => setTimeout(r, 1000)); signed = feChurch({ ...tmpl, created_at: now() }, sk); }
+      } catch (e) { signed = null; }
+      if (!signed || (signed.created_at || 0) <= (ev.created_at || 0)) { result = 'failed'; break; }
+      const now_ = inFlight(d).map(w => w.done);
+      if (now_.length !== seen.length || now_.some((x, i) => x !== seen[i])) { result = 'unchecked'; continue; }   // a write began since the re-read
+      try {
+        // bounded: a relay that never answers must not keep the Reconnect screen busy for ever (audit round 5)
+        let tm = null;
+        ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r(false), SWAP_PUBLISH_MS); })]);
+        if (tm) clearTimeout(tm);
+      } catch (e) { ok = false; }
+      result = ok ? 'swapped' : 'failed';
+      break;
+    }
+    if (result === 'unchecked') out.anyUnanswered = true;
+    if (result === 'swapped' || result === 'failed' || result === 'unchecked' || result === 'other' || result === 'otherSomeone') out[result].push(label);
   }
   return out;
 }
@@ -8558,7 +8596,14 @@ function _blockStewardKeeping(pk, blockedList, opts) {
     //   · item 3 — a CURRENT helper too, once the helper-list write has landed (the church's own copies were never theirs
     //     to edit, so the carry did not touch them). A write that did not land leaves them a helper: not run.
     //   · item 4 — the helper list not read yet: run anyway (the take-off does not need it), never skipped in silence.
-    if (!out.onRoster || out.outcome === 'landed') {
+    //   · re-audit of ab82f16d, item 4 (owner): a block that did NOT save (setBlocked false — refused, or only partly saved)
+    //     changes no group, as the teams and the youth clearance are left (DashMembers.block); said, with why.
+    //   · re-audit item 3: a current helper whose helper-list write did not land (or could not be confirmed) gets no
+    //     take-off — and the screen is told it could not check, never silence.
+    const notRun = (extra) => { out.groupsOff = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false, ...extra }; out.groupsOffDone = Promise.resolve(out.groupsOff); };
+    if (b === false) notRun({ notRun: 'block-not-saved' });
+    else if (out.onRoster && out.outcome !== 'landed') notRun({ unchecked: ['the groups they may have been on'], anyUnanswered: true });
+    else {
       out.groupsOffDone = (async () => {
         let r;
         try { r = await _swapKeyInChurchGroups(out.carry || { carried: [], superseded: [] }, who, ''); }

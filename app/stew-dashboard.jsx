@@ -9199,6 +9199,8 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         // take-off back UNFINISHED (`groupsOffDone`, audit of 98ab7e38 item 2) so the keys below are rotated at once,
         // not behind it; its line is added when it settles.
         const lineOf = (go) => !go ? '' : [
+          // a block that did not save changes no group (owner, re-audit of ab82f16d item 4) — as the teams and clearance below
+          go.notRun === 'block-not-saved' ? 'Their groups were left unchanged because the block didn’t save.' : '',
           (go.failed || []).length ? 'Couldn’t take them off ' + go.failed.join(', ') + ' — open Groups and take them off by hand.' : '',
           (go.unchecked || []).length ? 'Couldn’t check ' + go.unchecked.join(', ') + ' — open Groups and check whether they are still on ' + (go.unchecked.length > 1 ? 'them' : 'it') + '.' : '',
           (go.other || []).length ? 'Another helper has changed ' + go.other.join(', ') + ' since, and it still names them — check it by hand.' : '',

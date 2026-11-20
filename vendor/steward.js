@@ -21666,6 +21666,7 @@ zoo`.split("\n");
   var SWAP_PUBLISH_MS = 8e3;
   var SWAP_QUIET_MS = 8e3;
   var SWAP_READ_CAP_MS = 45e3;
+  var SWAP_FIND_LIMIT = 2e3;
   async function _swapKeyInChurchGroups(carry, oldPk, newPk) {
     const from = String(oldPk || "").toLowerCase(), to = String(newPk || "").toLowerCase();
     const out = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false };
@@ -21735,7 +21736,7 @@ zoo`.split("\n");
         }
       }
     });
-    const LIM = 2e3;
+    const LIM = SWAP_FIND_LIMIT;
     const found = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], authors: [pub], "#t": [NET], limit: LIM }, { kinds: [30078], "#church": [pub], "#t": [NET], limit: LIM }]))) : [];
     const foundWhole = found.length > 0 && found.every((a) => a.complete && a.evs.filter((e) => e.pubkey === pub).length < LIM && a.evs.filter((e) => e.pubkey !== pub).length < LIM);
     if (!foundWhole) {
@@ -21757,18 +21758,22 @@ zoo`.split("\n");
     }
     const ds = [...labelOf.keys()];
     if (!ds.length) return out;
-    const answers = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], "#d": ds, limit: ds.length * 50 }]))) : [];
-    const whole = answers.length > 0 && answers.every((a) => a.complete);
+    const readNewest = async (dl) => {
+      const answers = urls.length ? await Promise.all(urls.map((u) => ask(u, [{ kinds: [30078], "#d": dl, limit: dl.length * 50 }]))) : [];
+      const newest = /* @__PURE__ */ new Map();
+      for (const a of answers) for (const e of a.evs) {
+        const d = dOf(e);
+        if (dl.indexOf(d) === -1) continue;
+        const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
+        if (ch && ch !== pub) continue;
+        const cur = newest.get(d);
+        if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
+      }
+      return { whole: answers.length > 0 && answers.every((a) => a.complete), newest };
+    };
+    const first = await readNewest(ds);
+    const whole = first.whole;
     if (!whole) out.anyUnanswered = true;
-    const newest = /* @__PURE__ */ new Map();
-    for (const a of answers) for (const e of a.evs) {
-      const d = dOf(e);
-      if (!labelOf.has(d)) continue;
-      const ch = ((e.tags || []).find((t) => t[0] === "church") || [])[1] || "";
-      if (ch && ch !== pub) continue;
-      const cur = newest.get(d);
-      if (!cur || (e.created_at || 0) > (cur.created_at || 0) || (e.created_at || 0) === (cur.created_at || 0) && e.pubkey !== pub) newest.set(d, e);
-    }
     const isHelper = (pk) => {
       try {
         return [..._careRoster].some((p) => String(p || "").toLowerCase() === String(pk || "").toLowerCase());
@@ -21776,25 +21781,16 @@ zoo`.split("\n");
         return false;
       }
     };
-    for (const d of ds) {
-      const ev = newest.get(d);
-      const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
-      if (!whole) {
-        out.unchecked.push(label);
-        continue;
-      }
-      if (!ev || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) continue;
+    const decide = (ev) => {
+      if (!ev || !ev.content || (ev.tags || []).some((t) => t[0] === "deleted")) return { what: "none" };
       let g;
       try {
         g = JSON.parse(ev.content);
       } catch (e) {
-        continue;
+        return { what: "none" };
       }
-      if (!g || typeof g !== "object") continue;
-      if (ev.pubkey !== pub) {
-        if (namesOld(g)) (isHelper(ev.pubkey) ? out.other : out.otherSomeone).push(label);
-        continue;
-      }
+      if (!g || typeof g !== "object") return { what: "none" };
+      if (ev.pubkey !== pub) return namesOld(g) ? { what: isHelper(ev.pubkey) ? "other" : "otherSomeone" } : { what: "none" };
       let changed = false;
       const swap = (arr) => {
         const o = [];
@@ -21808,24 +21804,83 @@ zoo`.split("\n");
       };
       if (Array.isArray(g.leaders)) g.leaders = swap(g.leaders);
       if (Array.isArray(g.members)) g.members = swap(g.members);
-      if (!changed) continue;
-      let ok = false;
+      return changed ? { what: "write", g } : { what: "none" };
+    };
+    const inFlight = (d) => {
+      const o = [];
       try {
-        const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(g) };
-        let signed = feChurch(tmpl, sk);
-        for (let k = 0; (signed.created_at || 0) <= (ev.created_at || 0) && k < 4; k++) {
-          await new Promise((r) => setTimeout(r, 1e3));
-          signed = feChurch({ ...tmpl, created_at: now() }, sk);
-        }
-        let tm = null;
-        ok = (signed.created_at || 0) > (ev.created_at || 0) ? await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
-          tm = setTimeout(() => r(false), SWAP_PUBLISH_MS);
-        })]) : false;
-        if (tm) clearTimeout(tm);
+        for (const [k, v] of _pubLatest) if (k.indexOf("30078|") === 0 && k.slice(-(d.length + 1)) === "|" + d) o.push(v);
       } catch (e) {
-        ok = false;
       }
-      (ok ? out.swapped : out.failed).push(label);
+      return o;
+    };
+    for (const d of ds) {
+      let ev = first.newest.get(d);
+      const label = labelOf.get(d) || _carryLabel(d, ev && ev.content);
+      if (!whole) {
+        out.unchecked.push(label);
+        continue;
+      }
+      let dec = decide(ev);
+      if (dec.what === "other" || dec.what === "otherSomeone") {
+        out[dec.what].push(label);
+        continue;
+      }
+      if (dec.what !== "write") continue;
+      let result = "unchecked";
+      for (let k = 0; k < 3; k++) {
+        for (const w of inFlight(d)) {
+          try {
+            await w.done;
+          } catch (e) {
+          }
+        }
+        const seen = inFlight(d).map((w) => w.done);
+        const again = await readNewest([d]);
+        if (!again.whole) {
+          result = "unchecked";
+          break;
+        }
+        ev = again.newest.get(d);
+        dec = decide(ev);
+        if (dec.what !== "write") {
+          result = dec.what;
+          break;
+        }
+        let ok = false, signed = null;
+        try {
+          const tmpl = { kind: 30078, created_at: now(), tags: (ev.tags || []).filter((t) => t[0] !== "for"), content: JSON.stringify(dec.g) };
+          signed = feChurch(tmpl, sk);
+          for (let j = 0; (signed.created_at || 0) <= (ev.created_at || 0) && j < 4; j++) {
+            await new Promise((r) => setTimeout(r, 1e3));
+            signed = feChurch({ ...tmpl, created_at: now() }, sk);
+          }
+        } catch (e) {
+          signed = null;
+        }
+        if (!signed || (signed.created_at || 0) <= (ev.created_at || 0)) {
+          result = "failed";
+          break;
+        }
+        const now_ = inFlight(d).map((w) => w.done);
+        if (now_.length !== seen.length || now_.some((x, i3) => x !== seen[i3])) {
+          result = "unchecked";
+          continue;
+        }
+        try {
+          let tm = null;
+          ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise((r) => {
+            tm = setTimeout(() => r(false), SWAP_PUBLISH_MS);
+          })]);
+          if (tm) clearTimeout(tm);
+        } catch (e) {
+          ok = false;
+        }
+        result = ok ? "swapped" : "failed";
+        break;
+      }
+      if (result === "unchecked") out.anyUnanswered = true;
+      if (result === "swapped" || result === "failed" || result === "unchecked" || result === "other" || result === "otherSomeone") out[result].push(label);
     }
     return out;
   }
@@ -21971,7 +22026,13 @@ zoo`.split("\n");
         await q;
       } catch (e) {
       }
-      if (!out.onRoster || out.outcome === "landed") {
+      const notRun = (extra) => {
+        out.groupsOff = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false, ...extra };
+        out.groupsOffDone = Promise.resolve(out.groupsOff);
+      };
+      if (b === false) notRun({ notRun: "block-not-saved" });
+      else if (out.onRoster && out.outcome !== "landed") notRun({ unchecked: ["the groups they may have been on"], anyUnanswered: true });
+      else {
         out.groupsOffDone = (async () => {
           let r;
           try {
