@@ -18,8 +18,14 @@ function UpdateBanner({ ctx, variant }) {
   const busyRef = React.useRef(false);           // SYNCHRONOUS guard — state lags a render, so rapid taps fired several downloads at once
   React.useEffect(() => {
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
-    const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
-    if (!native || !(P && P.App && P.App.getInfo)) return;
+    // APK sideload updates are an ANDROID-ONLY mechanism (sideloaded apps get no Play Store nudge). The guard used to
+    // be isNativePlatform(), which is ALSO true on iOS — so on iPhone this banner fired and its Update button opened
+    // https://app.trinityone.church/trinityone.apk, i.e. it offered an ANDROID package for download on iOS. It tripped
+    // because the iOS build number parses BELOW the Android versionCode in apk-latest.json (225), so latest > installed.
+    // iOS updates come from TestFlight / the App Store, which nudge on their own. Gate strictly to Android by NAME —
+    // share-app.jsx:180 records the same isNativePlatform() trap. (2026-11-19, reported from the TestFlight pilot.)
+    const android = !!(Cap && Cap.getPlatform && Cap.getPlatform() === 'android');
+    if (!android || !(P && P.App && P.App.getInfo)) return;
     let alive = true;
     (async () => {
       try {
