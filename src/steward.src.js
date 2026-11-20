@@ -7972,13 +7972,18 @@ async function _quietSend(evt) {
   let urls = [];
   try { urls = relays(); } catch (e) { urls = []; }
   if (!urls.length) return { ok: false, reason: 'no relay is connected' };
-  const attempt = () => Promise.race([
-    Promise.any(pool.publish(urls, evt).map(p => p.then(v => {
+  const attempt = () => {
+    let timer = null;
+    const first = Promise.any(pool.publish(urls, evt).map(p => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
       return v;
-    }))),
-    new Promise((_, rej) => setTimeout(() => rej(new Error('timed out — the relay did not answer within 15s')), 15000)),
-  ]);
+    })));
+    first.catch(() => {});   // a rejection that loses the race must never surface as unhandled (audit F7)
+    return Promise.race([
+      first,
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timed out — the relay did not answer within 15s')), 15000); }),
+    ]).finally(() => clearTimeout(timer));   // a settled publish must not leave a 15s timer running (audit F7)
+  };
   const reasonsOf = (e) => ((e && e.errors) || [e]).map(x => String((x && x.message) || x || '')).filter(Boolean);
   try { await attempt(); return { ok: true }; }
   catch (e) {
@@ -16623,6 +16628,12 @@ window.Steward = {
     const authed = _isRelayAuthed();
     // derive every pubkey up front — marking and admission need them before anything is published
     const rows = list.map(e => { let pk = ''; try { pk = getPublicKey(privateKeyFromSeedWords(e.mnemonic)); } catch (x) {} return { name: String(e.name).trim(), mnemonic: e.mnemonic, isChild: !!e.isChild, pubkey: pk }; });
+    // 0. A STALE ADMITTED LIST REFUSES **BEFORE ANYTHING IS WRITTEN** (audit F5). The admission write itself
+    //    stays step 2 (mark → admit → join), but its freshness is knowable now — checked only at step 2 it
+    //    let the children's marking land first, so "nothing has been published yet" was false for a refused
+    //    batch and an abandoned retry left stray pubkeys on the children's list.
+    if (authed && rows.some(r => r.pubkey) && !window.Steward.admittedListFresh())
+      return { results: [], refused: 'the members list hasn’t loaded yet — try again in a moment' };
     // 1. MARK CHILDREN FIRST — one write for the whole batch
     let marked = new Set(), childrenRefused = '';
     const childPks = rows.filter(r => r.isChild && r.pubkey).map(r => r.pubkey);
@@ -16643,12 +16654,15 @@ window.Steward = {
     // 2. ADMIT EVERYONE — one write. Children are admitted only if their mark landed.
     const wantJoin = rows.filter(r => r.pubkey && (!r.isChild || marked.has(r.pubkey)));
     if (authed && wantJoin.length) {
+      // freshness was refused up front (step 0); re-checked here because the children's marking awaited the
+      // network in between. A refusal from HERE on may follow a landed setMinors — the safe direction
+      // (marked, never joined), and a retry with the SAME keys re-unions the identical list.
       const fresh = window.Steward.admittedListFresh();
       if (!fresh) return { results: [], refused: 'the members list hasn’t loaded yet — try again in a moment', childrenRefused };
       let okA = null;
       try { okA = await Promise.resolve(window.Steward.setAdmitted([...new Set([...((_lastAdmitted.list) || []), ...wantJoin.map(r => r.pubkey)])])); } catch (e) { okA = null; }
       // STOP on a refused admission (N3): in an approval church the joins would sit waiting with nothing on
-      // this screen to say so. Nothing has been published yet, and a retry with the same keys is safe.
+      // this screen to say so. No JOIN has been published; at most the children's marking has landed.
       if (!okA) return { results: [], refused: 'the relay didn’t accept the admissions, so no account was made. Check the relay and try again', childrenRefused };
     }
     // 3. PUBLISH JOINS, sequentially

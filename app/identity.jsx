@@ -350,7 +350,9 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   // stable directory name a printed slip needs once its tunnel ?relay= has rotated — rebuilding the string
   // from parts dropped it. The fragment is stripped because the seed must NEVER reach followChurch /
   // adoptInviteRelays: the engine's [?&]relay= matcher reads to the next '&', so on a link whose relay=
-  // is the last query param an un-stripped fragment would ride along inside the relay address.
+  // is the last query param an un-stripped fragment would ride along inside the relay address. A LEGACY
+  // link carries the seed in the ?invite= QUERY param instead — that is stripped too (audit F4), so the
+  // claim holds for both forms.
   const seedFromScan = (text) => {
     const raw = String(text || '').trim();
     if (!raw) return { seed: '' };
@@ -367,7 +369,13 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
         const w = decodeURIComponent(v).trim().toLowerCase().replace(/\s+/g, ' ');
         if (w.split(' ').length !== 12) return { seed: '' };
         const follow = u.searchParams.get('follow') || '';
-        return { seed: w, src: follow ? (u.origin + u.pathname + u.search) : '' };
+        // A LEGACY link (pre-SECURITY-AUDIT-2026-07-18) carries the seed in the QUERY (?invite=) — strip that
+        // param too, so the seed reaches followChurch in NEITHER form (audit F4). Only the legacy form is
+        // rebuilt through URLSearchParams; a modern #invite= link keeps its query byte-for-byte as printed
+        // (the verbatim pass-through ?relayname= depends on).
+        let search = u.search;
+        if (q) { try { const qp = new URLSearchParams(search); qp.delete('invite'); const qs = qp.toString(); search = qs ? '?' + qs : ''; } catch (e) { search = ''; } }
+        return { seed: w, src: follow ? (u.origin + u.pathname + search) : '' };
       }
     } catch (e) {}
     // or the bare phrase

@@ -8137,20 +8137,23 @@ window.BulkInviteModal = BulkInviteModal;
 // is a child, the steward marks and the software enforces (reference/DOMAIN.md, mechanism not policy).
 // Auto-detection only PRE-FILLS the child toggles; the steward sees every row and can change any of them.
 function parseAccountsCsv(txt) {
+  const lines = String(txt || '').split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  // European Excel exports semicolon-separated "CSV" — pick whichever delimiter the FIRST line uses more
+  // of (comma on a tie), or "Ana;9" becomes an account named "Ana;9" (audit F9).
+  const delim = lines[0].split(';').length > lines[0].split(',').length ? ';' : ',';
   const splitLine = (line) => {
     const out = []; let cur = '', q = false;
     for (let i = 0; i < line.length; i++) {
       const c = line[i];
       if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
       else if (c === '"') q = true;
-      else if (c === ',') { out.push(cur); cur = ''; }
+      else if (c === delim) { out.push(cur); cur = ''; }
       else cur += c;
     }
     out.push(cur);
     return out.map(s => s.trim());
   };
-  const lines = String(txt || '').split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return [];
   const NAME_COLS = ['name', 'first name', 'full name', 'member', 'person'];
   const CHILD_COLS = ['child', 'minor', 'young person', 'youth'];
   const YES = ['yes', 'y', 'true', '1', 'x', '✓'];
@@ -8168,7 +8171,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   const gate = useGoPublicGate();   // handing out slips before the relay is public would hand out dead QR codes
   const [stage, setStage] = React.useState('input');   // input → confirm → running → done
   const [names, setNames] = React.useState('');
-  const [childMarks, setChildMarks] = React.useState({});   // name → true; CSV pre-fills, the steward decides
+  const [childMarks, setChildMarks] = React.useState({});   // row key (name + '#' + occurrence) → true; CSV pre-fills, the steward decides
   const [entries, setEntries] = React.useState([]);         // frozen at confirm, keys minted: [{ name, isChild, mnemonic }]
   const [results, setResults] = React.useState(null);       // kept (keys included) until the modal CLOSES — reprint stays possible (I6)
   const [progressLog, setProgressLog] = React.useState([]);
@@ -8186,8 +8189,17 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   // cannot SAVE a child's mark (helper key, or not yet authed) must never silently unmake it: a CSV child
   // column dropped here would publish those children as ADULTS. Marked rows keep their mark on screen and
   // are LEFT OUT of the batch instead; the banner below says so, and the confirm step repeats it.
-  const rows = names.split('\n').map(n => n.trim()).filter(Boolean).slice(0, 200)
-    .map(n => ({ name: n, isChild: !!childMarks[n], blocked: !!childrenBlocked && !!childMarks[n] }));
+  // Rows are keyed name + '#' + occurrence (0-based among same-named rows), counted through a null-prototype
+  // object: keyed by bare NAME, two "John Smith" rows shared ONE Child toggle, and a row named __proto__ or
+  // constructor read Object.prototype as already marked (audit F6). onFile builds the same keys.
+  const rows = (() => {
+    const occ = Object.create(null);
+    return names.split('\n').map(n => n.trim()).filter(Boolean).slice(0, 200).map(n => {
+      const i = occ[n] || 0; occ[n] = i + 1;
+      const k = n + '#' + i, mk = !!childMarks[k];
+      return { name: n, key: k, isChild: mk, blocked: !!childrenBlocked && mk };
+    });
+  })();
   const blockedKids = rows.filter(r => r.blocked);
   const eligible = rows.filter(r => !r.blocked);
   const existingLower = React.useMemo(() => new Set(Object.values(nameByPub || {}).map(n => String(n).toLowerCase())), [nameByPub]);
@@ -8198,7 +8210,8 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     rdr.onload = () => {
       const parsed = parseAccountsCsv(String(rdr.result || ''));
       setNames(parsed.map(r => r.name).join('\n'));
-      const marks = {}; parsed.forEach(r => { if (r.isChild) marks[r.name] = true; });
+      const marks = {}, occ = Object.create(null);   // same name#occurrence keys as the rows (audit F6)
+      parsed.forEach(r => { const i = occ[r.name] || 0; occ[r.name] = i + 1; if (r.isChild) marks[r.name + '#' + i] = true; });
       setChildMarks(marks);
     };
     rdr.readAsText(f);
@@ -8267,12 +8280,15 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
       + `.sec{font-size:11px;font-weight:700;color:#8a2f1f;max-width:240px}.sec.kid{color:#5c2a84}`
       + `@media print{.bar{display:none}}`
       + `</style></head><body><div class="bar"><span>${ok.length} sign-in slip${ok.length === 1 ? '' : 's'} for ${esc(church.name || 'your church')}. Print, cut along the dashes, and hand each slip to its person — don’t keep copies.</span><button onclick="window.print()">Print / Save as PDF</button></div><div class="grid">${slips}</div></body></html>`;
-    if (window.skPrintable) window.skPrintable(html);
-    setPrinted(true);   // results stay until the modal closes, so printing again stays possible (I6)
+    // `printed` only says the print window was OPENED — pressing Print proves nothing about paper (a popup
+    // blocker, a cancelled dialog, a closed tab all print nothing), so closing still confirms below (audit F8)
+    if (window.skPrintable) { window.skPrintable(html); setPrinted(true); }
   };
   const requestClose = () => {
     if (stage === 'running' || cleaning) return;   // the batch cannot be abandoned half-made
-    if (stage === 'done' && (results || []).some(r => r.attempted) && !printed) { setClosing(true); return; }
+    // attempted accounts always confirm the close: unprinted → offer to withdraw them; printed → ask whether
+    // the slips really printed (we cannot see the print dialog from here — audit F8). Never silent.
+    if (stage === 'done' && (results || []).some(r => r.attempted)) { setClosing(true); return; }
     onClose();
   };
   // CLOSE WITHOUT PRINTING = nobody will ever hold these keys. Every ATTEMPTED row is withdrawn — a send
@@ -8308,7 +8324,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
               {existingLower.has(r.name.toLowerCase()) ? <span title="A member with this name already exists — you can still continue" style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>already a member?</span> : null}
               {dupInBatch.has(r.name.toLowerCase()) ? <span title="This name appears more than once in your list" style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>duplicate</span> : null}
               {r.blocked ? <span title={childrenBlocked} style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)' }}>left out</span> : null}
-              <button onClick={() => setChildMarks(m => ({ ...m, [r.name]: !m[r.name] }))} disabled={!!childrenBlocked} title={childrenBlocked || 'Mark this account as a young person’s — their protection is saved before the account is made'}
+              <button onClick={() => setChildMarks(m => ({ ...m, [r.key]: !m[r.key] }))} disabled={!!childrenBlocked} title={childrenBlocked || 'Mark this account as a young person’s — their protection is saved before the account is made'}
                 style={{ flexShrink: 0, border: '1px solid ' + (r.isChild ? 'var(--clay)' : 'var(--line)'), background: r.isChild ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: r.isChild ? 'var(--clay-ink)' : 'var(--ink-2)', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, fontWeight: 700, cursor: childrenBlocked ? 'not-allowed' : 'pointer', opacity: childrenBlocked ? 0.5 : 1, fontFamily: 'var(--font-ui)' }}>{r.isChild ? 'Child ✓' : 'Child?'}</button>
             </div>
           ))}
@@ -8351,9 +8367,15 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 10 }}>
             {(results || []).map((r, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{r.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{r.name}{r.isChild ? ' (child)' : ''}</span>{!r.ok && r.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{r.reason}</span> : null}</div>)}
           </div>
-          {closing ? <SkConfirm icon="shield" title="Close without printing?" confirmLabel={cleaning ? 'Withdrawing…' : 'Close anyway'}
-            body={'You haven’t printed the slips. If you close now, nobody will ever have these accounts’ sign-in codes — so the ' + (results || []).filter(r => r.attempted).length + ' account(s) just made will be withdrawn from your church’s relays.'}
-            busy={cleaning} onConfirm={closeAnyway} onCancel={() => { if (!cleaning) setClosing(false); }} /> : null}
+          {closing ? (printed
+            // after Print was pressed the slips MAY be on paper, so closing must never withdraw the accounts —
+            // it only checks, because a cancelled print dialog or blocked popup printed nothing (audit F8)
+            ? <SkConfirm icon="qr" title="Did the slips print?" confirmLabel="Yes — close"
+                body={'If they didn’t, go back and press “Print again” — a cancelled or blocked print window printed nothing, and these slips are the only sign-in codes. Closing keeps the ' + (results || []).filter(r => r.attempted).length + ' account(s) either way.'}
+                onConfirm={onClose} onCancel={() => setClosing(false)} />
+            : <SkConfirm icon="shield" title="Close without printing?" confirmLabel={cleaning ? 'Withdrawing…' : 'Close anyway'}
+                body={'You haven’t printed the slips. If you close now, nobody will ever have these accounts’ sign-in codes — so the ' + (results || []).filter(r => r.attempted).length + ' account(s) just made will be withdrawn from your church’s relays.'}
+                busy={cleaning} onConfirm={closeAnyway} onCancel={() => { if (!cleaning) setClosing(false); }} />) : null}
           <div style={{ display: 'flex', gap: 10 }}>
             <button onClick={requestClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>{printed ? 'Done' : 'Close'}</button>
             <button onClick={print} disabled={!ok.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: ok.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> {printed ? 'Print again' : ('Print ' + ok.length + ' slip' + (ok.length === 1 ? '' : 's'))}</button>
