@@ -390,12 +390,21 @@ function shareCardLayout(measure, quote, comment) {
       cLines: hasC ? shareCardWrap(t => measure(t, f.comment), comment, max) : [] };
   };
   const need = (size, w) => fixed + w.lines.length * size * G.VLH + w.cLines.length * cSizeFor(size) * G.CLH;
+  const sizes = [64, 60, 56, 52, 48, 44, 40, 36];
   const memo = {};
+  const wrap = (s) => memo[s] || (memo[s] = wrapAt(s));
   for (const H of G.HEIGHTS) {
     const room = H - 2 * G.PAD - G.FOOT;
-    for (let size = 64; size >= 36; size -= 4) {
-      const w = memo[size] || (memo[size] = wrapAt(size));
-      if (need(size, w) <= room) return { W: G.W, H, size, cSize: cSizeFor(size), fonts: w.f, lines: w.lines, cLines: w.cLines, truncated: false, rtl, cRtl };
+    let lo = 0, hi = sizes.length - 1, best = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const w = wrap(sizes[mid]);
+      if (need(sizes[mid], w) <= room) { best = mid; hi = mid - 1; }
+      else lo = mid + 1;
+    }
+    if (best >= 0) {
+      const size = sizes[best], w = wrap(size);
+      return { W: G.W, H, size, cSize: cSizeFor(size), fonts: w.f, lines: w.lines, cLines: w.cLines, truncated: false, rtl, cRtl };
     }
   }
   // nothing fits at 1080 x 1920, 36px: cut
@@ -415,13 +424,22 @@ function shareCardLayout(measure, quote, comment) {
 }
 
 // Wait (briefly) for the card's fonts, so the canvas does not draw in the fallback serif.
+let _fontsDone = false;
 async function shareCardFonts() {
+  if (_fontsDone || shareCardFontsIn()) { _fontsDone = true; return; }
   try {
     const f = document.fonts; if (!f || !f.load) return;
     const all = Promise.all(['500 64px Newsreader', '700 32px Sora', '400 32px Sora'].map(x => Promise.resolve(f.load(x)).catch(() => null)));
     await Promise.race([all, new Promise(r => setTimeout(r, 2500))]);
+    if (shareCardFontsIn()) _fontsDone = true;
   } catch (e) {}
 }
+
+function shareCardFontsEager() {
+  if (_fontsDone) return;
+  shareCardFonts().then(() => { if (shareCardFontsIn()) _fontsDone = true; });
+}
+window.shareCardFontsEager = shareCardFontsEager;
 
 // Are the card's fonts in? false if the drawing went ahead on the timeout, with the fallback fonts.
 function shareCardFontsIn() {
@@ -431,6 +449,7 @@ function shareCardFontsIn() {
 
 // Draw the card for `verse` in style `st` (a CARD_STYLES entry). Returns { bytes (PNG), layout, fontsOk }. Throws if the
 // canvas cannot produce one. `comment`: the member's thoughts, drawn under the reference ('' for none).
+let _layoutCache = { key: '', layout: null };
 async function shareCardRender(verse, st, probe, comment) {
   await shareCardFonts();
   const fontsOk = shareCardFontsIn();
@@ -440,7 +459,14 @@ async function shareCardRender(verse, st, probe, comment) {
   const cv = document.createElement('canvas');
   const cx = cv.getContext('2d');
   if (!cx) throw new Error('no 2d canvas');
-  const L = shareCardLayout((t, f) => { cx.font = f; return cx.measureText(t).width; }, quote, String(comment || '').trim());
+  const lk = [quote, String(comment || '').trim(), fontsOk].join('\u0001');
+  let L;
+  if (_layoutCache.key === lk) {
+    L = _layoutCache.layout;
+  } else {
+    L = shareCardLayout((t, f) => { cx.font = f; return cx.measureText(t).width; }, quote, String(comment || '').trim());
+    _layoutCache = { key: lk, layout: L };
+  }
   const W = L.W, H = L.H, PAD = G.PAD;
   cv.width = W; cv.height = H;
   const k = st.cv;

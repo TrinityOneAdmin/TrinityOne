@@ -230,6 +230,7 @@ function _mergeChurchProfile(cs, id, p){
     picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner,
     bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent, titleColor: p.titleColor != null ? p.titleColor : x.titleColor,
     mainColor: p.mainColor != null ? p.mainColor : x.mainColor,   // the church's MAIN colour (2026-11-12); churchMainColor() validates it at every render
+    cardColor: p.cardColor != null ? p.cardColor : x.cardColor,
     features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules,
     initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() };
   const same = (a, b) => a === b || (a && b && typeof a === 'object' && JSON.stringify(a) === JSON.stringify(b));
@@ -269,23 +270,25 @@ function verseShareFull(v) { var t = verseShareText(v); var u = verseShareUrl(v)
 // ── devotional overlay ──
 function DevotionalView({ open, onClose, ctx }) {
   const d = window.TrinityData.DEVOTIONAL;
+  const cardC = (typeof churchCardColor === 'function') ? churchCardColor(ctx.church) : null;
+  const onCard = cardC ? churchOnColor(cardC) : '#fff';
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: cardC ? churchCardGradient(cardC, 160) : 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: onCard, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color={onCard} /></div>
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <button onClick={onClose} aria-label="Close this devotional" style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
-              color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={20} color="#fff" /></button>
+              color: onCard, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={20} color={onCard} /></button>
             <button onClick={() => ctx.openShareSheet({ type: 'devotional', title: d.title, ref: d.ref, series: d.series, excerpt: (d.body && d.body[0]) || '' })}
               aria-label="Share this devotional"
               style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
-              color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="share" size={18} color="#fff" /></button>
+              color: onCard, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="share" size={18} color={onCard} /></button>
           </div>
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9, marginTop: 16 }}>{d.series} · {d.day}</div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 29, fontWeight: 700, margin: '6px 0 8px', lineHeight: 1.08 }}>{d.title}</h1>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(255,255,255,.2)', padding: '5px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700 }}>
-            <Icon name="read" size={15} color="#fff" /> {d.ref} · {d.read}</div>
+            <Icon name="read" size={15} color={onCard} /> {d.ref} · {d.read}</div>
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '22px 22px 30px' }}>
