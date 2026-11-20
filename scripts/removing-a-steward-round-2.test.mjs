@@ -806,3 +806,96 @@ test('AUDIT 6 — the newest copy is by someone NOT on the helper list: listed a
   assert.deepEqual(b2.other, [], 'SAID "ANOTHER HELPER" OF SOMEONE WHO IS NOT ONE (audit 6): ' + JSON.stringify(b2));
   assert.deepEqual(b2.otherSomeone, ['the group “Sam’s Group”'], JSON.stringify(b2));
 });
+
+// ══ RE-AUDIT OF ab82f16d (Opus, GREEN WITH CHANGES; owner: fix the four LOWs) ═══════════════════════════════════════
+// R1: the "which groups" read keeps the newest N copies a relay holds; a relay that sent N is not a whole answer
+test('RE-AUDIT 1 — a relay that sends as many copies as the read asked for is not a whole answer: "Couldn’t check" is said', async () => {
+  const { eng, tess, g } = await formerHelperWithOrdinaryGroup('ra1-cap');
+  try {
+    assert.equal(typeof eng.SWAP_FIND_LIMIT, 'number', 'THE LIMIT IS NOT A NAMED CONSTANT THE TEST CAN LOWER — re-anchor (or the cap is gone)');
+    eng.SWAP_FIND_LIMIT = 2;   // the church holds more than 2 of its own documents (roster, group copy, blocklist, …)
+    const go = await eng._swapKeyInChurchGroups({ carried: [], superseded: [] }, tess.pub, '');
+    assert.ok(go.unchecked.includes('the groups they may have been on'), 'A READ CUT OFF AT ITS LIMIT WAS TAKEN AS WHOLE (re-audit 1): ' + JSON.stringify(go));
+    assert.equal(go.anyUnanswered, true);
+  } finally { g.stop(); }
+});
+// R2: the take-off and the Block screen's own write of an invite-only room (rotateChurchKeys → publishGroup, which drops
+// the blocked person AND anyone else held as blocked) race. The take-off must decide from the newest copy at the moment
+// it signs — never put back someone that write took out.
+async function raceCase(name, { inFlight }) {
+  const C = await churchOn(2, name);
+  const eng = owner(C);
+  const tess = await newSteward(C), other = H.key().pub, xan = H.key().pub;
+  await setRoster(eng, [tess.pub], { [tess.pub]: ['content'] });
+  const gid = C.cp.slice(0, 16) + '-race';
+  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Prayer Room', leaders: [tess.pub], visibility: 'invite', encrypted: true, members: [tess.pub, other, xan] }, { tagChurch: false }));
+  // the rotation's write: the room's member list without Tess and without Xan (held as blocked)
+  const rotation = () => eng.publishGroup({ id: gid, name: 'Prayer Room', leaders: [tess.pub], visibility: 'invite', encrypted: true, members: [other] });
+  if (inFlight) {
+    // as the real _publishToRelays does: the write is registered the moment it is made, and lands later
+    eng._publishToRelays = (evt) => {
+      const d = dOf(evt); let settle; const done = new Promise(r => { settle = r; });
+      eng._pubLatest.set((evt.kind | 0) + '|' + evt.pubkey + '|' + d, { id: evt.id, done });
+      eng.sent.push(evt);
+      return sleep(2500).then(() => putAll(C, evt)).then(([ok]) => { settle(ok); return ok ? evt : null; });
+    };
+  }
+  // the moment the take-off's own read of the room has answered, the rotation writes
+  const real = eng.pool.subscribeMany; let hooked = false;
+  eng.pool.subscribeMany = (urls, filters, h) => {
+    const mine = !hooked && filters.some(f => (f['#d'] || []).includes(GROUP_D + gid)) && !filters.some(f => f['#t']);
+    if (!mine) return real(urls, filters, h);
+    hooked = true;
+    let muted = false, wrote = null;
+    return real(urls, filters, {
+      onevent: (e) => { if (!muted && h.onevent) h.onevent(e); },
+      oneose: () => { muted = true; if (!wrote) wrote = inFlight ? (rotation(), Promise.resolve()) : rotation(); wrote.then(() => { if (h.oneose) h.oneose(); }); },
+    });
+  };
+  blockApi(eng, C);
+  eng._exStewards.add(tess.pub); eng._careRoster = new Set(); eng._stewardCaps = {};   // a FORMER helper
+  const go = await eng._swapKeyInChurchGroups({ carried: [], superseded: [GROUP_D + gid] }, tess.pub, '');
+  if (inFlight) await sleep(3000);
+  return { C, gid, go, tess, other, xan };
+}
+for (const inFlight of [false, true]) test('RE-AUDIT 2 — the rotation’s room write ' + (inFlight ? 'still IN FLIGHT' : 'LANDED') + ' after the take-off read the room: nobody it took out comes back', async () => {
+  const { C, gid, go, tess, other, xan } = await raceCase('ra2-' + (inFlight ? 'flight' : 'landed'), { inFlight });
+  for (const relay of C.relays) {
+    const newest = (await copiesAt(C, GROUP_D + gid, relay)).sort((a, b) => b.created_at - a.created_at)[0];
+    const g = JSON.parse(newest.content);
+    assert.ok(!(g.members || []).includes(xan), relay.name + ': THE TAKE-OFF PUT BACK SOMEONE THE ROTATION TOOK OUT (re-audit 2): ' + JSON.stringify(g) + ' ' + JSON.stringify(go));
+    assert.ok(!JSON.stringify(g).includes(tess.pub), relay.name + ': still names her: ' + JSON.stringify(g));
+    assert.deepEqual(g.members, [other], relay.name);
+  }
+});
+// R3: a CURRENT helper whose helper-list write did not land: no take-off — and it is said, never silence
+test('RE-AUDIT 3 — Block of a current helper whose helper-list write did NOT land: no take-off, and "Couldn’t check" is said', async () => {
+  const C = await churchOn(1, 'ra3-notlanded');
+  const eng = owner(C);
+  const kim = await newSteward(C);
+  await setRoster(eng, [kim.pub], { [kim.pub]: ['content'] });
+  const gid = C.cp.slice(0, 16) + '-c';
+  await mustPut(C, raw(C, C.church, GROUP_D + gid, { name: 'Church Choir', leaders: [kim.pub] }, { tagChurch: false }));
+  blockApi(eng, C);
+  eng.window.Steward.setStewards = async () => null;   // the helper-list write does not land
+  const b = await eng._blockStewardKeeping(kim.pub, [], { limitMs: 6000 });
+  assert.ok(b.blocked && b.onRoster && b.outcome !== 'landed', 'FIXTURE: ' + JSON.stringify({ blocked: !!b.blocked, onRoster: b.onRoster, outcome: b.outcome }));
+  const go = await groupsOffOf(b);
+  assert.ok(go && go.unchecked.includes('the groups they may have been on'), 'NO TAKE-OFF AND NOTHING SAID (re-audit 3): ' + JSON.stringify(go));
+  assert.deepEqual(go.swapped, []);
+  assert.ok(JSON.parse((await churchCopy(C, GROUP_D + gid, C.relays[0])).content).leaders.includes(kim.pub), 'the take-off ran although the helper-list write did not land');
+});
+// R4 (owner decision): a block that did not save (setBlocked false) changes no group — as teams and youth clearance
+test('RE-AUDIT 4 — a Block that did NOT save (setBlocked answered false): the group take-off does not run, and says why', async () => {
+  const { C, eng, tess, gid, g } = await formerHelperWithOrdinaryGroup('ra4-notsaved');
+  try {
+    blockApi(eng, C);
+    eng.window.Steward.setBlocked = async () => false;
+    const b = await eng._blockStewardKeeping(tess.pub, [], { limitMs: 6000 });
+    assert.equal(b.blocked, false, 'FIXTURE');
+    const go = await groupsOffOf(b);
+    assert.ok(go && go.notRun === 'block-not-saved', 'THE TAKE-OFF RAN (OR SAID NOTHING) FOR A BLOCK THAT DID NOT SAVE (re-audit 4): ' + JSON.stringify(go));
+    assert.deepEqual(go.swapped, []);
+    for (const relay of C.relays) assert.ok(JSON.stringify(JSON.parse((await churchCopy(C, GROUP_D + gid, relay)).content)).includes(tess.pub), relay.name + ': a group was changed for a block that did not save');
+  } finally { g.stop(); }
+});

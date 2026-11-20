@@ -346,3 +346,13 @@ test('AUDIT 1 — Reconnect: the done line names exactly the groups the swap re-
   const none = await reconnectDone({ carried: [], notCarried: [], superseded: [], swapped: [], swapFailed: [], swapOther: [], swapOtherSomeone: [], swapUnchecked: [], swapAnyUnanswered: false });
   assert.doesNotMatch(none, /now name their new key/, 'claimed a group moved when the swap re-saved none');
 });
+// RE-AUDIT 4 (owner decision): a Block that did not save leaves their groups unchanged, and the screen says why
+test('RE-AUDIT 4 — Block that did NOT save: the screen says their groups were left unchanged because the block didn’t save', async () => {
+  const r = blockRig({ carry: allKept(), blocked: false, stewards: [] });
+  r.g.window.Steward.isOrWasSteward = (pk) => pk === BRAM;
+  const real = r.g.window.Steward.blockStewardKeeping;
+  const off = { swapped: [], failed: [], other: [], otherSomeone: [], unchecked: [], anyUnanswered: false, notRun: 'block-not-saved' };
+  r.g.window.Steward.blockStewardKeeping = async (pk, list) => ({ ...(await real(pk, list)), groupsOff: off, groupsOffDone: Promise.resolve(off) });
+  const said = await blockBram(r);
+  assert.match(said, /Their groups were left unchanged because the block didn’t save\./, said.slice(0, 700));
+});

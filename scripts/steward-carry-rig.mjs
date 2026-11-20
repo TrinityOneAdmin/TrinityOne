@@ -105,6 +105,8 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     // carry asks it whether the church's care team still exists). Not loaded unless a test says so.
     _lastGroups: { cp: '', list: null }, _listIsFresh: (l) => !!(l && l._fresh),
     _reCheckCareKeyPending: () => {}, _webQueueSync: () => {},
+    // the console's register of its writes in flight, per document (_publishToRelays / publish fill it on the real console)
+    _pubLatest: new Map(),
     _exStewards: new Set(), _exStewardSet: () => scope._exStewards,
     _exRemembered: [], _rememberExStewards: (before, after, at) => { scope._exRemembered.push({ before: [...before], after: [...after], at }); },
     _hex: (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join(''),
@@ -148,7 +150,7 @@ export function consoleEngine({ signer, church, actingChurch = '', relayUrl, pub
     .filter(([a]) => STEWARD.includes(a));
   for (const [a] of OPT_TOPS) tops.push(fnBody(STEWARD, a, a));
   const optNames = OPT_TOPS.map(([, n]) => n);
-  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = ', ...['var SWAP_QUIET_MS = ', 'var SWAP_READ_CAP_MS = '].filter(a => STEWARD.includes(a))].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
+  const vars = ['var STEWARD_CARRY = ', 'var _CARRY_BARE = ', 'var STEWARD_CARRY_LIMIT_MS = ', 'var _CARRY_WORDS = ', 'var SWAP_PUBLISH_MS = ', ...['var SWAP_QUIET_MS = ', 'var SWAP_READ_CAP_MS = ', 'var SWAP_FIND_LIMIT = '].filter(a => STEWARD.includes(a))].map(a => stmt(STEWARD, a, a).replace(/^var /, 'scope.').replace(/^scope\.(\w+) = /, 'scope.$1 = '));
   const methods = [gkBody, fnBody(STEWARD, 'setNoPhoto(pubkeys) {', 'setNoPhoto'), fnBody(STEWARD, 'publishGroup(group) {', 'publishGroup'), ssBody];
   // the window.Steward methods the screens call — lifted too, so the screen reaches the shipped delegation
   const pub3 = ['removeStewardKeeping(pk, opts) {', 'carryOverStewardDocs(pk, opts) {', 'isOrWasSteward(pk) {', 'setCareRoster(list) {', 'blockStewardKeeping(pk, blockedList, opts) {']
