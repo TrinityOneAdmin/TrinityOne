@@ -11,6 +11,11 @@
 //
 // Callers of UpdateBanner: app/steward-root.jsx (steward, variant="steward"), app/app.jsx (member,
 // no variant / default "member").
+//
+// 2026-11-19: UpdateBanner is now gated to Android by NAME (Capacitor.getPlatform() === 'android'), not just
+// isNativePlatform() — which is true on iOS too, where the banner fired and offered an Android .apk on an iPhone.
+// These steward mocks therefore set getPlatform:'android' (the steward APK is Android). The iOS-gate is proven in
+// scripts/ios-shows-no-apk-update-banner.test.mjs.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,6 +56,7 @@ test('UpdateBanner with variant="steward" reads stewardVersionCode from the mani
 
   window.Capacitor = {
     isNativePlatform: () => true,
+    getPlatform: () => 'android',   // the APK update banner is Android-gated by NAME (2026-11-19): isNativePlatform() is true on iOS too, where it offered an Android .apk. The steward APK is Android, so the mock must say so or the banner no-ops.
     Plugins: { App: { getInfo: async () => ({ version: '0.9.50', build: '100' }) } },
   };
   window.fetch = async (url) => {
@@ -112,6 +118,7 @@ test('UpdateBanner with variant="steward" ignores a manifest that only has membe
 
   window.Capacitor = {
     isNativePlatform: () => true,
+    getPlatform: () => 'android',   // the APK update banner is Android-gated by NAME (2026-11-19): isNativePlatform() is true on iOS too, where it offered an Android .apk. The steward APK is Android, so the mock must say so or the banner no-ops.
     Plugins: { App: { getInfo: async () => ({ version: '0.9.50', build: '100' }) } },
   };
   window.fetch = async () => {
@@ -155,6 +162,7 @@ test('UpdateBanner with variant="steward" uses a separate snooze key', async () 
 
   window.Capacitor = {
     isNativePlatform: () => true,
+    getPlatform: () => 'android',   // the APK update banner is Android-gated by NAME (2026-11-19): isNativePlatform() is true on iOS too, where it offered an Android .apk. The steward APK is Android, so the mock must say so or the banner no-ops.
     Plugins: { App: { getInfo: async () => ({ version: '0.9.50', build: '100' }) } },
   };
   window.fetch = async () => {
