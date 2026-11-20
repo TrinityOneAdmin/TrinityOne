@@ -52,17 +52,17 @@ test('the code the parent shows IS a code the app can sign in from', () => {
   const seedFromScan = lift(IDENTITY, 'const seedFromScan = (text) => {', 'seedFromScan', {});
   const url = inviteUrlFor(PHRASE, {});
   assert.match(url, /#invite=/, 're-anchor: the seed no longer travels in the fragment');
-  assert.equal(seedFromScan(url), PHRASE,
+  assert.equal(seedFromScan(url).seed, PHRASE,
     'the scanner on the restore screen cannot read the code the parent is showing, so "Someone set this up ' +
     'for me" is not a route for a child hand-off at all and the twelve words are the only way through');
 });
 
 test('and it refuses anything that is not one', () => {
   const seedFromScan = lift(IDENTITY, 'const seedFromScan = (text) => {', 'seedFromScan', {});
-  assert.equal(seedFromScan('https://app.trinityone.church/?follow=npub1x'), '',
+  assert.equal(seedFromScan('https://app.trinityone.church/?follow=npub1x').seed, '',
     'a church JOIN link reads as a sign-in seed, which would be an identity takeover from an ordinary invite');
-  assert.equal(seedFromScan('WIFI:S=ChurchHall;T=WPA;P=hunter2;;'), '', 'a Wi-Fi code reads as a seed');
-  assert.equal(seedFromScan('https://app.trinityone.church/#invite=only four words here'), '',
+  assert.equal(seedFromScan('WIFI:S=ChurchHall;T=WPA;P=hunter2;;').seed, '', 'a Wi-Fi code reads as a seed');
+  assert.equal(seedFromScan('https://app.trinityone.church/#invite=only four words here').seed, '',
     'a link carrying something that is not a 12-word phrase is accepted as one');
 });
 

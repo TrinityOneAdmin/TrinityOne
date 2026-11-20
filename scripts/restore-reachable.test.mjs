@@ -42,13 +42,16 @@ test('the restore route opens straight into restore, not into name-entry', () =>
 });
 
 test('opening it from settings does NOT re-run onboarding side effects', () => {
-  // The member is already set up. Re-writing trinityone.onboarded is harmless-but-wrong; re-prompting them to
+  // The member is already set up. Re-writing trinityone.onboarded is harmless-but-wrong; re-PROMPTING them to
   // follow a church is a confusing dead end. The settings render must have its OWN handlers.
+  // The `followChurch` PROP is allowed, and deliberately (Set up accounts, 2026-11-20): it is not a prompt —
+  // it is the scan route honouring a slip that itself names a church, and a slip scanned from Settings must
+  // behave exactly as on a fresh phone. What stays forbidden is the onboarding handlers' promptFollowChurch.
   const at = APP.indexOf("idSheet === 'restore' ? <IdentityOnboarding");
   assert.notEqual(at, -1, 'the settings-mode render is gone');
   const block = APP.slice(at, APP.indexOf('/> : null}', at));
   assert.doesNotMatch(block, /trinityone\.onboarded/, 'the settings restore re-writes the onboarding flag');
-  assert.doesNotMatch(block, /promptFollowChurch|followChurch/, 'the settings restore re-prompts a church follow');
+  assert.doesNotMatch(block, /promptFollowChurch/, 'the settings restore re-prompts a church follow');
   assert.match(block, /setIdSheet\(null\)/, 'it never closes');
 });
 

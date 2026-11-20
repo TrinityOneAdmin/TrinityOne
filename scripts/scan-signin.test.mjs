@@ -40,11 +40,26 @@ const PHRASE = 'ridge lunar absent gospel timber olive candle harvest meadow bis
 
 test('it reads the seed out of a real invite link', () => {
   const url = 'https://app.trinityone.church/?follow=npub1abc&relay=wss%3A%2F%2Fx%2Frelay#invite=' + encodeURIComponent(PHRASE);
-  assert.equal(seedFromScan(url), PHRASE);
+  assert.equal(seedFromScan(url).seed, PHRASE);
+});
+
+test('it hands back the church half of the link, WITHOUT the seed fragment', () => {
+  // The slip names the church (?follow=, ?relay=, and ?relayname= — the stable name a printed slip needs
+  // once its tunnel address has rotated). doScanSignIn hands `src` to followChurch, whose engine reads
+  // ?relay= with a [?&]relay=([^&\s]+) matcher — so the fragment MUST be stripped, or on a link where
+  // relay= is the last query param the BIP-39 seed rides into the relay address and out of the fragment's
+  // never-sent safety (SECURITY-AUDIT-2026-07-18).
+  const url = 'https://app.trinityone.church/?follow=npub1abc&relayname=grace-city&relay=wss%3A%2F%2Fx%2Frelay#invite=' + encodeURIComponent(PHRASE);
+  const r = seedFromScan(url);
+  assert.equal(r.seed, PHRASE);
+  assert.equal(r.src, 'https://app.trinityone.church/?follow=npub1abc&relayname=grace-city&relay=wss%3A%2F%2Fx%2Frelay',
+    'the query must pass through VERBATIM (relayname included) with the fragment gone');
+  assert.ok(!r.src.includes('#') && !r.src.includes(PHRASE.split(' ')[0]), 'no fragment, no seed words, in what reaches followChurch');
+  assert.equal(seedFromScan('  ' + PHRASE + '  ').src, '', 'a bare phrase names no church');
 });
 
 test('it accepts a bare 12-word phrase', () => {
-  assert.equal(seedFromScan('  ' + PHRASE.toUpperCase() + '  '), PHRASE, 'case and padding should not matter');
+  assert.equal(seedFromScan('  ' + PHRASE.toUpperCase() + '  ').seed, PHRASE, 'case and padding should not matter');
 });
 
 test('it refuses anything it does not recognise', () => {
@@ -57,13 +72,13 @@ test('it refuses anything it does not recognise', () => {
     (PHRASE + ' extra'),                                   // too many
     'nostr:npub1abc', 'https://example.com', '', '   ', '{"a":1}',
   ]) {
-    assert.equal(seedFromScan(junk), '', 'accepted a payload it should have refused: ' + junk.slice(0, 40));
+    assert.equal(seedFromScan(junk).seed, '', 'accepted a payload it should have refused: ' + junk.slice(0, 40));
   }
 });
 
 test('an older ?invite= link still works', () => {
   const url = 'https://app.trinityone.church/?invite=' + encodeURIComponent(PHRASE);
-  assert.equal(seedFromScan(url), PHRASE, 'links shared before the seed moved into the fragment must still work');
+  assert.equal(seedFromScan(url).seed, PHRASE, 'links shared before the seed moved into the fragment must still work');
 });
 
 test('scanning does not count as proving you have your phrase', () => {

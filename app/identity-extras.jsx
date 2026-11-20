@@ -452,8 +452,9 @@ function joinLinkFor(ctx) {
   const nm = (relay !== shared && pick && typeof pick.relayname === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(pick.relayname)) ? pick.relayname : '';
   return _inviteBase() + '/?follow=' + np + '&relay=' + encodeURIComponent(relay) + (nm ? '&relayname=' + encodeURIComponent(nm) : '');
 }
-// The seed-carrying invite is now used ONLY for the guardian→child handoff (safeguarding v2): the parent OWNS
-// the child account they set up and hands its key to the child's device. Kept for that path; the receiving
+// The seed-carrying invite is a HANDED-OVER account: the guardian→child handoff (safeguarding v2 — the parent
+// OWNS the child account they set up and hands its key to the child's device), and since the Set up accounts
+// feature also a steward's pre-minted member slip (Steward.memberInviteUrl, same #invite= shape). The receiving
 // device confirms before adopting (app.jsx), so a crafted link can't silently take over a fresh phone.
 function inviteUrlFor(mnemonic, ctx) {
   const np = _inviteChurchNp(ctx);

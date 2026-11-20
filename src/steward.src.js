@@ -9206,6 +9206,41 @@ function _blockStewardKeeping(pk, blockedList, opts) {
     }
     return out;
   })();
+
+// ── QUIET PUBLISH for the Set up accounts flow (plan v3, 2026-11-20) ─────────────────────────────────────
+// publish() raises the console-wide red "could not be saved" banner per failed event; a 200-slip batch must
+// not raise 200 of them, and these failures are reported per-row inside the modal where the steward is
+// looking. SUCCESS = ANY ONE relay acknowledged — the same bar createChildAccount's _publishAny sets
+// (src/fellowship.src.js): the member's own phone re-announces the join on first sign-in and every document
+// here is replaceable, so one landed copy is enough to hand the slip out on. The 'connection failure…'
+// string nostr-tools RESOLVES with is converted to the failure it is (same check as publish(), inline for
+// the same reason — tests lift this function out of the bundle). `rate-limited:` — the one refusal that
+// says nothing about THIS event — is asked again once, with the SAME signed event, after the limiter's
+// one-second window (a relay that stored it first time answers `duplicate`, OK). Every attempt is bounded
+// at 15s so a hung relay cannot wedge the modal's close guard.
+async function _quietSend(evt) {
+  let urls = [];
+  try { urls = relays(); } catch (e) { urls = []; }
+  if (!urls.length) return { ok: false, reason: 'no relay is connected' };
+  const attempt = () => Promise.race([
+    Promise.any(pool.publish(urls, evt).map(p => p.then(v => {
+      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      return v;
+    }))),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timed out — the relay did not answer within 15s')), 15000)),
+  ]);
+  const reasonsOf = (e) => ((e && e.errors) || [e]).map(x => String((x && x.message) || x || '')).filter(Boolean);
+  try { await attempt(); return { ok: true }; }
+  catch (e) {
+    const msgs = reasonsOf(e);
+    const limited = msgs.some(w => /^rate-limited/i.test(w) && !/^rate-limited: document limit reached/i.test(w));
+    if (limited) {
+      await new Promise(r => setTimeout(r, 1200 + Math.floor(Math.random() * 400)));
+      try { await attempt(); return { ok: true }; }
+      catch (e2) { return { ok: false, reason: reasonsOf(e2)[0] || 'no relay accepted it' }; }
+    }
+    return { ok: false, reason: msgs[0] || 'no relay accepted it' };
+  }
 }
 
 window.Steward = {
@@ -17927,6 +17962,144 @@ window.Steward = {
                                               { kinds: [30078], '#p': [pub], '#d': ['trinityone/member:' + pub], limit: 200 }], handlers);
     const docs = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }], { onevent: (e) => handlers.onevent(e), oneose() { emit(); } });
     return () => { try { sub.close(); } catch {} try { docs.close(); } catch {} };
+  },
+
+  // ═══ STEWARD ACCOUNT SETUP — pre-minted member accounts handed over as printed QR slips (plan v3) ═══
+  // A steward (or a helper with the `members` capability) enters names; each gets a BIP-39 key minted by
+  // the UI, a join document, an empty kind-0 and a sealed name published HERE with the member's own key,
+  // and a slip whose QR is joinUrl() + '#invite=<mnemonic>' — the same link shape the guardian→child
+  // handoff prints, consumed by "Someone set this up for me" (app/identity.jsx).
+  // the UI mints keys with this, one per name, BEFORE confirming — a retry must finish the same account,
+  // never start a second one (createChildAccount's rule, AUDIT-2026-08-29)
+  mintAccountKey() { return generateSeedWords(); },
+  // is the authoritative admitted list loaded fresh for the church this console is on?
+  // (subscribeAdmitted keeps _lastAdmitted; the Members tab holds that subscription open)
+  admittedListFresh() { try { return _lastAdmitted.cp === (actingChurch || pub) && _listIsFresh(_lastAdmitted.list); } catch (e) { return false; } },
+  // ONE pre-minted account: derive the caller's mnemonic, publish join → (kind-0 ∥ sealed name).
+  // Never mints a key, never admits, never marks — createMemberAccounts owns the batch semantics.
+  async createMemberAccount(name, opts) {
+    const nm = String(name || '').trim();
+    if (!nm) return { ok: false, attempted: false, name: nm, reason: 'no name' };
+    if (nm.length > 40) return { ok: false, attempted: false, name: nm, reason: 'that name is too long (40 characters at most)' };
+    const mnemonic = opts && opts.mnemonic;
+    if (!mnemonic) return { ok: false, attempted: false, name: nm, reason: 'no key was provided for this account' };
+    const cp = actingChurch || pub;   // the CHURCH — on a helper console `pub` is already the church (switchTo), said explicitly anyway
+    if (!cp) return { ok: false, attempted: false, name: nm, reason: 'no church is open on this console' };
+    let memberSk = null, memberPub = '';
+    try { memberSk = privateKeyFromSeedWords(mnemonic); memberPub = getPublicKey(memberSk); }
+    catch (e) { return { ok: false, attempted: false, name: nm, reason: 'the key words are not a valid phrase' }; }
+    const ts = now();
+    // the same three documents createChildAccount publishes (src/fellowship.src.js), minus the guardian request
+    const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, memberSk);
+    const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: '{}' }, memberSk);
+    let nameDoc = null;
+    try {
+      const body = JSON.stringify({ name: nm });
+      const c = nip44e(body, nip44ck(memberSk, cp));          // the church key's copy — a helper console cannot open it (its sk is its own; accepted, plan I7)
+      const m = nip44e(body, nip44ck(memberSk, memberPub));   // the member's own recovery copy, same shape as everyone's
+      nameDoc = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c, m }) }, memberSk);
+    } catch (e) {}
+    // JOIN FIRST, AND AS A GATE: the relay refuses a name document from a pubkey it does not already know
+    // is a member, so publishing the rest over a failed join guarantees refusals (createChildAccount's rule).
+    const j = await _quietSend(join);
+    if (!j.ok) return { ok: false, attempted: true, name: nm, pubkey: memberPub, npub: npubEncode(memberPub), reason: 'join: ' + (j.reason || 'not accepted') };
+    const [, rn] = await Promise.all([
+      _quietSend(k0),   // non-fatal: an empty kind-0 is republished by the member's own phone on first sign-in
+      nameDoc ? _quietSend(nameDoc) : Promise.resolve({ ok: false, reason: 'the name could not be sealed' }),
+    ]);
+    return { ok: rn.ok, attempted: true, name: nm, pubkey: memberPub, npub: npubEncode(memberPub), reason: rn.ok ? '' : ('name: ' + (rn.reason || 'not accepted')) };
+  },
+  // THE BATCH (a single account is the same path with one entry — no special case, plan I4).
+  // Order is MARK → ADMIT → JOINS, the order reseatMember titles "SAFEGUARDING BEFORE ADMISSION": a child's
+  // pubkey is known before anything is published, so a child whose mark did not land gets NO account at all,
+  // instead of an account the relay treats as an adult's. Auth and both lists are read HERE, at the moment
+  // of use, never from a render-time snapshot (audit v3 B2).
+  //   · not authed → publish joins WITHOUT admitting (an open church makes them effective on the join alone;
+  //     an approval church queues them — fails closed either way), and REFUSE every child row: setMinors
+  //     cannot be written without auth, and "create them as adults, mark later" is the gap NB2 names.
+  //   · authed → the admitted list must be FRESH (_lastAdmitted via subscribeAdmitted) or the whole batch
+  //     refuses; one setAdmitted carries everyone. The join policy itself is deliberately not consulted —
+  //     admitting into an open church is accepted-and-ignored by the relay (audit v1).
+  //   · children → Steward.readMinors() must answer known:true or every child refuses (a cold list would
+  //     publish a list that takes every OTHER child in the church off it — stew-dashboard's toggleMinor
+  //     guard, HIGH, audit 2026-10-13); one setMinors carries current list + every child. setMinors is
+  //     all-or-nothing across relays, so a failure excludes ALL children (N2).
+  // toggleMinor's other side effects are deliberately NOT repeated here for brand-new keys: there is no
+  // photograph to suppress yet (the modal writes the no-photo entries, and DashMembers' reconcile effect is
+  // the standing backstop), no guardian role to end, no check-in clearance to withdraw, and the roster
+  // back-fill re-seals clearances once the children document lands.
+  async createMemberAccounts(entries, opts) {
+    const onProgress = (opts && opts.onProgress) || (() => {});
+    const list = (Array.isArray(entries) ? entries : []).filter(e => e && String(e.name || '').trim()).slice(0, 200);
+    if (!list.length) return { results: [], refused: 'no names' };
+    try { await _waitForRegistration(); } catch (e) {}
+    let urls = []; try { urls = relays(); } catch (e) { urls = []; }
+    if (!urls.length) return { results: [], refused: 'no relay is connected' };
+    const cp = actingChurch || pub;
+    if (!cp) return { results: [], refused: 'no church is open on this console' };
+    const authed = _isRelayAuthed();
+    // derive every pubkey up front — marking and admission need them before anything is published
+    const rows = list.map(e => { let pk = ''; try { pk = getPublicKey(privateKeyFromSeedWords(e.mnemonic)); } catch (x) {} return { name: String(e.name).trim(), mnemonic: e.mnemonic, isChild: !!e.isChild, pubkey: pk }; });
+    // 1. MARK CHILDREN FIRST — one write for the whole batch
+    let marked = new Set(), childrenRefused = '';
+    const childPks = rows.filter(r => r.isChild && r.pubkey).map(r => r.pubkey);
+    if (childPks.length) {
+      if (!authed) childrenRefused = 'this console has not finished connecting to your church’s relay, so children’s accounts can’t be set up yet';
+      else {
+        let cur = null;
+        try { cur = await window.Steward.readMinors(); } catch (e) { cur = null; }
+        if (!cur || cur.known !== true) childrenRefused = 'your church’s list of children hasn’t loaded yet — saving now would take every other child off it. Try again in a moment';
+        else {
+          let okM = null;
+          try { okM = await Promise.resolve(window.Steward.setMinors([...new Set([...(cur.list || []), ...childPks])])); } catch (e) { okM = null; }   // throws synchronously when auth drops (N1)
+          if (okM) marked = new Set(childPks);
+          else childrenRefused = 'the relay didn’t accept the children’s marking, so no child’s account was made';   // all-or-nothing (N2)
+        }
+      }
+    }
+    // 2. ADMIT EVERYONE — one write. Children are admitted only if their mark landed.
+    const wantJoin = rows.filter(r => r.pubkey && (!r.isChild || marked.has(r.pubkey)));
+    if (authed && wantJoin.length) {
+      const fresh = window.Steward.admittedListFresh();
+      if (!fresh) return { results: [], refused: 'the members list hasn’t loaded yet — try again in a moment', childrenRefused };
+      let okA = null;
+      try { okA = await Promise.resolve(window.Steward.setAdmitted([...new Set([...((_lastAdmitted.list) || []), ...wantJoin.map(r => r.pubkey)])])); } catch (e) { okA = null; }
+      // STOP on a refused admission (N3): in an approval church the joins would sit waiting with nothing on
+      // this screen to say so. Nothing has been published yet, and a retry with the same keys is safe.
+      if (!okA) return { results: [], refused: 'the relay didn’t accept the admissions, so no account was made. Check the relay and try again', childrenRefused };
+    }
+    // 3. PUBLISH JOINS, sequentially
+    const results = [];
+    for (const r of rows) {
+      let res;
+      if (!r.pubkey) res = { ok: false, attempted: false, name: r.name, reason: 'the key words are not a valid phrase' };
+      else if (r.isChild && !marked.has(r.pubkey)) res = { ok: false, attempted: false, name: r.name, pubkey: r.pubkey, reason: childrenRefused || 'not marked as a child, so not created' };
+      else res = await window.Steward.createMemberAccount(r.name, { mnemonic: r.mnemonic });
+      res.isChild = r.isChild; res.mnemonic = r.mnemonic;
+      results.push(res);
+      try { onProgress({ done: results.length, total: rows.length, current: r.name, ok: !!res.ok, reason: res.reason || '' }); } catch (e) {}
+    }
+    return { results, authed, childrenRefused };
+  },
+  // the slip's QR: the ordinary join link with the account's key in the FRAGMENT (#invite= never reaches a
+  // server — SECURITY-AUDIT-2026-07-18), the shape "Someone set this up for me" already consumes
+  memberInviteUrl(mnemonic) { return window.Steward.joinUrl() + '#invite=' + encodeURIComponent(String(mnemonic || '')); },
+  // CLOSE-WITHOUT-PRINT: nobody will ever hold this account's key, so withdraw what was published. Every
+  // ATTEMPTED row is tombstoned — a send that timed out may still have landed (N6). Name doc FIRST: its
+  // write gate needs the author still in MEMBER_DOCS, which the member tombstone is what ends. The member
+  // tombstone is leaveMembership's exact shape (same d-tag, ['deleted','1'], empty content), which the
+  // relay's ingest honours. The admitted/minors entries are left (an admitted key with no join document is
+  // inert, and taking a key OFF the children list is never the safe direction to automate).
+  async tombstoneMemberAccount(mnemonic) {
+    const cp = actingChurch || pub;
+    if (!cp || !mnemonic) return false;
+    let mSk = null; try { mSk = privateKeyFromSeedWords(mnemonic); } catch (e) { return false; }
+    const ts = now();
+    const nameGone = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, mSk);
+    const memberGone = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }, mSk);
+    const r1 = await _quietSend(nameGone);
+    const r2 = await _quietSend(memberGone);
+    return r1.ok && r2.ok;
   },
 
   // ---- join flow: members follow the church by its npub ----
