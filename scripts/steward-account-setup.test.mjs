@@ -535,11 +535,72 @@ test('POINT OF USE: the same CSV on an authed main console creates the marked ch
   ], 'the file’s marks must arrive at the engine as CHILD entries');
 });
 
-// ── reachability (existence only — the behaviour above is proved by DRIVING the real modal) ──────────────
-test('the trigger and the modal are referenced by DashMembers, and the render sites pass followChurch', () => {
+// ── POINT OF USE (rule 1): the Members-panel wiring, EXECUTED — not grepped ──────────────────────────────
+// The three real pieces of the trigger wiring are sliced out of DashMembers BY STRUCTURE (the state line,
+// the button whose label is "Set up accounts", and the ENCLOSING {…} JSX expression that mounts the modal —
+// taken from the outside in, so a `false && ` prefixed to the condition rides along), assembled into one
+// compilable component, compiled with the packaged esbuild, and DRIVEN. Deadening the onClick or prefixing
+// the mount condition leaves every word of the text in place — a text match stayed green over exactly that
+// sabotage (audit F2, 19/19) — but here the button is CLICKED and the mount is OBSERVED, so either goes red.
+function loadDashWiring(React, SetupAccountsModalStub) {
   const dash = fnBody(STEW, 'function DashMembers({ dmConvos: dmConvosProp }) {', 'DashMembers');
-  assert.match(dash, /setSetupOpen\(true\)/, 'nothing on the Members panel opens the modal');
-  assert.match(dash, /<SetupAccountsModal/, 'DashMembers never renders the modal');
+  const stateLine = 'const [setupOpen, setSetupOpen] = React.useState(false);';
+  assert.equal(dash.split(stateLine).length, 2, 'the setupOpen state is gone from DashMembers — re-anchor');
+  const btnEndTag = ' Set up accounts</button>';
+  assert.equal(dash.split(btnEndTag).length, 2, 'the Set up accounts button is gone from DashMembers');
+  const be = dash.indexOf(btnEndTag);
+  const bs = dash.lastIndexOf('<button', be);
+  assert.notEqual(bs, -1, 'no opening <button before the Set up accounts label');
+  const btn = dash.slice(bs, be + btnEndTag.length);
+  assert.equal(dash.split('<SetupAccountsModal').length, 2, 'DashMembers must render the modal exactly once');
+  const mAt = dash.indexOf('<SetupAccountsModal');
+  const os = dash.lastIndexOf('{', mAt);
+  let depth = 0, oe = -1;
+  for (let i = os; i < dash.length; i++) {
+    const c = dash[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (!depth) { oe = i; break; } }
+  }
+  assert.notEqual(oe, -1, 'unbalanced modal-mount expression');
+  const mount = dash.slice(os, oe + 1);
+  const src = 'function DashWiring({ sg, kidPhotosAllowed, nameByPub, delegated }) {\n  ' + stateLine
+    + '\n  return <div>' + btn + mount + '</div>;\n}\n';
+  const tmp = join(tmpdir(), 'dashwiring-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
+  let js;
+  try {
+    writeFileSync(tmp, src);
+    js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--log-level=error'], { encoding: 'utf8' });
+  } finally { rmSync(tmp, { force: true }); }
+  return new Function('React', 'Icon', 'SetupAccountsModal', js + '\nreturn DashWiring;')(React, () => null, SetupAccountsModalStub);
+}
+
+test('POINT OF USE: the Members-panel button CAUSES the modal to mount, with the live props, and onClose unmounts it', () => {
+  const { React, draw } = miniReact();
+  const seen = [];
+  const Stub = (props) => { seen.push(props); return React.createElement('div', {}, 'SETUP-MODAL-MOUNTED'); };
+  const DashWiring = loadDashWiring(React, Stub);
+  const props = { sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: false, nameByPub: { x: 'Maria' }, delegated: true };
+  let tree = draw(DashWiring, props);
+  assert.ok(!texts(tree).join(' ').includes('SETUP-MODAL-MOUNTED'), 'the modal must not be open before the tap');
+  const b = button(tree, 'Set up accounts').filter(n => typeof n.props.onClick === 'function' && !n.props.disabled);
+  assert.ok(b.length, 'no live Set up accounts button on the Members panel — the trigger is dead on the screen');
+  b[0].props.onClick();
+  tree = draw(DashWiring, props);
+  assert.ok(texts(tree).join(' ').includes('SETUP-MODAL-MOUNTED'),
+    'tapping the button must MOUNT the modal — a dead onClick or a false&& on the render goes red HERE, where a text match stays green');
+  const mp = seen[seen.length - 1];
+  assert.equal(mp.sg, props.sg, 'the modal must receive the live safeguarding roster');
+  assert.equal(mp.delegated, props.delegated, 'the modal must be told it is on a helper console — the child gates hang off this');
+  assert.equal(mp.kidPhotosAllowed, props.kidPhotosAllowed);
+  assert.equal(mp.nameByPub, props.nameByPub);
+  assert.equal(typeof mp.onClose, 'function');
+  mp.onClose();
+  tree = draw(DashWiring, props);
+  assert.ok(!texts(tree).join(' ').includes('SETUP-MODAL-MOUNTED'), 'the modal’s own onClose must close it');
+});
+
+// ── reachability (regex, and it bites: REMOVING the prop fails this — measured in the audit) ─────────────
+test('both IdentityOnboarding render sites pass followChurch', () => {
   const APP = readFileSync(join(ROOT, 'app/app.jsx'), 'utf8');
   const sites = APP.match(/<IdentityOnboarding[^>]*followChurch=\{followChurch\}/g) || [];
   assert.equal(sites.length, 2, 'BOTH IdentityOnboarding render sites must pass followChurch, or the scan route silently stops following (the saveIdentity lesson)');
