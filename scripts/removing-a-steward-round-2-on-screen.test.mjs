@@ -337,3 +337,12 @@ test('AUDIT 6 — Reconnect: a newer copy by someone who is not a helper is NOT 
   assert.match(said, /Someone else has changed the group “Youth” since, and it still names their old key — check it by hand\./, said.slice(0, 800));
   assert.doesNotMatch(said, /Ordinary groups need nothing/, 'said "nothing needed" over a group that still names the old key');
 });
+// the done line says only what the swap did: the groups it re-saved, by name — a group they were only a MEMBER of
+// included (the swap covers those since item 1), and never "groups they set up"
+test('AUDIT 1 — Reconnect: the done line names exactly the groups the swap re-saved, member-only ones included', async () => {
+  const said = await reconnectDone({ carried: [], notCarried: [], superseded: [], swapped: ['the group “Choir”', 'the group “Youth”'], swapFailed: [], swapOther: [], swapOtherSomeone: [], swapUnchecked: [], swapAnyUnanswered: false });
+  assert.match(said, /Groups that named them now name their new key: the group “Choir”, the group “Youth”\./, said.slice(0, 800));
+  assert.doesNotMatch(said, /Groups they set up/, 'still says "groups they set up" of groups they may only have been a member of');
+  const none = await reconnectDone({ carried: [], notCarried: [], superseded: [], swapped: [], swapFailed: [], swapOther: [], swapOtherSomeone: [], swapUnchecked: [], swapAnyUnanswered: false });
+  assert.doesNotMatch(none, /now name their new key/, 'claimed a group moved when the swap re-saved none');
+});

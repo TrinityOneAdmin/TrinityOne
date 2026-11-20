@@ -328,7 +328,7 @@ test('LOW 1 — Reconnect with "taken" on a steward’s old key shows progress, 
   const said = reads(draw(C, props));
   assert.match(said, /These couldn’t be kept and may change back: a photo setting\./, 'the result of the carry is not said');
   // round 3 (nit 6): groups they set up were moved to the new key automatically, so the hand step is only for the OTHERS
-  assert.match(said, /Groups they set up now name their new key\./, 'the screen does not say the groups they set up were moved');
+  assert.match(said, /Groups that named them now name their new key: the group “Youth”\./, 'the screen does not say which groups were moved');
   assert.match(said, /Couldn’t put their new key on the group “Choir” — open Groups and add them\./, 'a group the swap could not re-save is not named');
   assert.match(said, /if they were in any other invite-only groups/, 'the hand step still reads as if no group was moved');
 });
@@ -371,12 +371,12 @@ async function reconnectDone(carry) {
   await flush();
   return reads(draw(C, props));
 }
-test('N3 — "Groups they set up now name their new key" only when at least one group was actually swapped', async () => {
+test('N3 — "Groups that named them now name their new key" only when at least one group was actually swapped', async () => {
   const none = await reconnectDone({ carried: [{ d: 'trinityone/group:g', label: 'the group “Youth”' }], notCarried: [], superseded: [], swapped: [], swapFailed: ['the group “Youth”'] });
-  assert.doesNotMatch(none, /Groups they set up now name their new key/, 'claimed the groups moved when every swap failed');
+  assert.doesNotMatch(none, /now name their new key/, 'claimed the groups moved when every swap failed');
   assert.match(none, /if they were in any invite-only groups/, 'the hand step says "other" although no group was moved');
   const some = await reconnectDone({ carried: [], notCarried: [], superseded: ['trinityone/group:g'], swapped: ['the group “Youth”'], swapFailed: [] });
-  assert.match(some, /Groups they set up now name their new key\./, 'a group moved on a RETRIED re-seat (superseded, not carried) is not said');
+  assert.match(some, /Groups that named them now name their new key: the group “Youth”\./, 'a group moved on a RETRIED re-seat (superseded, not carried) is not said');
 });
 
 test('N2 — a second untick-all’s result does not wipe the first one’s "couldn’t be kept" list; each names its steward', async () => {
