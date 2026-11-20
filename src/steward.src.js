@@ -8643,32 +8643,18 @@ async function _carryOverStewardDocs(pk, opts) {
   const out = { carried: [], notCarried: [], superseded: [], refused: '' };
   if (actingChurch) { out.refused = 'delegated'; return out; }   // the relay accepts the roster and blocklist from the church only
   if (!sk || !pub || !/^[0-9a-f]{64}$/.test(who) || who === pub) { out.refused = 'no-key'; return out; }
-  const limit = (typeof o.limitMs === 'number' && o.limitMs > 0) ? o.limitMs : STEWARD_CARRY_LIMIT_MS;
-  const deadline = Date.now() + limit;
+  const deadline = Date.now() + ((typeof o.limitMs === 'number' && o.limitMs > 0) ? o.limitMs : STEWARD_CARRY_LIMIT_MS);
   const left = () => deadline - Date.now();
-  // THE LAST 5 s ARE FOR PUBLISHING (plan §2.3): every read — phase A, phase B, the children list — ends at the read
-  // deadline, and a relay still silent then is "unanswered", so a frozen box cannot starve the publish. A limit shorter
-  // than 20 s keeps a quarter of itself for publishing instead.
-  const readDeadline = deadline - Math.min(5000, Math.floor(limit / 4));
-  const readLeft = () => readDeadline - Date.now();
   const dOf = (e) => ((e && e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
   const chOf = (e) => ((e && e.tags || []).find(t => t[0] === 'church') || [])[1] || '';
   const notC = (d, why, label) => out.notCarried.push({ d, why, label: label || _carryLabel(d, null) });
   const urls = relays();   // the proof-gated set publish() uses — no new candidates (CLAUDE.md rule 10)
   if (!urls.length) { notC('', 'no-relay', 'anything they set up (no relay could be reached)'); return out; }
-  // OWNER ANSWERS (k) and (s): carry from the relays that answered only once EVERY relay is remembered as running the
-  // newest-wins build (_relaysAllLiveNewest); otherwise the strict rule — every relay must answer a slice completely.
-  const _rk = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
-  let configured = []; try { configured = relaysRaw(); } catch (e) { configured = []; }
-  if (!Array.isArray(configured) || !configured.length) configured = urls;
-  const admitted = new Set(urls.map(_rk));
-  const liveRule = configured.every(u => admitted.has(_rk(u))) && _relaysAllLiveNewest(urls);
-  const rulek = (d) => liveRule && !!_carryPrefix(d, STEWARD_CARRY_RULE.newest);   // owner answer (u): only these types
   // ONE question to ONE relay: what it sent, and whether it FINISHED — an EOSE inside the limit, on a socket the relay
   // accepted the church's login on (an unauthenticated read is answered with the private documents withheld).
-  const ask = (url, filter, until) => new Promise((resolve) => {
+  const ask = (url, filter) => new Promise((resolve) => {
     const evs = []; let done = false, sub = null;
-    const ms = Math.min(readLeft(), until ? until - Date.now() : Infinity);
+    const ms = left();
     const finish = (complete) => {
       if (done) return; done = true;
       try { if (sub) sub.close(); } catch (e) {}
@@ -8679,12 +8665,8 @@ async function _carryOverStewardDocs(pk, opts) {
     try { sub = pool.subscribeMany([url], [filter], { onevent(e) { evs.push(e); }, oneose() { finish(true); }, maxWait: ms + 5000 }); }
     catch (e) { finish(false); return; }
     if (done) { try { sub.close(); } catch (e) {} }
-    setTimeout(() => { if (!done) silent.add(url); finish(false); }, ms);
+    setTimeout(() => finish(false), ms);
   });
-  // A RELAY THAT RAN OUT THE CLOCK ONCE IS NOT WAITED ON AGAIN (Fable audit MED-2): every later question to it is answered
-  // "unanswered" at once, so one frozen box cannot cut a helper with more than 60 documents down to the first slice.
-  const silent = new Set();
-  const askOrSilent = (url, filter, until) => (silent.has(url) ? Promise.resolve({ evs: [], complete: false }) : ask(url, filter, until));
   const carryable = (d) => !!_carryPrefix(d, STEWARD_CARRY.carry) || !!_carryPrefix(d, STEWARD_CARRY.remint);
   // OWNER ANSWER (j), 2026-11-18: a care-team list is carried only if its author HELD 'care' when removed — phones (and the
   // relay) already ignored the list of a steward without it, so carrying it would switch back on a list the owner had
@@ -8738,21 +8720,13 @@ async function _carryOverStewardDocs(pk, opts) {
   // PHASE A — what did they write? Paged backwards; `until` is inclusive, so pages are deduped by id and paging stops
   // when a page brings nothing new (L1). A relay cut short by the limit or the page cap is incomplete.
   let readAll = true;
-  // phase A gets HALF of what is left for reading, so a relay that never answers cannot leave phase B nothing (§2.3)
-  const phaseAUntil = Date.now() + Math.max(0, Math.floor(readLeft() / 2));
-  // THE CHILDREN LIST a carried care-team list is filtered by (R-L1), asked NOW, beside phase A, and bounded by phase A's
-  // share: its own read waits _KEY_READ_LONG_WAIT on a frozen box, which must not eat phase B (Fable audit LOW). Used only
-  // if a careteam: document turns up.
-  const minorsRead = (window.Steward && window.Steward.readMinors)
-    ? Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, phaseAUntil - Date.now())))])
-    : Promise.resolve(null);
   await Promise.all(urls.map(async (url) => {
     const ids = new Set(); let until = null;
     for (let page = 0; ; page++) {
       if (page >= 40) { readAll = false; return; }
       const f = { kinds: [30078], authors: [who], '#t': [NET], limit: 500 };
       if (until != null) f.until = until;
-      const r = await askOrSilent(url, f, phaseAUntil);
+      const r = await ask(url, f);
       let fresh = 0, oldest = until;
       for (const e of r.evs) {
         if (!e || ids.has(e.id)) continue;
@@ -8775,21 +8749,14 @@ async function _carryOverStewardDocs(pk, opts) {
     pre.minors = await Promise.race([Promise.resolve().then(() => window.Steward.readMinors()).catch(() => null), new Promise(r => setTimeout(() => r(null), Math.max(0, Math.floor(left() / 2))))]);
   }
   if (mine.has(MEALS_D_)) noteCareIds(mine.get(MEALS_D_).content);
-  // the children list a carried care-team list is filtered by: read once, now, inside the read deadline (R-L1)
-  const pre = {};
-  if (ds.some(d => d.startsWith('trinityone/careteam:'))) { try { pre.minors = await minorsRead; } catch (e) { pre.minors = null; } }
   for (let i = 0; i < ds.length; i += 60) {
     const slice = ds.slice(i, i + 60);
-    if (readLeft() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
+    if (left() <= 0) { for (const d of slice) notC(d, 'time', _carryLabel(d, mine.get(d).content)); continue; }
     // the first slice always carries the meals-settings question — see careKnown
     const asked = (i === 0 && slice.indexOf(MEALS_D_) === -1) ? [...slice, MEALS_D_] : slice;
-    // EACH SLICE GETS ITS OWN SHARE of the read time left (Fable audit MED-2): a relay that freezes during phase B cannot
-    // spend every later slice's time on this one
-    const sliceUntil = Date.now() + Math.max(0, Math.floor(readLeft() / Math.ceil((ds.length - i) / 60)));
-    const answers = await Promise.all(urls.map(u => askOrSilent(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 }, sliceUntil)));
+    const answers = await Promise.all(urls.map(u => ask(u, { kinds: [30078], '#d': asked, limit: asked.length * 50 })));
     const whole = answers.every(a => a.complete);   // H1 wording: EVERY relay in relays() answered this slice completely
-    const someWhole = answers.some(a => a.complete);   // rule (k): at least ONE relay answered it completely
-    if (i === 0) mealsReadWhole = whole;   // the care team is known only from EVERY relay (batch gate) — whatever the rule
+    if (i === 0) mealsReadWhole = whole;
     const others = new Map();                       // d -> [{ at, church }]
     for (const a of answers) for (const e of a.evs) {
       const d = dOf(e);
@@ -8812,8 +8779,7 @@ async function _carryOverStewardDocs(pk, opts) {
     const jobs = [];
     for (const d of slice) {
       const S = mine.get(d), label = _carryLabel(d, S.content);
-      if (rulek(d) ? !someWhole : !whole) { notC(d, 'incomplete', label); continue; }
-      // a copy by anyone else at S or later, in ANY answer received — complete or partial — blocks (rule k)
+      if (!whole) { notC(d, 'incomplete', label); continue; }
       const rivals = (others.get(d) || []).filter(x => x.at >= (S.created_at || 0));
       if (rivals.length) {
         // the church itself saved it AFTER them: nothing of theirs is showing, so nothing changes back
@@ -8823,21 +8789,11 @@ async function _carryOverStewardDocs(pk, opts) {
         else notC(d, rivals.some(x => x.at === (S.created_at || 0)) ? 'tie' : 'newer', label);
         continue;
       }
-      // THE CHURCH'S COPY IS DATED EXACTLY ONE SECOND AFTER THEIRS (owner answer k): a change anyone made on a box that
-      // did not answer, after their save, is dated S+2 or later and still wins there and everywhere it syncs. This console
-      // already had a copy ACCEPTED (_lastOk — never _lastStamp, which is bumped at creation) dated after S+1: that is the
-      // church's own newer edit, not something of theirs to keep. Exactly S+1 is ours from an earlier attempt: re-signed
-      // (same content and tags → the same event → the relay answers duplicate) — plan 0b R-H2.
-      const S1 = (S.created_at || 0) + 1;
-      if ((_lastOk.get(d) || 0) > S1) { out.superseded.push(d); continue; }
       const cd = heldCare ? '' : careDoc(d);
       if (cd === 'care') { notC(d, 'no-care', 'the care team list (they no longer had the Care permission)'); continue; }
       if (cd === 'unknown') { notC(d, 'no-care', 'a team list (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
       let from = S, teamGone = false;
       if (!heldCare && d === MEALS_D_) {
-        // the church's pointer only from a COMPLETE answer set (every relay answered the slice that read it): under rule (k)
-        // a silent box may hold the church's newer choice (Fable audit LOW), so then the "not yet read" path
-        if (!mealsReadWhole) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission, and this console had not yet read which team is the care team)'); continue; }
         if (!churchMeals || churchMeals.adminGroupId == null) { notC(d, 'no-care', 'the meals and care setting (they no longer had the Care permission)'); continue; }
         // THEIR WITHDRAWN SETTING (tombstone / empty) is not carried, and listed as no-care (audit of 1fc01a16, LOW 6): a
         // church copy of the withdrawal would withdraw the church's own setting too — and with it the church's care team
@@ -8858,32 +8814,30 @@ async function _carryOverStewardDocs(pk, opts) {
         if (!tmpl || tmpl.skip) { notC(d, (tmpl && tmpl.skip) || 'error', label); return; }
         if (left() <= 0) { notC(d, 'time', label); return; }   // at the limit nothing more is published
         let ok = false, signedEv = null;
-        const po = {};
         try {
-          // SIGNED AT EXACTLY S+1, WITHOUT _monotonic (plan §2.2): _monotonic shifts by the measured relay offset (S is
-          // already in the author's relay-corrected time) and bumps past _lastStamp — a copy dated later than S+1 could
-          // overwrite a newer change on a silent box. Owner answer (i) holds by construction (S+1 > S). The church's
-          // tombstone names every copy (for:'*'), exactly as feChurch stamps it for the owner console — repeated here, not
-          // shared, because eleven test harnesses lift feChurch on its own and a helper it called would break them all.
-          const tags = (tmpl.tags || []).slice();
-          if (tags.some(t => t[0] === 'deleted') && !tags.some(t => t[0] === 'for')) tags.push(['for', '*']);
-          const signed = finalizeEvent({ ...tmpl, tags, created_at: S1 }, sk);
+          // STRICTLY NEWER THAN THEIRS, CHECKED ON THE SIGNED EVENT (owner, 2026-11-18, answer i). feChurch runs _monotonic,
+          // which shifts by the measured relay clock offset and can fall back at its ceiling, so what `created_at` will be
+          // is only known after signing. A copy that ties (or trails) theirs is a coin toss on phones and on a restarted
+          // relay (it replays ties in arrival order), so wait a second and sign again, a bounded number of times, inside the
+          // limit; still not newer: listed as a tie, never published.
+          let signed = feChurch(tmpl, sk);
+          for (let k = 0; (signed.created_at || 0) <= (S.created_at || 0) && k < 4 && left() > 1200; k++) {
+            await new Promise(r => setTimeout(r, 1000));
+            signed = feChurch({ ...tmpl, created_at: now() }, sk);
+          }
+          // could not catch up: a tie when the stamps are equal, 'newer' when theirs is still ahead of every re-sign
+          if ((signed.created_at || 0) <= (S.created_at || 0)) { notC(d, (signed.created_at || 0) === (S.created_at || 0) ? 'tie' : 'newer', label); return; }
           signedEv = signed;
           let tm = null;
-          ok = await Promise.race([Promise.resolve(publish(signed, po)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
+          ok = await Promise.race([Promise.resolve(publish(signed)).catch(() => false), new Promise(r => { tm = setTimeout(() => r('time'), Math.max(0, left())); })]);
           if (tm) clearTimeout(tm);
         } catch (e) { ok = false; }
-        // publish() answers on the FIRST relay that accepts (Promise.any). A "newer version already stored" refusal is told
-        // apart (plan 0b R-L2): when the newer stored copy is the church's own (publish answers it as ours, _lastOk is
-        // newer than S+1) it is superseded; anyone else's is not kept ('newer'); never "kept".
-        if (ok && ok !== 'time' && (_lastOk.get(d) || 0) > S1) { out.superseded.push(d); return; }
         if (ok && ok !== 'time') {
-          if ((_lastStamp.get(d) || 0) < S1) _lastStamp.set(d, S1);   // a later owner edit of d is stamped after it
           out.carried.push({ d, label, ev: signedEv });
           if (teamGone) (out.notes = out.notes || []).push(teamGone === 'none'
             ? 'Their care setting was kept, but your church hasn’t chosen a care team — help requests go only to you.'
             : 'Their care setting was kept, but it names a care team that no longer exists — help requests go only to you until you choose a team.');
-        } else notC(d, ok === 'time' ? 'time' : (/newer version/i.test(String(po.reason || '')) ? 'newer' : 'refused'), label);
+        } else notC(d, ok === 'time' ? 'time' : 'refused', label);
       })());
     }
     await Promise.all(jobs);
@@ -9206,6 +9160,7 @@ function _blockStewardKeeping(pk, blockedList, opts) {
     }
     return out;
   })();
+}
 
 // ── QUIET PUBLISH for the Set up accounts flow (plan v3, 2026-11-20) ─────────────────────────────────────
 // publish() raises the console-wide red "could not be saved" banner per failed event; a 200-slip batch must
