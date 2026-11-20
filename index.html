@@ -35,6 +35,16 @@
      heading) while Android inherits the ink colour and looked correct. Inherit here so buttons match
      normal text on both. Buttons that set their own colour inline still win. (2026-10-21) */
   button { color: inherit; }
+  /* iOS WKWebView (and Safari) inflate ALL web text to match the phone's Larger Text / Display Zoom
+     accessibility setting unless text-size-adjust is pinned to 100%. The member app inlines its own tokens
+     and does NOT link brand.css (which has carried `html { -webkit-text-size-adjust: 100% }` for ages), so on
+     a member's phone with larger text every size scaled up ~1.1–1.3x: the UI read as "zoomed in" and the
+     inflated layout pushed the floating bottom tab bar below the fold, so the footer menu needed a scroll to
+     reach. Pinning to 100% makes the app render at its designed sizes regardless of the device text setting.
+     Reported 2026-11-19 by 3 onboarded iPhone users whose phones had larger text (reading glasses); the
+     owner's phone, at default text size, never reproduced it. Set here, not only in brand.css, because the
+     member build never links brand.css — the public site/steward app already have it and were unaffected. */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     background: #ddd6c8;
