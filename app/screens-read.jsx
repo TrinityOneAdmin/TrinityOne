@@ -1061,7 +1061,7 @@ function XrefPreviewSheet({ refStr, open, onClose, onGo, onShare, version }) {
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
               <Icon name="book" size={16} color="currentColor" /> Open in reader
             </button>
-            {text && onShare ? <button onClick={() => onShare({ ref: refStr, text, version: version || '' })} aria-label={'Share ' + refStr} style={{
+            {onShare ? <button onClick={() => onShare({ ref: refStr, text: text || '', version: text ? (version || '') : '' })} aria-label={'Share ' + refStr} style={{
               border: 'none', background: 'var(--surface-2)', color: 'var(--ink-2)', padding: '12px 14px',
               borderRadius: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Icon name="share" size={18} />
