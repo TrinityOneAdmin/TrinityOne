@@ -1206,6 +1206,11 @@ function KeyDistributor() {
   React.useEffect(() => {
     const run = () => {
       try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+      // …and heal the church's SYNC list on the same signals (plan A1 trigger a). The engine itself holds
+      // the 10-minute damper (autoSyncHeal) and the one signing queue, so this call is cheap to repeat; a
+      // heal that finds nothing changed publishes nothing. Guarded like the line above so an older bundle
+      // without the method changes nothing.
+      try { const h = window.Steward && window.Steward.autoSyncHeal && window.Steward.autoSyncHeal(); if (h && h.catch) h.catch(() => {}); } catch (e) {}
     };
     const t = setTimeout(run, 4000);
     // 'steward-relays': the tunnel address or relay name changed (setSelfPublicRelay / setSelfRelayName), so
@@ -5843,12 +5848,30 @@ function DashRelaysCard() {
   // beside a relay whose own answer is still outstanding, and a click while that is so simply starts a fresh read.
   const [pendingUrls, setPendingUrls] = React.useState([]);
   const normUrl = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  // A TRUST REFUSAL REQUESTS A HEAL (plan A1 trigger b). When a relay's per-church block says this church's
+  // pulls were REFUSED for 'trust' — its key fell out of the newest trinityone/relays doc, the a8 shape —
+  // the self-healing pass is asked for at once (force past the 10-minute damper), because the cure IS a
+  // re-signed trust doc. NEVER for reason 'time': a clock refusal is not a trust-list problem and a re-sign
+  // would churn for nothing. Once per refusal observation: keyed on the relay + the pass stamp it reported,
+  // so one standing refusal asks once per fresh report, not once per render.
+  const healAskedFor = React.useRef(new Set());
   React.useEffect(() => {
     let ok = true;
     const got = new Map();
     // Rows paint as each relay's answer lands (relaySyncStates reads them all at once, with no time cutoff), so one
     // black-holed relay never holds the others back. A re-read keeps the old rows until each is replaced.
-    const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e); setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
+    const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e);
+      try {
+        if (e.church && e.church.state === 'refused' && e.reason === 'trust') {
+          const hk = normUrl(e.url) + '|' + (Number(e.church.at) || 0);
+          if (!healAskedFor.current.has(hk)) {
+            healAskedFor.current.add(hk);
+            const h = window.Steward && window.Steward.autoSyncHeal && window.Steward.autoSyncHeal({ force: true });
+            if (h && h.catch) h.catch(() => {});
+          }
+        }
+      } catch (err) {}
+      setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
     (async () => {
       setPendingUrls(status.map(r => normUrl(r && r.url)));
       try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates(onEach) : null; if (ok && m) setSyncStates(m); } catch {}

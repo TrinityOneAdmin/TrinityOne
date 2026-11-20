@@ -6581,6 +6581,212 @@ async function autoEnrolRelayNet() {
   return res;
 }
 
+// ── SELF-HEALING SYNC LIST (plan A1, 2026-11-20): merge, never rebuild ──────────────────────────────────
+//
+// `trinityone/relays` (SYNC/TRUST — the full-corpus authorisation + peer list the gateway ingests into
+// TRUSTED_RELAYS / PEER_URLS) was written only by syncEnable's point-in-time snapshot, so a console whose
+// relays() happened to lack a box re-signed the list WITHOUT that box and every peer holding the newest doc
+// then 401'd the box's pulls for ever (the a8 shape, INVESTIGATION-a8-refuses-box-sync-2026-11-18). This
+// pass heals that: it reads the church's newest doc, merges what this console can PROVE onto it by pubkey,
+// and re-signs only when something changed. Owner-console only, and it NEVER turns sync on — no doc, or a
+// deliberate `[]` Turn-off, is returned untouched.
+//
+// SHAPE, copied from enrolRelayNet's discipline:
+//   · every identity proof runs BEFORE entering the enrolSerial queue (no probe may starve the queue, and
+//     nothing inside the queue may await the queue again — that deadlocks);
+//   · the queue slot holds only read → merge → sign → read-back (≤2 repairs, the M-5 loop);
+//   · the identity (sk/pub, delegated/network view) is re-checked after EVERY await — a church switch
+//     mid-pass aborts as unknown rather than signing church A's list with whatever key is current;
+//   · an incomplete read is UNKNOWN and writes nothing; `_readCovers` with a DROPPABLE set (the
+//     church-added addresses that did not prove this pass) so one dead old-tunnel row cannot freeze
+//     healing for ever, while the canonical pool and the own box must still answer;
+//   · loopback/LAN bases are never written into the doc: the own box contributes selfPublicRelay() or
+//     nothing, any other private sighting contributes nothing, and a private sighting never replaces a
+//     public url already in the doc.
+//
+// THE MERGE, by pubkey (the key is the membership; the url is the dial hint):
+//   · an entry whose box did not answer this pass is KEPT unchanged (briefly-down is not removed);
+//   · an entry whose key proved at a different PUBLIC base gets its url updated in place;
+//   · a proved key not in the doc and not tombstoned is ADDED as { pubkey, url: base };
+//   · ONE kind of removal and only one: an entry whose key carries a `trinityone/relays-removed` tombstone
+//     with `at` strictly newer than the doc's created_at (otherwise a heal that raced a Remove would re-add
+//     the key for ever, additively — and a removed relay's key keeps full-corpus pull rights on every peer
+//     holding the doc until a re-sign drops it). Nothing else is ever removed here.
+//
+// THE TOMBSTONE DOC (read contract only — the WRITER is the Remove flow, a later branch): kind 30078,
+// d = RELAYS_REMOVED_D, authors [pub], content [{pubkey, at}], newest `at` per key wins. Absent is normal
+// and means "no tombstones". It is read in the same queue slot under the same completeness rule as the
+// sync doc, so a heal cannot act on a sync list newer than the tombstones it checked against.
+const RELAYS_REMOVED_D = 'trinityone/relays-removed';
+// ONE NORMALISER FOR BOTH SPELLINGS (v1 audit finding 19): the doc stores https BASE origins
+// (syncEnable's shape), the relay list stores wss urls with '/relay'. Both map onto one comparison key.
+function _syncRelayBase(u) {
+  return String(u || '').trim().replace(/\/relay\/?$/i, '').replace(/\/+$/, '')
+    .replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+}
+const _syncRelayKey = (u) => _syncRelayBase(u).toLowerCase();
+// Loopback AND RFC1918/LAN: an address only this machine or this wifi can dial must never become a peer
+// url other boxes are told to pull from, and must never replace a public one. Wider than _isLoopbackRelay
+// on purpose (the plan's loopback/LAN rule); the ranges mirror joinUrl's non-public test.
+const _isPrivateRelayBase = (u) =>
+  /^(wss?|https?):\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(String(u || '').trim());
+async function syncHeal() {
+  if (!sk || !pub) return { ran: false };
+  if (actingChurch || _viewingNetwork()) return { ran: false, skipped: 'not this church’s own console' };
+  const sk0 = sk, pub0 = pub;
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  // ── PHASE 1, OUTSIDE THE QUEUE: one identity proof per distinct address in relaysRaw() ──────────────
+  let candidates = []; try { candidates = relaysRaw(); } catch (e) { candidates = []; }
+  const own = relayNetCandidates()[0] || '';
+  const probed = [];            // { url, base, provedKey } — base '' when nothing may be written for it
+  const provedAddrs = new Set();  // normalised addresses that proved a key this pass
+  const asked = new Set();
+  for (const url of candidates) {
+    const addr = _k(url);
+    if (asked.has(addr)) continue;
+    asked.add(addr);
+    let proof = null;
+    try { proof = await verifyRelayIdentity(url); } catch (e) { proof = null; }
+    if (moved()) return { published: false, unknown: true, changed: true };
+    const p = String((proof && proof.relayPub) || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(p)) continue;
+    provedAddrs.add(addr);
+    const isOwn = !!own && _k(own) === addr;
+    let base = _syncRelayBase(url);
+    if (_isPrivateRelayBase(url)) base = isOwn ? _syncRelayBase(selfPublicRelay()) : '';
+    if (base && _isPrivateRelayBase(base)) base = '';   // a private selfPublicRelay is still private
+    probed.push({ url, base, provedKey: p });
+  }
+  // The droppable set, in _readCovers' own normalisation: addresses that did NOT prove this pass may be
+  // excused from the full-answer rule — never a canonical spelling, never the own box (those must answer
+  // before the church's trust list may be re-signed; the same split unenrolRelayNet keeps).
+  const droppable = new Set();
+  for (const addr of asked) {
+    if (provedAddrs.has(addr)) continue;
+    let canonical = false;
+    try { canonical = Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some(h => _k(h) === addr); } catch (e) { canonical = false; }
+    if (canonical) continue;
+    if (own && _k(own) === addr) continue;
+    droppable.add(addr);
+  }
+  // ── PHASE 2, INSIDE THE QUEUE: read → merge → sign, nothing else ────────────────────────────────────
+  return enrolSerial(async () => {
+    if (moved()) return { published: false, unknown: true, changed: true };
+    const readSync = () => _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true);
+    const read = await readSync();
+    if (moved()) return { published: false, unknown: true, changed: true };
+    const tombRead = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true);
+    if (moved()) return { published: false, unknown: true, changed: true };
+    if (!_readCovers(read, '', droppable) || !_readCovers(tombRead, '', droppable)) return { published: false, unknown: true };
+    // Re-check the signature's author on both: a relay need not honour the filter, and these two docs
+    // decide which machines hold the church's whole corpus.
+    const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
+    if (!mine) return { published: false, changed: false, noDoc: true };            // healing never turns sync ON
+    let arr = null; try { arr = JSON.parse(mine.content || '[]'); } catch (e) { arr = null; }
+    if (!Array.isArray(arr) || !arr.length) return { published: false, changed: false, off: true };   // `[]` is a Turn-off; never resurrected
+    const tombEv = (tombRead.ev && tombRead.ev.pubkey === pub) ? tombRead.ev : null;
+    const tombAt = new Map();   // pubkey -> newest `at`
+    if (tombEv) {
+      let ts = []; try { ts = JSON.parse(tombEv.content || '[]'); } catch (e) { ts = []; }
+      for (const t of (Array.isArray(ts) ? ts : [])) {
+        const p = String((t && t.pubkey) || '').toLowerCase(); const at = Number(t && t.at) || 0;
+        if (/^[0-9a-f]{64}$/.test(p) && at > (tombAt.get(p) || 0)) tombAt.set(p, at);
+      }
+    }
+    // The merge. `wanted` is what THIS call means to change (the M-5 contract: the read-back asks whether
+    // these are in the newest document, not whether a relay accepted the write).
+    const keyOf = (e) => String((e && e.pubkey) || '').toLowerCase();
+    const basesByKey = new Map();
+    for (const r of probed) { const a = basesByKey.get(r.provedKey) || []; a.push(r.base); basesByKey.set(r.provedKey, a); }
+    const entries = arr.map(e => ({ ...e }));
+    const wanted = [];        // { pubkey, url } — adds and in-place url updates
+    const removedKeys = [];   // tombstoned out, the one removal
+    for (const [p, bases] of basesByKey) {
+      const cur = entries.find(e => keyOf(e) === p);
+      const pubBase = bases.find(b => !!b) || '';
+      if (cur) {
+        // Proved at the base the doc already names (either spelling)? Leave it. A private-only sighting
+        // (pubBase '') never overwrites; a new PUBLIC base updates the url in place.
+        if (!bases.some(b => b && _syncRelayKey(b) === _syncRelayKey(cur.url)) && pubBase && _syncRelayKey(pubBase) !== _syncRelayKey(cur.url)) {
+          cur.url = pubBase;
+          wanted.push({ pubkey: p, url: pubBase });
+        }
+      } else if (!tombAt.has(p) && pubBase) {
+        entries.push({ pubkey: p, url: pubBase });
+        wanted.push({ pubkey: p, url: pubBase });
+      }
+    }
+    const docAt = Number(mine.created_at) || 0;
+    const keep = [];
+    for (const e of entries) {
+      const at = tombAt.get(keyOf(e)) || 0;
+      if (at && at > docAt) { removedKeys.push(keyOf(e)); continue; }   // tombstone newer than the doc
+      keep.push(e);
+    }
+    if (!wanted.length && !removedKeys.length) return { published: false, changed: false };
+    // SIGN, READ BACK, AT MOST TWO REPAIRS (enrol's M-5 loop). An incomplete read-back is unknown, never
+    // "missing"; a repair pass that finds the newest doc ABSENT or `[]` aborts without signing — a racing
+    // Turn-off must stand. `background`: this is a pass nobody pressed; a refusal must not raise the
+    // standing alarm on every tab.
+    let list = keep, floorAt = 0, repairs = 0;
+    for (;;) {
+      if (moved()) return { published: false, unknown: true, changed: true };
+      const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', 'trinityone/relays']], content: JSON.stringify(list) }), sk);
+      const ev = await publish(signed, { background: true });
+      if (moved()) return { published: false, unknown: true, changed: true };
+      if (!ev) return { published: false, changed: true, entries: list };
+      const back = await readSync();
+      if (moved()) return { published: false, unknown: true, changed: true };
+      if (!_readCovers(back, '', droppable)) return { published: false, unknown: true, unverified: true, entries: list };
+      const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+      if (!newest) return { published: false, unknown: true, aborted: true };
+      let found = null; try { found = JSON.parse(newest.content || '[]'); } catch (e) { found = null; }
+      if (!Array.isArray(found)) return { published: false, unknown: true, aborted: true };
+      if (!found.length) return { published: false, aborted: true, off: true };   // a Turn-off won the race: never re-sign over `[]`
+      const landed = wanted.every(w => { const e = found.find(x => keyOf(x) === w.pubkey); return !!e && (!w.url || e.url === w.url); })
+        && removedKeys.every(p => !found.some(x => keyOf(x) === p));
+      if (landed) return { published: true, changed: true, entries: found, repaired: repairs };
+      if (repairs >= 2) return { published: false, unknown: true, lost: true, entries: found };
+      repairs++;
+      // The same edit, applied to the NEWER list: re-drop what we removed (and anything whose tombstone
+      // outdates the newer doc), re-apply the adds/updates, never re-adding a tombstoned key.
+      const newestAt = Number(newest.created_at) || 0;
+      const relist = [];
+      for (const e of found) {
+        const p = keyOf(e);
+        const at = tombAt.get(p) || 0;
+        if (removedKeys.includes(p) || (at && at > newestAt)) continue;
+        relist.push({ ...e });
+      }
+      for (const w of wanted) {
+        const cur = relist.find(x => keyOf(x) === w.pubkey);
+        if (cur) { if (w.url && cur.url !== w.url) cur.url = w.url; }
+        else if (!tombAt.has(w.pubkey)) relist.push({ pubkey: w.pubkey, url: w.url });
+      }
+      list = relist;
+      floorAt = newestAt + 1;
+    }
+  });
+}
+
+// THE TRIGGER VALVE. The heal is event-driven (the KeyDistributor effect's mount/focus/relay-returned/
+// steward-relays churn — the same signals enrolment follows), so without a damper a console left open
+// would re-probe every relay on every focus. At most one heal per 10 minutes; `force` (a relay refusing
+// this church's pulls for 'trust', a steward's Add/Connect landing) bypasses the damper once and resets
+// it. There is deliberately NO standing timer (the 2G rule): with the console closed nothing heals —
+// healing requires the church key. A heal that finds nothing changed publishes nothing, so the triggers
+// stay cheap.
+let _syncHealLastAt = 0;
+async function autoSyncHeal(opts) {
+  const force = !!(opts && opts.force);
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+  const t = Date.now();
+  if (!force && t - _syncHealLastAt < 600000) return { ran: false, debounced: true };
+  _syncHealLastAt = t;
+  try { return await syncHeal(); } catch (e) { return { ran: false, unknown: true }; }
+}
+
 // ── STEP 1: USE THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ──────────────────────────────────────────────
 //
 // PLAN-relay-address-gossip-2026-10-22 §4 step 1. Measured 2026-10-22 on two phones: a relay typed into the
@@ -9297,7 +9503,30 @@ window.Steward = {
   autoEnrolRelayNet,
   // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
   // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.
-  signRelay(url) { const u = normRelay(url); return u ? enrolSerial(() => enrolRelayNet({ extra: [u] })) : Promise.resolve(null); },
+  // …AND A CONNECT THAT WORKED QUEUES A SYNC HEAL (A1 trigger c + A3): the owner confirmed that Add means
+  // "this box will hold the full copy of your church's records", and the heal is the pass that signs a
+  // proved box into the sync-trust doc. Fired AFTER the enrol queue slot resolves (never from inside it —
+  // the no-nesting rule), forced past the 10-minute damper because a steward just acted, and swallowed on
+  // failure: the next trigger retries, and signRelay's own result is unchanged either way.
+  signRelay(url) {
+    const u = normRelay(url);
+    if (!u) return Promise.resolve(null);
+    const p = enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    p.then((r) => {
+      try {
+        if (r && !r.unknown && (r.published || ((r.proven || []).length > 0))) {
+          const h = autoSyncHeal({ force: true });
+          if (h && h.catch) h.catch(() => {});
+        }
+      } catch (e) {}
+    }, () => {});
+    return p;
+  },
+  // SELF-HEALING SYNC (plan A1). `syncHeal` is the raw pass (module fn above: probe outside the queue,
+  // read→merge→sign inside it); `autoSyncHeal` is what the console's triggers call — same pass behind the
+  // 10-minute damper, `{ force: true }` to bypass it once.
+  syncHeal: () => syncHeal(),
+  autoSyncHeal,
   // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
   unsignRelay(url) { return enrolSerial(() => unenrolRelayNet(url)); },
 

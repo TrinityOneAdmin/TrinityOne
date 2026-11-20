@@ -20641,6 +20641,192 @@ zoo`.split("\n");
     if (!worked) _autoEnrolled.delete(key);
     return res;
   }
+  var RELAYS_REMOVED_D = "trinityone/relays-removed";
+  function _syncRelayBase(u) {
+    return String(u || "").trim().replace(/\/relay\/?$/i, "").replace(/\/+$/, "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+  }
+  var _syncRelayKey = (u) => _syncRelayBase(u).toLowerCase();
+  var _isPrivateRelayBase = (u) => /^(wss?|https?):\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(String(u || "").trim());
+  async function syncHeal() {
+    if (!sk || !pub) return { ran: false };
+    if (actingChurch || _viewingNetwork()) return { ran: false, skipped: "not this church\u2019s own console" };
+    const sk0 = sk, pub0 = pub;
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    let candidates = [];
+    try {
+      candidates = relaysRaw();
+    } catch (e) {
+      candidates = [];
+    }
+    const own = relayNetCandidates()[0] || "";
+    const probed = [];
+    const provedAddrs = /* @__PURE__ */ new Set();
+    const asked = /* @__PURE__ */ new Set();
+    for (const url of candidates) {
+      const addr = _k(url);
+      if (asked.has(addr)) continue;
+      asked.add(addr);
+      let proof = null;
+      try {
+        proof = await verifyRelayIdentity(url);
+      } catch (e) {
+        proof = null;
+      }
+      if (moved()) return { published: false, unknown: true, changed: true };
+      const p = String(proof && proof.relayPub || "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p)) continue;
+      provedAddrs.add(addr);
+      const isOwn = !!own && _k(own) === addr;
+      let base = _syncRelayBase(url);
+      if (_isPrivateRelayBase(url)) base = isOwn ? _syncRelayBase(selfPublicRelay()) : "";
+      if (base && _isPrivateRelayBase(base)) base = "";
+      probed.push({ url, base, provedKey: p });
+    }
+    const droppable = /* @__PURE__ */ new Set();
+    for (const addr of asked) {
+      if (provedAddrs.has(addr)) continue;
+      let canonical = false;
+      try {
+        canonical = Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some((h) => _k(h) === addr);
+      } catch (e) {
+        canonical = false;
+      }
+      if (canonical) continue;
+      if (own && _k(own) === addr) continue;
+      droppable.add(addr);
+    }
+    return enrolSerial(async () => {
+      if (moved()) return { published: false, unknown: true, changed: true };
+      const readSync = () => _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
+      const read = await readSync();
+      if (moved()) return { published: false, unknown: true, changed: true };
+      const tombRead = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
+      if (moved()) return { published: false, unknown: true, changed: true };
+      if (!_readCovers(read, "", droppable) || !_readCovers(tombRead, "", droppable)) return { published: false, unknown: true };
+      const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
+      if (!mine) return { published: false, changed: false, noDoc: true };
+      let arr = null;
+      try {
+        arr = JSON.parse(mine.content || "[]");
+      } catch (e) {
+        arr = null;
+      }
+      if (!Array.isArray(arr) || !arr.length) return { published: false, changed: false, off: true };
+      const tombEv = tombRead.ev && tombRead.ev.pubkey === pub ? tombRead.ev : null;
+      const tombAt = /* @__PURE__ */ new Map();
+      if (tombEv) {
+        let ts = [];
+        try {
+          ts = JSON.parse(tombEv.content || "[]");
+        } catch (e) {
+          ts = [];
+        }
+        for (const t of Array.isArray(ts) ? ts : []) {
+          const p = String(t && t.pubkey || "").toLowerCase();
+          const at = Number(t && t.at) || 0;
+          if (/^[0-9a-f]{64}$/.test(p) && at > (tombAt.get(p) || 0)) tombAt.set(p, at);
+        }
+      }
+      const keyOf = (e) => String(e && e.pubkey || "").toLowerCase();
+      const basesByKey = /* @__PURE__ */ new Map();
+      for (const r of probed) {
+        const a = basesByKey.get(r.provedKey) || [];
+        a.push(r.base);
+        basesByKey.set(r.provedKey, a);
+      }
+      const entries = arr.map((e) => ({ ...e }));
+      const wanted = [];
+      const removedKeys = [];
+      for (const [p, bases] of basesByKey) {
+        const cur = entries.find((e) => keyOf(e) === p);
+        const pubBase = bases.find((b) => !!b) || "";
+        if (cur) {
+          if (!bases.some((b) => b && _syncRelayKey(b) === _syncRelayKey(cur.url)) && pubBase && _syncRelayKey(pubBase) !== _syncRelayKey(cur.url)) {
+            cur.url = pubBase;
+            wanted.push({ pubkey: p, url: pubBase });
+          }
+        } else if (!tombAt.has(p) && pubBase) {
+          entries.push({ pubkey: p, url: pubBase });
+          wanted.push({ pubkey: p, url: pubBase });
+        }
+      }
+      const docAt = Number(mine.created_at) || 0;
+      const keep = [];
+      for (const e of entries) {
+        const at = tombAt.get(keyOf(e)) || 0;
+        if (at && at > docAt) {
+          removedKeys.push(keyOf(e));
+          continue;
+        }
+        keep.push(e);
+      }
+      if (!wanted.length && !removedKeys.length) return { published: false, changed: false };
+      let list = keep, floorAt = 0, repairs = 0;
+      for (; ; ) {
+        if (moved()) return { published: false, unknown: true, changed: true };
+        const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", "trinityone/relays"]], content: JSON.stringify(list) }), sk);
+        const ev = await publish(signed, { background: true });
+        if (moved()) return { published: false, unknown: true, changed: true };
+        if (!ev) return { published: false, changed: true, entries: list };
+        const back = await readSync();
+        if (moved()) return { published: false, unknown: true, changed: true };
+        if (!_readCovers(back, "", droppable)) return { published: false, unknown: true, unverified: true, entries: list };
+        const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+        if (!newest) return { published: false, unknown: true, aborted: true };
+        let found = null;
+        try {
+          found = JSON.parse(newest.content || "[]");
+        } catch (e) {
+          found = null;
+        }
+        if (!Array.isArray(found)) return { published: false, unknown: true, aborted: true };
+        if (!found.length) return { published: false, aborted: true, off: true };
+        const landed = wanted.every((w) => {
+          const e = found.find((x) => keyOf(x) === w.pubkey);
+          return !!e && (!w.url || e.url === w.url);
+        }) && removedKeys.every((p) => !found.some((x) => keyOf(x) === p));
+        if (landed) return { published: true, changed: true, entries: found, repaired: repairs };
+        if (repairs >= 2) return { published: false, unknown: true, lost: true, entries: found };
+        repairs++;
+        const newestAt = Number(newest.created_at) || 0;
+        const relist = [];
+        for (const e of found) {
+          const p = keyOf(e);
+          const at = tombAt.get(p) || 0;
+          if (removedKeys.includes(p) || at && at > newestAt) continue;
+          relist.push({ ...e });
+        }
+        for (const w of wanted) {
+          const cur = relist.find((x) => keyOf(x) === w.pubkey);
+          if (cur) {
+            if (w.url && cur.url !== w.url) cur.url = w.url;
+          } else if (!tombAt.has(w.pubkey)) relist.push({ pubkey: w.pubkey, url: w.url });
+        }
+        list = relist;
+        floorAt = newestAt + 1;
+      }
+    });
+  }
+  var _syncHealLastAt = 0;
+  async function autoSyncHeal(opts) {
+    const force = !!(opts && opts.force);
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+    const t = Date.now();
+    if (!force && t - _syncHealLastAt < 6e5) return { ran: false, debounced: true };
+    _syncHealLastAt = t;
+    try {
+      return await syncHeal();
+    } catch (e) {
+      return { ran: false, unknown: true };
+    }
+  }
   function _netDocDialUrl(raw) {
     let s = String(raw || "").trim();
     if (!s) return "";
@@ -22951,10 +23137,33 @@ zoo`.split("\n");
     autoEnrolRelayNet,
     // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
     // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.
+    // …AND A CONNECT THAT WORKED QUEUES A SYNC HEAL (A1 trigger c + A3): the owner confirmed that Add means
+    // "this box will hold the full copy of your church's records", and the heal is the pass that signs a
+    // proved box into the sync-trust doc. Fired AFTER the enrol queue slot resolves (never from inside it —
+    // the no-nesting rule), forced past the 10-minute damper because a steward just acted, and swallowed on
+    // failure: the next trigger retries, and signRelay's own result is unchanged either way.
     signRelay(url) {
       const u = normRelay(url);
-      return u ? enrolSerial(() => enrolRelayNet({ extra: [u] })) : Promise.resolve(null);
+      if (!u) return Promise.resolve(null);
+      const p = enrolSerial(() => enrolRelayNet({ extra: [u] }));
+      p.then((r) => {
+        try {
+          if (r && !r.unknown && (r.published || (r.proven || []).length > 0)) {
+            const h = autoSyncHeal({ force: true });
+            if (h && h.catch) h.catch(() => {
+            });
+          }
+        } catch (e) {
+        }
+      }, () => {
+      });
+      return p;
     },
+    // SELF-HEALING SYNC (plan A1). `syncHeal` is the raw pass (module fn above: probe outside the queue,
+    // read→merge→sign inside it); `autoSyncHeal` is what the console's triggers call — same pass behind the
+    // 10-minute damper, `{ force: true }` to bypass it once.
+    syncHeal: () => syncHeal(),
+    autoSyncHeal,
     // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
     unsignRelay(url) {
       return enrolSerial(() => unenrolRelayNet(url));
