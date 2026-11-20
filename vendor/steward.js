@@ -22871,13 +22871,21 @@ zoo`.split("\n");
       urls = [];
     }
     if (!urls.length) return { ok: false, reason: "no relay is connected" };
-    const attempt = () => Promise.race([
-      Promise.any(pool.publish(urls, evt).map((p) => p.then((v) => {
+    const attempt = () => {
+      let timer = null;
+      const first = Promise.any(pool.publish(urls, evt).map((p) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
         return v;
-      }))),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timed out \u2014 the relay did not answer within 15s")), 15e3))
-    ]);
+      })));
+      first.catch(() => {
+      });
+      return Promise.race([
+        first,
+        new Promise((_, rej) => {
+          timer = setTimeout(() => rej(new Error("timed out \u2014 the relay did not answer within 15s")), 15e3);
+        })
+      ]).finally(() => clearTimeout(timer));
+    };
     const reasonsOf = (e) => (e && e.errors || [e]).map((x) => String(x && x.message || x || "")).filter(Boolean);
     try {
       await attempt();
@@ -32122,6 +32130,8 @@ zoo`.split("\n");
         }
         return { name: String(e.name).trim(), mnemonic: e.mnemonic, isChild: !!e.isChild, pubkey: pk };
       });
+      if (authed && rows.some((r) => r.pubkey) && !window.Steward.admittedListFresh())
+        return { results: [], refused: "the members list hasn\u2019t loaded yet \u2014 try again in a moment" };
       let marked = /* @__PURE__ */ new Set(), childrenRefused = "";
       const childPks = rows.filter((r) => r.isChild && r.pubkey).map((r) => r.pubkey);
       if (childPks.length) {

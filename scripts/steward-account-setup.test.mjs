@@ -221,14 +221,23 @@ test('an UNAUTHED console publishes joins without admitting, and refuses childre
   assert.ok(kids.every(r => !r.ok), '"create them as adults and mark later" is the NB2 gap — children refuse instead');
 });
 
-test('a stale admitted list, or a refused admission, stops the batch BEFORE anything is published', async () => {
-  for (const opts of [{ admittedFresh: false }, { setAdmittedOk: false }]) {
-    const { fn, log } = liftBatch(opts);
-    const out = await fn(BATCH, {});
-    assert.ok(out.refused, 'the batch must refuse: ' + JSON.stringify(opts));
-    assert.equal(out.results.length, 0);
-    assert.ok(!log.some(l => l[0] === 'create'), 'nothing may be published past a failed admission — in an approval church those joins would sit invisible');
-  }
+test('a STALE admitted list refuses before ANYTHING is written — the children’s list stays untouched', async () => {
+  const { fn, log } = liftBatch({ admittedFresh: false });
+  const out = await fn(BATCH, {});
+  assert.ok(out.refused, 'the batch must refuse on a stale list');
+  assert.equal(out.results.length, 0);
+  assert.deepEqual(log, [],
+    'no readMinors, no setMinors, no setAdmitted, no join: checked only at the admission step, the children’s marking had already landed, so "nothing has been published yet" was false and an abandoned retry left stray pubkeys on the children’s list (audit F5)');
+});
+
+test('a REFUSED admission write still stops the batch before any account is published', async () => {
+  const { fn, log } = liftBatch({ setAdmittedOk: false });
+  const out = await fn(BATCH, {});
+  assert.ok(out.refused, 'the batch must refuse on a refused admission');
+  assert.equal(out.results.length, 0);
+  assert.ok(!log.some(l => l[0] === 'create'), 'nothing may be published past a failed admission — in an approval church those joins would sit invisible');
+  assert.ok(log.some(l => l[0] === 'setMinors'),
+    'control: the marking ran first (mark → admit is the safeguarding order) — a refusal HERE may follow a landed mark, which is the safe direction and what the engine’s comment now says');
 });
 
 test('a single name goes through the SAME path (no special case), and the batch caps at 200', async () => {
@@ -270,6 +279,21 @@ test('_quietSend treats the connection-failure resolution as failure and an acce
   const refused = await mk([new Error('rejected: not allowed')])({});
   assert.equal(refused.ok, false);
   assert.match(refused.reason, /not allowed/);
+});
+
+test('_quietSend clears its 15s timer once the publish settles', async () => {
+  const timers = { set: 0, cleared: [] };
+  const send = lift(BUNDLE, 'async function _quietSend(evt) {', '_quietSend', {
+    relays: () => ['wss://r.example'],
+    pool: { publish: () => [Promise.resolve('')] },
+    setTimeout: () => { timers.set++; return 'T' + timers.set; },
+    clearTimeout: (t) => { timers.cleared.push(t); },
+  });
+  const r = await send({});
+  assert.equal(r.ok, true, 'control row');
+  assert.equal(timers.set, 1, 'control row: one timeout was armed');
+  assert.deepEqual(timers.cleared, ['T1'],
+    'the timer must be CLEARED when the publish settles — left running it held the loop open 15s per event (audit F7)');
 });
 
 // ── the scanner hands the church half to followChurch, and a throw cannot strand the sign-in ─────────────
@@ -366,6 +390,12 @@ test('the CSV parser reads headered and bare files, quoted commas, and the child
   assert.deepEqual(parse('name,age\nAna,9'), [{ name: 'Ana', isChild: false }],
     'an AGE column must never mark a child — TrinityOne does not decide who is a child, the steward marks (DOMAIN.md)');
   assert.deepEqual(parse('person,young person\nTam,true'), [{ name: 'Tam', isChild: true }]);
+  // European Excel exports semicolons — the file must parse like a comma file, not become ;-riddled names
+  assert.deepEqual(parse('name;child\n"Smith; John";yes\nAna;'),
+    [{ name: 'Smith; John', isChild: true }, { name: 'Ana', isChild: false }],
+    'semicolon-delimited files must read their header and quoted fields like comma files (audit F9)');
+  assert.deepEqual(parse('Ana;9\nBob;10'), [{ name: 'Ana', isChild: false }, { name: 'Bob', isChild: false }],
+    '"Ana;9" must never become an account NAMED "Ana;9" (audit F9)');
 });
 
 // ── point of use: the REAL modal, rendered and driven end to end ─────────────────────────────────────────
@@ -460,8 +490,12 @@ test('POINT OF USE: typing two names and driving the real modal creates two acco
   assert.ok(printed[0].includes('Someone set this up for me'), 'the slip must tell the person the route that reads it');
   tree = draw(SetupAccountsModal, props);
   press(tree, 'Done');
-  assert.ok(log.some(l => l[0] === 'close'), 'after printing, closing closes');
-  assert.ok(!log.some(l => l[0] === 'tombstone'), 'printed slips are handed out — nothing may be withdrawn');
+  assert.ok(!log.some(l => l[0] === 'close'), 'pressing Print proves nothing about paper — closing must CONFIRM, never close silently (audit F8)');
+  tree = draw(SetupAccountsModal, props);
+  assert.ok(texts(tree).join(' ').includes('Did the slips print?'), 'the after-print close asks whether the slips really printed');
+  press(tree, 'Yes — close');
+  assert.ok(log.some(l => l[0] === 'close'), 'confirming closes');
+  assert.ok(!log.some(l => l[0] === 'tombstone'), 'the slips MAY be on paper — closing after Print must NEVER withdraw the accounts');
 });
 
 test('POINT OF USE: closing WITHOUT printing warns, and "Close anyway" withdraws every attempted account', async () => {
@@ -520,6 +554,40 @@ test('POINT OF USE: a helper console offers no child toggle it can use', async (
   assert.ok(toggles.length, 'the toggle should render (disabled), so the reason can sit in its tooltip');
   assert.ok(toggles.every(b => b.props.disabled), 'the relay only accepts the children’s list from the church key — a helper’s toggle must be disabled');
   assert.ok(toggles.some(b => /main steward/.test(b.props.title || '')), 'and the tooltip must say why');
+});
+
+// ── row identity: same-named rows are separate people, and prototype names are nobody ────────────────────
+test('POINT OF USE: two same-named rows keep independent Child toggles, and prototype names start unmarked', async () => {
+  const log = [];
+  const steward = stewardSpy(log);
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  typeNames(tree, 'John Smith\nJohn Smith');
+  tree = draw(SetupAccountsModal, props);
+  const toggles = button(tree, 'Child');
+  assert.equal(toggles.length, 2, 'control: one toggle per row');
+  toggles[1].props.onClick();   // mark ONLY the second John Smith
+  tree = draw(SetupAccountsModal, props);
+  assert.equal(button(tree, 'Child ✓').length, 1, 'marking one row must not mark its same-named sibling (audit F6)');
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  const call = log.find(l => l[0] === 'createMemberAccounts');
+  assert.deepEqual(call[1], [
+    { name: 'John Smith', isChild: false, hasKey: true },
+    { name: 'John Smith', isChild: true, hasKey: true },
+  ], 'the first row stays an adult, the second is the child — a shared name-key merged them before (audit F6)');
+  // a person really named __proto__ or constructor must not arrive pre-marked off Object.prototype
+  const two = loadModal({ steward: stewardSpy([]) });
+  const { SetupAccountsModal: M2 } = await two.load;
+  let t2 = two.draw(M2, props);
+  const ta2 = find(t2, n => n.type === 'textarea');
+  ta2[0].props.onChange({ target: { value: '__proto__\nconstructor' } });
+  t2 = two.draw(M2, props);
+  assert.equal(button(t2, 'Child?').length, 2, 'control: both rows render');
+  assert.equal(button(t2, 'Child ✓').length, 0, 'prototype-chain names must start UNMARKED (audit F6)');
 });
 
 // ── a CSV's child marks on a console that cannot save them: said and left out, never silently adults ─────

@@ -76,9 +76,18 @@ test('it refuses anything it does not recognise', () => {
   }
 });
 
-test('an older ?invite= link still works', () => {
+test('an older ?invite= link still works — and its QUERY-carried seed is stripped from the church half', () => {
   const url = 'https://app.trinityone.church/?invite=' + encodeURIComponent(PHRASE);
   assert.equal(seedFromScan(url).seed, PHRASE, 'links shared before the seed moved into the fragment must still work');
+  // the legacy form carries the seed in the QUERY — a follow-carrying one must hand followChurch a src
+  // with the invite param GONE, or the seed leaves the never-reaches-the-engine guarantee (audit F4)
+  const legacy = 'https://app.trinityone.church/?follow=npub1abc&invite=' + encodeURIComponent(PHRASE) + '&relay=' + encodeURIComponent('wss://x/relay');
+  const r = seedFromScan(legacy);
+  assert.equal(r.seed, PHRASE, 'control: the legacy follow-carrying link still signs in');
+  assert.ok(r.src && !/invite=/.test(r.src) && !r.src.includes(PHRASE.split(' ')[0]),
+    'the QUERY-carried seed must be stripped from what reaches followChurch');
+  assert.ok(/follow=npub1abc/.test(r.src) && /relay=wss%3A%2F%2Fx%2Frelay/.test(r.src),
+    'follow and relay must survive the strip');
 });
 
 test('scanning does not count as proving you have your phrase', () => {

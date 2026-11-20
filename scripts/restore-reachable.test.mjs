@@ -52,6 +52,10 @@ test('opening it from settings does NOT re-run onboarding side effects', () => {
   const block = APP.slice(at, APP.indexOf('/> : null}', at));
   assert.doesNotMatch(block, /trinityone\.onboarded/, 'the settings restore re-writes the onboarding flag');
   assert.doesNotMatch(block, /promptFollowChurch/, 'the settings restore re-prompts a church follow');
+  // The prop (followChurch={followChurch}) is the allowed shape; a CALL — followChurch(…) — in these
+  // handlers would auto-follow on every settings restore, the incidental guard the 2026-11-20 narrowing
+  // dropped (audit F10). Only the scan route may call it, and only for a slip that names a church.
+  assert.doesNotMatch(block, /followChurch\(/, 'the settings-restore handlers call followChurch themselves');
   assert.match(block, /setIdSheet\(null\)/, 'it never closes');
 });
 
