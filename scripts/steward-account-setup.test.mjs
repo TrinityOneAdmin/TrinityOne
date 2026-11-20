@@ -308,6 +308,52 @@ test('a throwing or absent followChurch cannot strand "Signing in" — the resto
   assert.deepEqual(fin3, [{ followed: false }]);
 });
 
+// ── finishRestore({followed}): an empty lookup after a followed slip is first contact, not a dead end ────
+// The REAL finishRestore lifted from app/identity.jsx; only its externals are stubbed. setTimeout is stubbed
+// to a recorder, so "the reload path was taken" is observed as the scheduled reload, never executed.
+function liftFinishRestore(log, { churches = [] } = {}) {
+  return lift(IDENTITY, 'const finishRestore = async (opts) => {', 'finishRestore', {
+    setRBusy: (s) => log.push(['busy', s]),
+    rTypedWords: { current: false },
+    setXferStage: (s) => log.push(['xfer', s]),
+    setRNoChurch: (v) => log.push(['nochurch', v]),
+    localStorage: {
+      setItem: (k, v) => log.push(['set', k, v]),
+      removeItem: (k) => log.push(['rm', k]),
+      getItem: () => null,
+    },
+    window: {
+      Fellowship: { recoverIdentityRetry: async () => ({ churches, name: '' }), toNpub: (x) => 'npub' + x },
+      TrinityIdentity: { current: { npub: 'npub1me' } },
+    },
+    setTimeout: (fn, ms) => log.push(['reload-scheduled', ms]),
+  });
+}
+
+test('finishRestore: empty lookup + followed slip -> reload into the followed church, restorePending CLEARED', async () => {
+  const log = [];
+  await liftFinishRestore(log)({ followed: true });
+  assert.ok(log.some(l => l[0] === 'set' && l[1] === 'trinityone.onboarded' && l[2] === 'true'),
+    'onboarded is written unconditionally, before the branch — losing it bounced restores back to Welcome (2026-07-28)');
+  assert.ok(log.some(l => l[0] === 'rm' && l[1] === 'trinityone.restorePending'), 'restorePending must be CLEARED — the follow already set the retry in motion');
+  assert.ok(!log.some(l => l[0] === 'set' && l[1] === 'trinityone.restorePending'), 'restorePending must not be re-set on this path');
+  assert.ok(log.some(l => l[0] === 'busy' && /Connecting you to your church/.test(l[1])), 'the member is told what is happening');
+  assert.ok(log.some(l => l[0] === 'reload-scheduled'), 'the reload path must be taken — the followed church is in app state, the reload lands in it');
+  assert.ok(!log.some(l => l[0] === 'nochurch'), 'the no-church dead end must NOT be shown: it would tell the member to scan the code they are holding');
+});
+
+test('finishRestore: empty lookup WITHOUT a follow keeps the no-church screen and the retry flag (control)', async () => {
+  const log = [];
+  await liftFinishRestore(log)({ followed: false });
+  assert.ok(log.some(l => l[0] === 'set' && l[1] === 'trinityone.restorePending' && l[2] === '1'), 'a later boot must retry');
+  assert.ok(log.some(l => l[0] === 'nochurch'), 'nothing found and nothing followed IS the no-church screen');
+  assert.ok(!log.some(l => l[0] === 'reload-scheduled'), 'no reload into nothing');
+  const found = [];
+  await liftFinishRestore(found, { churches: ['cp1'] })({ followed: true });
+  assert.ok(found.some(l => l[0] === 'set' && l[1] === 'trinityone.followedChurches'), 'control: a FOUND church still takes the normal path');
+  assert.ok(found.some(l => l[0] === 'reload-scheduled') && !found.some(l => l[0] === 'nochurch'));
+});
+
 // ── the CSV parser: headers, quotes, child column — and NEVER an age column ──────────────────────────────
 function liftCsv() { return lift(STEW, 'function parseAccountsCsv(txt) {', 'parseAccountsCsv', {}); }
 
@@ -533,6 +579,40 @@ test('POINT OF USE: the same CSV on an authed main console creates the marked ch
     { name: 'Little Ben', isChild: true, hasKey: true },
     { name: 'Little Cara', isChild: true, hasKey: true },
   ], 'the file’s marks must arrive at the engine as CHILD entries');
+});
+
+// ── a refused batch, retried: the SAME keys go back — a re-mint would strand the first accounts ──────────
+test('POINT OF USE: retrying after a refusal re-uses the SAME minted keys (no re-mint, no new accounts)', async () => {
+  let mintN = 0;
+  const calls = [];
+  const steward = {
+    relayAuthed: () => true,
+    mintAccountKey: () => 'key-' + (++mintN),
+    createMemberAccounts: async (entries, opts) => {
+      calls.push(entries.map(e => e.mnemonic));
+      if (calls.length === 1) return { refused: 'The members list hasn’t loaded yet — try again in a moment.' };
+      return { results: entries.map(e => ({ ok: true, attempted: true, name: e.name, pubkey: 'pk-' + e.name, isChild: !!e.isChild, mnemonic: e.mnemonic, reason: '' })), childrenRefused: '' };
+    },
+    memberInviteUrl: (m) => 'https://x/#invite=' + m, qrSVG: () => '<svg></svg>',
+    setNoPhoto: async () => true, tombstoneMemberAccount: async () => true,
+  };
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  typeNames(tree, 'Ana\nBen');
+  tree = draw(SetupAccountsModal, props);
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  tree = draw(SetupAccountsModal, props);
+  assert.ok(texts(tree).join(' ').includes('hasn’t loaded yet'), 'the refusal must be shown on the confirm screen the steward retries from');
+  await press(tree, 'Create');
+  assert.equal(calls.length, 2, 'control: the retry reached the engine');
+  assert.deepEqual(calls[0], ['key-1', 'key-2'], 'control: one key per name at Continue');
+  assert.deepEqual(calls[1], calls[0],
+    'the retry must carry the SAME mnemonics — a re-mint is the historical false claim (rule 4): it starts NEW accounts and strands the first set');
+  assert.equal(mintN, 2, 'nothing may mint between the refusal and the retry');
 });
 
 // ── POINT OF USE (rule 1): the Members-panel wiring, EXECUTED — not grepped ──────────────────────────────
