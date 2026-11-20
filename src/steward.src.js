@@ -1602,7 +1602,7 @@ async function _readNetworkJoin(np) {
     const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [NETWORK_D + np], limit: 5 }]);
     const e = (evs || []).filter(x => x && x.pubkey === churchPub).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
     if (!e || !e.content || (e.tags || []).some(t => t[0] === 'deleted')) return null;
-    return { doc: JSON.parse(e.content), ts: e.created_at };
+    return { doc: JSON.parse(e.content), ts: e.created_at, id: e.id };   // id: so a read-back can prove it read THE write, not a stale predecessor (sim 2026-11-20 U1)
   } catch { return null; }
 }
 // READ AS ANOTHER KEY than the one this console's pool is logged in as (N5c, dff88ecf). The relay authenticates a socket as exactly one
@@ -16679,11 +16679,17 @@ window.Steward = {
     if (want) doc.scopes = want;
     else if (Array.isArray(doc.scopes)) doc.scopes = doc.scopes.filter(x => typeof x === 'string' && NETWORK_SCOPES.includes(x));   // a stored 'feed' (Oct 2026 builds) is dropped on rewrite
     const o = {};
-    const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content: JSON.stringify(doc) }), churchSk), o);
+    const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content: JSON.stringify(doc) }), churchSk);
+    const r = await publish(signed, o);
     if (!r) return { ok: false, stage: 'join', reason: o.reason || 'No relay accepted it.' };
-    // EVIDENCE, NOT THE PROMISE: read the document back. A relay acknowledged it; this is the proof it is stored.
+    // EVIDENCE, NOT THE PROMISE: read the document back — and it must be THE document just signed, by id.
+    // The sim's leave-then-rejoin (2026-11-20, U1) read back the STALE join from before the leave: same
+    // author, same d, joined:true — so a rejoin whose write never reached any relay still reported ok, and
+    // the screen said "You have joined" over a relay that held the old state. Existence is not evidence;
+    // the id is.
     const back = await _readNetworkJoin(np);
     if (!back || !back.doc || back.doc.joined !== true) return { ok: false, stage: 'readback', reason: 'A relay accepted it, but it could not be read back, so it may not have been saved. Try again.' };
+    if (back.id !== signed.id) return { ok: false, stage: 'readback', reason: 'A relay answered with an OLDER copy of this church’s membership, not the one just written — the join may not have been saved. Check the relay and try again.' };
     try { if (_joinedNets) _joinedNets.add(np); } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch (x) {}
     return { ok: true, networkPub: np, npub: npubEncode(np), scopes: back.doc.scopes };
