@@ -803,17 +803,14 @@
           </div>
         </details>
       </section>
-      <!-- STORAGE-BEGIN — "Where this relay keeps its data" (plan step 4). Hidden unless GET /storage answers; control.js
-           fills #stNow / #stBody (STORAGE-BEGIN..END there). -->
-      <section class="card" id="storageCard" hidden aria-label="Where this relay keeps its data">
+      <section class="card" id="storageLimitsCard" aria-label="Storage limits">
         <div class="card-head">
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M5 13 7.5 5h9L19 13"></path><circle cx="17" cy="16.5" r=".9"></circle></svg></span>
           <div class="card-titles">
-            <div class="card-title">Where this relay keeps its data</div>
-            <div class="card-desc" id="stDesc"></div>
+            <div class="card-title">Storage limits</div>
+            <div class="card-desc">Cap how much data churches can upload.</div>
           </div>
         </div>
-        <div class="st-now" id="stNow"></div>
         <div id="storageLimitsBlock" style="padding: 0 20px 8px">
           <div class="field">
             <div class="storage-grid">
@@ -825,6 +822,18 @@
             <p class="hint" style="margin-top:6px"><span id="mediaUsed"></span> 0 = no limit. Uploads over a limit are refused; messages are not.</p>
           </div>
         </div>
+      </section>
+      <!-- STORAGE-BEGIN — "Where this relay keeps its data" (plan step 4). Hidden unless GET /storage answers; control.js
+           fills #stNow / #stBody (STORAGE-BEGIN..END there). -->
+      <section class="card" id="storageCard" hidden aria-label="Where this relay keeps its data">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M5 13 7.5 5h9L19 13"></path><circle cx="17" cy="16.5" r=".9"></circle></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Where this relay keeps its data</div>
+            <div class="card-desc" id="stDesc"></div>
+          </div>
+        </div>
+        <div class="st-now" id="stNow"></div>
         <div id="stBody" role="region" aria-live="polite"></div>
       </section>
       <!-- STORAGE-END -->

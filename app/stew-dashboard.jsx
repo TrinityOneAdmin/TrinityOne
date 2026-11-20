@@ -2678,7 +2678,7 @@ function StewDashboard({ initial = 'overview' }) {
             {actions}
           </div>
           <PublishErrorBanner />
-          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
+          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
             {content}
           </main>
         </div>
@@ -2770,7 +2770,7 @@ function StewDashboard({ initial = 'overview' }) {
           </div>
           <PublishErrorBanner />
           {/* content — the console's MAIN landmark, so a screen reader can jump past the sidebar to it */}
-          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: 28, background: 'var(--paper)' }}>
+          <main data-tour="main" className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 28, background: 'var(--paper)' }}>
             {content}
           </main>
         </div>
@@ -13603,7 +13603,7 @@ function DashBrandingPanel({ church }) {
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
 
       <div style={lbl}>Devotional &amp; plan colour</div>
-      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills the devotional, reading plan and verse prompt cards in your members' app.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills the devotional and verse prompt cards in your members' app.</div>
       <button type="button" role="switch" aria-checked={useCard} aria-label="Use a different devotional colour" onClick={() => setCardOn(!useCard)}
         style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: 'none', background: 'none', padding: '4px 0', marginBottom: useCard ? 12 : 6, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', textAlign: 'left' }}>
         <span style={{ position: 'relative', width: 40, height: 24, borderRadius: 999, flexShrink: 0, background: useCard ? 'var(--clay)' : 'var(--line)', transition: 'background .15s' }}>
@@ -13611,7 +13611,7 @@ function DashBrandingPanel({ church }) {
         </span>
         Use a different devotional colour
       </button>
-      {!useCard ? <div data-card-off-note="1" style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: 18 }}>Devotional and plan cards use the default sage green.</div> : null}
+      {!useCard ? <div data-card-off-note="1" style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: 18 }}>Devotional and verse prompt cards use the default sage green.</div> : null}
       {useCard ? <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: cardCol || NOT_SET, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>

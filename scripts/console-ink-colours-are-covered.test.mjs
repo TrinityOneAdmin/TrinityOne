@@ -418,6 +418,7 @@ const BARE_INVENTORY = [
     [1, "background: allUp ? 'var(--sage)' : 'var(--clay)'"],
     [1, "background: approval ? 'var(--clay)' : 'var(--line)'"],
     [1, "background: useMain ? 'var(--clay)' : 'var(--line)'"],   // role=switch TRACK, no text on it — same kind as the approval switch above
+    [1, "background: useCard ? 'var(--clay)' : 'var(--line)'"],   // cardColor devotional colour toggle — same switch pattern
     [1, "background: on ? 'var(--sage)' : 'var(--line)'"],   // the 42x24 keep-relays-in-sync role=switch TRACK (136df470); no text on it — same kind as autoConfirm's track
     [1, "background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)'"],   // the 8px per-relay sync status DOT (c071323b); non-text
     [1, "background: church.giving ? 'var(--sage)' : 'var(--line)'"],

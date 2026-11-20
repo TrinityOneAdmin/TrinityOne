@@ -3068,7 +3068,7 @@ function TodayScreen({ ctx }) {
               <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i > 0 ? i - 1 : vpPages.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: onCard, flexShrink: 0 }}><Icon name="chevL" size={16} color={onCard} /></button>
               <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
                 {vpPages.map(function(_, i) {
-                  return <div key={i} onClick={function(e) { e.stopPropagation(); setVpIdx(i); }} style={{ width: i === vpIdx ? 20 : 8, height: 8, borderRadius: 99, background: i === vpIdx ? '#fff' : 'rgba(255,255,255,.4)', cursor: 'pointer', transition: 'all .2s ease' }} />;
+                  return <div key={i} onClick={function(e) { e.stopPropagation(); setVpIdx(i); }} style={{ width: i === vpIdx ? 20 : 8, height: 8, borderRadius: 99, background: i === vpIdx ? onCard : (onCard === '#fff' ? 'rgba(255,255,255,.4)' : 'rgba(42,27,18,.4)'), cursor: 'pointer', transition: 'all .2s ease' }} />;
                 })}
               </div>
               <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i < vpPages.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: onCard, flexShrink: 0 }}><Icon name="chevR" size={16} color={onCard} /></button>

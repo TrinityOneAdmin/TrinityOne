@@ -54,6 +54,7 @@ function nextDay(plan, doneSet) { return plan.days.find(d => !doneSet.has(d.d)) 
 // a church devotional rendered with the SAME card dimensions as a PlanCard (for the 2-col grid)
 function DevoCard({ d, onClick, cardColor }) {
   const accent = d.accent || cardColor || 'var(--sage)';
+  const onAccent = cardColor ? churchOnColor(cardColor) : '#fff';
   return (
     <div onClick={onClick} style={{
       borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
@@ -61,8 +62,8 @@ function DevoCard({ d, onClick, cardColor }) {
     }}>
       <div style={{ height: 80, background: accent, position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 0%, rgba(255,255,255,.3), transparent 55%)' }} />
-        <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color="#fff" /></div>
-        <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: '#fff',
+        <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color={onAccent} /></div>
+        <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: onAccent,
           padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, backdropFilter: 'blur(4px)' }}>Devotional</span>
       </div>
       <div style={{ padding: '13px 15px 15px' }}>
@@ -81,6 +82,7 @@ function DevoSeriesCard({ group, ctx }) {
   const next = group.items.find(d => !read(d)) || group.items[0];
   const started = group.items.some(read);
   const cardC = (typeof churchCardColor === 'function') ? churchCardColor(ctx.church) : null;
+  const onC = cardC ? churchOnColor(cardC) : '#fff';
   return (
     <div onClick={() => ctx.openChurchDevo(next)} style={{
       borderRadius: 22, overflow: 'hidden', cursor: 'pointer', position: 'relative',
@@ -88,8 +90,8 @@ function DevoSeriesCard({ group, ctx }) {
     }}>
       <div style={{ height: 80, background: cardC || 'var(--sage)', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 0%, rgba(255,255,255,.3), transparent 55%)' }} />
-        <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color="#fff" /></div>
-        <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: '#fff',
+        <div style={{ position: 'absolute', right: -16, bottom: -22, opacity: .2 }}><Icon name="read" size={120} stroke={1.3} color={onC} /></div>
+        <span style={{ position: 'absolute', top: 12, left: 14, background: 'rgba(255,255,255,.22)', color: onC,
           padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, backdropFilter: 'blur(4px)' }}>Series</span>
       </div>
       <div style={{ padding: '13px 15px 15px' }}>
