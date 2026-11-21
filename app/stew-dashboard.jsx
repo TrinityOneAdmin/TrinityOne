@@ -8409,6 +8409,29 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
       return { name: n, key: k, isChild: mk, blocked: !!childrenBlocked && mk };
     });
   })();
+  // A CHILD MARK IS NEVER SILENTLY LOST (integration audit 2026-11-21, S3 -- fail closed).
+  //
+  // The marks live in `childMarks` under name#occurrence, and the names live in a free-text box. So fixing a
+  // typo in a marked child's name, or deleting an earlier row with the same name, leaves the mark filed under
+  // a key no row has any more: the row on screen reads "Child?", and the batch would have made that child an
+  // ADULT with nothing said. reference/DOMAIN.md: marking after the fact is the fallback, not the plan -- so
+  // this is not left to the steward re-reading the confirm summary.
+  //
+  // DETECTION: every key in `childMarks` whose value is true must belong to a CURRENT row. One that does not
+  // is a lost mark. While any exists the list says so, by the name the mark was made under, and toConfirm
+  // REFUSES -- no keys are minted and the confirm step is never reached, so nothing can be created from a
+  // list with a mark unaccounted for. The steward clears it by saying they have re-checked (which drops only
+  // the lost marks; marks on current rows stay) or by putting the name back.
+  // Deliberately NOT done: guessing which edited row the mark "moved" to. A wrong guess marks the wrong
+  // person, and a silent guess is the same defect in the other direction.
+  // What this cannot see: two rows with the SAME name swapping places -- the marks follow position among
+  // same-named rows, and nothing is orphaned. A row past the 200-row cap that carries a mark IS reported.
+  const lostMarks = (() => {
+    const live = new Set(rows.map(r => r.key));
+    return Object.keys(childMarks).filter(k => childMarks[k] && !live.has(k));
+  })();
+  const lostNames = lostMarks.map(k => k.slice(0, k.lastIndexOf('#')));
+  const recheckedMarks = () => setChildMarks(m => { const keep = {}; rows.forEach(r => { if (m[r.key]) keep[r.key] = true; }); return keep; });
   const blockedKids = rows.filter(r => r.blocked);
   const eligible = rows.filter(r => !r.blocked);
   const existingLower = React.useMemo(() => new Set(Object.values(nameByPub || {}).map(n => String(n).toLowerCase())), [nameByPub]);
@@ -8437,6 +8460,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   }, [stage, results, printed]);
   const toConfirm = () => {
     if (!eligible.length) return;
+    if (lostMarks.length) return;   // S3: fail closed -- the alert above the list says why, and how to go on
     setErr('');
     setEntries(eligible.map(r => ({ name: r.name, isChild: r.isChild, mnemonic: window.Steward.mintAccountKey() })));   // minted ONCE; retry re-uses these
     setStage('confirm');
@@ -8542,6 +8566,10 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
           <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>
           <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{rows.length} name{rows.length === 1 ? '' : 's'}{rows.length ? ` · ${kids.length} child${kids.length === 1 ? '' : 'ren'}` : ''}</span>
         </div>
+        {lostMarks.length ? <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--clay-soft)', border: '1px solid var(--clay)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="var(--clay-ink)" style={{ flexShrink: 0, marginTop: 1 }} /><div>
+          <b>{lostMarks.length === 1 ? 'A child mark was lost when the list changed.' : lostMarks.length + ' child marks were lost when the list changed.'}</b>{(lostMarks.length === 1 ? ' It was on: ' : ' They were on: ') + lostNames.join(', ') + '. Re-check who is a child \u2014 nothing can be created until you have.'}
+          <div style={{ marginTop: 7 }}><button onClick={recheckedMarks} className="sk-btn sk-btn--ghost" style={{ padding: '5px 11px', fontSize: 12 }}>I have re-checked the list</button></div>
+        </div></div> : null}
         {csvNoChildCol && rows.length ? <div role="status" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div><b>No child column found in that file</b>{' \u2014 everyone was imported as an adult. Mark children by hand below.'}</div></div> : null}
         <textarea value={names} onChange={e => setNames(e.target.value)} placeholder={'Maria Gonzalez\nJohn Park\nGrace Okafor\n…'} style={{ width: '100%', boxSizing: 'border-box', minHeight: 120, border: '1px solid var(--line)', borderRadius: 12, padding: 12, fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
         {rows.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10, maxHeight: 200, overflowY: 'auto' }}>

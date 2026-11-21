@@ -884,3 +884,114 @@ test('POINT OF USE: importing a file with no child column SAYS so above the list
   tree = draw(SetupAccountsModal, props);
   assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL);
 });
+
+// ── S3 (integration audit 2026-11-21): A CHILD MARK IS NEVER SILENTLY LOST ───────────────────────────────
+// Marks are keyed name#occurrence against a free-text box, so a typo fix on a marked child's name — or
+// deleting an earlier same-named row — left the mark under a key no row has, and the child went to the
+// engine as an ADULT. The modal now refuses to go on while any mark is unaccounted for. Every row below
+// drives the compiled modal through its own textarea and buttons and reads what reaches the engine.
+const LOST_MARK = /child marks? (was|were) lost when the list changed/;
+async function markThenEdit({ first, markIndex, then }) {
+  const log = [];
+  const { draw, load } = loadModal({ steward: stewardSpy(log) });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  const redraw = () => draw(SetupAccountsModal, props);
+  let tree = redraw();
+  typeNames(tree, first);
+  tree = redraw();
+  button(tree, 'Child')[markIndex].props.onClick();
+  tree = redraw();
+  assert.equal(button(tree, 'Child ✓').length, 1, 'control: exactly one row is marked before the edit');
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK, 'control: no alert before the list changes');
+  typeNames(tree, then);
+  return { log, redraw, tree: redraw() };
+}
+const engineCall = (log) => log.find(l => l[0] === 'createMemberAccounts');
+const atInputStep = (tree) => find(tree, n => n.type === 'textarea').length === 1 && !texts(tree).join(' ').includes('you will hold the sign-in code');
+
+test('POINT OF USE: fixing a typo in a MARKED child’s name refuses to continue — the child is never created as an adult', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'Litle Ana\nBob Adult', markIndex: 0, then: 'Little Ana\nBob Adult' });
+  let tree = t0;
+  assert.equal(button(tree, 'Child ✓').length, 0, 'control: this is the defect’s shape — the edited row now reads unmarked');
+  assert.match(texts(tree).join(' '), LOST_MARK, 'the lost mark is not said on screen');
+  assert.ok(texts(tree).join(' ').includes('Litle Ana'), 'the alert must name the row the mark was made on');
+  press(tree, 'Continue with');
+  tree = redraw();
+  assert.ok(atInputStep(tree), 'the modal went on to the confirm step with a child mark unaccounted for');
+  assert.ok(!log.some(l => l[0] === 'mint'), 'keys were minted for a list that was refused');
+  assert.equal(button(tree, 'Create').length, 0, 'a Create button is reachable — the child would be created as an ADULT');
+  assert.equal(engineCall(log), undefined);
+  // the way on: say the list was re-checked, mark the row as it now reads, and the child goes through AS A CHILD
+  press(tree, 'I have re-checked');
+  tree = redraw();
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK);
+  button(tree, 'Child?')[0].props.onClick();
+  tree = redraw();
+  press(tree, 'Continue with');
+  tree = redraw();
+  await press(tree, 'Create');
+  assert.deepEqual(engineCall(log)[1], [
+    { name: 'Little Ana', isChild: true, hasKey: true },
+    { name: 'Bob Adult', isChild: false, hasKey: true },
+  ]);
+});
+
+test('POINT OF USE: deleting an EARLIER same-named row cannot turn the marked one into an adult', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'John Smith\nJohn Smith\nAna Adult', markIndex: 1, then: 'John Smith\nAna Adult' });
+  let tree = t0;
+  assert.equal(button(tree, 'Child ✓').length, 0, 'control: the surviving John Smith reads unmarked');
+  assert.match(texts(tree).join(' '), LOST_MARK);
+  press(tree, 'Continue with');
+  tree = redraw();
+  assert.ok(atInputStep(tree));
+  assert.equal(engineCall(log), undefined);
+  assert.ok(!log.some(l => l[0] === 'mint'));
+});
+
+test('POINT OF USE: putting the name back restores the mark, and re-checking keeps the marks that were never lost', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'Little Ana\nBen', markIndex: 0, then: 'Little Anna\nBen' });
+  let tree = t0;
+  assert.match(texts(tree).join(' '), LOST_MARK);
+  typeNames(tree, 'Little Ana\nBen');
+  tree = redraw();
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK, 'the name is back, so the mark is accounted for');
+  assert.equal(button(tree, 'Child ✓').length, 1);
+  // now lose a DIFFERENT mark and acknowledge it: Ana's must survive the acknowledgement
+  button(tree, 'Child?')[0].props.onClick();   // Ben
+  tree = redraw();
+  typeNames(tree, 'Little Ana\nBenjamin');
+  tree = redraw();
+  assert.match(texts(tree).join(' '), LOST_MARK);
+  press(tree, 'I have re-checked');
+  tree = redraw();
+  press(tree, 'Continue with');
+  tree = redraw();
+  await press(tree, 'Create');
+  assert.deepEqual(engineCall(log)[1], [
+    { name: 'Little Ana', isChild: true, hasKey: true },
+    { name: 'Benjamin', isChild: false, hasKey: true },
+  ], 'acknowledging one lost mark must not drop a mark that still has its row');
+});
+
+test('POINT OF USE: edits that orphan NO mark go straight through — adding a row, editing an adult, un-marking (control)', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'Little Ana\nBob Adlt', markIndex: 0, then: 'Little Ana\nBob Adult\nCara New' });
+  let tree = t0;
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK, 'an edit that touched no marked row raised the alert');
+  assert.equal(button(tree, 'Child ✓').length, 1);
+  press(tree, 'Continue with');
+  tree = redraw();
+  await press(tree, 'Create');
+  assert.deepEqual(engineCall(log)[1], [
+    { name: 'Little Ana', isChild: true, hasKey: true },
+    { name: 'Bob Adult', isChild: false, hasKey: true },
+    { name: 'Cara New', isChild: false, hasKey: true },
+  ]);
+  // a mark the steward took OFF is not a lost mark when its row is later edited
+  const b = await markThenEdit({ first: 'Dee', markIndex: 0, then: 'Dee' });
+  button(b.tree, 'Child ✓')[0].props.onClick();
+  let t2 = b.redraw();
+  typeNames(t2, 'Deirdre');
+  t2 = b.redraw();
+  assert.doesNotMatch(texts(t2).join(' '), LOST_MARK, 'an un-marked row was treated as a lost mark');
+});
