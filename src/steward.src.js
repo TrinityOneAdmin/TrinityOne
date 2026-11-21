@@ -6625,11 +6625,36 @@ function _syncRelayBase(u) {
     .replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
 }
 const _syncRelayKey = (u) => _syncRelayBase(u).toLowerCase();
-// Loopback AND RFC1918/LAN: an address only this machine or this wifi can dial must never become a peer
-// url other boxes are told to pull from, and must never replace a public one. Wider than _isLoopbackRelay
-// on purpose (the plan's loopback/LAN rule); the ranges mirror joinUrl's non-public test.
-const _isPrivateRelayBase = (u) =>
-  /^(wss?|https?):\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(String(u || '').trim());
+// Loopback AND RFC1918/LAN AND the ranges a box dials ITSELF on behind a tunnel: an address only this
+// machine, this wifi or this tailnet can reach must never become a peer url other boxes are told to pull
+// from, and must never replace a public one. Wider than _isLoopbackRelay on purpose (the plan's loopback/LAN
+// rule). WRITE-ONLY — this screens what syncHeal writes INTO trinityone/relays; it is NOT on any read /
+// admission / bootstrap path (rule 10). Parsed, not matched by a fragile prefix regex, so 100.63 stays
+// public while 100.64–100.127 (CGNAT/Tailscale) do not, and a *.ts.net funnel — a PUBLIC self-host address
+// that must still be written — never trips it. Ranges: 127/8, 10/8, 0/8, 192.168/16, 172.16–31, 169.254/16
+// (link-local), 100.64/10 (CGNAT/Tailscale), plus ::1, IPv6 ULA fc00::/7, and localhost.
+function _isPrivateRelayBase(u) {
+  let s = String(u || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/[\/?#].*$/, '');
+  if (!s) return false;
+  let host;
+  if (s[0] === '[') host = s.slice(1).replace(/\].*$/, '');            // [ipv6](:port)
+  else if ((s.match(/:/g) || []).length > 1) host = s;                 // bare ipv6, no port
+  else host = s.replace(/:\d+$/, '');                                  // host or host:port
+  host = host.toLowerCase();
+  if (host === 'localhost' || host === '::1') return true;
+  if (host.indexOf(':') >= 0) return /^f[cd]/.test(host.split(':')[0]); // IPv6 ULA fc00::/7
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;                                                // a public hostname
+  const o = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  if (o.some(n => n > 255)) return false;
+  const a = o[0], b = o[1];
+  if (a === 127 || a === 10 || a === 0) return true;                   // loopback /8, private /8, 0/8
+  if (a === 192 && b === 168) return true;                             // 192.168/16
+  if (a === 172 && b >= 16 && b <= 31) return true;                    // 172.16/12
+  if (a === 169 && b === 254) return true;                             // 169.254/16 link-local
+  if (a === 100 && b >= 64 && b <= 127) return true;                   // 100.64/10 CGNAT/Tailscale
+  return false;
+}
 async function syncHeal() {
   if (!sk || !pub) return { ran: false };
   if (actingChurch || _viewingNetwork()) return { ran: false, skipped: 'not this church’s own console' };

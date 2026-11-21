@@ -20646,7 +20646,28 @@ zoo`.split("\n");
     return String(u || "").trim().replace(/\/relay\/?$/i, "").replace(/\/+$/, "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
   }
   var _syncRelayKey = (u) => _syncRelayBase(u).toLowerCase();
-  var _isPrivateRelayBase = (u) => /^(wss?|https?):\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(String(u || "").trim());
+  function _isPrivateRelayBase(u) {
+    let s = String(u || "").trim().replace(/^[a-z]+:\/\//i, "").replace(/[\/?#].*$/, "");
+    if (!s) return false;
+    let host;
+    if (s[0] === "[") host = s.slice(1).replace(/\].*$/, "");
+    else if ((s.match(/:/g) || []).length > 1) host = s;
+    else host = s.replace(/:\d+$/, "");
+    host = host.toLowerCase();
+    if (host === "localhost" || host === "::1") return true;
+    if (host.indexOf(":") >= 0) return /^f[cd]/.test(host.split(":")[0]);
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return false;
+    const o = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+    if (o.some((n) => n > 255)) return false;
+    const a = o[0], b = o[1];
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
   async function syncHeal() {
     if (!sk || !pub) return { ran: false };
     if (actingChurch || _viewingNetwork()) return { ran: false, skipped: "not this church\u2019s own console" };

@@ -32,7 +32,7 @@ const LIFT = [
   ['st', 'var RELAYS_REMOVED_D = '],
   ['fn', 'function _syncRelayBase'],
   ['st', 'var _syncRelayKey = '],
-  ['st', 'var _isPrivateRelayBase = '],
+  ['fn', 'function _isPrivateRelayBase(u) {'],
   ['fn', 'function _readCovers'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
@@ -153,6 +153,48 @@ test('a console that sees the box at LOOPBACK (or a LAN address) never overwrite
   assert.equal(r2.published, true, 'the own box behind a tunnel was not healed in: ' + JSON.stringify(r2));
   assert.equal(w2.stored().find(e => e.pubkey === KEY_C).url, 'https://quick-tunnel.example',
     'the own box was written under something other than its public tunnel base');
+});
+
+test('a proved box sighted only at a CGNAT/Tailscale, link-local, 127/8 or IPv6-ULA address is NOT written in; a PUBLIC *.ts.net funnel still is', async () => {
+  // Every box below PROVES identity — the key is real — but all but one are sighted at an address only this
+  // machine or this tailnet can dial. None of those may be told to other phones as a pull url. This screen is
+  // WRITE-ONLY (rule 10): it decides what syncHeal writes INTO trinityone/relays, never which relay is
+  // admitted/read. A *.ts.net funnel is a PUBLIC self-host address and MUST still be written.
+  const K_CG = 'aa'.repeat(32);   // 100.64.0.1  — CGNAT / Tailscale (100.64/10)
+  const K_UL = 'bb'.repeat(32);   // [fd00::1]   — IPv6 ULA (fc00::/7)
+  const K_LO = 'cc'.repeat(32);   // 127.5.5.5   — all of loopback (127/8), not just 127.0.0.1
+  const K_LL = 'dd'.repeat(32);   // 169.254.1.1 — link-local (169.254/16)
+  const K_PUB = 'ee'.repeat(32);  // box.ts.net  — a PUBLIC tunnel funnel
+  const SEED = '11'.repeat(32);   // an existing public entry so the doc is a real list, not a Turn-off
+  const w = makeWorld({
+    relays: [
+      { url: 'wss://100.64.0.1:8000/relay', key: K_CG, up: true },
+      { url: 'wss://[fd00::1]:8000/relay', key: K_UL, up: true },
+      { url: 'ws://127.5.5.5:8000/relay', key: K_LO, up: true },
+      { url: 'wss://169.254.1.1:8000/relay', key: K_LL, up: true },
+      { url: 'wss://box.ts.net/relay', key: K_PUB, up: true },
+    ],
+    doc: [{ pubkey: SEED, url: 'https://seed.example' }],
+  });
+  const r = await w.api.syncHeal();
+  assert.equal(r.published, true, 'the public ts.net funnel was never added, so nothing proved the write path still writes public boxes: ' + JSON.stringify(r));
+  const got = w.stored();
+  assert.deepEqual(keysOf(got), [SEED, K_PUB].sort(),
+    'A PRIVATE-RANGE SIGHTING (100.64 CGNAT / fd00::1 ULA / 127.5.5.5 loopback / 169.254 link-local) WAS WRITTEN INTO THE SHARED DOC — every phone would be told to pull from an address only one machine can reach — or the public funnel was dropped: ' + JSON.stringify(got));
+  assert.equal(got.find(e => e.pubkey === K_PUB).url, 'https://box.ts.net', 'the public funnel was written under the wrong base');
+  // …and the CGNAT boundary is exact: 100.63 and 100.128 are PUBLIC and must still be written.
+  const K_63 = '22'.repeat(32), K_128 = '33'.repeat(32);
+  const w2 = makeWorld({
+    relays: [
+      { url: 'wss://100.63.0.1:8000/relay', key: K_63, up: true },
+      { url: 'wss://100.128.0.1:8000/relay', key: K_128, up: true },
+    ],
+    doc: [{ pubkey: SEED, url: 'https://seed.example' }],
+  });
+  const r2 = await w2.api.syncHeal();
+  assert.equal(r2.published, true, JSON.stringify(r2));
+  assert.deepEqual(keysOf(w2.stored()), [SEED, K_63, K_128].sort(),
+    '100.63 or 100.128 — both OUTSIDE 100.64/10 and PUBLIC — were wrongly screened as CGNAT and dropped: ' + JSON.stringify(w2.stored()));
 });
 
 test('a proved box missing from the doc is ADDED; a NEWER tombstone removes; an OLDER tombstone leaves the entry alone', async () => {
