@@ -95,6 +95,9 @@ function relaysCard({ relays = [], backup = null, steward = {}, rejected = false
     Icon: function Icon() { return null; },
     SkPill: function SkPill() { return null; },
     SkBadge: function SkBadge() { return null; },
+    // DashCommunityRelaysCard links to the B4 high-risk guide (stew-help.jsx in the real console); a no-op stub here,
+    // this sweep is about ink colours, not the link.
+    StewHelpLink: function StewHelpLink() { return null; },
     useStewDialog: () => ({ current: null }),
   };
   const names = Object.keys(globals);
@@ -419,7 +422,7 @@ const BARE_INVENTORY = [
     [1, "background: approval ? 'var(--clay)' : 'var(--line)'"],
     [1, "background: useMain ? 'var(--clay)' : 'var(--line)'"],   // role=switch TRACK, no text on it — same kind as the approval switch above
     [1, "background: useCard ? 'var(--clay)' : 'var(--line)'"],   // cardColor devotional colour toggle — same switch pattern
-    [1, "background: on ? 'var(--sage)' : 'var(--line)'"],   // the 42x24 keep-relays-in-sync role=switch TRACK (136df470); no text on it — same kind as autoConfirm's track
+    [2, "background: on ? 'var(--sage)' : 'var(--line)'"],   // TWO 42x24 role=switch TRACKs, no text on either: keep-relays-in-sync (136df470) and the community-relays opt-out (e71c384b, plan B1). Was [1] — the B1 switch landed without its inventory line, so this LINT was red before the A3/B3/B4 copy work; corrected here (CLAUDE.md rule 8)
     [1, "background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)'"],   // the 8px per-relay sync status DOT (c071323b); non-text
     [1, "background: church.giving ? 'var(--sage)' : 'var(--line)'"],
     [1, "background: composeEvt ? 'var(--clay-soft)' : 'var(--clay)'"],

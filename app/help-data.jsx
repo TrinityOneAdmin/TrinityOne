@@ -526,6 +526,26 @@ window.HelpData = {
       ],
     },
     {
+      // B4 (owner Q4, 2026-11-20): the high-risk exception. Linked from the Community-relays switch (stew-dashboard.jsx).
+      // A church in danger should connect only to relays it trusts and turn the automatic feature off — plain words, one
+      // card. Every step here is true of the code: the switch writes publicAuto (opt-out), Remove tombstones the box so
+      // no device re-adds it, and a relay holds the full copy of the church's records (A3).
+      id: 'console-high-risk-relays',
+      illo: 'safe',
+      title: 'Churches in a high-risk situation',
+      summary: 'If it would be dangerous for your records to reach a computer you don’t control, turn off automatic community relays and connect only to ones you trust.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'By default your church keeps a backup on a few community relays — other churches’ computers — so your records survive even if your own relay goes down. For most churches that is worth having. But a relay holds the full copy of your church’s records, and if your church is somewhere it would be dangerous for your records to sit on a computer you do not control, you should turn this off and connect only to relays you run or trust.' },
+        { type: 'steps', label: 'Turning off automatic community relays', items: [
+          'Open Settings → Infrastructure → Move or copy history, and find “Community relays”.',
+          'Turn off “Use community relays automatically”. From then on, only relays you add yourself are used.',
+          'If a community relay has already been added, open Settings → Infrastructure → Relays and Remove it. Removing it also tells your church’s devices to stop using it, and stops it being added back.',
+        ] },
+        { type: 'note', text: 'What anyone running a relay can see is limited — your content and private messages are encrypted — but they can see who is in your church and that messages are being sent. Only connect to people you would trust with that.' },
+      ],
+    },
+    {
       id: 'giving-records',
       illo: 'paper',
       title: 'Church finances & statements (for treasurers)',

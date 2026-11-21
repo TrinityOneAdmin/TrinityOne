@@ -130,6 +130,9 @@ function card(steward, { acting = '' } = {}) {
     fetch: async () => ({ ok: false, json: async () => ({}) }),
     CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     Icon: function Icon() { return null; }, SkPill: function SkPill() { return null; }, SkBadge: function SkBadge() { return null; },
+    // The card now links to the B4 high-risk guide (stew-help.jsx in the real console); here it is a no-op stub,
+    // so this file's switch/target assertions below are unchanged. The LINK itself is asserted in its own test file.
+    StewHelpLink: function StewHelpLink() { return null; },
     useStewDialog: () => ({ current: null }),
   };
   const names = Object.keys(globals);

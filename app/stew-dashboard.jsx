@@ -6346,7 +6346,10 @@ function WizAddRelay() {
 // THE CONSENT LINE (owner, 2026-10-21). Shown on the first tap of Add relay / Connect / Auto-find / the setup
 // wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
 // relay is the church vouching for it to every member's phone, not a connection test.
-const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+// A3 (owner Q4, 2026-11-20): a Connect now grants SYNC trust — signRelay chains a forced syncHeal that signs the
+// proved box into trinityone/relays (the full-corpus authorisation). The owner confirmed "add can say that", so the
+// consent names it in one plain sentence AFTER the existing one (kept verbatim so every test that anchors on it holds).
+const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it. It will hold the full copy of your church’s records.';
 // WHAT A REMOVE ANSWERED: whether the row may leave this screen (`drop`), and what to tell the steward (`note`, ''
 // when there is nothing to say). Every answer that is not a success says so (third audit, finding 3), and the row
 // leaves the screen only once the church's list no longer names the relay, or never did (fourth audit, finding 2).
@@ -6365,7 +6368,7 @@ function dropOutcome(r, url) {
   // answer). If that one is gone for good it would block every change for ever, so the steward is told the way out.
   return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
 }
-const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them. Each will hold the full copy of your church’s records.';
 // How many of the fastest public relays Auto-find shows before "Show all" (owner decision 2026-10-29).
 const RELAY_OFFERS_SHOWN = 5;
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
@@ -6826,7 +6829,11 @@ function DashCommunityRelaysCard() {
   const target = (prefs && Number.isFinite(prefs.publicTarget)) ? prefs.publicTarget : 5;
   return (
     <Panel title="Community relays">
-      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Other churches’ relays can keep a backup of your records, so your data survives even if your own relay goes down. New ones are added automatically, fastest first, up to your limit.</div>
+      {/* B3 (owner Q1, 2026-11-20): the one plain consent line for the default-on behaviour — up to `target` boxes,
+          added only unless this is turned off, and only ones that PROVE they run TrinityOne and are REGISTERED to this
+          church (B2: identity proof + registerAtRelay before a box counts). B4: the high-risk opt-out guidance is one
+          tap away, right here on the switch (owner Q4). */}
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Other churches’ relays can keep a backup of your records, so your data survives even if your own relay goes down. Unless you turn this off, up to {target} are added automatically — fastest first, and only ones that prove they run TrinityOne and accept your church. <StewHelpLink id="console-high-risk-relays" label="In a high-risk situation?" /></div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <button
           onClick={() => setAuto(checking ? true : !on)} disabled={busy}
