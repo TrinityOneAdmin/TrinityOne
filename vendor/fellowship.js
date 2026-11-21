@@ -8088,6 +8088,28 @@
     } catch {
     }
   }
+  function _netdocNamesUrl(url) {
+    try {
+      const rec = JSON.parse(localStorage.getItem("trinityone.relays.netdoc") || "{}") || {};
+      for (const c of Object.keys(rec)) {
+        const rows = rec[c] && rec[c].rows;
+        if (rows && Object.prototype.hasOwnProperty.call(rows, url)) return true;
+      }
+    } catch (e) {
+    }
+    return false;
+  }
+  function _otherChurchPersistsBox(url, exceptCp) {
+    try {
+      const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || "{}") || {};
+      for (const c of Object.keys(m)) {
+        if (c !== exceptCp && Array.isArray(m[c]) && m[c].includes(url)) return true;
+      }
+    } catch (e) {
+    }
+    return false;
+  }
+  var _burnBaselineDone = /* @__PURE__ */ new Set();
   async function _applyChurchList(cp) {
     if (_applying.has(cp)) return;
     _applying.add(cp);
@@ -8115,7 +8137,23 @@
           _maybeDropRelay(u, cp);
         }
       }
-      if (own && own.size) _saveChurchBoxes(cp, [...own.keys()]);
+      if (!_burnBaselineDone.has(cp)) {
+        _burnBaselineDone.add(cp);
+        const baseline = _loadChurchBoxes(cp);
+        const live = _churchRelays.get(cp);
+        const kept = baseline.filter((u) => {
+          if (live && live.has(u)) return true;
+          if (want.has(u) || _netdocNamesUrl(u) || _otherChurchPersistsBox(u, cp)) return true;
+          _maybeDropRelay(u, cp);
+          return false;
+        });
+        const out = new Set(kept);
+        if (live) for (const u of live.keys()) out.add(u);
+        if (out.size) _saveChurchBoxes(cp, [...out]);
+        else if (baseline.length) _dropChurchBoxes(cp);
+      } else if (own && own.size) {
+        _saveChurchBoxes(cp, [...own.keys()]);
+      }
       _saveHW(cp, at);
     } finally {
       _applying.delete(cp);
@@ -8152,6 +8190,109 @@
       }
     } finally {
       _resolving.delete(cp);
+    }
+  }
+  var DEAD_STRIKES_KEY = "trinityone.relays.deadstrikes";
+  var RETIRE_STRIKES = 2;
+  var RETIRE_PROBE_CAP = 3;
+  var _retiring = /* @__PURE__ */ new Set();
+  function _loadStrikes() {
+    try {
+      const m = JSON.parse(localStorage.getItem(DEAD_STRIKES_KEY) || "{}");
+      return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function _saveStrikes(m) {
+    try {
+      localStorage.setItem(DEAD_STRIKES_KEY, JSON.stringify(m));
+    } catch (e) {
+    }
+  }
+  function _signedAssociation(cp, url, key) {
+    const k = String(key || "").toLowerCase();
+    if (!k) return false;
+    try {
+      const cur = _churchList.get(cp);
+      if (cur && cur.want && cur.want.has(url)) return true;
+    } catch (e) {
+    }
+    try {
+      for (const v of Object.values(CANONICAL_RELAY_PUBS || {})) {
+        const arr = Array.isArray(v) ? v : [v];
+        if (arr.some((x) => String(x).toLowerCase() === k)) return true;
+      }
+    } catch (e) {
+    }
+    try {
+      const rec = JSON.parse(localStorage.getItem("trinityone.relays.netdoc") || "{}") || {};
+      for (const c of Object.keys(rec)) {
+        const rows = rec[c] && rec[c].rows;
+        if (rows) {
+          for (const u of Object.keys(rows)) if (String(rows[u] || "").toLowerCase() === k) return true;
+        }
+      }
+    } catch (e) {
+    }
+    return false;
+  }
+  async function _retireDeadRows(cp) {
+    if (!cp || _retiring.has(cp)) return;
+    _retiring.add(cp);
+    try {
+      const list = (window.Fellowship.relays || []).filter((u) => u && /^wss:\/\//i.test(u) && !CANONICAL_RELAYS.includes(u) && !DEFAULT_RELAYS.includes(u));
+      if (!list.length) return;
+      const strikes = _loadStrikes();
+      let probed = 0, changed = false;
+      const reset = (u) => {
+        if (strikes[u]) {
+          delete strikes[u];
+          changed = true;
+        }
+      };
+      for (const u of list) {
+        if (probed >= RETIRE_PROBE_CAP) break;
+        if (_netdocNamesUrl(u) || _otherChurchPersistsBox(u, null)) {
+          reset(u);
+          continue;
+        }
+        let detail;
+        try {
+          detail = await verifyRelayIdentityDetailed(u);
+        } catch (e) {
+          detail = { proof: null, reached: false };
+        }
+        probed++;
+        if (window.Fellowship.churchPub !== cp) break;
+        if (!detail || !detail.reached) {
+          reset(u);
+          continue;
+        }
+        const proof = detail.proof;
+        if (proof && _signedAssociation(cp, u, proof.relayPub)) {
+          reset(u);
+          continue;
+        }
+        strikes[u] = (Number(strikes[u]) || 0) + 1;
+        changed = true;
+        if (strikes[u] >= RETIRE_STRIKES) {
+          delete strikes[u];
+          _maybeDropRelay(u, cp);
+          try {
+            const boxes = _loadChurchBoxes(cp);
+            if (boxes.includes(u)) _saveChurchBoxes(cp, boxes.filter((x) => x !== u));
+          } catch (e) {
+          }
+          try {
+            _gate.forget(u);
+          } catch (e) {
+          }
+        }
+      }
+      if (changed) _saveStrikes(strikes);
+    } finally {
+      _retiring.delete(cp);
     }
   }
   var CHURCHLIST_REREAD_MS = 2e4;
@@ -11351,6 +11492,12 @@
       try {
         const _p = adoptChurchNetDocAddresses(window.Fellowship.churchPub);
         if (_p && _p.catch) _p.catch(() => {
+        });
+      } catch (e) {
+      }
+      try {
+        const _r = _retireDeadRows(window.Fellowship.churchPub);
+        if (_r && _r.catch) _r.catch(() => {
         });
       } catch (e) {
       }

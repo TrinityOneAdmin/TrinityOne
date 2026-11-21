@@ -1582,7 +1582,7 @@ function _restoreFold() {
 }
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
-const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (dedup by identity not URL).
+const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. Only the KEYS are ever read (keys()/has()/size, and values() to reach the inner maps); the per-url relayPub is recorded but NO reader consults it (re-audit finding 8 — the old comment claimed "distinct non-null values = distinct relay BOXES", a dedup-by-identity count that nothing computes).
 const _churchList   = new Map();   // cp -> { at, want:Set(url) }: the newest ACCEPTED church-signed relay-list, held in memory; drives (re)adoption + revocation.
 const _applying     = new Set();   // cp currently inside _applyChurchList — coalesces re-entrant churn (addRelay itself fires 'trinity-relays').
 const LISTHW_KEY = 'trinityone.relaylist.hw';   // persisted {cp: created_at} high-water — blocks a replayed OLDER list from downgrading or resurrecting a burned relay (R2 anti-replay).
@@ -1623,6 +1623,31 @@ function _maybeDropRelay(url, exceptCp) {
   try { window.Fellowship.removeRelay(url); } catch {}
   try { pool.close([url]); } catch {}
 }
+// ── C2 (plan item C): member revocation survives a RESTART, and dead rows retire ─────────────────────────
+// Two small reads of PERSISTED routing state, shared by the restart-burn baseline (_applyChurchList) and the
+// two-strike retire pass (_retireDeadRows). Both read the persisted records on disk, NEVER churchRelayNet's
+// 60s in-memory cache — which is empty at the cold-boot moment the baseline runs (re-audit finding 4).
+//
+// A row the NEWEST relay-net record NAMES (by url) is live routing, not a stale leftover — never burn/retire it.
+// `trinityone.relays.netdoc` = { [cp]: { hw, rows: { [url]: <proved key> } } }; checked across ALL churches so a
+// box two congregations both host (DOMAIN: churches host each other) is protected whichever one recorded it.
+function _netdocNamesUrl(url) {
+  try {
+    const rec = JSON.parse(localStorage.getItem('trinityone.relays.netdoc') || '{}') || {};
+    for (const c of Object.keys(rec)) { const rows = rec[c] && rec[c].rows; if (rows && Object.prototype.hasOwnProperty.call(rows, url)) return true; }
+  } catch (e) {}
+  return false;
+}
+// A row ANOTHER church still lists in its persisted boxes is not this church's to retire. (The in-memory
+// equivalent lives in _maybeDropRelay; this is the cold-boot half, before other churches have been applied.)
+function _otherChurchPersistsBox(url, exceptCp) {
+  try {
+    const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || '{}') || {};
+    for (const c of Object.keys(m)) { if (c !== exceptCp && Array.isArray(m[c]) && m[c].includes(url)) return true; }
+  } catch (e) {}
+  return false;
+}
+const _burnBaselineDone = new Set();   // cp whose one-shot restart burn baseline has been consumed THIS launch
 // R2 core: (re)apply a church's newest accepted list — adopt its enforcing relays, revoke the ones it dropped.
 // Idempotent + re-drivable (called on reconnect churn), so a transient NIP-11 probe timeout does NOT strand a
 // self-hosted member — the next churn re-adopts. RACE-SAFE: every async step re-checks the list is still the newest
@@ -1638,13 +1663,44 @@ async function _applyChurchList(cp) {
       if ((_churchList.get(cp) || {}).at !== at) return;      // a newer list arrived mid-probe → abandon this stale pass
       if (!info || info.enforces !== true) return;            // capability gate (fail-closed); unreachable → retried on next churn
       if (!_churchRelays.has(cp)) _churchRelays.set(cp, new Map());
-      _churchRelays.get(cp).set(u, info.relayPub || null);    // value = identity → distinct-box count (R3)
+      _churchRelays.get(cp).set(u, info.relayPub || null);    // the key is what's read; the relayPub value has no reader (see _churchRelays decl)
       if (!(window.Fellowship.relays || []).includes(u)) window.Fellowship.addRelay(u);
     }));
     if ((_churchList.get(cp) || {}).at !== at) return;        // superseded during adoption → don't revoke or persist
     const own = _churchRelays.get(cp);
-    if (own) for (const u of [...own.keys()]) { if (!want.has(u)) { own.delete(u); _maybeDropRelay(u, cp); } }   // burn the omitted relays
-    if (own && own.size) _saveChurchBoxes(cp, [...own.keys()]);
+    if (own) for (const u of [...own.keys()]) { if (!want.has(u)) { own.delete(u); _maybeDropRelay(u, cp); } }   // burn the IN-MEMORY omitted relays
+    // RESTART-SURVIVING BURN (audit finding 14, HIGH). The in-memory burn above cannot see a row the church
+    // removed while this phone was OFF: _churchRelays is in-memory, so after a cold start the dropped row was
+    // never in `own` and was never burned, and persisted churchboxes kept it for ever. So on the FIRST
+    // _applyChurchList for this church after boot, build a ONE-SHOT baseline from the PERSISTED churchboxes and
+    // burn any the church's newest list no longer wants.
+    //  · CRITICAL (re-audit finding 1, HIGH): the baseline is a LOCAL set consumed only here — it is NEVER
+    //    written into _churchRelays. That map's size>0 is _reResolveRelayName's "boxes already working" test;
+    //    seeding it with dead rows would permanently disable the tunnel-move name re-resolution — the existing
+    //    healer for exactly the self-hosting churn population this whole feature serves.
+    //  · Guards on the burn: still wanted by the newest 10002 (an unreachable-but-wanted box is briefly down,
+    //    never dropped); named by the newest PERSISTED relay-net record (re-audit finding 4); listed by another
+    //    church (persisted or, inside _maybeDropRelay, in memory); canonical/default (inside _maybeDropRelay).
+    //  · Residual, named: a church that has NEVER published a 10002 has no _churchList entry, so the early
+    //    `if (!cur) return` means it burns nothing here — C1 makes every console list-change publish one, so
+    //    this drains for any church whose console comes up once.
+    if (!_burnBaselineDone.has(cp)) {
+      _burnBaselineDone.add(cp);
+      const baseline = _loadChurchBoxes(cp);
+      const live = _churchRelays.get(cp);
+      const kept = baseline.filter((u) => {
+        if (live && live.has(u)) return true;                  // re-adopted this boot — the live map owns it
+        if (want.has(u) || _netdocNamesUrl(u) || _otherChurchPersistsBox(u, cp)) return true;   // protected: keep
+        _maybeDropRelay(u, cp);                                // genuine removal the phone slept through: off the pool
+        return false;
+      });
+      const out = new Set(kept);
+      if (live) for (const u of live.keys()) out.add(u);
+      if (out.size) _saveChurchBoxes(cp, [...out]);            // persist what survived + what this boot adopted
+      else if (baseline.length) _dropChurchBoxes(cp);         // had rows, all burned → clear them from disk; a church that never had any keeps NO key (don't write {})
+    } else if (own && own.size) {
+      _saveChurchBoxes(cp, [...own.keys()]);
+    }
     _saveHW(cp, at);
   } finally { _applying.delete(cp); }
 }
@@ -1677,6 +1733,76 @@ async function _reResolveRelayName(cp) {
       if (!(window.Fellowship.relays || []).includes(hit.url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), hit.url]);
     }
   } finally { _resolving.delete(cp); }
+}
+// ── C2: TWO-STRIKE RETIREMENT OF DEAD ROWS (plan item C, audit finding 16) ───────────────────────────────
+// The restart burn above drains a row the church REMOVED (gone from its newest 10002). This drains a row that
+// no church vouches for at all: a non-canonical address that keeps ANSWERING but has no signed tie to any
+// church on this phone — the standing invite/auto-find backlog the member list bloats with.
+//
+// WHAT RETIRES A ROW, AND WHAT MUST NOT. A non-canonical row that is REACHED twice CONSECUTIVELY
+// (verifyRelayIdentityDetailed().reached === true) and either proves NO key, or proves a key with NO SIGNED
+// association on this phone, is dropped.
+//   · UNREACHABLE NEVER COUNTS — a briefly-down box answers no HTTP, scores no strike, and its running count
+//     is RESET. This is the core "never drop a box that's only briefly down" requirement.
+//   · SIGNED ASSOCIATION (the only thing that keeps an answering row) = a key the persisted relay-net record
+//     proved (trinityone.relays.netdoc, across all churches), OR the church's newest kind-10002 want-set (by
+//     url), OR a canonical pin key. NIP-11 `relayPub` is NEVER an association — it is an unauthenticated string,
+//     not proof (RELAY-ADMISSION rule 10). This pass READS these records; it adds no gate to any admission or
+//     bootstrap path, and never widens the set.
+//   · Invite rows (churchboxes) are NOT blanket-exempt — they are the main stale source. They are protected only
+//     while the newest 10002/netdoc names them, or until two answered-no-association strikes.
+// CADENCE (2G rule: progress-based, never a new wall-clock timer): piggybacks the existing background verifier
+// beat — setChurch, on the app's [activeChurch, churches, connTick] effect (launch/foreground/unlock/online/
+// resume/90s) — and probes at most RETIRE_PROBE_CAP addresses per beat.
+// Residual, named: a row whose box answers and proves the church's key, while that church's relay-net doc stays
+// UNREADABLE for two beats, has no association yet and can be struck — but adoption (adoptInviteRelays /
+// adoptChurchNetDocAddresses) re-adds it the moment the doc is read, so it is self-healing, never permanent.
+const DEAD_STRIKES_KEY = 'trinityone.relays.deadstrikes';   // { [url]: consecutive answered-no-association strikes }. ROUTING state, NOT in a member backup — it rides the same exclusion as trinityone.relays.netdoc (absent from app/backup.jsx MEMBER_PREFIXES): a forged strike would retire a live box one answer early (the ROUTING_KEYS reasoning).
+const RETIRE_STRIKES = 2;          // two CONSECUTIVE answered-no-association passes retire a row (audit finding 16)
+const RETIRE_PROBE_CAP = 3;        // addresses probed per beat — progress-based, never a wall-clock timer
+const _retiring = new Set();       // cp currently inside _retireDeadRows
+function _loadStrikes() { try { const m = JSON.parse(localStorage.getItem(DEAD_STRIKES_KEY) || '{}'); return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; } catch (e) { return {}; } }
+function _saveStrikes(m) { try { localStorage.setItem(DEAD_STRIKES_KEY, JSON.stringify(m)); } catch (e) {} }
+// Does this url's PROVED key have a SIGNED association on this phone? Never NIP-11 relayPub (not proof — rule 10).
+function _signedAssociation(cp, url, key) {
+  const k = String(key || '').toLowerCase();
+  if (!k) return false;
+  try { const cur = _churchList.get(cp); if (cur && cur.want && cur.want.has(url)) return true; } catch (e) {}   // the church's newest 10002 names this url
+  try { for (const v of Object.values(CANONICAL_RELAY_PUBS || {})) { const arr = Array.isArray(v) ? v : [v]; if (arr.some(x => String(x).toLowerCase() === k)) return true; } } catch (e) {}   // a shipped canonical key
+  try {
+    const rec = JSON.parse(localStorage.getItem('trinityone.relays.netdoc') || '{}') || {};
+    for (const c of Object.keys(rec)) { const rows = rec[c] && rec[c].rows; if (rows) for (const u of Object.keys(rows)) if (String(rows[u] || '').toLowerCase() === k) return true; }   // a key the persisted relay-net record proved
+  } catch (e) {}
+  return false;
+}
+async function _retireDeadRows(cp) {
+  if (!cp || _retiring.has(cp)) return;
+  _retiring.add(cp);
+  try {
+    const list = (window.Fellowship.relays || []).filter(u => u && /^wss:\/\//i.test(u) && !CANONICAL_RELAYS.includes(u) && !DEFAULT_RELAYS.includes(u));
+    if (!list.length) return;
+    const strikes = _loadStrikes();
+    let probed = 0, changed = false;
+    const reset = (u) => { if (strikes[u]) { delete strikes[u]; changed = true; } };
+    for (const u of list) {
+      if (probed >= RETIRE_PROBE_CAP) break;
+      if (_netdocNamesUrl(u) || _otherChurchPersistsBox(u, null)) { reset(u); continue; }   // a row a church's record names, or another church lists: never retire
+      let detail; try { detail = await verifyRelayIdentityDetailed(u); } catch (e) { detail = { proof: null, reached: false }; }
+      probed++;
+      if (window.Fellowship.churchPub !== cp) break;            // church switched mid-probe
+      if (!detail || !detail.reached) { reset(u); continue; }   // UNREACHABLE never counts — briefly-down protection
+      const proof = detail.proof;
+      if (proof && _signedAssociation(cp, u, proof.relayPub)) { reset(u); continue; }   // answered WITH a signed association: keep, reset
+      strikes[u] = (Number(strikes[u]) || 0) + 1; changed = true;   // answered, no key OR a key with no signed association → strike
+      if (strikes[u] >= RETIRE_STRIKES) {
+        delete strikes[u];
+        _maybeDropRelay(u, cp);                                 // off the live pool (canonical / in-memory-other-church guarded inside)
+        try { const boxes = _loadChurchBoxes(cp); if (boxes.includes(u)) _saveChurchBoxes(cp, boxes.filter(x => x !== u)); } catch (e) {}
+        try { _gate.forget(u); } catch (e) {}                   // and forget the stale proof, so it is not "already checked" for 30 days
+      }
+    }
+    if (changed) _saveStrikes(strikes);
+  } finally { _retiring.delete(cp); }
 }
 // ── THE CHURCH'S SIGNED RELAY LIST IS READ ON EVERY LAUNCH, NOT ONLY WHEN SOMEBODY FOLLOWS ──────────────
 //
@@ -5180,6 +5306,12 @@ window.Fellowship = {
     // synchronous and on the unlock path, so a slow or gone box must cost the member nothing, and the guard +
     // 60s cache make every later tick a no-op. Rides the existing [activeChurch, churches, connTick] effect.
     try { const _p = adoptChurchNetDocAddresses(window.Fellowship.churchPub); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
+    // C2: RETIRE DEAD ROWS ON THE SAME BEAT. The background verifier beat is exactly this effect; retirement
+    // piggybacks it rather than starting a second schedule (no new wall-clock timer — the 2G rule). It probes
+    // at most a few addresses per beat, never counts an unreachable box, and drops only a row that keeps
+    // answering with no signed tie to any church on this phone. Fire-and-forget, re-entrancy-guarded, after
+    // adoption so a box just re-adopted this beat is never a strike.
+    try { const _r = _retireDeadRows(window.Fellowship.churchPub); if (_r && _r.catch) _r.catch(() => {}); } catch (e) {}
     return window.Fellowship.churchPub;
   },
   // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
