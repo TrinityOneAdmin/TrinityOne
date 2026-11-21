@@ -16922,14 +16922,17 @@ zoo`.split("\n");
   }
   function saveNetKey(rec) {
     const sealed = { pub: rec.pub, name: rec.name };
-    if (rec.mnemonic && churchSk) {
-      try {
-        sealed.sealedMnemonic = encrypt2(rec.mnemonic, churchSk);
-      } catch {
-        sealed.mnemonic = rec.mnemonic;
+    if (rec.mnemonic) {
+      let s = null;
+      if (churchSk) {
+        try {
+          s = encrypt2(rec.mnemonic, churchSk);
+        } catch {
+          s = null;
+        }
       }
-    } else if (rec.mnemonic) {
-      sealed.mnemonic = rec.mnemonic;
+      if (!s) return false;
+      sealed.sealedMnemonic = s;
     } else {
       const had = rec.sealedMnemonic ? rec : _netKeysRaw().find((x) => x.pub === rec.pub) || {};
       if (had.sealedMnemonic) sealed.sealedMnemonic = had.sealedMnemonic;
@@ -16938,6 +16941,7 @@ zoo`.split("\n");
     const a = _netKeysRaw().filter((x) => x.pub !== rec.pub);
     a.push(sealed);
     lsSet(NETKEYS_LS, JSON.stringify(a));
+    return true;
   }
   function _migrateNetKeysToSealed() {
     if (!churchSk) return;
@@ -30567,9 +30571,16 @@ zoo`.split("\n");
       const m = generateSeedWords();
       const nsk = privateKeyFromSeedWords(m);
       const nPub = getPublicKey2(nsk);
+      let sealedWords = null;
+      try {
+        sealedWords = encrypt2(m, churchSk);
+      } catch (e) {
+        sealedWords = null;
+      }
+      if (!sealedWords) return { ok: false, stage: "start", reason: "This console could not seal the new network\u2019s key, so nothing was created." };
       const j = await window.Steward.joinNetwork(nPub, { scopes: NETWORK_SCOPES.slice() });
       if (!j.ok) return { ok: false, stage: j.stage === "join" || j.stage === "readback" ? "join" : j.stage, reason: j.reason };
-      saveNetKey({ pub: nPub, mnemonic: m, name: nm });
+      saveNetKey({ pub: nPub, sealedMnemonic: sealedWords, name: nm });
       try {
         lsSet(NETRING_MINT_LS + nPub, "1");
       } catch (x) {
@@ -30731,7 +30742,7 @@ zoo`.split("\n");
     // storing a random phrase would let this console silently publish as a key nobody vouched for — so an
     // unanswered probe REFUSES, with a reason that says to try again. Stores the key and nothing else:
     // no publishes, no registration, no join — the network's documents already exist on the relays.
-    // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'verify'|'relay', reason }
+    // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'locked'|'verify'|'relay', reason }
     async restoreNetwork(mnemonic) {
       const mm = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (mm.split(" ").length < 12) return { ok: false, stage: "words", reason: "Enter the full 12-word recovery phrase." };
@@ -30741,6 +30752,7 @@ zoo`.split("\n");
       } catch (e) {
         return { ok: false, stage: "words", reason: "That is not a valid recovery phrase \u2014 check the words and their order." };
       }
+      if (!churchSk || !churchPub) return { ok: false, stage: "locked", reason: "This console is locked, so a network\u2019s words cannot be stored safely \u2014 nothing has been added. Unlock it and try again." };
       if (np === churchPub) return { ok: false, stage: "verify", reason: "These are this church\u2019s own recovery words, not a network\u2019s \u2014 nothing has been added." };
       const held = netKeys().find((r) => r.pub === np);
       if (held) return { ok: true, already: true, npub: npubEncode(np), name: held.name || "Network" };
@@ -30750,7 +30762,7 @@ zoo`.split("\n");
         return { ok: false, stage: "relay", reason: "Couldn\u2019t check these words with your relay \u2014 nothing has been added. Try again when your relay answers." };
       }
       const name = p.name || "Network";
-      saveNetKey({ pub: np, mnemonic: mm, name });
+      if (!saveNetKey({ pub: np, mnemonic: mm, name })) return { ok: false, stage: "locked", reason: "This console locked before the network\u2019s words could be stored safely \u2014 nothing has been added. Unlock it and try again." };
       try {
         window.dispatchEvent(new CustomEvent("steward-networks"));
       } catch (e) {
@@ -30763,7 +30775,7 @@ zoo`.split("\n");
       if (mm.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
       const nsk = privateKeyFromSeedWords(mm);
       const nPub = getPublicKey2(nsk);
-      saveNetKey({ pub: nPub, mnemonic: mm, name: name || "Network" });
+      if (!saveNetKey({ pub: nPub, mnemonic: mm, name: name || "Network" })) throw new Error("This console is locked, so the network\u2019s words cannot be stored safely. Unlock it and try again.");
       window.dispatchEvent(new CustomEvent("steward-networks"));
       return { networkPub: nPub, npub: npubEncode(nPub) };
     },

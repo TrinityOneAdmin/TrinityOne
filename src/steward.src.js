@@ -2034,11 +2034,28 @@ async function _netRemovePost(np, kind, id) {
   const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', (kind === 'event' ? NETEVENT_D : NETANN_D) + id], ['t', NET], ['deleted', '1']], content: '' }), nsk), o);
   return r ? { ok: true } : { ok: false, reason: o.reason || 'No relay accepted it.' };
 }
+// A NETWORK'S WORDS ARE NEVER WRITTEN IN PLAIN TEXT (integration audit 2026-11-21, LOW#1). This used to fall
+// back to storing `mnemonic` as given whenever it could not seal — the console locked (churchSk null), or
+// the seal threw — which put a network's recovery phrase in localStorage in the clear, the exact thing S-1
+// sealed it to prevent. Words that cannot be sealed are now NOT WRITTEN: nothing in the store changes and
+// the answer is false. -> true when the record was written, false when it was skipped.
+// The sealed bytes of the ordinary unlocked save are what they were. A record ALREADY stored in plain text
+// by an older build is not touched here (never erased, never rewritten in the clear): _migrateNetKeysToSealed
+// seals it on the next unlock.
+// Callers (rule 2), and what each does with false:
+//   createNetwork            seals BEFORE it joins and hands over the sealed copy, so it cannot get false
+//   restoreNetwork           refuses with stage 'locked' — nothing was published, so nothing is half-done
+//   importNetworkKey         throws
+//   subscribeNetworkProfile  (rename self-heal) ignores it — the stored record keeps its old name, and the
+//                            next profile event tries again
 function saveNetKey(rec) {
   const sealed = { pub: rec.pub, name: rec.name };
-  if (rec.mnemonic && churchSk) {
-    try { sealed.sealedMnemonic = nip44e(rec.mnemonic, churchSk); } catch { sealed.mnemonic = rec.mnemonic; }
-  } else if (rec.mnemonic) { sealed.mnemonic = rec.mnemonic; }
+  if (rec.mnemonic) {
+    let s = null;
+    if (churchSk) { try { s = nip44e(rec.mnemonic, churchSk); } catch { s = null; } }
+    if (!s) return false;
+    sealed.sealedMnemonic = s;
+  }
   else {
     // A SAVE WITH NO WORDS IN HAND KEEPS THE WORDS ALREADY STORED. The 12 words are the only way to publish
     // as the network, and this used to write just {pub, name} whenever it was handed a record it could not
@@ -2052,6 +2069,7 @@ function saveNetKey(rec) {
     else if (had.mnemonic) sealed.mnemonic = had.mnemonic;
   }
   const a = _netKeysRaw().filter(x => x.pub !== rec.pub); a.push(sealed); lsSet(NETKEYS_LS, JSON.stringify(a));
+  return true;
 }
 function _migrateNetKeysToSealed() {
   if (!churchSk) return;
@@ -16748,9 +16766,16 @@ window.Steward = {
     const m = generateSeedWords();
     const nsk = privateKeyFromSeedWords(m);
     const nPub = getPublicKey(nsk);
+    // SEALED NOW, WHILE THE CHURCH KEY IS KNOWN TO BE HERE (LOW#1, 2026-11-21). The join below is awaited, and
+    // a console that locks during it has no key to seal with afterwards — saveNetKey no longer writes the
+    // words in plain text, so sealing after the join could leave a joined network whose key was never kept.
+    // A seal that fails refuses HERE, before anything is published.
+    let sealedWords = null;
+    try { sealedWords = nip44e(m, churchSk); } catch (e) { sealedWords = null; }
+    if (!sealedWords) return { ok: false, stage: 'start', reason: 'This console could not seal the new network’s key, so nothing was created.' };
     const j = await window.Steward.joinNetwork(nPub, { scopes: NETWORK_SCOPES.slice() });
     if (!j.ok) return { ok: false, stage: j.stage === 'join' || j.stage === 'readback' ? 'join' : j.stage, reason: j.reason };
-    saveNetKey({ pub: nPub, mnemonic: m, name: nm });   // keep the key so this console can publish AS the network
+    saveNetKey({ pub: nPub, sealedMnemonic: sealedWords, name: nm });   // keep the key so this console can publish AS the network
     try { lsSet(NETRING_MINT_LS + nPub, '1'); } catch (x) {}   // N5b: THIS console founded it, so an empty read of its network key may start the FIRST ring (see _netMintBlockers)
     const base = { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
     const pr = await window.Steward.retryNetworkProfile(nPub, nm);
@@ -16861,12 +16886,15 @@ window.Steward = {
   // storing a random phrase would let this console silently publish as a key nobody vouched for — so an
   // unanswered probe REFUSES, with a reason that says to try again. Stores the key and nothing else:
   // no publishes, no registration, no join — the network's documents already exist on the relays.
-  // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'verify'|'relay', reason }
+  // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'locked'|'verify'|'relay', reason }
   async restoreNetwork(mnemonic) {
     const mm = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (mm.split(' ').length < 12) return { ok: false, stage: 'words', reason: 'Enter the full 12-word recovery phrase.' };
     let np = '';
     try { np = getPublicKey(privateKeyFromSeedWords(mm)); } catch (e) { return { ok: false, stage: 'words', reason: 'That is not a valid recovery phrase — check the words and their order.' }; }
+    // THE WORDS ARE SEALED TO THE CHURCH KEY, so a console without one (locked) cannot keep them — the same
+    // guard networkWords() has (slice3-F4). Refused before the relay is asked.
+    if (!churchSk || !churchPub) return { ok: false, stage: 'locked', reason: 'This console is locked, so a network’s words cannot be stored safely — nothing has been added. Unlock it and try again.' };
     // A CHURCH'S OWN WORDS ARE NOT A NETWORK'S — the same refusal joinNetwork makes for np === churchPub.
     // Stored as a network, the church key would be offered in the switcher as a network console.
     if (np === churchPub) return { ok: false, stage: 'verify', reason: 'These are this church’s own recovery words, not a network’s — nothing has been added.' };
@@ -16878,7 +16906,8 @@ window.Steward = {
       return { ok: false, stage: 'relay', reason: 'Couldn’t check these words with your relay — nothing has been added. Try again when your relay answers.' };
     }
     const name = p.name || 'Network';
-    saveNetKey({ pub: np, mnemonic: mm, name });
+    // the probe above is awaited: a console that locked meanwhile cannot seal, and saveNetKey then writes nothing
+    if (!saveNetKey({ pub: np, mnemonic: mm, name })) return { ok: false, stage: 'locked', reason: 'This console locked before the network’s words could be stored safely — nothing has been added. Unlock it and try again.' };
     try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch (e) {}
     return { ok: true, npub: npubEncode(np), name };
   },
@@ -16887,7 +16916,7 @@ window.Steward = {
     const mm = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (mm.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
     const nsk = privateKeyFromSeedWords(mm); const nPub = getPublicKey(nsk);
-    saveNetKey({ pub: nPub, mnemonic: mm, name: name || 'Network' });
+    if (!saveNetKey({ pub: nPub, mnemonic: mm, name: name || 'Network' })) throw new Error('This console is locked, so the network’s words cannot be stored safely. Unlock it and try again.');
     window.dispatchEvent(new CustomEvent('steward-networks'));
     return { networkPub: nPub, npub: npubEncode(nPub) };
   },
