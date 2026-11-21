@@ -23372,6 +23372,12 @@ zoo`.split("\n");
               });
             };
             un.then(heal, heal);
+            try {
+              const pl = window.Steward.publishRelayList();
+              if (pl && pl.catch) pl.catch(() => {
+              });
+            } catch (e) {
+            }
           }
         } catch (e) {
         }
@@ -23385,8 +23391,25 @@ zoo`.split("\n");
     syncHeal: () => syncHeal(),
     autoSyncHeal,
     // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
+    // C1: a Remove that actually changed the church's signed list republishes the authoritative kind-10002 so
+    // member phones — which retire a row the newest 10002 omits — learn the drop and, with the member-side
+    // restart fix (plan C2), keep it across a reboot. Only on `removed === true` (the list changed); a notListed
+    // / unknown / own-box refusal changed nothing to advertise. Built church-wide from the relay-net doc this
+    // removal just re-signed; fire-and-forget, swallowed on failure like the heal.
     unsignRelay(url) {
-      return enrolSerial(() => unenrolRelayNet(url));
+      const p = enrolSerial(() => unenrolRelayNet(url));
+      p.then((r) => {
+        try {
+          if (r && r.removed === true) {
+            const pl = window.Steward.publishRelayList();
+            if (pl && pl.catch) pl.catch(() => {
+            });
+          }
+        } catch (e) {
+        }
+      }, () => {
+      });
+      return p;
     },
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
@@ -24624,9 +24647,31 @@ zoo`.split("\n");
     // only lists relays the church already uses (today the public canonical set), so it reveals nothing new.
     // NOTE: when self-hosted/HIDDEN relays arrive (Phase 4), this MUST become opt-in per church so a hidden
     // relay isn't advertised (FEDERATION-PLAN risk #4). Signed by the church key only — not a delegated steward.
-    publishRelayList() {
-      if (!sk || actingChurch) return Promise.resolve(null);
-      const tags = relays().map((r) => ["r", r]);
+    // C1 (plan item C, audit finding 15 + re-audit finding 5). BUILT FROM THE CHURCH-WIDE SIGNED SOURCE — this
+    // church's own relay-net document — NOT relays() (this device's gated localStorage view). The member app
+    // retires a row the newest kind-10002 omits, so the 10002 is authoritative over what a phone keeps; built
+    // from relays() it would differ per device (a cold-gate console's relays() is short), and two consoles of
+    // one church would publish two different lists, each burning live rows on every member. From the signed doc,
+    // every console publishes the SAME list.
+    //  · `_viewingNetwork()` guard: enrol/unenrol have it, this did not — a network view's `pub` is the network
+    //    key, which has no relay list, and signing a 10002 there would be the wrong author (rule 2 parity).
+    //  · NO PUBLISH OVER AN INCOMPLETE RELAY-NET READ: a 10002 built from a cold/partial doc read is a partial
+    //    list, and phones on OLD APKs burn UNCONDITIONALLY from the newest 10002 — the same `_readCovers`
+    //    discipline enrolRelayNet/unenrolRelayNet use before re-signing. No document at all → publish nothing.
+    //  · url-less relay-net entries are excluded (`url` is optional in that doc; a pubkey with no dialable wss
+    //    address is nothing a member could put in an `r` tag).
+    // CALLERS (rule 2): refreshNamedRelays (tunnel move), connectFoundRelays + autoPickRelays (Auto-find), and
+    // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). B2 adoption will
+    // add its own call when Work Item B is built; the source list stays the signed doc so B only widens it.
+    async publishRelayList() {
+      if (!sk || actingChurch || _viewingNetwork()) return null;
+      const read = await relayNetDoc();
+      const { ev } = read;
+      const mine = ev && ev.pubkey === pub ? ev : null;
+      if (!mine || !_readCovers(read)) return null;
+      const urls = [...new Set(parseRelayNet(mine.content).map((e) => e && typeof e.url === "string" ? e.url : "").filter((u) => /^wss:\/\//i.test(u)))];
+      if (!urls.length) return null;
+      const tags = urls.map((u) => ["r", u]);
       return publish(finalizeEvent2(_monotonic({ kind: 10002, created_at: now(), tags, content: "" }), sk));
     },
     publishFund(fund) {
