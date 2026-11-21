@@ -791,3 +791,54 @@ test('POINT OF USE: an adults-only batch with the same gap stays quiet — the l
   tree = draw(SetupAccountsModal, props);
   assert.doesNotMatch(texts(tree).join(' '), /relay machines/, 'the child line fired for a batch with no children');
 });
+
+// ── S5 (integration audit 2026-11-21): the batch's no-photo write is READ, and a miss is SAID ────────────
+// It was fire-and-forget behind sg.loaded: a refused save or a skipped one left the done screen reading
+// as though the children's photos were off. Driven through the real modal each time.
+async function batchOneChild({ setNoPhoto, sg, kidPhotosAllowed = false }) {
+  const log = [];
+  const steward = stewardSpy(log);
+  steward.setNoPhoto = (list) => { log.push(['setNoPhoto', list]); return setNoPhoto(); };
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg, kidPhotosAllowed, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  typeNames(tree, 'Little Ana');
+  tree = draw(SetupAccountsModal, props);
+  button(tree, 'Child?')[0].props.onClick();
+  tree = draw(SetupAccountsModal, props);
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  tree = draw(SetupAccountsModal, props);
+  const all = texts(tree).join(' ');
+  assert.ok(/1\s+account\s+created/.test(all), 'control: the batch reached its done screen: ' + all.slice(0, 200));
+  return { log, all };
+}
+const NOT_ON_LIST = /not added to your church.s no-photo list/;
+
+test('POINT OF USE: a no-photo write the relay REFUSES is said on the done screen — resolved null, false, or thrown', async () => {
+  for (const [what, impl] of [['null', () => Promise.resolve(null)], ['false', () => Promise.resolve(false)],
+    ['rejects', () => Promise.reject(new Error('refused'))], ['throws', () => { throw new Error('may not write'); }]]) {
+    const { log, all } = await batchOneChild({ setNoPhoto: impl, sg: { loaded: true, nophoto: [] } });
+    assert.ok(log.some(l => l[0] === 'setNoPhoto'), what + ': control — the write was attempted');
+    assert.match(all, NOT_ON_LIST, what + ': a refused no-photo write passed in silence');
+    assert.match(all, /was not accepted/, what);
+  }
+});
+
+test('POINT OF USE: a no-photo list that had NOT LOADED is left alone, and the skip is said', async () => {
+  const { log, all } = await batchOneChild({ setNoPhoto: () => Promise.resolve(true), sg: { loaded: false, nophoto: [] } });
+  assert.ok(!log.some(l => l[0] === 'setNoPhoto'), 'a cold list must never be replaced (audit 2026-10-13)');
+  assert.match(all, NOT_ON_LIST, 'the skipped write passed in silence');
+  assert.match(all, /had not loaded/);
+});
+
+test('POINT OF USE: an accepted no-photo write, and a church that allows children’s photos, both stay quiet (control)', async () => {
+  const a = await batchOneChild({ setNoPhoto: () => Promise.resolve(true), sg: { loaded: true, nophoto: [] } });
+  assert.ok(a.log.some(l => l[0] === 'setNoPhoto'));
+  assert.doesNotMatch(a.all, NOT_ON_LIST);
+  const b = await batchOneChild({ setNoPhoto: () => Promise.resolve(null), sg: { loaded: false, nophoto: [] }, kidPhotosAllowed: true });
+  assert.ok(!b.log.some(l => l[0] === 'setNoPhoto'));
+  assert.doesNotMatch(b.all, NOT_ON_LIST, 'a church that allows children’s photos has nothing to report');
+});

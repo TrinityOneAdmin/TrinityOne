@@ -8377,6 +8377,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   const [err, setErr] = React.useState('');
   const [closing, setClosing] = React.useState(false);      // the close-without-print warning
   const [cleaning, setCleaning] = React.useState(false);
+  const [photoNote, setPhotoNote] = React.useState('');     // the batch's no-photo write did not happen: said on the done screen (audit S5)
   // Moment-of-use gates for the UI; the ENGINE re-reads auth and both lists again when it runs, so these
   // only decide what the screen offers, never what is written.
   const authed = !!(window.Steward.relayAuthed && window.Steward.relayAuthed());
@@ -8439,15 +8440,30 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     // THE OWNER'S RULE: a marked child goes on the no-photo list (unless this church allows children's
     // photos). Gated on sg.loaded exactly like the DashMembers reconcile effect, which is the standing
     // backstop for this write either way — a cold list must never be replaced (audit 2026-10-13).
+    //
+    // THE RESULT IS READ AND SAID (integration audit 2026-11-21, S5). This write was fire-and-forget: a
+    // refused save, or a list that had not loaded (so the write is skipped), left the done screen reading as
+    // though the children's photos were off. setNoPhoto RESOLVES null/false for a refusal as well as
+    // throwing, so the resolved value is what is checked. The done screen is shown first -- the slips are
+    // what the steward is waiting for -- and the note joins it when the answer is in.
+    setPhotoNote('');
+    setStage('done');
     try {
       const okKids = out.results.filter(r => r.ok && r.isChild && r.pubkey).map(r => r.pubkey);
-      if (okKids.length && !kidPhotosAllowed && sg && sg.loaded) {
-        const have = new Set(sg.nophoto || []);
-        const add = okKids.filter(p => !have.has(p));
-        if (add.length) window.Steward.setNoPhoto([...(sg.nophoto || []), ...add]);
+      if (okKids.length && !kidPhotosAllowed) {
+        if (!(sg && sg.loaded)) {
+          setPhotoNote('The new children were not added to your church\u2019s no-photo list \u2014 that list had not loaded on this console, so it was left alone. Their photos are not switched off yet.');
+        } else {
+          const have = new Set(sg.nophoto || []);
+          const add = okKids.filter(p => !have.has(p));
+          if (add.length) {
+            let okP = null;
+            try { okP = await Promise.resolve(window.Steward.setNoPhoto([...(sg.nophoto || []), ...add])); } catch (e) { okP = null; }
+            if (!okP) setPhotoNote('The new children were not added to your church\u2019s no-photo list \u2014 that save was not accepted. Their photos are not switched off yet.');
+          }
+        }
       }
     } catch (e) {}
-    setStage('done');
   };
   const print = async () => {
     const ok = (results || []).filter(r => r.ok);
@@ -8578,6 +8594,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
         return <React.Fragment>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{ok.length} account{ok.length === 1 ? '' : 's'} created{failed.length ? ` · ${failed.length} failed` : ''}.</div>
           {kidSpread ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 8, lineHeight: 1.5 }}>{kidSpread}</div> : null}
+          {photoNote ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 8, lineHeight: 1.5 }}>{photoNote}</div> : null}
           {err ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 8 }}>{err}</div> : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 10 }}>
             {(results || []).map((r, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{r.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{r.name}{r.isChild ? ' (child)' : ''}</span>{!r.ok && r.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{r.reason}</span> : null}</div>)}
