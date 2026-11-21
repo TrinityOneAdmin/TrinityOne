@@ -511,13 +511,17 @@ test('POINT OF USE: a trust refusal asks for NO heal until the SAME 2-pass thres
     'THE HEAL NO LONGER FIRES AT THE 2-PASS THRESHOLD — the a8 shape stays broken: ' + JSON.stringify(two));
 });
 
-// ── POINT OF USE 3: a Connect that landed queues a forced heal, after the queue slot ────────────────────
-test("POINT OF USE: signRelay's success path queues a forced heal; a failed or unknown signing does not", async () => {
+// ── POINT OF USE 3: a Connect that landed un-tombstones the box, THEN queues a forced heal, each in its own
+// queue slot (never nested) ──────────────────────────────────────────────────────────────────────────────
+test("POINT OF USE: signRelay's success path un-tombstones the proved box then queues a forced heal; a failed or unknown signing does neither", async () => {
   const mk = (enrolResult) => {
     const order = [];
     const scope = {
       enrolSerial: (fn) => { order.push('slot'); return Promise.resolve().then(fn).then((v) => { order.push('slot-end'); return v; }); },
       enrolRelayNet: async () => (enrolResult instanceof Error ? Promise.reject(enrolResult) : enrolResult),
+      // A2: the one un-tombstone path. signRelay must clear the proved key from the removal tombstones so the
+      // forced heal that follows does not refuse the box the steward just chose to re-add.
+      _writeTombstone: async (o) => { order.push('untomb:' + JSON.stringify((o && o.remove) || null)); return { wrote: true }; },
       autoSyncHeal: async (opts) => { order.push('heal:' + JSON.stringify(opts)); return {}; },
       Promise, JSON, String,
     };
@@ -533,9 +537,9 @@ test("POINT OF USE: signRelay's success path queues a forced heal; a failed or u
   };
   const ok = mk({ published: true, proven: [{ url: 'wss://x.example/relay', pubkey: KEY_A }], entries: [{ pubkey: KEY_A }] });
   await ok.api.signRelay('wss://x.example/relay');
-  await settle(); await settle();
-  assert.deepEqual(ok.order, ['slot', 'slot-end', 'heal:{"force":true}'],
-    'A CONNECT THAT LANDED NEVER QUEUES THE HEAL (or queues it inside the slot — the nesting deadlock): ' + JSON.stringify(ok.order));
+  await settle(); await settle(); await settle();
+  assert.deepEqual(ok.order, ['slot', 'slot-end', 'slot', 'untomb:["' + KEY_A + '"]', 'slot-end', 'heal:{"force":true}'],
+    'A CONNECT THAT LANDED did not un-tombstone the box then heal, each in its OWN slot (nesting deadlocks, or the heal would refuse the box it just re-added): ' + JSON.stringify(ok.order));
   for (const [why, res] of [
     ['an unknown signing (a relay not answering)', { unknown: true, proven: [], entries: [] }],
     ['a signing that proved nothing and published nothing', { published: false, proven: [], unproven: ['x'], entries: [] }],
@@ -543,7 +547,8 @@ test("POINT OF USE: signRelay's success path queues a forced heal; a failed or u
   ]) {
     const bad = mk(res);
     await bad.api.signRelay('wss://x.example/relay').catch(() => {});
-    await settle(); await settle();
+    await settle(); await settle(); await settle();
     assert.ok(!bad.order.some(x => x.startsWith('heal')), why + ' still queued a heal: ' + JSON.stringify(bad.order));
+    assert.ok(!bad.order.some(x => x.startsWith('untomb')), why + ' still un-tombstoned: ' + JSON.stringify(bad.order));
   }
 });

@@ -120,6 +120,14 @@ export const DOC_TYPES = Object.freeze({
   // finalizeEvent(…, sk) and NOT feChurch, so a delegated steward's copy carries no ['church'] tag at all
   // and there is no church to scope it to. Sibling of relay-net below, which is owner-only for this reason.
   'trinityone/relays':        { write: 'church',    read: 'members', scope: 'author', note: 'the church\'s trusted-relay list — OWNER-ONLY (CLAUDE.md rule 10): it decides which relay boxes exchange the full corpus' },
+  // ITS TOMBSTONE SIBLING (plan A2, 2026-11-20). When a steward Removes a relay, its key is signed into this
+  // [{pubkey, at}] list AND dropped from trinityone/relays, so a removed box loses full-corpus pull rights on
+  // every peer and cannot be re-added for ever by another console's additive heal (which refuses a key whose
+  // tombstone `at` is newer than the sync doc). A SEPARATE document, never a new shape for trinityone/relays
+  // (pilot back-compat: old gateways keep parsing the array they know). OWNER-ONLY, same CHURCH_PUBS.has rule
+  // as RELAYS_D — this says WHICH boxes lose the whole corpus, so a delegated steward is not the authority for
+  // it. The relay never READS it (note() has no branch); only consoles do, over authors:[churchpub].
+  'trinityone/relays-removed': { write: 'church',    read: 'members', scope: 'author', note: 'plan A2 — the church\'s relay-removal tombstones [{pubkey, at}]: a Removed box\'s key, so heal/autoSync/B2 stop re-adding it and it loses full-corpus sync trust. OWNER-ONLY, sibling of trinityone/relays; a deliberate Add/Connect clears the key (the one un-tombstone path)' },
   'trinityone/relay-net':     { write: 'church',    read: 'public',  scope: 'author', note: 'closed-network plan C3 — the church\'s own statement of WHICH RELAY BOXES ARE ITS NETWORK, as [{pubkey, alwaysOn, url?}]. NOT trinityone/relays, which means "cross-relay sync is on": syncEnable refuses to write that below two boxes (so a single-relay church could never author its own membership) and syncDisable writes [] to it (which would un-admit a church\'s own relay as a side effect of turning mirroring off). Add, never repurpose. The client matches on PUBKEY ONLY — `url` is an advisory hint about where the box was last seen, because a tunnelled relay changes address on every restart. READ IS PUBLIC (C4): under the client gate a phone will not publish anywhere until it has read this, so a newcomer who has scanned an invite must be able to read it BEFORE joining — the same reason joinpolicy: is public. It carries relay pubkeys and nothing about any person, and kind-10002 already publishes the same church\'s relay addresses to anyone' },
   'trinityone/network:':      { write: 'church',    read: 'members', scope: 'author', note: 'the church declares it joined a network, {joined, v, scopes}. N5c (2026-10-21, ported 2026-11-18): ALSO served to the network key it names while the join is live -- the ONE church document a network key may read; the scopes are the consent netReader enforces' },
   // THE CHAT TAG LABELS A CHURCH DEFINES (Prayer request, Testimony, …). UNDECLARED until 2026-09-22.
@@ -507,6 +515,7 @@ export const D = Object.freeze({
   BOOKING:        k('trinityone/booking:'),
   RUNSHEET:       k('trinityone/runsheet:'),
   RELAYS:         k('trinityone/relays'),
+  RELAYS_REMOVED: k('trinityone/relays-removed'),
   RELAY_NET:      k('trinityone/relay-net'),
   NETWORK:        k('trinityone/network:'),
   BLOCKED:        k('trinityone/blocked:'),

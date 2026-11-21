@@ -20571,54 +20571,73 @@ zoo`.split("\n");
     } catch (e) {
       _droppable = /* @__PURE__ */ new Set();
     }
-    const read = await relayNetDoc();
-    const { ev: existing } = read;
-    if (!_readCovers(read, u, _droppable)) return { removed: false, unknown: true };
-    const mine = existing && existing.pubkey === pub ? existing : null;
-    if (!mine) return { removed: false, notListed: true };
-    const entries = parseRelayNet(mine.content);
-    const _k = (x) => {
-      try {
-        return normalizeURL2(x);
-      } catch (e) {
-        return String(x || "");
-      }
-    };
-    const keyAt = async (x) => {
-      try {
-        const proof = await verifyRelayIdentity(x);
-        return String(proof && proof.relayPub || "").toLowerCase();
-      } catch (e) {
-        return "";
-      }
-    };
-    const pk = await keyAt(u);
-    const drop = entries.filter((e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u));
-    if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
-    const own = relayNetCandidates()[0] || "";
-    const ownKey = !own ? "" : _k(own) === _k(u) ? pk : await keyAt(own);
-    if (own && _k(own) === _k(u) || drop.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
-    if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
-    const keep = entries.filter((e) => !drop.includes(e));
-    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-    const isDropped = (e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u);
-    let list = keep, floorAt = 0, repairs = 0;
-    for (; ; ) {
-      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAY_NET_D]], content: JSON.stringify(list) }), sk));
-      if (!ev) return { removed: false, entries: list };
-      const back = await relayNetDoc();
-      if (!_readCovers(back, u, _droppable)) return { removed: false, unknown: true, unverified: true, entries: list };
-      const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
-      const found = newest ? parseRelayNet(newest.content) : [];
-      const still = found.filter(isDropped);
-      if (!still.length) return { removed: true, entries: found, repaired: repairs };
-      if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
+    let pk = "";
+    let _droppedNet = [];
+    const netResult = await (async () => {
+      const read = await relayNetDoc();
+      const { ev: existing } = read;
+      if (!_readCovers(read, u, _droppable)) return { removed: false, unknown: true };
+      const mine = existing && existing.pubkey === pub ? existing : null;
+      if (!mine) return { removed: false, notListed: true };
+      const entries = parseRelayNet(mine.content);
+      const _k = (x) => {
+        try {
+          return normalizeURL2(x);
+        } catch (e) {
+          return String(x || "");
+        }
+      };
+      const keyAt = async (x) => {
+        try {
+          const proof = await verifyRelayIdentity(x);
+          return String(proof && proof.relayPub || "").toLowerCase();
+        } catch (e) {
+          return "";
+        }
+      };
+      pk = await keyAt(u);
+      const drop = entries.filter((e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u));
+      _droppedNet = drop;
+      if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
+      const own = relayNetCandidates()[0] || "";
+      const ownKey = !own ? "" : _k(own) === _k(u) ? pk : await keyAt(own);
+      if (own && _k(own) === _k(u) || drop.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+      if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
+      const keep = entries.filter((e) => !drop.includes(e));
       if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-      if (still.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
-      repairs++;
-      list = found.filter((e) => !isDropped(e));
-      floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+      const isDropped = (e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u);
+      let list = keep, floorAt = 0, repairs = 0;
+      for (; ; ) {
+        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAY_NET_D]], content: JSON.stringify(list) }), sk));
+        if (!ev) return { removed: false, entries: list };
+        const back = await relayNetDoc();
+        if (!_readCovers(back, u, _droppable)) return { removed: false, unknown: true, unverified: true, entries: list };
+        const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+        const found = newest ? parseRelayNet(newest.content) : [];
+        const still = found.filter(isDropped);
+        if (!still.length) return { removed: true, entries: found, repaired: repairs };
+        if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
+        if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+        if (still.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+        repairs++;
+        list = found.filter((e) => !isDropped(e));
+        floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+      }
+    })();
+    if (netResult && (netResult.removed === true || netResult.notListed === true)) {
+      const removedKeys = /* @__PURE__ */ new Set();
+      if (/^[0-9a-f]{64}$/.test(pk)) removedKeys.add(pk);
+      for (const e of _droppedNet) {
+        const p = String(e && e.pubkey || "").toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
+      }
+      const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0 });
+      if (close && close.partial) {
+        return { removed: false, unknown: true, syncPartial: true };
+      }
+      return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned) };
     }
+    return netResult;
   }
   var _autoEnrolled = /* @__PURE__ */ new Set();
   async function autoEnrolRelayNet() {
@@ -20847,6 +20866,139 @@ zoo`.split("\n");
     } catch (e) {
       return { ran: false, unknown: true };
     }
+  }
+  async function _writeTombstone(opts) {
+    const o = opts || {};
+    const valid = (p) => /^[0-9a-f]{64}$/.test(p);
+    const add2 = [...new Set((o.add || []).map((p) => String(p || "").toLowerCase()).filter(valid))];
+    const remove = new Set((o.remove || []).map((p) => String(p || "").toLowerCase()).filter(valid));
+    if (!add2.length && !remove.size) return { wrote: false };
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { wrote: false, skipped: true };
+    const sk0 = o.sk0 || sk, pub0 = o.pub0 || pub;
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const leaving = o.leaving || "";
+    const droppable = o.droppable || /* @__PURE__ */ new Set();
+    const readTomb = () => _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
+    const mapOf = (ev) => {
+      const m = /* @__PURE__ */ new Map();
+      if (ev && ev.pubkey === pub) {
+        let ts = [];
+        try {
+          ts = JSON.parse(ev.content || "[]");
+        } catch (e) {
+          ts = [];
+        }
+        for (const t of Array.isArray(ts) ? ts : []) {
+          const p = String(t && t.pubkey || "").toLowerCase();
+          const at = Number(t && t.at) || 0;
+          if (valid(p) && at > (m.get(p) || 0)) m.set(p, at);
+        }
+      }
+      return m;
+    };
+    const applyTo = (ev) => {
+      const m = mapOf(ev);
+      for (const p of add2) m.set(p, Math.max(now(), m.get(p) || 0));
+      for (const p of remove) m.delete(p);
+      return m;
+    };
+    const toContent = (m) => [...m.entries()].map(([pubkey, at]) => ({ pubkey, at }));
+    const same = (ev, m) => {
+      const a = mapOf(ev);
+      if (a.size !== m.size) return false;
+      for (const [k, v] of m) if (a.get(k) !== v) return false;
+      return true;
+    };
+    const read = await readTomb();
+    if (moved()) return { wrote: false, partial: true };
+    if (!_readCovers(read, leaving, droppable)) return { wrote: false, partial: true };
+    let base = read.ev && read.ev.pubkey === pub ? read.ev : null, floorAt = 0, repairs = 0;
+    for (; ; ) {
+      if (moved()) return { wrote: false, partial: true };
+      const m = applyTo(base);
+      if (same(base, m)) return { wrote: false };
+      const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAYS_REMOVED_D]], content: JSON.stringify(toContent(m)) }), sk);
+      const ev = await publish(signed, { background: true });
+      if (moved()) return { wrote: false, partial: true };
+      if (!ev) return { wrote: false, partial: true };
+      const back = await readTomb();
+      if (moved()) return { wrote: false, partial: true };
+      if (!_readCovers(back, leaving, droppable)) return { wrote: false, partial: true };
+      const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+      const got = mapOf(newest);
+      if (add2.every((p) => got.has(p)) && [...remove].every((p) => !got.has(p))) return { wrote: true, repaired: repairs };
+      if (repairs >= 2) return { wrote: false, partial: true, lost: true };
+      repairs++;
+      base = newest;
+      floorAt = (Number(newest && newest.created_at) || 0) + 1;
+    }
+  }
+  async function _closeSyncTrust(opts) {
+    const o = opts || {};
+    const sk0 = o.sk0 || sk, pub0 = o.pub0 || pub;
+    const u = o.u || "";
+    const droppable = o.droppable || /* @__PURE__ */ new Set();
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const keyOf = (e) => String(e && e.pubkey || "").toLowerCase();
+    const removedKeys = new Set([...o.removedKeys || []].map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p)));
+    const matchU = (e) => !!(e && e.url && _syncRelayKey(e.url) === _syncRelayKey(u));
+    const matches = (e) => removedKeys.has(keyOf(e)) || matchU(e);
+    const readSync = () => _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
+    const read = await readSync();
+    if (moved()) return { partial: true };
+    if (!_readCovers(read, u, droppable)) return { partial: true };
+    const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
+    if (!mine) return { closed: false, tombstoned: false };
+    let arr = null;
+    try {
+      arr = JSON.parse(mine.content || "[]");
+    } catch (e) {
+      arr = null;
+    }
+    if (!Array.isArray(arr)) return { partial: true };
+    for (const e of arr) {
+      if (matches(e)) {
+        const p = keyOf(e);
+        if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
+      }
+    }
+    let closed = false;
+    if (arr.length && arr.some(matches)) {
+      let list = arr.filter((e) => !matches(e)), floorAt = 0, repairs = 0;
+      for (; ; ) {
+        if (moved()) return { partial: true };
+        const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", "trinityone/relays"]], content: JSON.stringify(list) }), sk);
+        const ev = await publish(signed, { background: true });
+        if (moved()) return { partial: true };
+        if (!ev) return { partial: true };
+        const back = await readSync();
+        if (moved()) return { partial: true };
+        if (!_readCovers(back, u, droppable)) return { partial: true };
+        const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+        let found = null;
+        try {
+          found = newest ? JSON.parse(newest.content || "[]") : null;
+        } catch (e) {
+          found = null;
+        }
+        if (!newest || Array.isArray(found) && !found.length) {
+          closed = true;
+          break;
+        }
+        if (!Array.isArray(found)) return { partial: true };
+        if (!found.some(matches)) {
+          closed = true;
+          break;
+        }
+        if (repairs >= 2) return { partial: true };
+        repairs++;
+        list = found.filter((e) => !matches(e));
+        floorAt = (Number(newest.created_at) || 0) + 1;
+      }
+    }
+    const tomb = await _writeTombstone({ add: [...removedKeys], leaving: u, droppable, sk0, pub0 });
+    if (tomb && tomb.partial) return { partial: true, closed };
+    return { closed, tombstoned: !!(tomb && tomb.wrote) };
   }
   function _netDocDialUrl(raw) {
     let s = String(raw || "").trim();
@@ -23170,9 +23322,14 @@ zoo`.split("\n");
       p.then((r) => {
         try {
           if (r && !r.unknown && (r.published || (r.proven || []).length > 0)) {
-            const h = autoSyncHeal({ force: true });
-            if (h && h.catch) h.catch(() => {
-            });
+            const keys = (r.proven || []).map((x) => String(x && x.pubkey || "").toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k));
+            const un = keys.length ? enrolSerial(() => _writeTombstone({ remove: keys })) : Promise.resolve(null);
+            const heal = () => {
+              const h = autoSyncHeal({ force: true });
+              if (h && h.catch) h.catch(() => {
+              });
+            };
+            un.then(heal, heal);
           }
         } catch (e) {
         }

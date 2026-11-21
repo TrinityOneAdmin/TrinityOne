@@ -6505,49 +6505,79 @@ async function unenrolRelayNet(url) {
   const _k0 = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
   let _droppable = new Set();
   try { _droppable = new Set(extraRelays().map(_k0)); } catch (e) { _droppable = new Set(); }
-  const read = await relayNetDoc();
-  const { ev: existing } = read;
-  if (!_readCovers(read, u, _droppable)) return { removed: false, unknown: true };
-  const mine = (existing && existing.pubkey === pub) ? existing : null;
-  if (!mine) return { removed: false, notListed: true };
-  const entries = parseRelayNet(mine.content);
-  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
-  const keyAt = async (x) => { try { const proof = await verifyRelayIdentity(x); return String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { return ''; } };
-  const pk = await keyAt(u);
-  const drop = entries.filter(e => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u)));
-  if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
-  const own = relayNetCandidates()[0] || '';
-  const ownKey = !own ? '' : (_k(own) === _k(u)) ? pk : await keyAt(own);
-  if ((own && _k(own) === _k(u)) || drop.some(e => (ownKey && e.pubkey === ownKey))) return { removed: false, ownBox: true };
-  // FAIL CLOSED (fourth audit, finding 3): matched by the key it proved, while the console's own box could not
-  // say which key is its own — the removed address may be the own box's alias. Unknown; try again.
-  if (own && !ownKey && pk && drop.some(e => e.pubkey === pk)) return { removed: false, unknown: true };
-  // A shared relay that the one-time seed carried in is taken out like any other (fourth audit, finding 4): the
-  // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
-  const keep = entries.filter(e => !drop.includes(e));
-  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-  // READ BACK, AND REPAIR A LOST REMOVE (audit M-5): a console that signed an addition from the old list at the same
-  // moment can replace this Remove with a newer document that still names the relay. `removed` is true only when a
-  // COMPLETE read-back no longer names it; an incomplete one is unknown and re-signs nothing. At most two repairs.
-  const isDropped = (e) => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u));
-  let list = keep, floorAt = 0, repairs = 0;
-  for (;;) {
-    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAY_NET_D]], content: JSON.stringify(list) }), sk));
-    if (!ev) return { removed: false, entries: list };
-    const back = await relayNetDoc();
-    if (!_readCovers(back, u, _droppable)) return { removed: false, unknown: true, unverified: true, entries: list };
-    const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
-    const found = newest ? parseRelayNet(newest.content) : [];
-    const still = found.filter(isDropped);
-    if (!still.length) return { removed: true, entries: found, repaired: repairs };
-    if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
+  // THE ADMISSION HALF, UNCHANGED, wrapped so plan A2 can run the sync-trust half after it in THIS SAME slot.
+  // `pk` (the proved key) and `_droppedNet` (the relay-net rows this removed) are lifted to the outer scope so
+  // the A2 step below knows WHICH identity key to prune from the sync-trust doc and to tombstone — including a
+  // DEAD box, whose key it learns from the rows it dropped rather than from a probe it cannot answer.
+  let pk = '';
+  let _droppedNet = [];
+  const netResult = await (async () => {
+    const read = await relayNetDoc();
+    const { ev: existing } = read;
+    if (!_readCovers(read, u, _droppable)) return { removed: false, unknown: true };
+    const mine = (existing && existing.pubkey === pub) ? existing : null;
+    if (!mine) return { removed: false, notListed: true };
+    const entries = parseRelayNet(mine.content);
+    const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+    const keyAt = async (x) => { try { const proof = await verifyRelayIdentity(x); return String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { return ''; } };
+    pk = await keyAt(u);
+    const drop = entries.filter(e => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u)));
+    _droppedNet = drop;
+    if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
+    const own = relayNetCandidates()[0] || '';
+    const ownKey = !own ? '' : (_k(own) === _k(u)) ? pk : await keyAt(own);
+    if ((own && _k(own) === _k(u)) || drop.some(e => (ownKey && e.pubkey === ownKey))) return { removed: false, ownBox: true };
+    // FAIL CLOSED (fourth audit, finding 3): matched by the key it proved, while the console's own box could not
+    // say which key is its own — the removed address may be the own box's alias. Unknown; try again.
+    if (own && !ownKey && pk && drop.some(e => e.pubkey === pk)) return { removed: false, unknown: true };
+    // A shared relay that the one-time seed carried in is taken out like any other (fourth audit, finding 4): the
+    // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
+    const keep = entries.filter(e => !drop.includes(e));
     if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-    // the own-box refusal still applies to whatever the newer list names under that address
-    if (still.some(e => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
-    repairs++;
-    list = found.filter(e => !isDropped(e));
-    floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+    // READ BACK, AND REPAIR A LOST REMOVE (audit M-5): a console that signed an addition from the old list at the same
+    // moment can replace this Remove with a newer document that still names the relay. `removed` is true only when a
+    // COMPLETE read-back no longer names it; an incomplete one is unknown and re-signs nothing. At most two repairs.
+    const isDropped = (e) => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u));
+    let list = keep, floorAt = 0, repairs = 0;
+    for (;;) {
+      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAY_NET_D]], content: JSON.stringify(list) }), sk));
+      if (!ev) return { removed: false, entries: list };
+      const back = await relayNetDoc();
+      if (!_readCovers(back, u, _droppable)) return { removed: false, unknown: true, unverified: true, entries: list };
+      const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+      const found = newest ? parseRelayNet(newest.content) : [];
+      const still = found.filter(isDropped);
+      if (!still.length) return { removed: true, entries: found, repaired: repairs };
+      if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      // the own-box refusal still applies to whatever the newer list names under that address
+      if (still.some(e => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+      repairs++;
+      list = found.filter(e => !isDropped(e));
+      floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+    }
+  })();
+  // ── SECURITY (plan A2): the box is out of the ADMISSION list; now CLOSE its full-corpus SYNC trust and
+  // tombstone its key, in THIS SAME slot (never a nested enrolSerial — the deadlock rule). Only once the
+  // relay-net step settled — the box is removed, or was never in that list at all — is there a box to close
+  // trust for; an aborted / own-box / church-switched step leaves the sync doc untouched (an own box must KEEP
+  // its sync trust, and an unreadable admission read must not drive a sync re-sign).
+  if (netResult && (netResult.removed === true || netResult.notListed === true)) {
+    const removedKeys = new Set();
+    if (/^[0-9a-f]{64}$/.test(pk)) removedKeys.add(pk);
+    for (const e of _droppedNet) { const p = String((e && e.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p); }
+    const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0 });
+    if (close && close.partial) {
+      // The box is still TRUSTED to pull the whole corpus on every peer holding the sync doc — the removal is
+      // only PARTIAL. Reported with unenrol's EXISTING honesty shape (dropOutcome's "could not be updated right
+      // now … remove it again once your relays are answering"), so the steward retries and nothing claims the
+      // trust was closed when it was not. The next press finds the box already out of admission (notListed) and
+      // runs the sync-close again — it converges once the relays answer.
+      return { removed: false, unknown: true, syncPartial: true };
+    }
+    return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned) };
   }
+  return netResult;
 }
 
 const _autoEnrolled = new Set();
@@ -6810,6 +6840,139 @@ async function autoSyncHeal(opts) {
   if (!force && t - _syncHealLastAt < 600000) return { ran: false, debounced: true };
   _syncHealLastAt = t;
   try { return await syncHeal(); } catch (e) { return { ran: false, unknown: true }; }
+}
+
+// ── THE TOMBSTONE WRITER (plan A2) ──────────────────────────────────────────────────────────────────────
+//
+// The companion to syncHeal's tombstone READER above (RELAYS_REMOVED_D, content [{pubkey, at}], newest `at`
+// per key wins, owner-key-signed only). ONE function does both jobs: it ADDS a removal (the Remove flow) and
+// CLEARS one on a deliberate Add/Connect (the single un-tombstone path). It never enters enrolSerial itself —
+// every caller already holds (or opens) a queue slot, and nesting the queue deadlocks.
+//
+// MERGE, NEVER REBUILD — exactly the discipline the sync doc is healed with. It reads the church's newest
+// tombstone doc, maps it by pubkey (newest `at`), applies this call's `add` (at = now(), the newest) and
+// `remove` (delete the key), and re-signs only on a real change. An INCOMPLETE read ABORTS (`partial`) rather
+// than re-sign a doc that might be missing another console's tombstones. M-5 read-back, at most two repairs,
+// identity re-checked after every await. `leaving`/`droppable` are the removal path's completeness exceptions
+// (a dead box it is removing must not freeze the read); the Add path passes neither.
+async function _writeTombstone(opts) {
+  const o = opts || {};
+  const valid = (p) => /^[0-9a-f]{64}$/.test(p);
+  const add = [...new Set((o.add || []).map(p => String(p || '').toLowerCase()).filter(valid))];
+  const remove = new Set((o.remove || []).map(p => String(p || '').toLowerCase()).filter(valid));
+  if (!add.length && !remove.size) return { wrote: false };
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { wrote: false, skipped: true };
+  const sk0 = o.sk0 || sk, pub0 = o.pub0 || pub;
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  const leaving = o.leaving || '';
+  const droppable = o.droppable || new Set();
+  const readTomb = () => _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true);
+  const mapOf = (ev) => {
+    const m = new Map();
+    if (ev && ev.pubkey === pub) {
+      let ts = []; try { ts = JSON.parse(ev.content || '[]'); } catch (e) { ts = []; }
+      for (const t of (Array.isArray(ts) ? ts : [])) { const p = String((t && t.pubkey) || '').toLowerCase(); const at = Number(t && t.at) || 0; if (valid(p) && at > (m.get(p) || 0)) m.set(p, at); }
+    }
+    return m;
+  };
+  const applyTo = (ev) => {
+    const m = mapOf(ev);
+    for (const p of add) m.set(p, Math.max(now(), m.get(p) || 0));   // the newest `at`, idempotent when already current
+    for (const p of remove) m.delete(p);
+    return m;
+  };
+  const toContent = (m) => [...m.entries()].map(([pubkey, at]) => ({ pubkey, at }));
+  const same = (ev, m) => { const a = mapOf(ev); if (a.size !== m.size) return false; for (const [k, v] of m) if (a.get(k) !== v) return false; return true; };
+  const read = await readTomb();
+  if (moved()) return { wrote: false, partial: true };
+  if (!_readCovers(read, leaving, droppable)) return { wrote: false, partial: true };
+  let base = (read.ev && read.ev.pubkey === pub) ? read.ev : null, floorAt = 0, repairs = 0;
+  for (;;) {
+    if (moved()) return { wrote: false, partial: true };
+    const m = applyTo(base);
+    if (same(base, m)) return { wrote: false };                       // add already current / remove already gone
+    const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAYS_REMOVED_D]], content: JSON.stringify(toContent(m)) }), sk);
+    const ev = await publish(signed, { background: true });
+    if (moved()) return { wrote: false, partial: true };
+    if (!ev) return { wrote: false, partial: true };
+    const back = await readTomb();
+    if (moved()) return { wrote: false, partial: true };
+    if (!_readCovers(back, leaving, droppable)) return { wrote: false, partial: true };
+    const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+    const got = mapOf(newest);
+    if (add.every(p => got.has(p)) && [...remove].every(p => !got.has(p))) return { wrote: true, repaired: repairs };
+    if (repairs >= 2) return { wrote: false, partial: true, lost: true };
+    repairs++;
+    base = newest;
+    floorAt = (Number(newest && newest.created_at) || 0) + 1;
+  }
+}
+
+// ── CLOSE A REMOVED BOX'S SYNC TRUST (plan A2) ──────────────────────────────────────────────────────────
+//
+// Called from unenrolRelayNet's EXISTING queue slot (NEVER a nested enrolSerial — that deadlocks). After the
+// box is out of the admission list (relay-net), this re-signs trinityone/relays WITHOUT its key — the actual
+// security fix: the key's full-corpus pull rights on every peer holding the doc are pruned — and writes the
+// tombstone so no other console's additive heal can put it back. Same completeness discipline as the relay-net
+// removal (the `leaving` box + the `droppable` unreachable extras, so a DEAD or SEIZED box can still be
+// removed — audit finding 4), the same M-5 read-back / ≤2-repair loop, and the same aborts as syncHeal: an
+// ABSENT or `[]` read-back is a racing Turn-off (or delete) and the key holds no trust either way, so it
+// counts as closed and is never re-signed over. Returns { closed, tombstoned }, or { partial: true } when a
+// read could not complete — the caller then reports the removal as PARTIAL.
+async function _closeSyncTrust(opts) {
+  const o = opts || {};
+  const sk0 = o.sk0 || sk, pub0 = o.pub0 || pub;
+  const u = o.u || '';
+  const droppable = o.droppable || new Set();
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  const keyOf = (e) => String((e && e.pubkey) || '').toLowerCase();
+  const removedKeys = new Set([...(o.removedKeys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)));
+  const matchU = (e) => !!(e && e.url && _syncRelayKey(e.url) === _syncRelayKey(u));
+  const matches = (e) => removedKeys.has(keyOf(e)) || matchU(e);
+  const readSync = () => _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true);
+  const read = await readSync();
+  if (moved()) return { partial: true };
+  if (!_readCovers(read, u, droppable)) return { partial: true };
+  const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
+  // No sync doc at all → the church never granted sync trust: nothing to close, and nothing to tombstone (a
+  // church that does not self-host must stay exactly as it was — an ordinary Remove adds no new writes).
+  if (!mine) return { closed: false, tombstoned: false };
+  let arr = null; try { arr = JSON.parse(mine.content || '[]'); } catch (e) { arr = null; }
+  if (!Array.isArray(arr)) return { partial: true };
+  // Every sync entry naming the removed box — by key, or by the address it is listed under — carries a key we
+  // must also tombstone, so even a box listed only by url (identity unprovable because it is dead) is pruned.
+  for (const e of arr) { if (matches(e)) { const p = keyOf(e); if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p); } }
+  let closed = false;
+  if (arr.length && arr.some(matches)) {
+    // A doc left with ONE entry is published as-is: it is the honest state, and the syncOn display already
+    // shows sync ineffective below two boxes. The removed key never comes back in a repair (matches() filters
+    // it from every re-apply onto the newer list).
+    let list = arr.filter(e => !matches(e)), floorAt = 0, repairs = 0;
+    for (;;) {
+      if (moved()) return { partial: true };
+      const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', 'trinityone/relays']], content: JSON.stringify(list) }), sk);
+      const ev = await publish(signed, { background: true });
+      if (moved()) return { partial: true };
+      if (!ev) return { partial: true };
+      const back = await readSync();
+      if (moved()) return { partial: true };
+      if (!_readCovers(back, u, droppable)) return { partial: true };
+      const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+      let found = null; try { found = newest ? JSON.parse(newest.content || '[]') : null; } catch (e) { found = null; }
+      if (!newest || (Array.isArray(found) && !found.length)) { closed = true; break; }   // a Turn-off/delete won the race: the key holds no trust either way
+      if (!Array.isArray(found)) return { partial: true };
+      if (!found.some(matches)) { closed = true; break; }
+      if (repairs >= 2) return { partial: true };
+      repairs++;
+      list = found.filter(e => !matches(e));
+      floorAt = (Number(newest.created_at) || 0) + 1;
+    }
+  }
+  // The tombstone: written whenever the church has a sync doc, so a later re-enable or another console's heal
+  // cannot re-admit the box, even if THIS console's own sync copy did not happen to name it.
+  const tomb = await _writeTombstone({ add: [...removedKeys], leaving: u, droppable, sk0, pub0 });
+  if (tomb && tomb.partial) return { partial: true, closed };
+  return { closed, tombstoned: !!(tomb && tomb.wrote) };
 }
 
 // ── STEP 1: USE THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ──────────────────────────────────────────────
@@ -9540,8 +9703,16 @@ window.Steward = {
     p.then((r) => {
       try {
         if (r && !r.unknown && (r.published || ((r.proven || []).length > 0))) {
-          const h = autoSyncHeal({ force: true });
-          if (h && h.catch) h.catch(() => {});
+          // UN-TOMBSTONE the box the steward just deliberately Added/Connected (plan A2, the ONE un-tombstone
+          // path): clear its proved key from the removal tombstones so this heal — and every later heal /
+          // autoSync / B2 — stops refusing it and it can be re-added. In its OWN enrolSerial slot (this `.then`
+          // runs AFTER the enrol slot resolved, never nested), and the forced heal is chained after it so the
+          // heal reads a tombstone that no longer names the box. Swallowed on failure like the heal itself: the
+          // next deliberate Add retries, and signRelay's own result is unchanged.
+          const keys = (r.proven || []).map(x => String((x && x.pubkey) || '').toLowerCase()).filter(k => /^[0-9a-f]{64}$/.test(k));
+          const un = keys.length ? enrolSerial(() => _writeTombstone({ remove: keys })) : Promise.resolve(null);
+          const heal = () => { const h = autoSyncHeal({ force: true }); if (h && h.catch) h.catch(() => {}); };
+          un.then(heal, heal);
         }
       } catch (e) {}
     }, () => {});
