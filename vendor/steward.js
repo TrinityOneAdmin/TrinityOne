@@ -23551,7 +23551,15 @@ zoo`.split("\n");
     // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
     // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
     // check and unreachable publishes fail together; the flap window between them is the accepted residual.
-    async _phraseIsNetworkKey(m) {
+    // The richer answer behind _phraseIsNetworkKey, shared with restoreNetwork — which needs the OPPOSITE
+    // failure polarity. -> { network, checked, np, name }:
+    //   network  true when the key provably IS a network's (any netkey:/network: copy, even a tombstone)
+    //   checked  true when the answer is DEFINITIVE: evidence was seen, or every probed relay answered EOSE
+    //            with none. false = the relays could not be asked properly, and "not a network" is unproven.
+    // adoptChurch treats !network as "carry on as a church" (fail-open: refusing a church restore on a flaky
+    // line would strand a real steward). restoreNetwork must treat !checked as REFUSE (fail-closed: it is
+    // about to store a secret key, and storing a random phrase as a network is the worse error).
+    async _networkKeyProbe(m) {
       try {
         const nsk = privateKeyFromSeedWords(m);
         const np = getPublicKey2(nsk);
@@ -23568,12 +23576,26 @@ zoo`.split("\n");
         for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
         const q = await _queryAsKey(probeSet, nsk, [
           { kinds: [30078], authors: [np], "#d": [NETKEY_D + np], limit: 2 },
-          { kinds: [30078], "#d": [NETWORK_D + np], limit: 8 }
+          { kinds: [30078], "#d": [NETWORK_D + np], limit: 8 },
+          { kinds: [0], authors: [np], limit: 2 }
+          // the network's own name, for restoreNetwork's confirmation
         ], 4e3);
-        return !!(q && Array.isArray(q.events) && q.events.length > 0);
+        const evs = q && Array.isArray(q.events) ? q.events : [];
+        const network = evs.some((e) => e && e.kind === 30078);
+        let name = "";
+        try {
+          const k0 = evs.filter((e) => e && e.kind === 0 && e.pubkey === np).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+          if (k0 && k0.content) name = String(JSON.parse(k0.content).name || "");
+        } catch (e2) {
+        }
+        return { network, checked: network || !!(q && q.complete), np, name };
       } catch (e) {
-        return false;
+        return { network: false, checked: true, np: "", name: "" };
       }
+    },
+    async _phraseIsNetworkKey(m) {
+      const p = await window.Steward._networkKeyProbe(m);
+      return !!(p && p.network);
     },
     // adopt a church from a scanned QR / pasted code / link → restore its key on THIS device.
     // ASYNC since 2026-11-20 (the network-words refusal above needs a relay read): callers await inside their
@@ -23589,7 +23611,7 @@ zoo`.split("\n");
       }
       m = m.replace(/^trinityone-church:/i, "").trim();
       if (await window.Steward._phraseIsNetworkKey(m)) {
-        const err2 = new Error("These are a NETWORK\u2019s recovery words, not a church\u2019s \u2014 nothing has been restored. To manage the network, open your church\u2019s console and use \u2018Tap to switch view\u2019 \u2192 Network console.");
+        const err2 = new Error("These are a NETWORK\u2019s recovery words, not a church\u2019s \u2014 nothing has been restored. To manage the network, open your church\u2019s console and use \u2018Tap to switch view\u2019 \u2192 Network console \u2014 or, on a new device, restore your church first and then enter these words under Settings \u2192 Network \u2192 \u2018Restore a network\u2019.");
         err2.networkKey = true;
         throw err2;
       }
@@ -30731,6 +30753,39 @@ zoo`.split("\n");
         } catch {
         }
       };
+    },
+    // RESTORE A NETWORK from its 12 words (RS-1, owner-approved 2026-11-21): the verified door in front of
+    // importNetworkKey. A founder who lost the device that created the network pastes its words on a CHURCH
+    // console and regains the network console (the header view switcher). FAIL-CLOSED, the opposite polarity
+    // to adoptChurch's refusal: that check errs open because refusing a church restore on a flaky line
+    // strands a real steward; THIS one is about to store a secret key as "a network this console owns", and
+    // storing a random phrase would let this console silently publish as a key nobody vouched for — so an
+    // unanswered probe REFUSES, with a reason that says to try again. Stores the key and nothing else:
+    // no publishes, no registration, no join — the network's documents already exist on the relays.
+    // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'verify'|'relay', reason }
+    async restoreNetwork(mnemonic) {
+      const mm = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
+      if (mm.split(" ").length < 12) return { ok: false, stage: "words", reason: "Enter the full 12-word recovery phrase." };
+      let np = "";
+      try {
+        np = getPublicKey2(privateKeyFromSeedWords(mm));
+      } catch (e) {
+        return { ok: false, stage: "words", reason: "That is not a valid recovery phrase \u2014 check the words and their order." };
+      }
+      const held = netKeys().find((r) => r.pub === np);
+      if (held) return { ok: true, already: true, npub: npubEncode(np), name: held.name || "Network" };
+      const p = await window.Steward._networkKeyProbe(mm);
+      if (!p || !p.network) {
+        if (p && p.checked) return { ok: false, stage: "verify", reason: "These words are not a network\u2019s \u2014 nothing has been added. A church\u2019s recovery phrase is restored from the console\u2019s start screen instead." };
+        return { ok: false, stage: "relay", reason: "Couldn\u2019t check these words with your relay \u2014 nothing has been added. Try again when your relay answers." };
+      }
+      const name = p.name || "Network";
+      saveNetKey({ pub: np, mnemonic: mm, name });
+      try {
+        window.dispatchEvent(new CustomEvent("steward-networks"));
+      } catch (e) {
+      }
+      return { ok: true, npub: npubEncode(np), name };
     },
     // import an existing network's recovery phrase so this console can also publish as it
     importNetworkKey(mnemonic, name) {

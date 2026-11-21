@@ -11871,6 +11871,22 @@ function DashNetworksPanel() {
   const [netName, setNetName] = React.useState('');
   const [agreed, setAgreed] = React.useState(false);
   const [retry, setRetry] = React.useState(false);
+  // RESTORE A NETWORK (RS-1): the founder's way back after device loss. Visible with or without a joined
+  // network — OWNING a network and BELONGING to one are separate facts (a church can hold the key of the
+  // network it belongs to, and a new device may restore the network before or after re-joining).
+  const [restoreOpen, setRestoreOpen] = React.useState(false);
+  const [restoreWords, setRestoreWords] = React.useState('');
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
+  const [restoreDone, setRestoreDone] = React.useState(null);   // { name, already } — the confirmation
+  const restoreNet = async () => {
+    if (restoreBusy) return;
+    setRestoreBusy(true); setErr('');
+    let r = null;
+    try { r = await window.Steward.restoreNetwork(restoreWords); } catch (e) { r = null; }
+    setRestoreBusy(false);
+    if (r && r.ok) { setRestoreDone({ name: r.name, already: !!r.already }); setRestoreWords(''); }
+    else setErr((r && r.reason) || 'That did not go through.');
+  };
   // A REFUSAL IS SAID, NEVER DRESSED AS SUCCESS (B2a). A relay without the network wall is named in plain words; the console's own reasons (stage
   // 'start' / 'code' / 'readback') are shown as written; a relay's refusal goes through publishErrorMessage as before.
   const said = (r) => {
@@ -11953,7 +11969,7 @@ function DashNetworksPanel() {
             <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', lineHeight: 1.5, marginBottom: 10 }}>The network exists and your church has joined it, but its name hasn’t been published yet{created.reason ? ' (' + created.reason + ')' : ''}. Keep the phrase below, then try again.{' '}
               <button onClick={retryProfile} disabled={retry} className="sk-btn sk-btn--ghost" style={{ padding: '4px 10px', fontSize: 12.5 }}>{retry ? 'Trying…' : 'Publish the name'}</button></div>
           ) : null}
-          <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>Save this recovery phrase — it’s the network’s key. Restore it in a console to post network-wide announcements and events. Share the code with other churches so they can join.</p>
+          <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>Save this recovery phrase — it’s the network’s key. On a new device, restore your church first, then enter it under Settings → Network → ‘Restore a network’ to post network-wide announcements and events again. Share the code with other churches so they can join.</p>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>NETWORK CODE</div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, wordBreak: 'break-all', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 8, padding: '7px 9px', marginBottom: 9 }}>{created.npub}</div>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 3 }}>RECOVERY PHRASE</div>
@@ -11995,6 +12011,30 @@ function DashNetworksPanel() {
             <button onClick={join} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13 }}>Join</button>
           </div>
         </React.Fragment>
+      )}
+      {netView ? null : (
+        <div data-net-restore="1" style={{ marginTop: 14 }}>
+          {restoreDone ? (
+            <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface-2)', padding: '9px 11px' }}>
+              {restoreDone.already
+                ? <React.Fragment>{'‘' + restoreDone.name + '’ is already on this console.'}</React.Fragment>
+                : <React.Fragment>{'‘' + restoreDone.name + '’ is on this console now — open it with ‘Tap to switch view’ → Network console at the top.'}</React.Fragment>}
+            </div>
+          ) : restoreOpen ? (
+            <div role="group" aria-label="Restore a network">
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 7 }}>{'Enter the network’s own 12 recovery words — not your church’s — to bring its console back to this device. Nothing is published; the key is checked with your relay first.'}</div>
+              <textarea value={restoreWords} onChange={e => { setRestoreWords(e.target.value); setErr(''); }} spellCheck={false} autoCapitalize="none" rows={2}
+                aria-label="The network's 12 recovery words"
+                placeholder="the network's 12 words, in order" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 8 }} />
+              <div style={{ display: 'flex', gap: 9 }}>
+                <button onClick={() => { setRestoreOpen(false); setRestoreWords(''); setErr(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5 }}>Cancel</button>
+                <button onClick={restoreNet} disabled={restoreBusy} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 12.5, opacity: restoreBusy ? 0.6 : 1 }}>{restoreBusy ? 'Checking…' : 'Restore network'}</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => { setRestoreOpen(true); setErr(''); }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontSize: 12.5, color: 'var(--ink-3)', textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>{'Restore a network — I have its 12 words'}</button>
+          )}
+        </div>
       )}
       {err ? <div role="alert" data-net-err="1" style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
       <NetworkAnnounceComposer />
