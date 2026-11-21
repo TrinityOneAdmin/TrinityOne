@@ -86,7 +86,7 @@ function membersGlobals({ steward }) {
   return {
     ...common(),
     nameHandle: () => '', shortNpub: (np) => String(np || '').slice(0, 12), ago: () => '2 days ago',
-    Avatar: () => null, StewMemberSheet: () => null, ReseatModal: () => null, GuardianLinkModal: () => null, BulkInviteModal: () => null,
+    Avatar: () => null, StewMemberSheet: () => null, ReseatModal: () => null, GuardianLinkModal: () => null, BulkInviteModal: () => null, SetupAccountsModal: () => null,
     stewCapState: () => ({ allowed: true }),
     // DashMembers gained the clearance-expiry summary (2026-11): a benign count stub — this file measures that
     // a refused list write throws nothing at the click, not the expiry badge, so its counts do not bite here.

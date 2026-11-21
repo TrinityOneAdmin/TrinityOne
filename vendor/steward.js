@@ -16922,14 +16922,17 @@ zoo`.split("\n");
   }
   function saveNetKey(rec) {
     const sealed = { pub: rec.pub, name: rec.name };
-    if (rec.mnemonic && churchSk) {
-      try {
-        sealed.sealedMnemonic = encrypt2(rec.mnemonic, churchSk);
-      } catch {
-        sealed.mnemonic = rec.mnemonic;
+    if (rec.mnemonic) {
+      let s = null;
+      if (churchSk) {
+        try {
+          s = encrypt2(rec.mnemonic, churchSk);
+        } catch {
+          s = null;
+        }
       }
-    } else if (rec.mnemonic) {
-      sealed.mnemonic = rec.mnemonic;
+      if (!s) return false;
+      sealed.sealedMnemonic = s;
     } else {
       const had = rec.sealedMnemonic ? rec : _netKeysRaw().find((x) => x.pub === rec.pub) || {};
       if (had.sealedMnemonic) sealed.sealedMnemonic = had.sealedMnemonic;
@@ -16938,6 +16941,7 @@ zoo`.split("\n");
     const a = _netKeysRaw().filter((x) => x.pub !== rec.pub);
     a.push(sealed);
     lsSet(NETKEYS_LS, JSON.stringify(a));
+    return true;
   }
   function _migrateNetKeysToSealed() {
     if (!churchSk) return;
@@ -21950,38 +21954,6 @@ zoo`.split("\n");
       // single-writer, sequence-pinned; the relay and console keep them anyway
     ])
   });
-  var STEWARD_CARRY_RULE = Object.freeze({
-    newest: Object.freeze([
-      "trinityone/group:",
-      "trinityone/category:",
-      "trinityone/service:",
-      "trinityone/room:",
-      "trinityone/booking:",
-      "trinityone/runsheet:",
-      "trinityone/rota:",
-      "trinityone/roster:",
-      "trinityone/msgtags",
-      "trinityone/rota-settings",
-      "trinityone/verse-prompt",
-      "trinityone/pinsermon:",
-      "trinityone/pin:",
-      "trinityone/hidden:",
-      "trinityone/reseat:",
-      "trinityone/careteam:",
-      "trinityone/meals-settings",
-      "trinityone/carereqstatus:"
-    ]),
-    strict: Object.freeze([
-      "trinityone/joinpolicy:",
-      "trinityone/nophoto:",
-      "trinityone/sermon:",
-      "trinityone/plan:",
-      "trinityone/devotional:",
-      "trinityone/event:",
-      "trinityone/care:",
-      "trinityone/request:"
-    ])
-  });
   var _CARRY_BARE = ["trinityone/rota-settings", "trinityone/verse-prompt", "trinityone/meals-settings", "trinityone/msgtags"];
   var STEWARD_CARRY_LIMIT_MS = 2e4;
   var _CARRY_WORDS = {
@@ -23546,14 +23518,16 @@ zoo`.split("\n");
     // true when the network key IS the church — and that console then published church artifacts as the
     // network (joinpolicy, checkinkey, kind-0) and self-registered the network npub as a church (sim
     // 2026-11-20, D2; the create panel itself pointed people down this road). The right door is the founder
-    // console's "Tap to switch view → Network console". Detection: every created network has at least its
-    // founder's `network:<np>` join declaration, and the relay's N5c gate serves those to the authed network
-    // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
+    // console's "Tap to switch view → Network console". Detection (since 2026-11-21, slice3-F1): the
+    // network's own `netkey:<np>` document, signed by the network key — see _networkKeyProbe. It was the
+    // founder's `network:<np>` join declaration, which any church can write for any np. A network that
+    // never got as far as writing its first netkey document is therefore NOT detected. FAIL-OPEN on purpose when
     // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
     // check and unreachable publishes fail together; the flap window between them is the accepted residual.
     // The richer answer behind _phraseIsNetworkKey, shared with restoreNetwork — which needs the OPPOSITE
     // failure polarity. -> { network, checked, np, name }:
-    //   network  true when the key provably IS a network's (any netkey:/network: copy, even a tombstone)
+    //   network  true when the key provably IS a network's: a netkey:<np> document AUTHORED BY np (any copy,
+    //            even a tombstone). NOTHING ELSE COUNTS — see the decision below.
     //   checked  true when the answer is DEFINITIVE: evidence was seen, or every probed relay answered EOSE
     //            with none. false = the relays could not be asked properly, and "not a network" is unproven.
     // adoptChurch treats !network as "carry on as a church" (fail-open: refusing a church restore on a flaky
@@ -23576,12 +23550,11 @@ zoo`.split("\n");
         for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
         const q = await _queryAsKey(probeSet, nsk, [
           { kinds: [30078], authors: [np], "#d": [NETKEY_D + np], limit: 2 },
-          { kinds: [30078], "#d": [NETWORK_D + np], limit: 8 },
           { kinds: [0], authors: [np], limit: 2 }
           // the network's own name, for restoreNetwork's confirmation
         ], 4e3);
         const evs = q && Array.isArray(q.events) ? q.events : [];
-        const network = evs.some((e) => e && e.kind === 30078);
+        const network = evs.some((e) => e && e.kind === 30078 && e.pubkey === np && Array.isArray(e.tags) && e.tags.some((t) => Array.isArray(t) && t[0] === "d" && t[1] === NETKEY_D + np));
         let name = "";
         try {
           const k0 = evs.filter((e) => e && e.kind === 0 && e.pubkey === np).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
@@ -26236,6 +26209,8 @@ zoo`.split("\n");
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed() || lateAuthed();
       const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed() || lateAuthed();
+      let sawGuardians = false;
+      const guardiansKnown = () => sawGuardians || sawEose && _isRelayAuthed() || lateAuthed();
       const eoseOn = /* @__PURE__ */ new Map();
       const lateAuthed = () => {
         try {
@@ -26246,7 +26221,7 @@ zoo`.split("\n");
       };
       let stopped = false, waiting = null;
       const reaskOnLogin = () => {
-        if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown()) return;
+        if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown() && guardiansKnown()) return;
         waiting = () => {
           waiting = null;
           if (stopped) return;
@@ -26256,7 +26231,7 @@ zoo`.split("\n");
         _keyReadAfterAuth(waiting);
       };
       const _sgSeed = _sgClearGet(pub);
-      const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
+      const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, guardiansKnown: guardiansKnown(), guardiansAt: tGuardians, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
       if (_sgSeed) emit();
       const relayUp = (url) => {
         try {
@@ -26360,6 +26335,7 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
             tGuardians = e.created_at;
+            sawGuardians = true;
             try {
               guardians = JSON.parse(e.content).links || {};
             } catch {
@@ -26939,7 +26915,7 @@ zoo`.split("\n");
     },
     subscribeGuardians(onData) {
       let cur = {}, curClosed = {}, latest = 0;
-      const _emit = () => onData({ links: cur, closed: curClosed });
+      const _emit = () => onData({ links: cur, closed: curClosed, at: latest });
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [GUARDIANS_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -30598,9 +30574,16 @@ zoo`.split("\n");
       const m = generateSeedWords();
       const nsk = privateKeyFromSeedWords(m);
       const nPub = getPublicKey2(nsk);
+      let sealedWords = null;
+      try {
+        sealedWords = encrypt2(m, churchSk);
+      } catch (e) {
+        sealedWords = null;
+      }
+      if (!sealedWords) return { ok: false, stage: "start", reason: "This console could not seal the new network\u2019s key, so nothing was created." };
       const j = await window.Steward.joinNetwork(nPub, { scopes: NETWORK_SCOPES.slice() });
       if (!j.ok) return { ok: false, stage: j.stage === "join" || j.stage === "readback" ? "join" : j.stage, reason: j.reason };
-      saveNetKey({ pub: nPub, mnemonic: m, name: nm });
+      saveNetKey({ pub: nPub, sealedMnemonic: sealedWords, name: nm });
       try {
         lsSet(NETRING_MINT_LS + nPub, "1");
       } catch (x) {
@@ -30762,7 +30745,7 @@ zoo`.split("\n");
     // storing a random phrase would let this console silently publish as a key nobody vouched for — so an
     // unanswered probe REFUSES, with a reason that says to try again. Stores the key and nothing else:
     // no publishes, no registration, no join — the network's documents already exist on the relays.
-    // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'verify'|'relay', reason }
+    // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'locked'|'verify'|'relay', reason }
     async restoreNetwork(mnemonic) {
       const mm = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (mm.split(" ").length < 12) return { ok: false, stage: "words", reason: "Enter the full 12-word recovery phrase." };
@@ -30772,6 +30755,8 @@ zoo`.split("\n");
       } catch (e) {
         return { ok: false, stage: "words", reason: "That is not a valid recovery phrase \u2014 check the words and their order." };
       }
+      if (!churchSk || !churchPub) return { ok: false, stage: "locked", reason: "This console is locked, so a network\u2019s words cannot be stored safely \u2014 nothing has been added. Unlock it and try again." };
+      if (np === churchPub) return { ok: false, stage: "verify", reason: "These are this church\u2019s own recovery words, not a network\u2019s \u2014 nothing has been added." };
       const held = netKeys().find((r) => r.pub === np);
       if (held) return { ok: true, already: true, npub: npubEncode(np), name: held.name || "Network" };
       const p = await window.Steward._networkKeyProbe(mm);
@@ -30780,7 +30765,7 @@ zoo`.split("\n");
         return { ok: false, stage: "relay", reason: "Couldn\u2019t check these words with your relay \u2014 nothing has been added. Try again when your relay answers." };
       }
       const name = p.name || "Network";
-      saveNetKey({ pub: np, mnemonic: mm, name });
+      if (!saveNetKey({ pub: np, mnemonic: mm, name })) return { ok: false, stage: "locked", reason: "This console locked before the network\u2019s words could be stored safely \u2014 nothing has been added. Unlock it and try again." };
       try {
         window.dispatchEvent(new CustomEvent("steward-networks"));
       } catch (e) {
@@ -30793,7 +30778,7 @@ zoo`.split("\n");
       if (mm.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
       const nsk = privateKeyFromSeedWords(mm);
       const nPub = getPublicKey2(nsk);
-      saveNetKey({ pub: nPub, mnemonic: mm, name: name || "Network" });
+      if (!saveNetKey({ pub: nPub, mnemonic: mm, name: name || "Network" })) throw new Error("This console is locked, so the network\u2019s words cannot be stored safely. Unlock it and try again.");
       window.dispatchEvent(new CustomEvent("steward-networks"));
       return { networkPub: nPub, npub: npubEncode(nPub) };
     },

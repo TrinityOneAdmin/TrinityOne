@@ -202,3 +202,140 @@ test('networkWords on a PLAINTEXT (unmigrated) record: nothing while the console
   assert.notEqual(sab, NETWORDS, 'sabotage anchor (the locked guard) not found');
   assert.equal(wordsHarness([plain], { locked: true, body: sab }).networkWords(NET), WORDS, 'THE SABOTAGE WAS NOT CAUGHT');
 });
+
+// ── LOW#1 (integration audit 2026-11-21): A NETWORK'S WORDS ARE NEVER WRITTEN IN PLAIN TEXT ─────────────
+// saveNetKey fell back to storing `mnemonic` as given when it could not seal (console locked, or the seal
+// threw). Words that cannot be sealed are now not written at all, and the save answers false. Everything
+// below runs saveNetKey — and the three API methods that hand it words — lifted from the SHIPPED bundle.
+import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
+import { getPublicKey } from 'nostr-tools/pure';
+import { npubEncode } from 'nostr-tools/nip19';
+
+const CREATE = once(VENDOR, 'async createNetwork(name) {');
+const RESTORE = once(VENDOR, 'async restoreNetwork(mnemonic) {');
+const IMPORT = once(VENDOR, 'importNetworkKey(mnemonic, name) {');
+const noPlainWords = (store, words, what) => {
+  const all = [...store.values()].join('\n');
+  assert.ok(!all.includes(words), what + ': the recovery words are in the store in plain text');
+  for (const r of JSON.parse(store.get(NETKEYS_LS) || '[]')) assert.equal(r.mnemonic, undefined, what + ': a record carries a plain `mnemonic` field');
+};
+// One console with the real store functions and the three callers. `o.onJoin` runs inside joinNetwork (the
+// awaited step in createNetwork); `o.probe` is the relay's answer to restoreNetwork; `o.encrypt` replaces the seal.
+function console2(initial, o = {}) {
+  const store = new Map([[NETKEYS_LS, JSON.stringify(initial)]]);
+  const calls = { join: 0, probe: 0, events: [] };
+  const win = { dispatchEvent(e) { calls.events.push(e.type); return true; } };
+  const world = {
+    churchSk: 'churchSk' in o ? o.churchSk : CHURCH_SK, churchPub: 'c'.repeat(64), NETKEYS_LS,
+    lsGet: (k) => (store.has(k) ? store.get(k) : null),
+    lsSet: (k, v) => { store.set(k, v); },
+    encrypt2: o.encrypt || ((m, k) => nip44.encrypt(m, k)),
+    decrypt3: (c, k) => nip44.decrypt(c, k),
+    generateSeedWords, privateKeyFromSeedWords, getPublicKey, getPublicKey2: getPublicKey, getPublicKey3: getPublicKey,
+    npubEncode, npubEncode2: npubEncode,
+    NETWORK_SCOPES: ['announcements', 'events'], NETRING_MINT_LS: 'trinityone.netring.mint.',
+    window: win, CustomEvent: class { constructor(type) { this.type = type; } },
+  };
+  const names = Object.keys(world);
+  const body = `${LIFTED}
+    const Steward = { ${CREATE}, ${RESTORE}, ${IMPORT} };
+    return { netKeys, saveNetKey, Steward, setChurchSk: (k) => { churchSk = k; } };`;
+  const api = new Function(...names, body)(...names.map(n => world[n]));
+  win.Steward = {
+    joinNetwork: async () => { calls.join++; if (o.onJoin) o.onJoin(api); return { ok: true }; },
+    retryNetworkProfile: async () => ({ ok: true }),
+    _networkKeyProbe: async () => { calls.probe++; if (o.onProbe) o.onProbe(api); return o.probe; },
+  };
+  return { store, calls, api, raw: () => JSON.parse(store.get(NETKEYS_LS)) };
+}
+
+test('LOW#1: a LOCKED console (churchSk null) handed new words writes NOTHING — and says so', () => {
+  const c = console2([], { churchSk: null });
+  assert.equal(c.api.saveNetKey({ pub: NET, name: 'N', mnemonic: WORDS }), false, 'a skipped save must answer false');
+  assert.deepEqual(c.raw(), [], 'something was written for words that could not be sealed');
+  noPlainWords(c.store, WORDS, 'locked');
+});
+
+test('LOW#1: a seal that THROWS writes nothing either — the old catch stored the words as given', () => {
+  const c = console2([sealedRecord('Kept')], { encrypt: () => { throw new Error('seal failed'); } });
+  const before = c.store.get(NETKEYS_LS);
+  assert.equal(c.api.saveNetKey({ pub: 'cd'.repeat(32), name: 'N', mnemonic: WORDS }), false);
+  assert.equal(c.store.get(NETKEYS_LS), before, 'a failed seal changed the store');
+  noPlainWords(c.store, WORDS, 'seal threw');
+});
+
+test('LOW#1 CONTROL: the unlocked save is what it was — one record, sealed to the church key, answering true', () => {
+  const c = console2([]);
+  assert.equal(c.api.saveNetKey({ pub: NET, name: 'N', mnemonic: WORDS }), true);
+  const recs = c.raw();
+  assert.deepEqual(Object.keys(recs[0]).sort(), ['name', 'pub', 'sealedMnemonic'], 'the stored record changed shape');
+  assert.equal(recs.length, 1);
+  assert.equal(wordsOpen(recs[0], CHURCH_SK), WORDS);
+  noPlainWords(c.store, WORDS, 'unlocked');
+});
+
+test('LOW#1: a record an OLDER build stored in plain text is not erased by a locked rename (it is left exactly as it was)', () => {
+  const legacy = { pub: NET, name: 'Old Name', mnemonic: WORDS };
+  const h = harness([legacy]);
+  h.api.setChurchSk(null);
+  rename(h, 'Renamed While Locked');
+  assert.deepEqual(h.raw(), [legacy], 'a locked save rewrote or dropped a legacy record — its words are the only copy');
+});
+
+test('LOW#1: createNetwork on a console that LOCKS during the join still keeps the key — sealed, never plain', async () => {
+  const c = console2([], { onJoin: (api) => api.setChurchSk(null) });   // lock() lands inside the awaited join
+  const r = await c.api.Steward.createNetwork('Thames Churches');
+  assert.equal(r.ok, true);
+  assert.equal(c.calls.join, 1, 'control: the join ran, and the lock happened inside it');
+  const recs = c.raw();
+  assert.equal(recs.length, 1, 'the joined network’s key was not kept — the network is orphaned');
+  assert.equal(recs[0].pub, r.networkPub);
+  assert.equal(wordsOpen(recs[0], CHURCH_SK), r.mnemonic, 'the kept key does not open to the words the founder was shown');
+  noPlainWords(c.store, r.mnemonic, 'locked mid-create');
+});
+
+test('LOW#1: createNetwork that cannot seal refuses BEFORE the join — nothing published, nothing stored', async () => {
+  const c = console2([], { encrypt: () => { throw new Error('seal failed'); } });
+  const r = await c.api.Steward.createNetwork('Thames Churches');
+  assert.equal(r.ok, false);
+  assert.equal(r.stage, 'start');
+  assert.equal(c.calls.join, 0, 'a network was joined whose key could never be kept');
+  assert.deepEqual(c.raw(), []);
+});
+
+test('LOW#1 / slice3-F4: restoreNetwork on a locked console refuses before the relay is asked; locking DURING the check stores nothing', async () => {
+  const words = generateSeedWords();
+  const np = getPublicKey(privateKeyFromSeedWords(words));
+  const yes = { network: true, checked: true, np, name: 'Thames Churches' };
+  const locked = console2([], { churchSk: null, probe: yes });
+  const r1 = await locked.api.Steward.restoreNetwork(words);
+  assert.equal(r1.ok, false);
+  assert.equal(r1.stage, 'locked');
+  assert.equal(locked.calls.probe, 0, 'a locked console went to the relay with words it could not keep');
+  assert.deepEqual(locked.raw(), []);
+  const mid = console2([], { probe: yes, onProbe: (api) => api.setChurchSk(null) });
+  const r2 = await mid.api.Steward.restoreNetwork(words);
+  assert.equal(mid.calls.probe, 1);
+  assert.equal(r2.ok, false, 'a restore whose words were not stored reported success');
+  assert.equal(r2.stage, 'locked');
+  assert.deepEqual(mid.raw(), []);
+  assert.deepEqual(mid.calls.events, [], 'the switcher was told about a network that was not stored');
+  noPlainWords(mid.store, words, 'locked mid-restore');
+  // control: the same answer on an unlocked console is stored, sealed
+  const open = console2([], { probe: yes });
+  const r3 = await open.api.Steward.restoreNetwork(words);
+  assert.equal(r3.ok, true);
+  assert.equal(wordsOpen(open.raw()[0], CHURCH_SK), words);
+});
+
+test('LOW#1: importNetworkKey on a locked console throws and stores nothing (control: unlocked stores sealed)', () => {
+  const words = generateSeedWords();
+  const locked = console2([], { churchSk: null });
+  assert.throws(() => locked.api.Steward.importNetworkKey(words, 'N'), /locked/);
+  assert.deepEqual(locked.raw(), []);
+  assert.deepEqual(locked.calls.events, []);
+  const open = console2([]);
+  open.api.Steward.importNetworkKey(words, 'N');
+  assert.equal(wordsOpen(open.raw()[0], CHURCH_SK), words);
+  noPlainWords(open.store, words, 'import');
+});

@@ -163,3 +163,31 @@ test('the instrument for the row above: the same two relays, B answering genuine
   h.login(h.relaysMap.get(URL2), URL2);
   assert.equal(h.last().minorsKnown, true, 'a genuine answer from B plus a login on B should be known — else the row above proves nothing');
 });
+
+// ── guardiansKnown / guardiansAt (2026-11-21, the cold-list wipe) ───────────────────────────────────────
+// approveGuardian replaces the whole parent-link map, so it needs the map's OWN evidence. minorsKnown is not
+// it: the minors document can arrive before the guardians document riding the same REQ.
+const sgDoc = (d, ts, content) => ({ created_at: ts, pubkey: CP, tags: [['d', 'trinityone/' + d + ':' + CP], ['t', 'trinityone']], content: JSON.stringify(content) });
+
+test('guardiansKnown is the guardians document’s own: the minors document arriving does not turn it on; its own document does, with its date', async () => {
+  const h = harness();
+  h.open();
+  h.sub().h.onevent(sgDoc('minors', 500, { pubkeys: ['k1'] }));
+  assert.equal(h.last().minorsKnown, true, 'rig: the minors document did not register');
+  assert.equal(h.last().guardiansKnown, false, 'THE MINORS DOCUMENT ALONE made the parent-link map "known" before it had arrived');
+  assert.equal(h.last().guardiansAt, 0);
+  h.sub().h.onevent(sgDoc('guardians', 900, { links: { k1: ['p1'] } }));
+  assert.equal(h.last().guardiansKnown, true);
+  assert.equal(h.last().guardiansAt, 900, 'guardiansAt is not the created_at of the copy held');
+  assert.deepEqual(h.last().guardians, { k1: ['p1'] });
+});
+
+test('guardiansKnown with NO guardians document: false on an answer before any login, true once the login is accepted on that socket (a first-ever link stays possible)', async () => {
+  const h = harness();
+  h.open();
+  await h.eose();
+  assert.equal(h.last().guardiansKnown, false, 'an unauthenticated answer counted as "this church has no parent links"');
+  h.login();
+  assert.equal(h.last().guardiansKnown, true, 'a church with no guardians document can never be known, so never confirm its first guardian');
+  assert.equal(h.last().guardiansAt, 0);
+});

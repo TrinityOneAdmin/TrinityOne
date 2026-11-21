@@ -8334,7 +8334,15 @@ window.BulkInviteModal = BulkInviteModal;
 // CSV: header-aware, quoted fields. There is deliberately NO age column — TrinityOne does not decide who
 // is a child, the steward marks and the software enforces (reference/DOMAIN.md, mechanism not policy).
 // Auto-detection only PRE-FILLS the child toggles; the steward sees every row and can change any of them.
-function parseAccountsCsv(txt) {
+//
+// `info` (optional, integration audit 2026-11-21 S4) is filled in for the caller: info.childColumn is true
+// only when a header named one of CHILD_COLS. A file with no such column comes back all-adults, which is
+// indistinguishable in the rows from a file whose children were all left blank -- so the modal asks, and
+// SAYS when no child column was found. The yes-values and column names are deliberately NOT widened: a
+// wrongly pre-filled mark is its own harm, and the notice is the fix. Callers (rule 2): SetupAccountsModal's
+// onFile only.
+function parseAccountsCsv(txt, info) {
+  if (info) info.childColumn = false;
   const lines = String(txt || '').split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return [];
   // European Excel exports semicolon-separated "CSV" — pick whichever delimiter the FIRST line uses more
@@ -8360,6 +8368,7 @@ function parseAccountsCsv(txt) {
   // no recognisable header: every line is a bare name (quoted "Smith, John" stays one name)
   if (nameAt === -1) return lines.map(l => ({ name: splitLine(l)[0] || '', isChild: false })).filter(r => r.name);
   const childAt = head.findIndex(h => CHILD_COLS.includes(h));
+  if (info) info.childColumn = childAt !== -1;
   return lines.slice(1)
     .map(l => { const f = splitLine(l); return { name: f[nameAt] || '', isChild: childAt !== -1 && YES.includes(String(f[childAt] || '').toLowerCase()) }; })
     .filter(r => r.name);
@@ -8377,6 +8386,8 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   const [err, setErr] = React.useState('');
   const [closing, setClosing] = React.useState(false);      // the close-without-print warning
   const [cleaning, setCleaning] = React.useState(false);
+  const [csvNoChildCol, setCsvNoChildCol] = React.useState(false);   // the last imported file had no child column: said above the list (audit S4)
+  const [photoNote, setPhotoNote] = React.useState('');     // the batch's no-photo write did not happen: said on the done screen (audit S5)
   // Moment-of-use gates for the UI; the ENGINE re-reads auth and both lists again when it runs, so these
   // only decide what the screen offers, never what is written.
   const authed = !!(window.Steward.relayAuthed && window.Steward.relayAuthed());
@@ -8398,6 +8409,29 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
       return { name: n, key: k, isChild: mk, blocked: !!childrenBlocked && mk };
     });
   })();
+  // A CHILD MARK IS NEVER SILENTLY LOST (integration audit 2026-11-21, S3 -- fail closed).
+  //
+  // The marks live in `childMarks` under name#occurrence, and the names live in a free-text box. So fixing a
+  // typo in a marked child's name, or deleting an earlier row with the same name, leaves the mark filed under
+  // a key no row has any more: the row on screen reads "Child?", and the batch would have made that child an
+  // ADULT with nothing said. reference/DOMAIN.md: marking after the fact is the fallback, not the plan -- so
+  // this is not left to the steward re-reading the confirm summary.
+  //
+  // DETECTION: every key in `childMarks` whose value is true must belong to a CURRENT row. One that does not
+  // is a lost mark. While any exists the list says so, by the name the mark was made under, and toConfirm
+  // REFUSES -- no keys are minted and the confirm step is never reached, so nothing can be created from a
+  // list with a mark unaccounted for. The steward clears it by saying they have re-checked (which drops only
+  // the lost marks; marks on current rows stay) or by putting the name back.
+  // Deliberately NOT done: guessing which edited row the mark "moved" to. A wrong guess marks the wrong
+  // person, and a silent guess is the same defect in the other direction.
+  // What this cannot see: two rows with the SAME name swapping places -- the marks follow position among
+  // same-named rows, and nothing is orphaned. A row past the 200-row cap that carries a mark IS reported.
+  const lostMarks = (() => {
+    const live = new Set(rows.map(r => r.key));
+    return Object.keys(childMarks).filter(k => childMarks[k] && !live.has(k));
+  })();
+  const lostNames = lostMarks.map(k => k.slice(0, k.lastIndexOf('#')));
+  const recheckedMarks = () => setChildMarks(m => { const keep = {}; rows.forEach(r => { if (m[r.key]) keep[r.key] = true; }); return keep; });
   const blockedKids = rows.filter(r => r.blocked);
   const eligible = rows.filter(r => !r.blocked);
   const existingLower = React.useMemo(() => new Set(Object.values(nameByPub || {}).map(n => String(n).toLowerCase())), [nameByPub]);
@@ -8406,7 +8440,9 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     const f = e.target.files && e.target.files[0]; if (!f) return;
     const rdr = new FileReader();
     rdr.onload = () => {
-      const parsed = parseAccountsCsv(String(rdr.result || ''));
+      const info = {};
+      const parsed = parseAccountsCsv(String(rdr.result || ''), info);
+      setCsvNoChildCol(parsed.length > 0 && !info.childColumn);
       setNames(parsed.map(r => r.name).join('\n'));
       const marks = {}, occ = Object.create(null);   // same name#occurrence keys as the rows (audit F6)
       parsed.forEach(r => { const i = occ[r.name] || 0; occ[r.name] = i + 1; if (r.isChild) marks[r.name + '#' + i] = true; });
@@ -8424,6 +8460,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   }, [stage, results, printed]);
   const toConfirm = () => {
     if (!eligible.length) return;
+    if (lostMarks.length) return;   // S3: fail closed -- the alert above the list says why, and how to go on
     setErr('');
     setEntries(eligible.map(r => ({ name: r.name, isChild: r.isChild, mnemonic: window.Steward.mintAccountKey() })));   // minted ONCE; retry re-uses these
     setStage('confirm');
@@ -8439,15 +8476,30 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     // THE OWNER'S RULE: a marked child goes on the no-photo list (unless this church allows children's
     // photos). Gated on sg.loaded exactly like the DashMembers reconcile effect, which is the standing
     // backstop for this write either way — a cold list must never be replaced (audit 2026-10-13).
+    //
+    // THE RESULT IS READ AND SAID (integration audit 2026-11-21, S5). This write was fire-and-forget: a
+    // refused save, or a list that had not loaded (so the write is skipped), left the done screen reading as
+    // though the children's photos were off. setNoPhoto RESOLVES null/false for a refusal as well as
+    // throwing, so the resolved value is what is checked. The done screen is shown first -- the slips are
+    // what the steward is waiting for -- and the note joins it when the answer is in.
+    setPhotoNote('');
+    setStage('done');
     try {
       const okKids = out.results.filter(r => r.ok && r.isChild && r.pubkey).map(r => r.pubkey);
-      if (okKids.length && !kidPhotosAllowed && sg && sg.loaded) {
-        const have = new Set(sg.nophoto || []);
-        const add = okKids.filter(p => !have.has(p));
-        if (add.length) window.Steward.setNoPhoto([...(sg.nophoto || []), ...add]);
+      if (okKids.length && !kidPhotosAllowed) {
+        if (!(sg && sg.loaded)) {
+          setPhotoNote('The new children were not added to your church\u2019s no-photo list \u2014 that list had not loaded on this console, so it was left alone. Their photos are not switched off yet.');
+        } else {
+          const have = new Set(sg.nophoto || []);
+          const add = okKids.filter(p => !have.has(p));
+          if (add.length) {
+            let okP = null;
+            try { okP = await Promise.resolve(window.Steward.setNoPhoto([...(sg.nophoto || []), ...add])); } catch (e) { okP = null; }
+            if (!okP) setPhotoNote('The new children were not added to your church\u2019s no-photo list \u2014 that save was not accepted. Their photos are not switched off yet.');
+          }
+        }
       }
     } catch (e) {}
-    setStage('done');
   };
   const print = async () => {
     const ok = (results || []).filter(r => r.ok);
@@ -8514,6 +8566,11 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
           <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>
           <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{rows.length} name{rows.length === 1 ? '' : 's'}{rows.length ? ` · ${kids.length} child${kids.length === 1 ? '' : 'ren'}` : ''}</span>
         </div>
+        {lostMarks.length ? <div role="alert" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--clay-soft)', border: '1px solid var(--clay)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="var(--clay-ink)" style={{ flexShrink: 0, marginTop: 1 }} /><div>
+          <b>{lostMarks.length === 1 ? 'A child mark was lost when the list changed.' : lostMarks.length + ' child marks were lost when the list changed.'}</b>{(lostMarks.length === 1 ? ' It was on: ' : ' They were on: ') + lostNames.join(', ') + '. Re-check who is a child \u2014 nothing can be created until you have.'}
+          <div style={{ marginTop: 7 }}><button onClick={recheckedMarks} className="sk-btn sk-btn--ghost" style={{ padding: '5px 11px', fontSize: 12 }}>I have re-checked the list</button></div>
+        </div></div> : null}
+        {csvNoChildCol && rows.length ? <div role="status" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div><b>No child column found in that file</b>{' \u2014 everyone was imported as an adult. Mark children by hand below.'}</div></div> : null}
         <textarea value={names} onChange={e => setNames(e.target.value)} placeholder={'Maria Gonzalez\nJohn Park\nGrace Okafor\n…'} style={{ width: '100%', boxSizing: 'border-box', minHeight: 120, border: '1px solid var(--line)', borderRadius: 12, padding: 12, fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
         {rows.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10, maxHeight: 200, overflowY: 'auto' }}>
           {rows.map((r, i) => (
@@ -8578,6 +8635,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
         return <React.Fragment>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{ok.length} account{ok.length === 1 ? '' : 's'} created{failed.length ? ` · ${failed.length} failed` : ''}.</div>
           {kidSpread ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 8, lineHeight: 1.5 }}>{kidSpread}</div> : null}
+          {photoNote ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 8, lineHeight: 1.5 }}>{photoNote}</div> : null}
           {err ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 8 }}>{err}</div> : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 10 }}>
             {(results || []).map((r, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{r.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{r.name}{r.isChild ? ' (child)' : ''}</span>{!r.ok && r.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{r.reason}</span> : null}</div>)}
@@ -9221,6 +9279,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const _guardData = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
   const guardians = _guardData.links || {};
   const guardiansClosed = _guardData.closed || {};
+  const guardiansAt = Number(_guardData.at) || 0;   // which copy of the guardians document this screen holds (0 = none) -- approveGuardian
   const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)) && !guardiansClosed[r.child + '|' + r.parent]);
   const parentSet = new Set(); Object.values(guardians).forEach(ps => (ps || []).forEach(p => parentSet.add(p)));
   const nameByPub = {}; members.forEach(m => { if (m.name) nameByPub[m.pubkey] = m.name; });
@@ -9318,6 +9377,30 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = async (r) => {
     const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
+    // BOTH LISTS MUST BE REAL BEFORE EITHER IS REPLACED (integration audit 2026-11-21, the cold-list wipe).
+    // setGuardians and setMinors below each REPLACE a whole document, built from what this screen holds. On a
+    // console those documents have not reached, that is {} and [] -- so one Confirm published a parent-link
+    // map of ONE link (and no closed pairs) and a children list of ONE child. toggleMinor has refused this for
+    // the children list since 2026-10-13; this path never did.
+    //
+    // HERE, BEFORE setGuardians, and not at setMinors: refusing after the link is written would leave a child
+    // linked and unmarked.
+    //
+    // THREE things, because the two documents reach this screen by TWO subscriptions:
+    //   sg.minorsKnown     the children list is known (see toggleMinor for why this and not `loaded`: a church
+    //                      that has never marked a child must still be able to confirm its first guardian)
+    //   sg.guardiansKnown  the parent-link map is known TO subscribeSafeguard, on the same kind of evidence
+    //   guardiansAt        ...but `guardians` / `guardiansClosed` here come from subscribeGuardians, a separate
+    //                      subscription whose bare EOSE proves nothing. So the copy this screen would write from
+    //                      must be at least the copy subscribeSafeguard holds (both 0 = no document exists).
+    // Fails CLOSED: a hook default, or an engine that does not say, carries none of these and is refused.
+    // NOT covered, deliberately (owner, 2026-11-21): linkParent has the same shape and is scheduled separately,
+    // and so is a relay that answers while logged in without holding the document.
+    if (sg.minorsKnown !== true || sg.guardiansKnown !== true || guardiansAt < (Number(sg.guardiansAt) || 0)) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Nothing was changed \u2014 this console hasn\u2019t received your church\u2019s '
+        + 'list of children and parent links yet, and confirming now would take every other child and every other parent link off them. Try again in a moment.' });
+      return null;
+    }
     // The guard linkParent has always had, and this path did not: a request from someone the church has marked
     // as a child must be refused, not confirmed. A child is never a guardian (D2; reference/DOMAIN.md).
     if (minorsSet.has(r.parent)) {
@@ -9326,39 +9409,77 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       return null;
     }
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
+    // _askedAt BEFORE the write, so the spread read below is THIS write's and never one left by an earlier
+    // save of the same document (integration audit 2026-11-21, S1). setGuardians can refuse without writing
+    // anything at all -- an unauthed console, a view that may not write -- and the spread of the LAST write
+    // that did go out is still sitting there: read unchecked, it made a write that reached no relay say
+    // "saved on N of your N relay machines, partly in force". Mirrors createEncryptedGroup's _madeAt.
+    const _askedAt = Date.now();
     let okG = null;
     try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
-    if (!okG) {
-      // THE WRITE IS ALL-OR-NOTHING; THE TRUTH OFTEN IS NOT (sim 2026-11-20 D4): with one relay refusing,
-      // the guardians doc had LANDED on the other — yet this line said "nobody has been linked" and the
-      // pending row was gone on the next reload. writeSpread says which relays took the write; say that,
-      // and claim total failure only when it was total.
-      let sp = null; try { sp = window.Steward.writeSpread ? window.Steward.writeSpread('guardians') : null; } catch (e) { sp = null; }
+    // HOW MANY of the church's relay machines took a write that did not land on all of them -- from THIS
+    // write's spread only (S1). -> { landedN, totalN }, landedN 0 when nothing landed or nothing is known.
+    const _landing = (which, since) => {
+      let sp = null;
+      try { const _s = window.Steward.writeSpread ? window.Steward.writeSpread(which) : null; if (_s && _s.at >= since) sp = _s; } catch (e) { sp = null; }
       const landedN = (sp && Array.isArray(sp.landed)) ? sp.landed.length : 0;
-      const totalN = sp ? Math.max((sp.configured || []).length, landedN + ((sp.missed || []) || []).length) : 0;
-      setMinorNotice({ pk: r.child, tone: 'fail', text: landedN > 0
-        ? ('That guardian link saved on ' + landedN + ' of your ' + totalN + ' relay machines, so it is partly in force. Confirm again to retry the others — until then a machine that missed it won’t enforce the link.')
-        : 'Couldn’t confirm that guardian link — no relay accepted it, so nobody has been linked and the request is still waiting. Check the relay and try again.' });
-      return null;
-    }
-    // A LINKED CHILD IS A MINOR, and if that half fails the link exists without the protection that is its
-    // whole point — so say which half landed rather than resealing over a half-written state.
-    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];
-    if (!minorsSet.has(r.child)) {
-      let okM = null;
-      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
-      if (!okM) {
-        setMinorNotice({ pk: r.child, tone: 'fail', text: 'The guardian link was saved, but marking them as a child was '
-          + 'NOT — the relay refused it. They are linked to a parent and are not yet treated as a child. Try again.' });
-        _reseal(sg.minors || [], sg.approved || [], [r.child], nextG);
+      return { landedN, totalN: sp ? Math.max((sp.configured || []).length, landedN + (sp.missed || []).length) : 0 };
+    };
+    // THE WRITE IS ALL-OR-NOTHING; THE TRUTH OFTEN IS NOT (sim 2026-11-20 D4): with one relay refusing,
+    // the guardians doc had LANDED on the other -- yet this line said "nobody has been linked" and the
+    // pending row was gone on the next reload. writeSpread says which relays took the write; say that,
+    // and claim total failure only when it was total.
+    let partG = null;
+    if (!okG) {
+      partG = _landing('guardians', _askedAt);
+      if (!(partG.landedN > 0)) {
+        setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn\u2019t confirm that guardian link \u2014 no relay accepted it, so nobody has been linked and the request is still waiting. Check the relay and try again.' });
         return null;
       }
     }
-    // Re-seal UNCONDITIONALLY once both halves are in. This used to run only when the child was not already
-    // marked a minor, so linking a parent to an already-marked child never reached that child's phone at all.
+    // A LINKED CHILD IS A MINOR -- AND THAT INCLUDES A LINK THAT ONLY PARTLY LANDED (integration audit
+    // 2026-11-21, S2). This returned as soon as the link missed any relay, BEFORE marking the child. But the
+    // link was real wherever it landed, and this request's card leaves the list as soon as the console reads
+    // that link back -- so the child stayed linked, UNMARKED, and with no card left to press: the notice said
+    // "Confirm again to retry" about a button that was no longer there. reference/DOMAIN.md: a child linked
+    // to a guardian must become a minor, so the mark is attempted whenever the link landed ANYWHERE. Failing
+    // toward the mark is the protective direction: an unmarked child is an adult to every relay.
+    // What is NOT retried from here is the link on the machines that missed it -- nothing on this screen can
+    // (the card is gone), so the notice no longer offers that; it says where the link reached.
+    const child = nameByPub[r.child] || 'This child';
+    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];
+    let mark = 'already', partM = null;   // 'already' | 'ok' | 'part' (some machines) | 'none' (no machine)
+    if (!minorsSet.has(r.child)) {
+      const _markAt = Date.now();
+      let okM = null;
+      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
+      if (okM) mark = 'ok';
+      else { partM = _landing('minors', _markAt); mark = partM.landedN > 0 ? 'part' : 'none'; }
+    }
+    const linkLine = partG
+      ? 'That guardian link saved on ' + partG.landedN + ' of your ' + partG.totalN + ' relay machines, so it is partly in force.'
+      : 'The guardian link was saved.';
+    if (mark === 'none') {
+      // the link exists without the protection that is its whole point -- say which half landed, and the step
+      // that is really there: the Child control on their own row (this card will not come back)
+      setMinorNotice({ pk: r.child, tone: 'fail', text: linkLine + ' Marking them as a child was NOT saved \u2014 no relay accepted it. '
+        + 'They are linked to a parent and are not yet treated as a child. Mark them as a child from their own row in the members list.' });
+      _reseal(sg.minors || [], sg.approved || [], [r.child], nextG);
+      return null;
+    }
+    // Re-seal UNCONDITIONALLY once the mark is in (anywhere). This used to run only when the child was not
+    // already marked a minor, so linking a parent to an already-marked child never reached that child's phone.
     _reseal(nextM, sg.approved || [], [r.child], nextG);
-    // …and the parent's app gets its whole list, so the child it asked for reads as linked (owner, 2026-10-01).
+    // ...and the parent's app gets its whole list, so the child it asked for reads as linked (owner, 2026-10-01).
     if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, nextG, guardiansClosed, noticeScope); } catch (e) {} }
+    if (partG || mark === 'part') {
+      const markLine = mark === 'part'
+        ? ' Marking them as a child reached ' + partM.landedN + ' of your ' + partM.totalN + ' relay machines.'
+        : ' ' + child + ' is marked as a child.';
+      setMinorNotice({ pk: r.child, tone: 'fail', text: linkLine + markLine
+        + ' A machine that missed either does not have it until it is back and in sync \u2014 the Relays page shows which.' });
+      return null;
+    }
     return true;
   };
   const declineGuardian = async (r) => {

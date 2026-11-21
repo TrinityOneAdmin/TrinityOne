@@ -38,7 +38,7 @@ const ds = (...fams) => fams.map(f => D[f] + (A ? A.church.pub : ''));
 const only = (r, want) => { for (const e of r.events) assert.ok(want.includes(e.d), 'the relay sent a document the read does not want: ' + e.d); assert.ok(r.events.length <= want.length, 'the relay sent ' + r.events.length + ' events for ' + want.length + ' wanted documents'); };
 
 const EXPR = {
-  safeguard: `window.Steward.subscribeSafeguard(l => window.__probe.out.push({ minors: l.minors, approved: l.approved, nophoto: l.nophoto, guardians: l.guardians }))`,
+  safeguard: `window.Steward.subscribeSafeguard(l => window.__probe.out.push({ minors: l.minors, approved: l.approved, nophoto: l.nophoto, guardians: l.guardians, guardiansAt: l.guardiansAt, guardiansKnown: l.guardiansKnown }))`,
   guardians: `window.Steward.subscribeGuardians(l => window.__probe.out.push(l))`,
   blocked: `window.Steward.subscribeBlocked(l => window.__probe.out.push([...l]))`,
 };
@@ -54,6 +54,13 @@ test('(c) the emitted lists are unchanged (passes with the old filters too: guar
   const sg = (await get('safeguard')).out.pop();
   assert.deepEqual([sg.minors, sg.approved, sg.nophoto], [[C1.pub], [C2.pub], [NP.pub]]);
   assert.deepEqual(sg.guardians, { [C1.pub]: [P1.pub] });
-  assert.deepEqual((await get('guardians')).out.pop(), { links: { [C1.pub]: [P1.pub] }, closed: {} });
+  // `at` joined this payload on 2026-11-21 (the cold-list wipe): the created_at of the copy delivered. Against a
+  // real relay, the two subscriptions that carry the guardians document must name the SAME copy -- that is the
+  // comparison approveGuardian refuses a cold confirm on.
+  const gd = (await get('guardians')).out.pop();
+  assert.deepEqual({ links: gd.links, closed: gd.closed }, { links: { [C1.pub]: [P1.pub] }, closed: {} });
+  assert.ok(gd.at > 0, 'subscribeGuardians delivered a document and did not say which copy');
+  assert.equal(sg.guardiansAt, gd.at, 'subscribeSafeguard and subscribeGuardians disagree about which copy of the guardians document they hold');
+  assert.equal(sg.guardiansKnown, true);
   assert.deepEqual((await get('blocked')).out.pop(), [K.pub]);
 });

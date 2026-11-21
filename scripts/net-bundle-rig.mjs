@@ -122,7 +122,9 @@ export function bootConsole({ relay, church, networks = [], nameKey = null, foun
     (x) => { const s = String(x || ''); if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase(); try { const d = nip19decode(s); return d.type === 'npub' ? d.data : null; } catch (e) { return null; } },
     queryAsKey || fakeQueryAsKey(relay), ...variants(all, 'getPublicKey').map(() => getPublicKey), (k) => ls.has(k) ? ls.get(k) : null, (k, v) => ls.set(k, v),
     (fn) => { ringListeners.add(fn); return () => ringListeners.delete(fn); }, { getItem: (k) => null }, win, class { constructor(t) { this.type = t; } }, fetchImpl || defaultFetch,
-    ...variants(all, 'npubEncode').map(() => npubEncode), (rec) => { savedKeys.push(rec); }, () => 'w' + Math.random().toString(36).slice(2), seedSk, SHIPPED_RELAYS,
+    ...variants(all, 'npubEncode').map(() => npubEncode), // saveNetKey + what netKeys() does with it: since 2026-11-21 createNetwork hands over the words ALREADY SEALED to the church key
+    // ({ pub, name, sealedMnemonic }), so the stand-in store opens them the way the real netKeys() does, for skFor/netKeys above
+    (rec) => { savedKeys.push((rec && rec.sealedMnemonic && !rec.mnemonic) ? { ...rec, mnemonic: nip44.decrypt(rec.sealedMnemonic, church.sk) } : rec); return true; }, () => 'w' + Math.random().toString(36).slice(2), seedSk, SHIPPED_RELAYS,
     ...Object.values(sh.nip)];
   const make = new Function(...names, prelude + src);
   // the lifted engine reads churchSk etc. as bare names; `set` re-runs the assignment so a test can move the console's state

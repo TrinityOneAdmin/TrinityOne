@@ -69,7 +69,9 @@ const furniture = () => ({
 });
 
 // ── the Members panel, over a church whose guardians map and minors list we set ────────────────────────────
-async function membersPanel({ minors, guardians, requests = [], checkinCleared = [] }) {
+// `sg` / `gd` override what the two hooks deliver, for the cold-console rows at the foot of this file. The
+// default is a WARM console: both lists known, and the screen's guardians copy the one the engine holds.
+async function membersPanel({ minors, guardians, requests = [], checkinCleared = [], sg = null, gd = null }) {
   const { React, draw } = miniReact();
   const calls = { minors: [], guardians: [], ckRevoked: [] };
   const g = {
@@ -86,8 +88,8 @@ async function membersPanel({ minors, guardians, requests = [], checkinCleared =
       // who holds a CHECK-IN clearance, in the shape subscribeCheckinPermissions delivers
       useStewardCheckinPermissions: () => checkinCleared.map(p => ({ person: p, source: 'steward', lifetime: 'open', from: 0, until: null })),
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({}), useStewardBlocked: () => [],
-      useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors, approved: [], nophoto: [], guardians }),
-      useStewardGuardians: () => ({ links: guardians, closed: {} }),
+      useStewardSafeguard: () => (sg || { loaded: true, minorsKnown: true, guardiansKnown: true, guardiansAt: 0, clearedKnown: true, cleared: {}, minors, approved: [], nophoto: [], guardians }),
+      useStewardGuardians: () => (gd || { links: guardians, closed: {}, at: 0 }),
       useStewardGuardianRequests: () => requests,
       useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: members,
@@ -233,4 +235,45 @@ test('…and an adult guardian beside the child still shows — the filter drops
   const c = await checkin({ minors: [KID_A, KID_B], guardians: { [KID_B]: [KID_A, ADULT] }, present: [KID_B] });
   assert.match(c.words(), /pickup: Ruth Okafor/);
   assert.doesNotMatch(c.words(), /Tom Okafor/, 'the child is still printed alongside the adult');
+});
+
+// ── 4. THE COLD-LIST WIPE (integration audit 2026-11-21), on the RENDERED panel ────────────────────────────
+// approveGuardian replaces the whole guardians map AND the whole children list from what the screen holds.
+// These press the real Confirm on the real panel with the two hooks delivering what a console really gets,
+// so the wire from each hook to the guard is under test and not only the guard (CLAUDE.md rule 1).
+test('COLD CONSOLE: Confirm pressed before the lists arrive replaces NEITHER the children list NOR the parent links, and says so', async () => {
+  // first paint, verbatim from app/steward-root.jsx: nothing known, both lists empty. Every request this
+  // church has ever had shows a live Confirm here, because nothing has said which are already confirmed.
+  const p = await membersPanel({ minors: [], guardians: {}, requests: [{ child: KID_B, parent: ADULT }],
+    sg: { minors: [], approved: [], expiry: {}, minorsKnown: false, minorsDocSeen: false }, gd: { links: {}, closed: {} } });
+  const confirm = p.btn(/^Confirm guardian link: Ruth Okafor/);
+  assert.equal(confirm.length, 1, 're-anchor: the cold panel has no Confirm for the request');
+  confirm[0].props.onClick();
+  await tick(); await tick();
+  assert.deepEqual(p.calls.minors, [], 'A COLD CONFIRM PUBLISHED A CHILDREN LIST — every other marked child becomes an adult to the relay');
+  assert.deepEqual(p.calls.guardians, [], 'A COLD CONFIRM PUBLISHED A PARENT-LINK MAP — every other link and closed pair is gone');
+  p.redraw();
+  assert.match(p.words(), /Nothing was changed/, 'the steward was not told the press did nothing');
+  assert.match(p.words(), /Try again in a moment/);
+});
+
+test('…the children list arrived but the screen’s copy of the parent links has NOT (the engine holds a newer one): still nothing is written', async () => {
+  const p = await membersPanel({ minors: [KID_B], guardians: {}, requests: [{ child: KID_B, parent: ADULT }],
+    sg: { loaded: true, minorsKnown: true, guardiansKnown: true, guardiansAt: 900, clearedKnown: true, cleared: {}, minors: [KID_B], approved: [], nophoto: [], guardians: { [KID_A]: [ADULT] } },
+    gd: { links: {}, closed: {}, at: 0 } });
+  p.btn(/^Confirm guardian link: Ruth Okafor/)[0].props.onClick();
+  await tick(); await tick();
+  assert.deepEqual(p.calls.guardians, [], 'the map was replaced from a copy the screen had not received');
+  assert.deepEqual(p.calls.minors, []);
+});
+
+test('CONTROL, WARM: the same press once both have arrived links the parent and keeps the link that was already there', async () => {
+  const held = { [KID_A]: [ADULT] }, closed = { [KID_A + '|' + KID_B]: 1700000000 };
+  const p = await membersPanel({ minors: [KID_A], guardians: held, requests: [{ child: KID_B, parent: ADULT }],
+    sg: { loaded: true, minorsKnown: true, guardiansKnown: true, guardiansAt: 900, clearedKnown: true, cleared: {}, minors: [KID_A], approved: [], nophoto: [], guardians: held },
+    gd: { links: held, closed, at: 900 } });
+  p.btn(/^Confirm guardian link: Ruth Okafor/)[0].props.onClick();
+  await tick(); await tick();
+  assert.deepEqual(p.calls.guardians, [[{ [KID_A]: [ADULT], [KID_B]: [ADULT] }, closed]], 'a warm confirm was refused, or dropped what the church already had');
+  assert.deepEqual(p.calls.minors, [[KID_A, KID_B]], 'the newly linked child was not added to the children already marked');
 });

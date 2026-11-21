@@ -379,7 +379,7 @@ test('finishRestore: empty lookup WITHOUT a follow keeps the no-church screen an
 });
 
 // ── the CSV parser: headers, quotes, child column — and NEVER an age column ──────────────────────────────
-function liftCsv() { return lift(STEW, 'function parseAccountsCsv(txt) {', 'parseAccountsCsv', {}); }
+function liftCsv() { return lift(STEW, 'function parseAccountsCsv(txt, info) {', 'parseAccountsCsv', {}); }
 
 test('the CSV parser reads headered and bare files, quoted commas, and the child column — never age', () => {
   const parse = liftCsv();
@@ -401,7 +401,7 @@ test('the CSV parser reads headered and bare files, quoted commas, and the child
 // ── point of use: the REAL modal, rendered and driven end to end ─────────────────────────────────────────
 function loadModal({ steward, gate, skPrintableLog }) {
   const { React, draw } = miniReact();
-  const src = fnBody(STEW, 'function parseAccountsCsv(txt) {', 'parseAccountsCsv')
+  const src = fnBody(STEW, 'function parseAccountsCsv(txt, info) {', 'parseAccountsCsv')
     + '\n' + fnBody(STEW, 'function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegated }) {', 'SetupAccountsModal');
   const tmp = join(tmpdir(), 'setupmodal-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
@@ -790,4 +790,208 @@ test('POINT OF USE: an adults-only batch with the same gap stays quiet — the l
   await press(tree, 'Create');
   tree = draw(SetupAccountsModal, props);
   assert.doesNotMatch(texts(tree).join(' '), /relay machines/, 'the child line fired for a batch with no children');
+});
+
+// ── S5 (integration audit 2026-11-21): the batch's no-photo write is READ, and a miss is SAID ────────────
+// It was fire-and-forget behind sg.loaded: a refused save or a skipped one left the done screen reading
+// as though the children's photos were off. Driven through the real modal each time.
+async function batchOneChild({ setNoPhoto, sg, kidPhotosAllowed = false }) {
+  const log = [];
+  const steward = stewardSpy(log);
+  steward.setNoPhoto = (list) => { log.push(['setNoPhoto', list]); return setNoPhoto(); };
+  const { draw, load } = loadModal({ steward });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg, kidPhotosAllowed, nameByPub: {}, delegated: false };
+  let tree = draw(SetupAccountsModal, props);
+  typeNames(tree, 'Little Ana');
+  tree = draw(SetupAccountsModal, props);
+  button(tree, 'Child?')[0].props.onClick();
+  tree = draw(SetupAccountsModal, props);
+  press(tree, 'Continue with');
+  tree = draw(SetupAccountsModal, props);
+  await press(tree, 'Create');
+  tree = draw(SetupAccountsModal, props);
+  const all = texts(tree).join(' ');
+  assert.ok(/1\s+account\s+created/.test(all), 'control: the batch reached its done screen: ' + all.slice(0, 200));
+  return { log, all };
+}
+const NOT_ON_LIST = /not added to your church.s no-photo list/;
+
+test('POINT OF USE: a no-photo write the relay REFUSES is said on the done screen — resolved null, false, or thrown', async () => {
+  for (const [what, impl] of [['null', () => Promise.resolve(null)], ['false', () => Promise.resolve(false)],
+    ['rejects', () => Promise.reject(new Error('refused'))], ['throws', () => { throw new Error('may not write'); }]]) {
+    const { log, all } = await batchOneChild({ setNoPhoto: impl, sg: { loaded: true, nophoto: [] } });
+    assert.ok(log.some(l => l[0] === 'setNoPhoto'), what + ': control — the write was attempted');
+    assert.match(all, NOT_ON_LIST, what + ': a refused no-photo write passed in silence');
+    assert.match(all, /was not accepted/, what);
+  }
+});
+
+test('POINT OF USE: a no-photo list that had NOT LOADED is left alone, and the skip is said', async () => {
+  const { log, all } = await batchOneChild({ setNoPhoto: () => Promise.resolve(true), sg: { loaded: false, nophoto: [] } });
+  assert.ok(!log.some(l => l[0] === 'setNoPhoto'), 'a cold list must never be replaced (audit 2026-10-13)');
+  assert.match(all, NOT_ON_LIST, 'the skipped write passed in silence');
+  assert.match(all, /had not loaded/);
+});
+
+test('POINT OF USE: an accepted no-photo write, and a church that allows children’s photos, both stay quiet (control)', async () => {
+  const a = await batchOneChild({ setNoPhoto: () => Promise.resolve(true), sg: { loaded: true, nophoto: [] } });
+  assert.ok(a.log.some(l => l[0] === 'setNoPhoto'));
+  assert.doesNotMatch(a.all, NOT_ON_LIST);
+  const b = await batchOneChild({ setNoPhoto: () => Promise.resolve(null), sg: { loaded: false, nophoto: [] }, kidPhotosAllowed: true });
+  assert.ok(!b.log.some(l => l[0] === 'setNoPhoto'));
+  assert.doesNotMatch(b.all, NOT_ON_LIST, 'a church that allows children’s photos has nothing to report');
+});
+
+// ── S4 (integration audit 2026-11-21): a file with NO child column must not be a silent all-adult list ───
+test('the CSV parser tells its caller whether the file HAD a child column — and reads the rows exactly as before', () => {
+  const parse = liftCsv();
+  const ask = (txt) => { const info = {}; const rows = parse(txt, info); return { rows, col: info.childColumn }; };
+  assert.equal(ask('name,child\nAna,yes\nBob,').col, true);
+  assert.equal(ask('name,child\nAna,\nBob,').col, true, 'a child column with nobody marked is still a child column');
+  assert.equal(ask('name,age\nAna,9').col, false, 'an age column is not a child column');
+  assert.equal(ask('name,is child\nAna,yes').col, false, 'an unrecognised header is NOT guessed at — it is reported as absent');
+  assert.deepEqual(ask('name,is child\nAna,yes').rows, [{ name: 'Ana', isChild: false }], 'and nothing is pre-marked from it');
+  assert.equal(ask('Ana\nBob').col, false, 'a bare list of names has no child column');
+  assert.equal(ask('').col, false);
+  assert.deepEqual(parse('name,child\nAna,yes'), [{ name: 'Ana', isChild: true }], 'the second argument stays optional');
+});
+
+const NO_CHILD_COL = /No child column found in that file/;
+test('POINT OF USE: importing a file with no child column SAYS so above the list; a file with one stays quiet', async () => {
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  for (const csv of ['name,age\nAna,9\nBob,41', 'Ana\nBob', 'name,is child\nAna,yes']) {
+    const { draw, load } = loadModal({ steward: stewardSpy([]) });
+    const { SetupAccountsModal } = await load;
+    let tree = draw(SetupAccountsModal, props);
+    assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL, 'control: nothing is said before a file is imported');
+    feedCsv(tree, csv);
+    tree = draw(SetupAccountsModal, props);
+    assert.equal(button(tree, 'Child ✓').length, 0, 'control: the file marked nobody');
+    assert.match(texts(tree).join(' '), NO_CHILD_COL, 'an all-adult import with no child column was handed over in silence: ' + JSON.stringify(csv));
+    assert.match(texts(tree).join(' '), /everyone was imported as an adult/);
+    // a second import that DOES carry the column clears it
+    feedCsv(tree, MARKED_CSV);
+    tree = draw(SetupAccountsModal, props);
+    assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL, 'the notice outlived the file it was about');
+    assert.equal(button(tree, 'Child ✓').length, 2);
+  }
+  // a file WITH the column but nobody marked: the steward's file answered the question, so no notice
+  const { draw, load } = loadModal({ steward: stewardSpy([]) });
+  const { SetupAccountsModal } = await load;
+  let tree = draw(SetupAccountsModal, props);
+  feedCsv(tree, 'name,child\nAna,\nBob,');
+  tree = draw(SetupAccountsModal, props);
+  assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL);
+});
+
+// ── S3 (integration audit 2026-11-21): A CHILD MARK IS NEVER SILENTLY LOST ───────────────────────────────
+// Marks are keyed name#occurrence against a free-text box, so a typo fix on a marked child's name — or
+// deleting an earlier same-named row — left the mark under a key no row has, and the child went to the
+// engine as an ADULT. The modal now refuses to go on while any mark is unaccounted for. Every row below
+// drives the compiled modal through its own textarea and buttons and reads what reaches the engine.
+const LOST_MARK = /child marks? (was|were) lost when the list changed/;
+async function markThenEdit({ first, markIndex, then }) {
+  const log = [];
+  const { draw, load } = loadModal({ steward: stewardSpy(log) });
+  const { SetupAccountsModal } = await load;
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  const redraw = () => draw(SetupAccountsModal, props);
+  let tree = redraw();
+  typeNames(tree, first);
+  tree = redraw();
+  button(tree, 'Child')[markIndex].props.onClick();
+  tree = redraw();
+  assert.equal(button(tree, 'Child ✓').length, 1, 'control: exactly one row is marked before the edit');
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK, 'control: no alert before the list changes');
+  typeNames(tree, then);
+  return { log, redraw, tree: redraw() };
+}
+const engineCall = (log) => log.find(l => l[0] === 'createMemberAccounts');
+const atInputStep = (tree) => find(tree, n => n.type === 'textarea').length === 1 && !texts(tree).join(' ').includes('you will hold the sign-in code');
+
+test('POINT OF USE: fixing a typo in a MARKED child’s name refuses to continue — the child is never created as an adult', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'Litle Ana\nBob Adult', markIndex: 0, then: 'Little Ana\nBob Adult' });
+  let tree = t0;
+  assert.equal(button(tree, 'Child ✓').length, 0, 'control: this is the defect’s shape — the edited row now reads unmarked');
+  assert.match(texts(tree).join(' '), LOST_MARK, 'the lost mark is not said on screen');
+  assert.ok(texts(tree).join(' ').includes('Litle Ana'), 'the alert must name the row the mark was made on');
+  press(tree, 'Continue with');
+  tree = redraw();
+  assert.ok(atInputStep(tree), 'the modal went on to the confirm step with a child mark unaccounted for');
+  assert.ok(!log.some(l => l[0] === 'mint'), 'keys were minted for a list that was refused');
+  assert.equal(button(tree, 'Create').length, 0, 'a Create button is reachable — the child would be created as an ADULT');
+  assert.equal(engineCall(log), undefined);
+  // the way on: say the list was re-checked, mark the row as it now reads, and the child goes through AS A CHILD
+  press(tree, 'I have re-checked');
+  tree = redraw();
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK);
+  button(tree, 'Child?')[0].props.onClick();
+  tree = redraw();
+  press(tree, 'Continue with');
+  tree = redraw();
+  await press(tree, 'Create');
+  assert.deepEqual(engineCall(log)[1], [
+    { name: 'Little Ana', isChild: true, hasKey: true },
+    { name: 'Bob Adult', isChild: false, hasKey: true },
+  ]);
+});
+
+test('POINT OF USE: deleting an EARLIER same-named row cannot turn the marked one into an adult', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'John Smith\nJohn Smith\nAna Adult', markIndex: 1, then: 'John Smith\nAna Adult' });
+  let tree = t0;
+  assert.equal(button(tree, 'Child ✓').length, 0, 'control: the surviving John Smith reads unmarked');
+  assert.match(texts(tree).join(' '), LOST_MARK);
+  press(tree, 'Continue with');
+  tree = redraw();
+  assert.ok(atInputStep(tree));
+  assert.equal(engineCall(log), undefined);
+  assert.ok(!log.some(l => l[0] === 'mint'));
+});
+
+test('POINT OF USE: putting the name back restores the mark, and re-checking keeps the marks that were never lost', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'Little Ana\nBen', markIndex: 0, then: 'Little Anna\nBen' });
+  let tree = t0;
+  assert.match(texts(tree).join(' '), LOST_MARK);
+  typeNames(tree, 'Little Ana\nBen');
+  tree = redraw();
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK, 'the name is back, so the mark is accounted for');
+  assert.equal(button(tree, 'Child ✓').length, 1);
+  // now lose a DIFFERENT mark and acknowledge it: Ana's must survive the acknowledgement
+  button(tree, 'Child?')[0].props.onClick();   // Ben
+  tree = redraw();
+  typeNames(tree, 'Little Ana\nBenjamin');
+  tree = redraw();
+  assert.match(texts(tree).join(' '), LOST_MARK);
+  press(tree, 'I have re-checked');
+  tree = redraw();
+  press(tree, 'Continue with');
+  tree = redraw();
+  await press(tree, 'Create');
+  assert.deepEqual(engineCall(log)[1], [
+    { name: 'Little Ana', isChild: true, hasKey: true },
+    { name: 'Benjamin', isChild: false, hasKey: true },
+  ], 'acknowledging one lost mark must not drop a mark that still has its row');
+});
+
+test('POINT OF USE: edits that orphan NO mark go straight through — adding a row, editing an adult, un-marking (control)', async () => {
+  const { log, redraw, tree: t0 } = await markThenEdit({ first: 'Little Ana\nBob Adlt', markIndex: 0, then: 'Little Ana\nBob Adult\nCara New' });
+  let tree = t0;
+  assert.doesNotMatch(texts(tree).join(' '), LOST_MARK, 'an edit that touched no marked row raised the alert');
+  assert.equal(button(tree, 'Child ✓').length, 1);
+  press(tree, 'Continue with');
+  tree = redraw();
+  await press(tree, 'Create');
+  assert.deepEqual(engineCall(log)[1], [
+    { name: 'Little Ana', isChild: true, hasKey: true },
+    { name: 'Bob Adult', isChild: false, hasKey: true },
+    { name: 'Cara New', isChild: false, hasKey: true },
+  ]);
+  // a mark the steward took OFF is not a lost mark when its row is later edited
+  const b = await markThenEdit({ first: 'Dee', markIndex: 0, then: 'Dee' });
+  button(b.tree, 'Child ✓')[0].props.onClick();
+  let t2 = b.redraw();
+  typeNames(t2, 'Deirdre');
+  t2 = b.redraw();
+  assert.doesNotMatch(texts(t2).join(' '), LOST_MARK, 'an un-marked row was treated as a lost mark');
 });

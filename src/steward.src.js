@@ -2034,11 +2034,28 @@ async function _netRemovePost(np, kind, id) {
   const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', (kind === 'event' ? NETEVENT_D : NETANN_D) + id], ['t', NET], ['deleted', '1']], content: '' }), nsk), o);
   return r ? { ok: true } : { ok: false, reason: o.reason || 'No relay accepted it.' };
 }
+// A NETWORK'S WORDS ARE NEVER WRITTEN IN PLAIN TEXT (integration audit 2026-11-21, LOW#1). This used to fall
+// back to storing `mnemonic` as given whenever it could not seal — the console locked (churchSk null), or
+// the seal threw — which put a network's recovery phrase in localStorage in the clear, the exact thing S-1
+// sealed it to prevent. Words that cannot be sealed are now NOT WRITTEN: nothing in the store changes and
+// the answer is false. -> true when the record was written, false when it was skipped.
+// The sealed bytes of the ordinary unlocked save are what they were. A record ALREADY stored in plain text
+// by an older build is not touched here (never erased, never rewritten in the clear): _migrateNetKeysToSealed
+// seals it on the next unlock.
+// Callers (rule 2), and what each does with false:
+//   createNetwork            seals BEFORE it joins and hands over the sealed copy, so it cannot get false
+//   restoreNetwork           refuses with stage 'locked' — nothing was published, so nothing is half-done
+//   importNetworkKey         throws
+//   subscribeNetworkProfile  (rename self-heal) ignores it — the stored record keeps its old name, and the
+//                            next profile event tries again
 function saveNetKey(rec) {
   const sealed = { pub: rec.pub, name: rec.name };
-  if (rec.mnemonic && churchSk) {
-    try { sealed.sealedMnemonic = nip44e(rec.mnemonic, churchSk); } catch { sealed.mnemonic = rec.mnemonic; }
-  } else if (rec.mnemonic) { sealed.mnemonic = rec.mnemonic; }
+  if (rec.mnemonic) {
+    let s = null;
+    if (churchSk) { try { s = nip44e(rec.mnemonic, churchSk); } catch { s = null; } }
+    if (!s) return false;
+    sealed.sealedMnemonic = s;
+  }
   else {
     // A SAVE WITH NO WORDS IN HAND KEEPS THE WORDS ALREADY STORED. The 12 words are the only way to publish
     // as the network, and this used to write just {pub, name} whenever it was handed a record it could not
@@ -2052,6 +2069,7 @@ function saveNetKey(rec) {
     else if (had.mnemonic) sealed.mnemonic = had.mnemonic;
   }
   const a = _netKeysRaw().filter(x => x.pub !== rec.pub); a.push(sealed); lsSet(NETKEYS_LS, JSON.stringify(a));
+  return true;
 }
 function _migrateNetKeysToSealed() {
   if (!churchSk) return;
@@ -8484,26 +8502,6 @@ const STEWARD_CARRY = Object.freeze({
     'finance/',                 // single-writer, sequence-pinned; the relay and console keep them anyway
   ]),
 });
-// WHICH CARRIED TYPES MAY BE KEPT FROM A PARTIAL ANSWER (owner answer u, 2026-11-19, after the Fable audit of the F1
-// round). Rule (k) — the church's copy dated one second after theirs, carried while a box is silent — is safe only where
-// BOTH the relay and the readers keep the newest copy at an address, so a later change sitting on the silent box still
-// wins when it wakes. Every carried type is in exactly one list (removing-a-steward-round-2.test.mjs checks it):
-//   newest  relay map newest-wins (group, roster, meals-settings — gateway LIVE_AT; rota-settings — ROTA_VIS by ts) or no
-//           relay map at all, and every reader newest-first (the shared document store, or its own newest check)
-//   strict  a relay map or a reader that still follows the last arrival — not carried while any relay is silent, listed
-// Until their maps/readers are made newest-wins in a later branch, the strict ones keep the strict rule.
-const STEWARD_CARRY_RULE = Object.freeze({
-  newest: Object.freeze([
-    'trinityone/group:', 'trinityone/category:', 'trinityone/service:', 'trinityone/room:', 'trinityone/booking:',
-    'trinityone/runsheet:', 'trinityone/rota:', 'trinityone/roster:', 'trinityone/msgtags', 'trinityone/rota-settings',
-    'trinityone/verse-prompt', 'trinityone/pinsermon:', 'trinityone/pin:', 'trinityone/hidden:', 'trinityone/reseat:',
-    'trinityone/careteam:', 'trinityone/meals-settings', 'trinityone/carereqstatus:',
-  ]),
-  strict: Object.freeze([
-    'trinityone/joinpolicy:', 'trinityone/nophoto:', 'trinityone/sermon:', 'trinityone/plan:', 'trinityone/devotional:',
-    'trinityone/event:', 'trinityone/care:', 'trinityone/request:',
-  ]),
-});
 // d-tags with no id or church suffix: the SAME string in every church, so another church's own (untagged) copy is
 // not a copy of this one's
 const _CARRY_BARE = ['trinityone/rota-settings', 'trinityone/verse-prompt', 'trinityone/meals-settings', 'trinityone/msgtags'];
@@ -8551,7 +8549,7 @@ async function _carryTemplate(S, blocked, who, pre) {
   if (!dead && d.startsWith('trinityone/careteam:')) {
     let body; try { body = JSON.parse(content); } catch (e) { return { skip: 'unreadable' }; }
     if (!body || typeof body !== 'object' || !Array.isArray(body.pubs)) return { skip: 'unreadable' };
-    // read ONCE by the carry before its read deadline (pre.minors) so it cannot eat the publish window (plan R-L1)
+    // read ONCE by the carry, bounded inside its limit (pre.minors) — a read that never answers must not hold the removal
     const m = (pre && 'minors' in pre) ? pre.minors : ((window.Steward && window.Steward.readMinors) ? await window.Steward.readMinors() : null);
     if (!m || !m.known) return { skip: 'children-unread' };
     const minors = new Set((m.list || []).map(p => String(p || '').toLowerCase()));
@@ -9936,14 +9934,16 @@ window.Steward = {
   // true when the network key IS the church — and that console then published church artifacts as the
   // network (joinpolicy, checkinkey, kind-0) and self-registered the network npub as a church (sim
   // 2026-11-20, D2; the create panel itself pointed people down this road). The right door is the founder
-  // console's "Tap to switch view → Network console". Detection: every created network has at least its
-  // founder's `network:<np>` join declaration, and the relay's N5c gate serves those to the authed network
-  // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
+  // console's "Tap to switch view → Network console". Detection (since 2026-11-21, slice3-F1): the
+  // network's own `netkey:<np>` document, signed by the network key — see _networkKeyProbe. It was the
+  // founder's `network:<np>` join declaration, which any church can write for any np. A network that
+  // never got as far as writing its first netkey document is therefore NOT detected. FAIL-OPEN on purpose when
   // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
   // check and unreachable publishes fail together; the flap window between them is the accepted residual.
   // The richer answer behind _phraseIsNetworkKey, shared with restoreNetwork — which needs the OPPOSITE
   // failure polarity. -> { network, checked, np, name }:
-  //   network  true when the key provably IS a network's (any netkey:/network: copy, even a tombstone)
+  //   network  true when the key provably IS a network's: a netkey:<np> document AUTHORED BY np (any copy,
+  //            even a tombstone). NOTHING ELSE COUNTS — see the decision below.
   //   checked  true when the answer is DEFINITIVE: evidence was seen, or every probed relay answered EOSE
   //            with none. false = the relays could not be asked properly, and "not a network" is unproven.
   // adoptChurch treats !network as "carry on as a church" (fail-open: refusing a church restore on a flaky
@@ -9960,8 +9960,13 @@ window.Steward = {
       //   • netkey:<np> AUTHORED BY np — the ring doc every created network writes about itself. The
       //     relay's FIRST read rule (your own event is always readable by you) serves it to the authed np
       //     unconditionally, and no church key ever authors a netkey doc for its own pubkey.
-      //   • network:<np> join declarations — kept as the second signal for networks whose relays do serve
-      //     them here.
+      //   • network:<np> join declarations — NO LONGER A SIGNAL (integration audit 2026-11-21, slice3-F1).
+      //     A join declaration is written by the JOINING CHURCH under its own key, so its author is not np
+      //     and the relay takes one from any registered church for any np. A co-tenant church could
+      //     therefore publish network:<victim church's pubkey> and make that church's genuine word-restore
+      //     refuse as "a network's words" — and make restoreNetwork store a non-network key as a network.
+      //     The decision rests ONLY on the document nobody but the key itself can sign; the join
+      //     declarations are not even asked for. Client-only: what the relay accepts is unchanged.
       // THE PROBE SET MUST NOT BE EMPTY ON A FRESH CONSOLE (re-sim RS-3 second round, 2026-11-21): the
       // ?adopt= door runs at page load on a KEYLESS profile, where relays() — the gate-ADMITTED set — is
       // still []. The read then answered instantly with nothing, the check fell open, and the church
@@ -9974,11 +9979,13 @@ window.Steward = {
       for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
       const q = await _queryAsKey(probeSet, nsk, [
         { kinds: [30078], authors: [np], '#d': [NETKEY_D + np], limit: 2 },
-        { kinds: [30078], '#d': [NETWORK_D + np], limit: 8 },
         { kinds: [0], authors: [np], limit: 2 },   // the network's own name, for restoreNetwork's confirmation
       ], 4000);
       const evs = (q && Array.isArray(q.events)) ? q.events : [];
-      const network = evs.some(e => e && e.kind === 30078);   // any copy — even a tombstone — marks the KEY as a network's
+      // AUTHOR and D-TAG are checked HERE, not left to the filter: a relay is free to answer a filter with
+      // anything, and an event is only this key's own netkey document if it says so itself.
+      const network = evs.some(e => e && e.kind === 30078 && e.pubkey === np
+        && Array.isArray(e.tags) && e.tags.some(t => Array.isArray(t) && t[0] === 'd' && t[1] === NETKEY_D + np));   // any copy — even a tombstone
       let name = '';
       try {
         const k0 = evs.filter(e => e && e.kind === 0 && e.pubkey === np).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
@@ -12403,6 +12410,15 @@ window.Steward = {
     // Same shape as clearedKnown, for the same reason: bare EOSE also fires on a 4.4s client timeout and on a
     // dropped socket, so it is evidence only WHILE AUTHENTICATED. Audit 2026-09-02 #3.
     const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed()) || lateAuthed();
+    // IS THE PARENT-LINK MAP KNOWN? A FOURTH QUESTION (2026-11-21, integration audit: the cold-list wipe).
+    // Same shape as the two above, on the guardians document's own evidence: we hold it, or the relay finished
+    // while we were logged in. NOT minorsKnown under another name: minorsKnown turns true the moment the minors
+    // document arrives, which can be before the guardians document riding the same REQ has. `guardiansAt` is
+    // the created_at of the copy held here (0 = none) -- so a screen that reads the map from the SEPARATE
+    // subscribeGuardians (which has no evidence of its own: its EOSE is the bare pool one) can tell whether what
+    // it holds is at least this copy. Both ADDITIVE. User of the two fields: approveGuardian (stew-dashboard.jsx).
+    let sawGuardians = false;
+    const guardiansKnown = () => sawGuardians || (sawEose && _isRelayAuthed()) || lateAuthed();
     // …AND WHEN THE LOGIN COMES AFTER THE ANSWER (2026-11-11, audit F1). With this REQ narrowed to its own four
     // documents it is often the FIRST on a fresh socket, and when none of the gated documents exists the relay
     // answers EOSE at once, with no login challenge — so both questions above were asked at a moment no login had
@@ -12424,7 +12440,7 @@ window.Steward = {
     };
     let stopped = false, waiting = null;
     const reaskOnLogin = () => {
-      if (stopped || waiting || !eoseOn.size || (minorsKnown() && clearedKnown())) return;
+      if (stopped || waiting || !eoseOn.size || (minorsKnown() && clearedKnown() && guardiansKnown())) return;
       waiting = () => { waiting = null; if (stopped) return; emit(); reaskOnLogin(); };
       _keyReadAfterAuth(waiting);
     };
@@ -12446,7 +12462,7 @@ window.Steward = {
     // ONLY the Overview renewal banner reads the *Seed fields, and only until clearedKnown. So AUDIT-2026-07-27
     // stays shut AND no fail-closed cold-start becomes fail-open.
     const _sgSeed = _sgClearGet(pub);
-    const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
+    const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, guardiansKnown: guardiansKnown(), guardiansAt: tGuardians, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
     if (_sgSeed) emit();   // paint the last-known clearance instantly via the *Seed fields (approved/expiry stay [])
     // ONE SUBSCRIPTION PER RELAY (2026-11-11, audit of dfd1a66c). The pool-level read this replaced could not say WHICH
     // relay answered: its oneose fires once every relay is "finished", a relay's CLOSED counts as finished while its
@@ -12508,7 +12524,7 @@ window.Steward = {
           emit(); }
         else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); emit(); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; sawGuardians = true; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -13267,9 +13283,12 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  subscribeGuardians(onData) {   // delivers { links: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs } }
+  subscribeGuardians(onData) {   // delivers { links: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs }, at }
     let cur = {}, curClosed = {}, latest = 0;
-    const _emit = () => onData({ links: cur, closed: curClosed });
+    // `at` (2026-11-21, ADDITIVE): the created_at of the copy this map was read from, 0 while none has arrived.
+    // This subscription cannot say whether an empty map is honest; subscribeSafeguard can (guardiansKnown), and
+    // `at` is what lets a caller check the two hold the same copy. User: approveGuardian (stew-dashboard.jsx).
+    const _emit = () => onData({ links: cur, closed: curClosed, at: latest });
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [GUARDIANS_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -16759,9 +16778,16 @@ window.Steward = {
     const m = generateSeedWords();
     const nsk = privateKeyFromSeedWords(m);
     const nPub = getPublicKey(nsk);
+    // SEALED NOW, WHILE THE CHURCH KEY IS KNOWN TO BE HERE (LOW#1, 2026-11-21). The join below is awaited, and
+    // a console that locks during it has no key to seal with afterwards — saveNetKey no longer writes the
+    // words in plain text, so sealing after the join could leave a joined network whose key was never kept.
+    // A seal that fails refuses HERE, before anything is published.
+    let sealedWords = null;
+    try { sealedWords = nip44e(m, churchSk); } catch (e) { sealedWords = null; }
+    if (!sealedWords) return { ok: false, stage: 'start', reason: 'This console could not seal the new network’s key, so nothing was created.' };
     const j = await window.Steward.joinNetwork(nPub, { scopes: NETWORK_SCOPES.slice() });
     if (!j.ok) return { ok: false, stage: j.stage === 'join' || j.stage === 'readback' ? 'join' : j.stage, reason: j.reason };
-    saveNetKey({ pub: nPub, mnemonic: m, name: nm });   // keep the key so this console can publish AS the network
+    saveNetKey({ pub: nPub, sealedMnemonic: sealedWords, name: nm });   // keep the key so this console can publish AS the network
     try { lsSet(NETRING_MINT_LS + nPub, '1'); } catch (x) {}   // N5b: THIS console founded it, so an empty read of its network key may start the FIRST ring (see _netMintBlockers)
     const base = { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
     const pr = await window.Steward.retryNetworkProfile(nPub, nm);
@@ -16872,12 +16898,18 @@ window.Steward = {
   // storing a random phrase would let this console silently publish as a key nobody vouched for — so an
   // unanswered probe REFUSES, with a reason that says to try again. Stores the key and nothing else:
   // no publishes, no registration, no join — the network's documents already exist on the relays.
-  // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'verify'|'relay', reason }
+  // -> { ok, npub, name, already? } | { ok: false, stage: 'words'|'locked'|'verify'|'relay', reason }
   async restoreNetwork(mnemonic) {
     const mm = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (mm.split(' ').length < 12) return { ok: false, stage: 'words', reason: 'Enter the full 12-word recovery phrase.' };
     let np = '';
     try { np = getPublicKey(privateKeyFromSeedWords(mm)); } catch (e) { return { ok: false, stage: 'words', reason: 'That is not a valid recovery phrase — check the words and their order.' }; }
+    // THE WORDS ARE SEALED TO THE CHURCH KEY, so a console without one (locked) cannot keep them — the same
+    // guard networkWords() has (slice3-F4). Refused before the relay is asked.
+    if (!churchSk || !churchPub) return { ok: false, stage: 'locked', reason: 'This console is locked, so a network’s words cannot be stored safely — nothing has been added. Unlock it and try again.' };
+    // A CHURCH'S OWN WORDS ARE NOT A NETWORK'S — the same refusal joinNetwork makes for np === churchPub.
+    // Stored as a network, the church key would be offered in the switcher as a network console.
+    if (np === churchPub) return { ok: false, stage: 'verify', reason: 'These are this church’s own recovery words, not a network’s — nothing has been added.' };
     const held = netKeys().find(r => r.pub === np);
     if (held) return { ok: true, already: true, npub: npubEncode(np), name: held.name || 'Network' };   // idempotent: nothing stored twice
     const p = await window.Steward._networkKeyProbe(mm);
@@ -16886,7 +16918,8 @@ window.Steward = {
       return { ok: false, stage: 'relay', reason: 'Couldn’t check these words with your relay — nothing has been added. Try again when your relay answers.' };
     }
     const name = p.name || 'Network';
-    saveNetKey({ pub: np, mnemonic: mm, name });
+    // the probe above is awaited: a console that locked meanwhile cannot seal, and saveNetKey then writes nothing
+    if (!saveNetKey({ pub: np, mnemonic: mm, name })) return { ok: false, stage: 'locked', reason: 'This console locked before the network’s words could be stored safely — nothing has been added. Unlock it and try again.' };
     try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch (e) {}
     return { ok: true, npub: npubEncode(np), name };
   },
@@ -16895,7 +16928,7 @@ window.Steward = {
     const mm = (mnemonic || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (mm.split(' ').length < 12) throw new Error('Enter the full 12-word recovery phrase.');
     const nsk = privateKeyFromSeedWords(mm); const nPub = getPublicKey(nsk);
-    saveNetKey({ pub: nPub, mnemonic: mm, name: name || 'Network' });
+    if (!saveNetKey({ pub: nPub, mnemonic: mm, name: name || 'Network' })) throw new Error('This console is locked, so the network’s words cannot be stored safely. Unlock it and try again.');
     window.dispatchEvent(new CustomEvent('steward-networks'));
     return { networkPub: nPub, npub: npubEncode(nPub) };
   },
