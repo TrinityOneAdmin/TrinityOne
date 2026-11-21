@@ -22,7 +22,7 @@ import { verifyEvent, getEventHash, generateSecretKey, getPublicKey } from 'nost
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { createServer } from 'node:http';
-import { loadScreen, miniReact, texts } from './render-jsx-screen.mjs';
+import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
 
 const BUNDLES = ['vendor/fellowship.js', 'vendor/steward.js'];
 
@@ -187,7 +187,15 @@ test('the Relays sheet reads Connected for a skew-verified relay — and Not in 
                     body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
       };
       const { RelaysSheet } = loadScreen('app/identity-extras.jsx', ['RelaysSheet'], g);
-      return texts(draw(RelaysSheet, { open: true, onClose() {}, ctx: {} })).join(' ');
+      let tree = draw(RelaysSheet, { open: true, onClose() {}, ctx: {} });
+      // RE-ANCHORED FOR C3 (2026-11-21). The sheet is no longer flat: proved boxes lead, and an UNPROVEN
+      // address — the only row that reads "Not in use" — now sits under a COLLAPSED "Addresses being checked (n)"
+      // disclosure. Open it, as a member does, before reading the words. The behaviour under test is unchanged:
+      // a skew-verified relay still reads Connected (proved, shown without opening anything), and when the
+      // verifier says no the address still reads Not in use.
+      const disc = find(tree, n => n.type === 'button' && n.props && /Addresses being checked/.test(String(n.props['aria-label'] || '')));
+      if (disc.length) { disc[0].props.onClick(); tree = draw(RelaysSheet, { open: true, onClose() {}, ctx: {} }); }
+      return texts(tree).join(' ');
     };
 
     const yes = render(true);

@@ -178,13 +178,17 @@ test('C2: Settings cards are placed — Internet across the top, Churches beside
   try {
     await c.open('set');
     await waitFor(c, `getComputedStyle(document.getElementById('updatesCard')).display !== 'none' && getComputedStyle(document.getElementById('backupCard')).display !== 'none' && document.querySelectorAll('#cfgList .cr-key').length >= 3`, v => v === true);
+    // Backup shares the right-hand column (the .s-fill grid cell) with the Storage-limits card, which now sits
+    // BELOW it (moved there by 6f9d2827, the storage refactor). So the "ends level with Updates" invariant belongs
+    // to that COLUMN (bakCol), not to backupCard alone — backupCard's own bottom now stops above Storage limits.
     const R = JSON.parse(await c.evalIn(`(() => { const R = ${RECT}; return JSON.stringify({ deck: R('.deck3'), pub: R('goPublic'), ch: R(document.getElementById('cfgCount').closest('.card')),
-      name: R('relayNameCard'), serves: R('servesCard'), upd: R('updatesCard'), bak: R('backupCard') }); })()`));
+      name: R('relayNameCard'), serves: R('servesCard'), upd: R('updatesCard'), bak: R('backupCard'),
+      bakCol: R(document.getElementById('backupCard').closest('.s-fill')) }); })()`));
     assert.ok(R.pub.w >= R.deck.w - 2, `Reach members from anywhere does not run the full width (${R.pub.w} of ${R.deck.w})`);
     assert.ok(R.ch.t > R.pub.b - 1 && R.name.t === R.ch.t && R.name.l > R.ch.r, 'Churches and the relay-name card are not side by side under the Internet card');
     assert.ok(R.serves.t > R.name.b - 1 && R.serves.l === R.name.l, 'What this relay serves is not stacked under the relay name');
     assert.equal(R.upd.t, R.bak.t, 'Updates and Backup do not start on the same row');
-    assert.equal(R.upd.b, R.bak.b, 'Updates and Backup do not end level');
+    assert.equal(R.upd.b, R.bakCol.b, 'Updates and the Backup column do not end level');
     assert.ok(R.bak.l > R.upd.r, 'Backup is not beside Updates');
     assert.ok(R.upd.t >= Math.max(R.ch.b, R.serves.b), 'Updates is not below the Churches row');
   } finally { c.stop(); }
