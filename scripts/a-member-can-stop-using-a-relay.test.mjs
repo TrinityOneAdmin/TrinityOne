@@ -10,6 +10,12 @@
 // Two things this must get right, and they pull against each other: the control has to exist, and it must
 // not be a way to lose your church. So it is offered only on rows that have NOT proved themselves, never on
 // a canonical address, and it asks first.
+//
+// RE-ANCHORED FOR C3 (2026-11-21). The sheet is no longer flat: proved boxes lead, and the addresses still
+// being checked — the only rows that carry a Remove — live under a COLLAPSED "Addresses being checked (n)"
+// disclosure. So each test here opens the disclosure before reaching for a Remove. The BEHAVIOUR under test is
+// unchanged and every behavioural assertion below is preserved: an unproved address can still be stopped, it
+// still asks first, and a proved or canonical address still offers no Remove.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
@@ -43,17 +49,24 @@ function sheet({ removed = [] } = {}) {
   let tree = draw(RelaysSheet, { open: true, onClose() {}, ctx: {} });
   const redraw = () => { tree = draw(RelaysSheet, { open: true, onClose() {}, ctx: {} }); return tree; };
   const byLabel = (re) => find(tree, n => n.type === 'button' && n.props && re.test(String(n.props['aria-label'] || '')));
-  return { removed, redraw, byLabel, words: () => texts(tree).join(' ') };
+  // The unproved addresses (the only removable ones) sit under a collapsed disclosure — open it, as a member does.
+  const expand = () => { const d = byLabel(/Addresses being checked/); if (d.length) d[0].props.onClick(); redraw(); };
+  return { removed, redraw, byLabel, expand, words: () => texts(tree).join(' ') };
 }
 
 test('CONTROL: the sheet lists the relays and says which are in use', () => {
   const s = sheet();
+  // The proved box leads, shown Connected; the unproved addresses are named behind the disclosure…
   assert.match(s.words(), /Connected/, 'no proved relay is shown as Connected — re-anchor this test');
-  assert.match(s.words(), /Not in use/, 'no unproved relay is shown — re-anchor this test');
+  assert.match(s.words(), /Addresses being checked/, 'the unproved addresses are not gathered under a disclosure — re-anchor this test');
+  // …and opening it shows them as Not in use.
+  s.expand();
+  assert.match(s.words(), /Not in use/, 'no unproved relay is shown even once the disclosure is open — re-anchor this test');
 });
 
 test('AN UNPROVED ADDRESS CAN BE REMOVED — that control was written and never rendered', () => {
   const s = sheet();
+  s.expand();
   const drop = s.byLabel(new RegExp('Stop using someone-elses-box'));
   assert.equal(drop.length, 1,
     'there is no way to stop using an address that has never shown it belongs to this church. It goes on ' +
@@ -62,6 +75,7 @@ test('AN UNPROVED ADDRESS CAN BE REMOVED — that control was written and never 
 
 test('…it asks first, and only then removes', () => {
   const s = sheet();
+  s.expand();
   s.byLabel(/Stop using someone-elses-box/)[0].props.onClick();
   s.redraw();
   assert.deepEqual(s.removed, [], 'one tap removed a relay with no confirmation');
@@ -73,6 +87,7 @@ test('…it asks first, and only then removes', () => {
 
 test('A RELAY THAT IS CARRYING THIS CHURCH’S TRAFFIC HAS NO REMOVE', () => {
   const s = sheet();
+  s.expand();   // even with every address on screen, the proved box offers no Remove
   assert.equal(s.byLabel(/Stop using our-church/).length, 0,
     'a proved, connected relay offers a Remove button. That is how a member drops the box their church ' +
     'actually runs, by accident, from a phone');
@@ -80,6 +95,7 @@ test('A RELAY THAT IS CARRYING THIS CHURCH’S TRAFFIC HAS NO REMOVE', () => {
 
 test('AND A CANONICAL ADDRESS IS NEVER REMOVABLE', () => {
   const s = sheet();
+  s.expand();
   assert.equal(s.byLabel(/Stop using app\.trinityone\.church/).length, 0,
     'the shipped default can be removed from a member\'s phone. Dropping it is how a member loses their ' +
     'church rather than a stray address');

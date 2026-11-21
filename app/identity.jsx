@@ -1628,6 +1628,26 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const [wbal, setWbal] = useId(() => (window.TrinityWallet ? window.TrinityWallet.balance() : 0));
   useIdE(() => { const W = window.TrinityWallet; if (!W || !W.onChange) return; if (W.init) W.init().catch(() => {}); return W.onChange(setWbal); }, []);
 
+  // NETWORK row count: how many relays have PROVED they are this church's — the same thing the Relays sheet
+  // leads with, counted ONE PER BOX (several addresses that proved one key are one machine), NOT raw addresses.
+  // The gate proves in the background and fires `trinity-relays-verified` when a verdict lands; without
+  // subscribing to it this row painted the count at first render — a stale 0 on a cold boot, before any proof —
+  // and never moved. Mirrors the wallet row above: a live count that follows the engine. Falls back to the
+  // boolean relayVerified, then to the raw list, on an older engine.
+  const relayCount = () => {
+    const FS = window.Fellowship, rs = (FS && FS.relays) || D.RELAYS || [];
+    if (FS && FS.relayDetail) { const keys = new Set(); let n = 0; for (const u of rs) { try { const d = FS.relayDetail(u) || {}; if (!d.verified) continue; if (d.key) { if (keys.has(d.key)) continue; keys.add(d.key); } n++; } catch (e) {} } return n; }
+    if (FS && FS.relayVerified) { let n = 0; for (const u of rs) { try { if (FS.relayVerified(u)) n++; } catch (e) {} } return n; }
+    return rs.length;
+  };
+  const [nRelays, setNRelays] = useId(relayCount);
+  useIdE(() => {
+    const f = () => setNRelays(relayCount());
+    window.addEventListener('trinity-relays', f);
+    window.addEventListener('trinity-relays-verified', f);
+    return () => { window.removeEventListener('trinity-relays', f); window.removeEventListener('trinity-relays-verified', f); };
+  }, []);
+
   // ── edit mode ──
   if (edit) {
     return (
@@ -1896,7 +1916,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         {/* relays + danger */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>NETWORK</div>
         <Group>
-          <Row icon="globe" label="Relays" sub={`${(window.Fellowship && window.Fellowship.relays || D.RELAYS).length} connected`} onClick={() => ctx.openRelays()} />
+          <Row icon="globe" label="Relays" sub={`${nRelays} connected`} onClick={() => ctx.openRelays()} />
         </Group>
         {/* "Start a new identity" hidden for the pilot — too easy to wipe a key by accident */}
         <AppVersion />

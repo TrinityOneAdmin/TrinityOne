@@ -5318,6 +5318,23 @@ window.Fellowship = {
   // proved is still IN the list and still retried — it is simply not published to, and the sheet says so
   // rather than the address quietly ceasing to matter.
   relayVerified(url) { try { return _gate.admits(url, window.Fellowship.churchPub); } catch (e) { return false; } },
+  // C3, audit finding 17: PER-URL VERIFIED DETAIL, so the Relays sheet can group one row per BOX rather than
+  // one per address — a self-hosting box reached by several addresses (a tunnel name plus a LAN address, say)
+  // proves ONE key, and the sheet dedupes on that key, not the URL. `relayVerified` is a boolean and cannot
+  // answer "which of these two rows are the same machine".
+  //
+  // STRICTLY READ-ONLY (CLAUDE.md rule 10). It reads the gate's CACHE only — `_gate.admits` and
+  // `_gate.provedKey` are the two cache-only getters on the gate (admit()/refresh() are the ones that schedule
+  // or await a proof; neither is called here). It opens no socket, writes no store, mutates no map, and never
+  // touches an admission/read/bootstrap path. `key` is the pubkey the gate has an ADMITTED proof for — never
+  // an unauthenticated `relayPub` from /status or NIP-11, which the gate does not store as a proof.
+  relayDetail(url) {
+    const cp = window.Fellowship.churchPub;
+    let verified = false, key = '';
+    try { verified = _gate.admits(url, cp); } catch (e) {}
+    try { key = _gate.provedKey(url, cp) || ''; } catch (e) {}
+    return { verified: !!verified, key };
+  },
   // PROVE THESE ADDRESSES NOW, AND WAIT FOR THE ANSWER. Audit 2026-09-02 #10.
   //
   // `relayVerified` above only reports what the gate ALREADY knows; it starts nothing. So a caller that had
