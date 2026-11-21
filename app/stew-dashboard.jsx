@@ -5852,8 +5852,11 @@ function DashRelaysCard() {
   // pulls were REFUSED for 'trust' — its key fell out of the newest trinityone/relays doc, the a8 shape —
   // the self-healing pass is asked for at once (force past the 10-minute damper), because the cure IS a
   // re-signed trust doc. NEVER for reason 'time': a clock refusal is not a trust-list problem and a re-sign
-  // would churn for nothing. Once per refusal observation: keyed on the relay + the pass stamp it reported,
-  // so one standing refusal asks once per fresh report, not once per render.
+  // would churn for nothing. ONLY once the refusal has reached the SAME 2-pass threshold the card uses to
+  // show "Needs attention" (relaySyncState: refused && refusedPasses >= 2, steward.src.js): a single refused
+  // pass shows nothing red and must not churn a church-wide re-sign over a transient refusal. Once per
+  // refusal observation: keyed on the relay + the pass stamp it reported, so one standing refusal asks once
+  // per fresh report, not once per render.
   const healAskedFor = React.useRef(new Set());
   React.useEffect(() => {
     let ok = true;
@@ -5862,7 +5865,7 @@ function DashRelaysCard() {
     // black-holed relay never holds the others back. A re-read keeps the old rows until each is replaced.
     const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e);
       try {
-        if (e.church && e.church.state === 'refused' && e.reason === 'trust') {
+        if (e.church && e.church.state === 'refused' && e.reason === 'trust' && (Number(e.church.refusedPasses) || 0) >= 2) {
           const hk = normUrl(e.url) + '|' + (Number(e.church.at) || 0);
           if (!healAskedFor.current.has(hk)) {
             healAskedFor.current.add(hk);

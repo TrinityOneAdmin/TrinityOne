@@ -448,10 +448,13 @@ function relaysCard(stewardExtra, rows) {
   const mod = new Function(...names, JS + '\nreturn { DashRelaysCard };')(...names.map(k => globals[k]));
   return { draw: () => draw(mod.DashRelaysCard, {}) };
 }
-const chip = (state, reason, at) => ({ url: 'wss://relay.grace.example/relay', sync: null,
-  church: { state, reason, at, lastReachedAt: 0, refusedPasses: 2, running: false, peers: 1 },
-  state: state === 'refused' ? (reason === 'time' ? 'clock' : 'attention') : 'synced',
-  label: '', at, lastReachedAt: 0, refusedPasses: 2, reason: reason || '' });
+// Mirrors the entry relaySyncStates hands onEach: the RAW church block plus the spread of relaySyncState.
+// `passes` is the refused-pass counter; relaySyncState only reaches 'attention'/'clock' at passes >= 2, so a
+// 1-pass refusal spreads to state 'unknown' — exactly the "one refused pass shows nothing red" rule.
+const chip = (state, reason, at, passes = 2) => ({ url: 'wss://relay.grace.example/relay', sync: null,
+  church: { state, reason, at, lastReachedAt: 0, refusedPasses: passes, running: false, peers: 1 },
+  state: state === 'refused' ? (passes >= 2 ? (reason === 'time' ? 'clock' : 'attention') : 'unknown') : 'synced',
+  label: '', at, lastReachedAt: 0, refusedPasses: passes, reason: reason || '' });
 
 test('POINT OF USE: a church pass REFUSED for trust asks for a forced heal, once per observation — and a clock refusal never does', async () => {
   const calls = [];
@@ -484,6 +487,28 @@ test('POINT OF USE: a church pass REFUSED for trust asks for a forced heal, once
   });
   card3.draw(); await settle(); card3.draw(); await settle();
   assert.equal(calls3.length, 1);
+});
+
+test('POINT OF USE: a trust refusal asks for NO heal until the SAME 2-pass threshold the card uses for "Needs attention" — one refused pass does nothing, two passes fire once', async () => {
+  // relaySyncState reddens the card to "Needs attention" only at refusedPasses >= 2 (steward.src.js); a single
+  // refused pass shows nothing. The forced heal must wait for that exact gate, or one transient refusal churns a
+  // church-wide re-sign before the card even reddens. Cut the wire in DashRelaysCard's effect and this goes red.
+  const one = [];
+  const k1 = relaysCard({
+    autoSyncHeal: async (o) => { one.push(o); return {}; },
+    relaySyncStates: async (onEach) => { const e = chip('refused', 'trust', 1700000200, 1); onEach(e); return [e]; },
+  });
+  k1.draw(); await settle(); k1.draw(); await settle();
+  assert.equal(one.length, 0,
+    'A SINGLE REFUSED-FOR-TRUST PASS FORCED A HEAL — a transient refusal now churns a church-wide re-sign before the card even says "Needs attention": ' + JSON.stringify(one));
+  const two = [];
+  const k2 = relaysCard({
+    autoSyncHeal: async (o) => { two.push(o); return {}; },
+    relaySyncStates: async (onEach) => { const e = chip('refused', 'trust', 1700000200, 2); onEach(e); return [e]; },
+  });
+  k2.draw(); await settle(); k2.draw(); await settle();
+  assert.deepEqual(two, [{ force: true }],
+    'THE HEAL NO LONGER FIRES AT THE 2-PASS THRESHOLD — the a8 shape stays broken: ' + JSON.stringify(two));
 });
 
 // ── POINT OF USE 3: a Connect that landed queues a forced heal, after the queue slot ────────────────────
