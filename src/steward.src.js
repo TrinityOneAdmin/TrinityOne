@@ -6948,6 +6948,99 @@ async function _writeRelayPrefs(mutate) {
   });
 }
 
+// ── B2: THE AUTO-JOIN PASS (console, background, after syncHeal on the same triggers) ─────────────────────────
+async function autoJoinPublicRelays() {
+  if (!sk || !pub) return { ran: false };
+  if (actingChurch || _viewingNetwork()) return { ran: false, skipped: 'not this church’s own console' };
+  const sk0 = sk, pub0 = pub;
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  // 1. SKIP UNLESS own console, prefs read COMPLETE, publicAuto !== false. An incomplete read FAILS CLOSED (13b).
+  const { prefs, complete } = await _readRelayPrefs();
+  if (moved()) return { ran: false, unknown: true };
+  if (!complete) return { ran: false, incomplete: true };
+  const publicAuto = prefs ? prefs.publicAuto !== false : true;     // absent + complete = ON (the opt-out default)
+  if (!publicAuto) return { ran: false, optedOut: true };
+  const publicTarget = _clampPublicTarget(prefs && 'publicTarget' in prefs ? prefs.publicTarget : PUBLIC_TARGET_DEFAULT);
+  const chosen = _mergeChosen(prefs && prefs.chosen, []);
+  // 2. CAP CHECK AGAINST LISTED, NOT ANSWERING: community cap (target minus canonical pins) minus the chosen count.
+  //    An outage changes neither, so it never creates a deficit; `0` target yields a 0 cap (opt out of new adoption).
+  const cap = _communityCap(publicTarget);
+  let deficit = cap - chosen.length;
+  if (deficit <= 0) return { ran: false, atTarget: true, chosen: chosen.length, cap };
+  // 3. CANDIDATES from the OPEN /relay-names/offers directory, ranked FASTEST MEASURED ACCESS FIRST (reuse the
+  //    existing Auto-find NIP-11 timing). Each offer has already passed admitRemoteRelay + _probeRelayEnforces.
+  let offers = [];
+  try { offers = rankOffersByLatency(await discoverRelayOffers(null, null)); } catch (e) { offers = []; }
+  if (moved()) return { ran: false, unknown: true };
+  const have = new Set(relays());
+  const chosenKeys = new Set(chosen.map(c => c.pubkey));
+  let listedKeys = new Set();
+  try { listedKeys = new Set((await relayNetEntries(pub)).map(e => String((e && e.pubkey) || '').toLowerCase())); } catch (e) {}
+  if (moved()) return { ran: false, unknown: true };
+  // Tombstoned keys: a box a steward Removed must not be auto-re-added (plan A2). Absent is normal.
+  let tombKeys = new Set();
+  try {
+    const t = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true);
+    const tev = (t && t.ev && t.ev.pubkey === pub) ? t.ev : null;
+    if (tev) { let ts = []; try { ts = JSON.parse(tev.content || '[]'); } catch (e) { ts = []; }
+      for (const x of (Array.isArray(ts) ? ts : [])) { const p = String((x && x.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) tombKeys.add(p); } }
+  } catch (e) {}
+  if (moved()) return { ran: false, unknown: true };
+  const name = _ownChurchName();
+  const added = [], skipped = [];
+  // (The loop's address is `addr`, not `url`, deliberately: the token `signRelay(url)` must not appear in the bundle
+  // before the Steward.signRelay method definition, or a test anchored on that bare string lifts this call instead.)
+  for (const o of offers) {
+    if (deficit <= 0) break;
+    const addr = (o && o.url) || '';
+    if (!addr) continue;
+    if (have.has(addr)) { skipped.push([addr, 'listed']); continue; }                         // already in the publish set
+    if (_isDeclined(addr)) { skipped.push([addr, 'declined']); continue; }                     // a steward dropped it before
+    if (isSharedRelaySpelling(addr)) { skipped.push([addr, 'shared']); continue; }             // never a 2nd spelling of the pool
+    // 4a. IDENTITY PROOF AT THE ADDRESS — the key is not carried by the offers directory, so prove it here.
+    let proof = null; try { proof = await verifyRelayIdentity(addr); } catch (e) { proof = null; }
+    if (moved()) return { ran: false, unknown: true };
+    const p = String((proof && proof.relayPub) || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(p)) { skipped.push([addr, 'unproven']); continue; }
+    if (chosenKeys.has(p) || listedKeys.has(p)) { skipped.push([addr, 'already']); continue; } // key already in the church's set
+    if (tombKeys.has(p)) { skipped.push([addr, 'tombstoned']); continue; }
+    // 4b. REGISTER THE CHURCH ON THE BOX BEFORE IT COUNTS (registerAtRelay, NOT selfRegister). 403 (invite-only/
+    //     private) and 429 (full) — and any other refusal — skip to the next candidate; a box counts only once
+    //     registration is confirmed.
+    let reg = null; try { reg = await window.Steward.registerAtRelay(addr, name); } catch (e) { reg = { ok: false }; }
+    if (moved()) return { ran: false, unknown: true };
+    if (!reg || !reg.ok) { skipped.push([addr, 'register:' + ((reg && reg.status) || 'err')]); continue; }
+    // 5. ADOPT exactly as manual Auto-find: add + name/key binding + signRelay (which signs it into relay-net, clears
+    //    any tombstone, fires the forced heal and republishes the authoritative 10002) + record in `chosen`.
+    try { window.Steward.addRelay(addr); } catch (e) {}
+    try { window.Steward.rememberRelayName((o && o.name) || '', addr, p); } catch (e) {}
+    try { await window.Steward.signRelay(addr); } catch (e) {}
+    if (moved()) return { ran: false, unknown: true };
+    chosen.push({ pubkey: p, url: addr, name: (o && o.name) || '' });
+    chosenKeys.add(p); listedKeys.add(p); have.add(addr);
+    added.push({ url: addr, pubkey: p });
+    deficit--;
+  }
+  // Record the CHURCH-WIDE chosen set so the cap is per-church (newest-wins merge), then publish the authoritative
+  // 10002 once more from the freshly re-signed relay-net doc. 6. Nothing is ever auto-removed.
+  if (added.length) {
+    try { await _writeRelayPrefs(prev => ({ ...prev, chosen: _mergeChosen(prev && prev.chosen, chosen) })); } catch (e) {}
+    try { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } catch (e) {}
+  }
+  return { ran: true, added, skipped, chosen: chosen.length, cap };
+}
+// THE TRIGGER VALVE, the same shape as autoSyncHeal's: event-driven off the console's existing churn (no new
+// wall-clock timer — the 2G rule), at most one pass per 10 minutes, `force` bypasses the damper once.
+let _autoJoinLastAt = 0;
+async function autoJoinPublicRelaysAuto(opts) {
+  const force = !!(opts && opts.force);
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+  const t = Date.now();
+  if (!force && t - _autoJoinLastAt < 600000) return { ran: false, debounced: true };
+  _autoJoinLastAt = t;
+  try { return await autoJoinPublicRelays(); } catch (e) { return { ran: false, unknown: true }; }
+}
+
 // ── PENDING TOMBSTONES (plan A2, FIX 2) ─────────────────────────────────────────────────────────────────
 //
 // The invariant _closeSyncTrust must hold: a key PRUNED from trinityone/relays is ALWAYS tombstoned, even if the
@@ -9906,6 +9999,10 @@ window.Steward = {
   // and _writeRelayPrefs returns `skipped` on this console before it even tries).
   setPublicAuto(on) { return _writeRelayPrefs((prev) => ({ ...prev, publicAuto: !!on })); },
   setPublicTarget(n) { const v = _clampPublicTarget(n); return _writeRelayPrefs((prev) => ({ ...prev, publicTarget: v })); },
+  // B2: the background auto-join pass. `autoJoinPublicRelays` is the raw pass; `autoJoinPublicRelaysAuto` is what the
+  // console's triggers call (same 10-minute damper as autoSyncHeal, after it, on the same signals).
+  autoJoinPublicRelays: () => autoJoinPublicRelays(),
+  autoJoinPublicRelaysAuto,
   // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
   // C1: a Remove that actually changed the church's signed list republishes the authoritative kind-10002 so
   // member phones — which retire a row the newest 10002 omits — learn the drop and, with the member-side

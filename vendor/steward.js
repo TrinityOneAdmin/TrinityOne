@@ -20970,6 +20970,151 @@ zoo`.split("\n");
       }
     });
   }
+  async function autoJoinPublicRelays() {
+    if (!sk || !pub) return { ran: false };
+    if (actingChurch || _viewingNetwork()) return { ran: false, skipped: "not this church\u2019s own console" };
+    const sk0 = sk, pub0 = pub;
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const { prefs, complete } = await _readRelayPrefs();
+    if (moved()) return { ran: false, unknown: true };
+    if (!complete) return { ran: false, incomplete: true };
+    const publicAuto = prefs ? prefs.publicAuto !== false : true;
+    if (!publicAuto) return { ran: false, optedOut: true };
+    const publicTarget = _clampPublicTarget(prefs && "publicTarget" in prefs ? prefs.publicTarget : PUBLIC_TARGET_DEFAULT);
+    const chosen = _mergeChosen(prefs && prefs.chosen, []);
+    const cap = _communityCap(publicTarget);
+    let deficit = cap - chosen.length;
+    if (deficit <= 0) return { ran: false, atTarget: true, chosen: chosen.length, cap };
+    let offers = [];
+    try {
+      offers = rankOffersByLatency(await discoverRelayOffers(null, null));
+    } catch (e) {
+      offers = [];
+    }
+    if (moved()) return { ran: false, unknown: true };
+    const have = new Set(relays());
+    const chosenKeys = new Set(chosen.map((c) => c.pubkey));
+    let listedKeys = /* @__PURE__ */ new Set();
+    try {
+      listedKeys = new Set((await relayNetEntries(pub)).map((e) => String(e && e.pubkey || "").toLowerCase()));
+    } catch (e) {
+    }
+    if (moved()) return { ran: false, unknown: true };
+    let tombKeys = /* @__PURE__ */ new Set();
+    try {
+      const t = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
+      const tev = t && t.ev && t.ev.pubkey === pub ? t.ev : null;
+      if (tev) {
+        let ts = [];
+        try {
+          ts = JSON.parse(tev.content || "[]");
+        } catch (e) {
+          ts = [];
+        }
+        for (const x of Array.isArray(ts) ? ts : []) {
+          const p = String(x && x.pubkey || "").toLowerCase();
+          if (/^[0-9a-f]{64}$/.test(p)) tombKeys.add(p);
+        }
+      }
+    } catch (e) {
+    }
+    if (moved()) return { ran: false, unknown: true };
+    const name = _ownChurchName();
+    const added = [], skipped = [];
+    for (const o of offers) {
+      if (deficit <= 0) break;
+      const addr = o && o.url || "";
+      if (!addr) continue;
+      if (have.has(addr)) {
+        skipped.push([addr, "listed"]);
+        continue;
+      }
+      if (_isDeclined(addr)) {
+        skipped.push([addr, "declined"]);
+        continue;
+      }
+      if (isSharedRelaySpelling(addr)) {
+        skipped.push([addr, "shared"]);
+        continue;
+      }
+      let proof = null;
+      try {
+        proof = await verifyRelayIdentity(addr);
+      } catch (e) {
+        proof = null;
+      }
+      if (moved()) return { ran: false, unknown: true };
+      const p = String(proof && proof.relayPub || "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p)) {
+        skipped.push([addr, "unproven"]);
+        continue;
+      }
+      if (chosenKeys.has(p) || listedKeys.has(p)) {
+        skipped.push([addr, "already"]);
+        continue;
+      }
+      if (tombKeys.has(p)) {
+        skipped.push([addr, "tombstoned"]);
+        continue;
+      }
+      let reg = null;
+      try {
+        reg = await window.Steward.registerAtRelay(addr, name);
+      } catch (e) {
+        reg = { ok: false };
+      }
+      if (moved()) return { ran: false, unknown: true };
+      if (!reg || !reg.ok) {
+        skipped.push([addr, "register:" + (reg && reg.status || "err")]);
+        continue;
+      }
+      try {
+        window.Steward.addRelay(addr);
+      } catch (e) {
+      }
+      try {
+        window.Steward.rememberRelayName(o && o.name || "", addr, p);
+      } catch (e) {
+      }
+      try {
+        await window.Steward.signRelay(addr);
+      } catch (e) {
+      }
+      if (moved()) return { ran: false, unknown: true };
+      chosen.push({ pubkey: p, url: addr, name: o && o.name || "" });
+      chosenKeys.add(p);
+      listedKeys.add(p);
+      have.add(addr);
+      added.push({ url: addr, pubkey: p });
+      deficit--;
+    }
+    if (added.length) {
+      try {
+        await _writeRelayPrefs((prev) => ({ ...prev, chosen: _mergeChosen(prev && prev.chosen, chosen) }));
+      } catch (e) {
+      }
+      try {
+        const pl = window.Steward.publishRelayList();
+        if (pl && pl.catch) pl.catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+    return { ran: true, added, skipped, chosen: chosen.length, cap };
+  }
+  var _autoJoinLastAt = 0;
+  async function autoJoinPublicRelaysAuto(opts) {
+    const force = !!(opts && opts.force);
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+    const t = Date.now();
+    if (!force && t - _autoJoinLastAt < 6e5) return { ran: false, debounced: true };
+    _autoJoinLastAt = t;
+    try {
+      return await autoJoinPublicRelays();
+    } catch (e) {
+      return { ran: false, unknown: true };
+    }
+  }
   var TOMB_PENDING_LS = "trinityone.steward.tomb-pending.";
   function _pendingTomb() {
     if (!pub) return [];
@@ -23520,6 +23665,10 @@ zoo`.split("\n");
       const v = _clampPublicTarget(n);
       return _writeRelayPrefs((prev) => ({ ...prev, publicTarget: v }));
     },
+    // B2: the background auto-join pass. `autoJoinPublicRelays` is the raw pass; `autoJoinPublicRelaysAuto` is what the
+    // console's triggers call (same 10-minute damper as autoSyncHeal, after it, on the same signals).
+    autoJoinPublicRelays: () => autoJoinPublicRelays(),
+    autoJoinPublicRelaysAuto,
     // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
     // C1: a Remove that actually changed the church's signed list republishes the authoritative kind-10002 so
     // member phones — which retire a row the newest 10002 omits — learn the drop and, with the member-side

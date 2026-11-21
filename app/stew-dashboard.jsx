@@ -1211,6 +1211,11 @@ function KeyDistributor() {
       // heal that finds nothing changed publishes nothing. Guarded like the line above so an older bundle
       // without the method changes nothing.
       try { const h = window.Steward && window.Steward.autoSyncHeal && window.Steward.autoSyncHeal(); if (h && h.catch) h.catch(() => {}); } catch (e) {}
+      // …and run the community-relay auto-join pass AFTER the heal, on the SAME signals (plan B2). It has its own
+      // 10-minute damper and skips unless this is the church's own console, prefs read COMPLETE and publicAuto is on,
+      // so this call is cheap to repeat; a church at target, or one that opted out, adopts nothing. Guarded like the
+      // lines above so an older bundle without the method changes nothing.
+      try { const j = window.Steward && window.Steward.autoJoinPublicRelaysAuto && window.Steward.autoJoinPublicRelaysAuto(); if (j && j.catch) j.catch(() => {}); } catch (e) {}
     };
     const t = setTimeout(run, 4000);
     // 'steward-relays': the tunnel address or relay name changed (setSelfPublicRelay / setSelfRelayName), so
