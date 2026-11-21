@@ -1219,6 +1219,16 @@ function KeyDistributor() {
   React.useEffect(() => {
     const run = () => {
       try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+      // …and heal the church's SYNC list on the same signals (plan A1 trigger a). The engine itself holds
+      // the 10-minute damper (autoSyncHeal) and the one signing queue, so this call is cheap to repeat; a
+      // heal that finds nothing changed publishes nothing. Guarded like the line above so an older bundle
+      // without the method changes nothing.
+      try { const h = window.Steward && window.Steward.autoSyncHeal && window.Steward.autoSyncHeal(); if (h && h.catch) h.catch(() => {}); } catch (e) {}
+      // …and run the community-relay auto-join pass AFTER the heal, on the SAME signals (plan B2). It has its own
+      // 10-minute damper and skips unless this is the church's own console, prefs read COMPLETE and publicAuto is on,
+      // so this call is cheap to repeat; a church at target, or one that opted out, adopts nothing. Guarded like the
+      // lines above so an older bundle without the method changes nothing.
+      try { const j = window.Steward && window.Steward.autoJoinPublicRelaysAuto && window.Steward.autoJoinPublicRelaysAuto(); if (j && j.catch) j.catch(() => {}); } catch (e) {}
     };
     const t = setTimeout(run, 4000);
     // 'steward-relays': the tunnel address or relay name changed (setSelfPublicRelay / setSelfRelayName), so
@@ -5900,12 +5910,33 @@ function DashRelaysCard() {
   // beside a relay whose own answer is still outstanding, and a click while that is so simply starts a fresh read.
   const [pendingUrls, setPendingUrls] = React.useState([]);
   const normUrl = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  // A TRUST REFUSAL REQUESTS A HEAL (plan A1 trigger b). When a relay's per-church block says this church's
+  // pulls were REFUSED for 'trust' — its key fell out of the newest trinityone/relays doc, the a8 shape —
+  // the self-healing pass is asked for at once (force past the 10-minute damper), because the cure IS a
+  // re-signed trust doc. NEVER for reason 'time': a clock refusal is not a trust-list problem and a re-sign
+  // would churn for nothing. ONLY once the refusal has reached the SAME 2-pass threshold the card uses to
+  // show "Needs attention" (relaySyncState: refused && refusedPasses >= 2, steward.src.js): a single refused
+  // pass shows nothing red and must not churn a church-wide re-sign over a transient refusal. Once per
+  // refusal observation: keyed on the relay + the pass stamp it reported, so one standing refusal asks once
+  // per fresh report, not once per render.
+  const healAskedFor = React.useRef(new Set());
   React.useEffect(() => {
     let ok = true;
     const got = new Map();
     // Rows paint as each relay's answer lands (relaySyncStates reads them all at once, with no time cutoff), so one
     // black-holed relay never holds the others back. A re-read keeps the old rows until each is replaced.
-    const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e); setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
+    const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e);
+      try {
+        if (e.church && e.church.state === 'refused' && e.reason === 'trust' && (Number(e.church.refusedPasses) || 0) >= 2) {
+          const hk = normUrl(e.url) + '|' + (Number(e.church.at) || 0);
+          if (!healAskedFor.current.has(hk)) {
+            healAskedFor.current.add(hk);
+            const h = window.Steward && window.Steward.autoSyncHeal && window.Steward.autoSyncHeal({ force: true });
+            if (h && h.catch) h.catch(() => {});
+          }
+        }
+      } catch (err) {}
+      setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
     (async () => {
       setPendingUrls(status.map(r => normUrl(r && r.url)));
       try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates(onEach) : null; if (ok && m) setSyncStates(m); } catch {}
@@ -6372,7 +6403,10 @@ function WizAddRelay() {
 // THE CONSENT LINE (owner, 2026-10-21). Shown on the first tap of Add relay / Connect / Auto-find / the setup
 // wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
 // relay is the church vouching for it to every member's phone, not a connection test.
-const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+// A3 (owner Q4, 2026-11-20): a Connect now grants SYNC trust — signRelay chains a forced syncHeal that signs the
+// proved box into trinityone/relays (the full-corpus authorisation). The owner confirmed "add can say that", so the
+// consent names it in one plain sentence AFTER the existing one (kept verbatim so every test that anchors on it holds).
+const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it. It will hold the full copy of your church’s records.';
 // WHAT A REMOVE ANSWERED: whether the row may leave this screen (`drop`), and what to tell the steward (`note`, ''
 // when there is nothing to say). Every answer that is not a success says so (third audit, finding 3), and the row
 // leaves the screen only once the church's list no longer names the relay, or never did (fourth audit, finding 2).
@@ -6391,7 +6425,7 @@ function dropOutcome(r, url) {
   // answer). If that one is gone for good it would block every change for ever, so the steward is told the way out.
   return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
 }
-const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them. Each will hold the full copy of your church’s records.';
 // How many of the fastest public relays Auto-find shows before "Show all" (owner decision 2026-10-29).
 const RELAY_OFFERS_SHOWN = 5;
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
@@ -6805,7 +6839,82 @@ function DashRelayHistoryCard() {
         })() : null}
         {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
       </Panel>
+        {/* community relays on by default (plan B1): one switch + how many public boxes to aim for */}
+      <DashCommunityRelaysCard />
     </React.Fragment>
+  );
+}
+
+// COMMUNITY RELAYS ON BY DEFAULT (plan B1). One switch (publicAuto) and one target control (publicTarget), both bound
+// to the church-signed, owner-only trinityone/relayprefs document through window.Steward. The switch DRIVES
+// publicAuto — a tap calls setPublicAuto — so a point-of-use test that renders this card and presses it goes red if
+// the wire is deleted (CLAUDE.md rule 1). Owner-only like the sync controls beside it (aria-disabled, not disabled, so
+// a delegate's press still answers on screen — there is no hover on a phone).
+function DashCommunityRelaysCard() {
+  const [prefs, setPrefs] = React.useState(null);   // { complete, publicAuto, publicTarget, chosen }
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  const _churchOnly = !stewCapState('content').owner;
+  React.useEffect(() => {
+    let live = true;
+    try { const p = window.Steward && window.Steward.relayPrefs && window.Steward.relayPrefs(); if (p && p.then) p.then((v) => { if (live) setPrefs(v); }, () => {}); } catch (e) {}
+    return () => { live = false; };
+  }, []);
+  const setAuto = async (on) => {
+    if (_churchOnly) { setMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.Steward.setPublicAuto(on);
+      if (r && r.written) { setPrefs((p) => (p ? { ...p, publicAuto: on } : p)); setMsg({ ok: true, text: on ? 'Community relays on — new backups are found automatically.' : 'Community relays off — only relays you add yourself are used.' }); }
+      else setMsg({ ok: false, text: 'Couldn’t save that yet — try again when your relays are answering.' });
+    } catch (e) { setMsg({ ok: false, text: (e && e.message) || 'Couldn’t save that.' }); }
+    setBusy(false);
+  };
+  const setTarget = async (n) => {
+    if (_churchOnly) { setMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
+    const v = Math.max(0, Math.min(10, Math.floor(Number(n) || 0)));
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.Steward.setPublicTarget(v);
+      if (r && r.written) setPrefs((p) => (p ? { ...p, publicTarget: v } : p));
+      else setMsg({ ok: false, text: 'Couldn’t save that yet — try again when your relays are answering.' });
+    } catch (e) { setMsg({ ok: false, text: (e && e.message) || 'Couldn’t save that.' }); }
+    setBusy(false);
+  };
+  const on = !!(prefs && prefs.publicAuto === true);
+  const checking = !prefs || prefs.publicAuto == null;
+  const target = (prefs && Number.isFinite(prefs.publicTarget)) ? prefs.publicTarget : 5;
+  return (
+    <Panel title="Community relays">
+      {/* B3 (owner Q1, 2026-11-20): the one plain consent line for the default-on behaviour — up to `target` boxes,
+          added only unless this is turned off, and only ones that PROVE they run TrinityOne and are REGISTERED to this
+          church (B2: identity proof + registerAtRelay before a box counts). B4: the high-risk opt-out guidance is one
+          tap away, right here on the switch (owner Q4). */}
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Other churches’ relays can keep a backup of your records, so your data survives even if your own relay goes down. Unless you turn this off, up to {target} are added automatically — fastest first, and only ones that prove they run TrinityOne and accept your church. <StewHelpLink id="console-high-risk-relays" label="In a high-risk situation?" /></div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setAuto(checking ? true : !on)} disabled={busy}
+          role="switch" aria-checked={on}
+          aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined}
+          aria-label="Use community relays automatically"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : (checking ? 0.7 : 1), fontFamily: 'var(--font-ui)' }}>
+          <span aria-hidden="true" style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, flexShrink: 0, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+            <span style={{ position: 'absolute', top: 3, left: on ? 21 : 3, width: 18, height: 18, borderRadius: 999, background: 'var(--surface)', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{_churchOnly ? <Icon name="lock" size={13} color="currentColor" /> : null}{busy ? 'Saving…' : checking ? 'Checking…' : (on ? 'Using community relays' : 'Not using community relays')}</span>
+        </button>
+      </div>
+      {on ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Aim for</span>
+          <button aria-label="Fewer community relays" disabled={busy || _churchOnly} onClick={() => setTarget(target - 1)} className="sk-btn sk-btn--ghost" style={{ padding: '4px 11px', fontSize: 15, lineHeight: 1, opacity: (busy || _churchOnly) ? 0.5 : 1 }}>−</button>
+          <span aria-label="Public relay limit" style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)', minWidth: 16, textAlign: 'center' }}>{target}</span>
+          <button aria-label="More community relays" disabled={busy || _churchOnly} onClick={() => setTarget(target + 1)} className="sk-btn sk-btn--ghost" style={{ padding: '4px 11px', fontSize: 15, lineHeight: 1, opacity: (busy || _churchOnly) ? 0.5 : 1 }}>+</button>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>public relays in all</span>
+        </div>
+      ) : null}
+      {msg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: msg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg.text}</div> : null}
+    </Panel>
   );
 }
 

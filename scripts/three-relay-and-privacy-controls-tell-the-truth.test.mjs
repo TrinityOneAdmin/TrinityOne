@@ -104,12 +104,16 @@ const relaysSheet = (startVerified) => {
   const setVerified = (v) => { state.verified = v; for (const fn of listeners['trinity-relays-verified'] || []) fn(); };
   const render = (open) => { let t; for (let i = 0; i < 3; i++) t = draw(mod.RelaysSheet, { open, onClose() {}, ctx: {} }); return t; };
   const labels = (t) => find(t, n => n.type === 'button').map(b => (b.props && b.props['aria-label']) || '').filter(Boolean);
-  return { render, labels, setVerified, armed: (t) => labels(t).some(l => /^Confirm: stop using/.test(l)) };
+  // C3 re-anchor: an unproved relay — the only removable one — now sits under a collapsed "Addresses being
+  // checked" disclosure. Open it the way a member would before reaching the Remove control underneath.
+  const openDisclosure = (t) => { const b = find(t, n => n.type === 'button' && /Addresses being checked/.test((n.props && n.props['aria-label']) || ''))[0]; if (b) b.props.onClick(); };
+  return { render, labels, setVerified, openDisclosure, armed: (t) => labels(t).some(l => /^Confirm: stop using/.test(l)) };
 };
 
 test('an abandoned "stop using" does not leave the destructive button armed', () => {
-  const { render, labels, armed } = relaysSheet(false);
+  const { render, labels, armed, openDisclosure } = relaysSheet(false);
   let t = render(true);
+  openDisclosure(t); t = render(true);   // reveal the unproved row and its Remove control
   assert.equal(armed(t), false, 'fixture: the sheet opened already armed');
   const ask = find(t, n => n.type === 'button' && /asks you to confirm/.test((n.props && n.props['aria-label']) || ''))[0];
   assert.ok(ask, 'fixture: no "stop using" button to press — re-anchor this test');
@@ -117,7 +121,7 @@ test('an abandoned "stop using" does not leave the destructive button armed', ()
   assert.equal(armed(render(true)), true, 'fixture: pressing "stop using" did not arm the confirmation');
 
   render(false);                       // the member closes the sheet without deciding
-  const back = render(true);           // …and opens it again later
+  const back = render(true);           // …and opens it again later (the disclosure stays open)
   assert.equal(armed(back), false,
     'the sheet reopened with "Confirm: stop using" already armed, sitting in the slot the harmless "asks ' +
     'you to confirm" button normally occupies — same row, same place, one tap and the relay is gone with no ' +
@@ -130,8 +134,9 @@ test('…and it does not survive the relay connecting and lapsing again', () => 
   // While a relay is connected `canRemove` is false and the whole control disappears; when it lapses the row
   // comes back — and with `confirmDrop` still holding that url, it came back ARMED, in the slot the harmless
   // button normally occupies. Found by an adversarial review of the sheet-close fix, 2026-09-15.
-  const { render, setVerified, armed, labels } = relaysSheet(false);
+  const { render, setVerified, armed, labels, openDisclosure } = relaysSheet(false);
   let t = render(true);
+  openDisclosure(t); t = render(true);   // reveal the unproved row and its Remove control
   const ask = find(t, n => n.type === 'button' && /asks you to confirm/.test((n.props && n.props['aria-label']) || ''))[0];
   assert.ok(ask, 'fixture: no "stop using" button to press');
   ask.props.onClick();
@@ -139,7 +144,7 @@ test('…and it does not survive the relay connecting and lapsing again', () => 
 
   setVerified(true);  render(true);      // the relay proves itself — the control vanishes
   setVerified(false);                    // …and lapses again
-  const back = render(true);
+  const back = render(true);             // the disclosure stays open from above; the row returns in it
   assert.equal(armed(back), false,
     'the relay reconnected and lapsed, and the DESTRUCTIVE button came back already armed with the member ' +
     'having done nothing at all. Clearing on sheet-close is not enough; clear it when the row stops being ' +

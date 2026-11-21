@@ -1583,6 +1583,20 @@ const FIN_ATTACHMENT_MAX = parseInt(process.env.RELAY_FIN_ATTACHMENT_MAX, 10) ||
 const ROOM_D = D.ROOM, BOOKING_D = D.BOOKING;   // shared room calendar (church-only writes)
 const RUNSHEET_D = D.RUNSHEET;   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
 const RELAYS_D = D.RELAYS;   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
+// ITS TOMBSTONE SIBLING (plan A2): d=trinityone/relays-removed, church-signed, content=[{pubkey,at}]. The console
+// writes it when a steward Removes a relay and reads it back to prune/never-re-add that key; the RELAY NEVER
+// INGESTS it (note() has no branch below — it only has to STORE and SERVE it so another console's heal can read
+// it). Owner-only at the door, the same CHURCH_PUBS.has rule as RELAYS_D, for the same CLAUDE.md rule-10 reason:
+// it decides which boxes LOSE the whole corpus, so a delegated steward is not the authority for it.
+const RELAYS_REMOVED_D = D.RELAYS_REMOVED;
+// THE COMMUNITY-RELAY OPT-OUT + CHOSEN SET (plan B1): d=trinityone/relayprefs, church-signed,
+// content={publicAuto, publicTarget, chosen:[{pubkey,url,name}]}. The console reads it to decide whether to
+// auto-adopt open community relays; the RELAY NEVER INGESTS it (note() has no branch below — it only STORES and
+// SERVES it). Owner-only at the door, the same CHURCH_PUBS.has rule as RELAYS_D / RELAYS_REMOVED_D, for the same
+// CLAUDE.md rule-10 reason: it decides whether OTHER PEOPLE'S boxes auto-hold the whole corpus, so a delegated
+// steward is not the authority for it. Today's gateways already accept it via the kind-30078 church catch-all;
+// this explicit branch is the hardening the doc-registry demands once the type is registered.
+const RELAYPREFS_D = D.RELAYPREFS;
 // The church's own statement of which relay BOXES are its network — d=trinityone/relay-net, church-signed,
 // content=[{pubkey, alwaysOn, url?}]. A DIFFERENT DOCUMENT from RELAYS_D above and deliberately so: that one
 // means "cross-relay sync is on", refuses to be written below two boxes and is emptied to turn mirroring
@@ -5330,6 +5344,19 @@ function accept(e) {
     // both already throw when publish() returns falsy — instead of reporting "✓ Sync on" over a document
     // that decided nothing.
     if (d === RELAYS_D) return CHURCH_PUBS.has(e.pubkey);
+    // …AND ITS TOMBSTONE SIBLING (plan A2). Owner-only for the same reason RELAYS_D is: this list is what prunes a
+    // Removed box's key from every peer's sync trust, so widening who may write it is widening who may hand — or
+    // withhold — the whole corpus. note() has no branch for it (the relay stores and serves it but never ingests
+    // it); only consoles read it. A member/steward-authored copy is keyed by (author, kind, d) and could never
+    // replace the church's, exactly like RELAYS_D, but it is refused here so none is stored at all.
+    if (d === RELAYS_REMOVED_D) return CHURCH_PUBS.has(e.pubkey);
+    // …AND THE COMMUNITY-RELAY PREFERENCES (plan B1). Owner-only for the same CLAUDE.md rule-10 reason as its two
+    // siblings above: this document decides whether, and up to how many, OTHER PEOPLE'S boxes auto-hold the church's
+    // whole corpus, so a delegated steward is not the authority for it. note() has no branch for it (the relay stores
+    // and serves it but never ingests it); only consoles read it, over authors:[churchpub]. A member/steward-authored
+    // copy is keyed by (author, kind, d) and could never replace the church's, exactly like RELAYS_D — refused here so
+    // none is stored at all.
+    if (d === RELAYPREFS_D) return CHURCH_PUBS.has(e.pubkey);
     if (d.startsWith(BLOCKED_D)) return leaderOf(d.slice(BLOCKED_D.length));   // OWNER-ONLY, and only your OWN blocklist                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
       // SECURITY-AUDIT-2026-07-06 M5: bind authority to the church that actually OWNS the referenced group,

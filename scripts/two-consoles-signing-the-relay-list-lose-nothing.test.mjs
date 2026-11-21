@@ -36,6 +36,13 @@ const PIECES = [
   ['fn', 'function _oneComplete(filters, ms = 6e3, privateDoc = false) {'],
   ['fn', 'function _readCovers'], ['fn', 'function relayNetDoc'],
   ['fn', 'async function enrolRelayNet'], ['fn', 'async function unenrolRelayNet'], ['fn', 'function normRelay(input) {'],
+  // A2 (977fbaea + 2dc4e053): unenrolRelayNet now closes a removed box's sync trust. The transitive chain
+  // _closeSyncTrust -> _writeTombstone -> _pendingTomb/_setPendingTomb, plus the sync-url key helpers and the
+  // two d-tag/localStorage-prefix consts they read.
+  ['fn', 'async function _closeSyncTrust(opts) {'], ['fn', 'async function _writeTombstone(opts) {'],
+  ['fn', 'function _pendingTomb() {'], ['fn', 'function _setPendingTomb(keys) {'],
+  ['fn', 'function _syncRelayBase(u) {'], ['st', 'var _syncRelayKey = '],
+  ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '],
   ['st', 'var RELAYNET_SEEN = '], ['st', 'var _isLoopbackRelay = '], ['st', 'var _RELAY_NAME_RE = '],
   ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['st', 'var _autoEnrolled = '],
   ['fn', 'async function autoEnrolRelayNet'],

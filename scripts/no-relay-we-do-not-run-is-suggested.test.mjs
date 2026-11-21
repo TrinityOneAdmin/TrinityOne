@@ -108,6 +108,9 @@ function relaysCard({ relays = [], backup = null, steward = {} } = {}) {
     Icon: function Icon() { return null; },
     SkPill: function SkPill() { return null; },
     SkBadge: function SkBadge() { return null; },
+    // The relay cards now link to the console help guides via <StewHelpLink> (B3/B4, 08334a3e); a no-op stub
+    // here, so this file's "no foreign relay is named" assertions are unchanged. The link is asserted elsewhere.
+    StewHelpLink: function StewHelpLink() { return null; },
     useStewDialog: () => ({ current: null }),
   };
   const names = Object.keys(globals);

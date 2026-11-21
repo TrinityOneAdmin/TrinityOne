@@ -128,6 +128,17 @@ function consoleWith(deps) {
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
     fnBody(src, 'async function unenrolRelayNet', 'unenrolRelayNet'),
+    // A2 (977fbaea + 2dc4e053): unenrolRelayNet now closes a removed box's sync trust. The transitive chain
+    // _closeSyncTrust -> _writeTombstone -> _pendingTomb/_setPendingTomb, plus the sync-url key helpers and
+    // the two d-tag/localStorage-prefix consts they read.
+    fnBody(src, 'async function _closeSyncTrust(opts) {', '_closeSyncTrust'),
+    fnBody(src, 'async function _writeTombstone(opts) {', '_writeTombstone'),
+    fnBody(src, 'function _pendingTomb() {', '_pendingTomb'),
+    fnBody(src, 'function _setPendingTomb(keys) {', '_setPendingTomb'),
+    fnBody(src, 'function _syncRelayBase(u) {', '_syncRelayBase'),
+    stmt(src, 'var _syncRelayKey = ', '_syncRelayKey'),
+    stmt(src, 'var RELAYS_REMOVED_D = ', 'RELAYS_REMOVED_D'),
+    stmt(src, 'var TOMB_PENDING_LS = ', 'TOMB_PENDING_LS'),
     fnBody(src, 'function normRelay(input) {', 'normRelay'),
     fnBody(src, 'function isNetworkRelay2', 'isNetworkRelay2'),
     // Self-hosting P1 (2026-10-21): the loopback test and the name shape enrolRelayNet now consults.

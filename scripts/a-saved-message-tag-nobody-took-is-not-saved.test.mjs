@@ -534,6 +534,9 @@ const BASE_GLOBALS = (React, win) => ({
   React, window: win,
   Icon: () => null, SkBadge: STUB(), SkPill: STUB(), SkToggle: STUB(),
   Panel: ({ children }) => children, DismissibleNote: ({ children }) => children,
+  // DashRelayHistoryCard's fragment now renders DashCommunityRelaysCard, which links to a console help guide via
+  // <StewHelpLink> (B3/B4, 08334a3e); a no-op stub here, so these screens' assertions are unchanged.
+  StewHelpLink: () => null,
   useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
   location: { search: '' },
   setTimeout, clearTimeout, URL, URLSearchParams, Blob,

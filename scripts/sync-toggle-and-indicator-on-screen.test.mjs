@@ -97,6 +97,9 @@ async function toggleCard({ syncOn, owner = true }) {
     useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn }, setBackup: () => {} }),
     stewCapState: () => ({ owner }),
     SYNC_OWNER_ONLY: 'owner only',
+    // DashRelayHistoryCard's fragment now renders <DashCommunityRelaysCard/> (B1, e71c384b); a no-op stub here,
+    // so this file's sync-toggle/indicator assertions are unchanged. The card is asserted in its own test file.
+    DashCommunityRelaysCard: function DashCommunityRelaysCard() { return null; },
     Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
     Icon: () => null,
     writeSyncCache: () => {}, readSyncCache: () => null,
@@ -156,6 +159,9 @@ test('tapping the switch while "Checking…" turns sync ON (the reliable write p
     useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn: null }, setBackup: () => {} }),
     stewCapState: () => ({ owner: true }),
     SYNC_OWNER_ONLY: 'owner only',
+    // DashRelayHistoryCard's fragment now renders <DashCommunityRelaysCard/> (B1, e71c384b); a no-op stub here,
+    // so this file's sync-toggle/indicator assertions are unchanged. The card is asserted in its own test file.
+    DashCommunityRelaysCard: function DashCommunityRelaysCard() { return null; },
     Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
     Icon: () => null,
     writeSyncCache: () => {}, readSyncCache: () => null,
@@ -184,6 +190,9 @@ test('flipping the switch sets it straight from the result, so it cannot contrad
     useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn: false }, setBackup }),
     stewCapState: () => ({ owner: true }),
     SYNC_OWNER_ONLY: 'owner only',
+    // DashRelayHistoryCard's fragment now renders <DashCommunityRelaysCard/> (B1, e71c384b); a no-op stub here,
+    // so this file's sync-toggle/indicator assertions are unchanged. The card is asserted in its own test file.
+    DashCommunityRelaysCard: function DashCommunityRelaysCard() { return null; },
     Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
     Icon: () => null,
     writeSyncCache: () => {}, readSyncCache: () => null,

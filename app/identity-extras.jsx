@@ -601,8 +601,18 @@ function RelaysSheet({ open, onClose, ctx }) {
   // list, keeps being retried and keeps being re-checked, but nothing is published to it until it has proved
   // it holds a key this church's network contains — so an address in the list is not evidence of anything on
   // its own, and saying "Connected" over one would be the label lying about the control again.
+  //
+  // C3: a row carries the PROVED KEY as well as verified/not, so one BOX reached by several addresses collapses
+  // to one row below. `relayDetail` is the read-only per-url accessor (verified + the proved key); it falls
+  // back to the boolean `relayVerified` on an older engine (key unknown → nothing dedupes, i.e. the old flat
+  // behaviour), and to 'on' before any gate exists.
+  const detail = (u) => {
+    if (FS && FS.relayDetail) { try { const d = FS.relayDetail(u) || {}; return { verified: !!d.verified, key: d.key || '' }; } catch (e) {} }
+    if (FS && FS.relayVerified) { try { return { verified: !!FS.relayVerified(u), key: '' }; } catch (e) {} }
+    return { verified: true, key: '' };
+  };
   const fromReal = () => FS && FS.relays
-    ? FS.relays.map(u => ({ url: u, status: (FS.relayVerified ? (FS.relayVerified(u) ? 'on' : 'checking') : 'on') }))
+    ? FS.relays.map(u => { const d = detail(u); return { url: u, status: d.verified ? 'on' : 'checking', key: d.key }; })
     : (window.TrinityData.RELAYS || []);
   const [list, setList] = useIx(null);
 
@@ -619,6 +629,17 @@ function RelaysSheet({ open, onClose, ctx }) {
   const rows = list || fromReal();
   const bare = (u) => (u || '').replace(/^wss?:\/\//, '');
 
+  // ONE ROW PER BOX. A proved key means "this machine", so several addresses that proved the SAME key are one
+  // box and show once (the first); rows with no proved key — every unproven address — are never collapsed, so a
+  // list of stranger addresses stays a list. Dedupe preserves order.
+  const oneRowPerBox = (arr) => {
+    const seen = new Set(), out = [];
+    for (const r of arr) { if (r.key) { if (seen.has(r.key)) continue; seen.add(r.key); } out.push(r); }
+    return out;
+  };
+  const verifiedRows = oneRowPerBox(rows.filter(r => r.status === 'on'));
+  const checkingRows = rows.filter(r => r.status !== 'on');
+
   // REMOVE EXISTED AND WAS NEVER RENDERED. Audit 2026-09-02 #9.
   //
   // An address gets into this list from an invite, and nothing ever takes one out. It stays, is retried,
@@ -631,6 +652,13 @@ function RelaysSheet({ open, onClose, ctx }) {
   // how a member loses their church rather than a stray address. (The dead `toggle` above it, which only
   // changed a row's colour, is gone.)
   const [confirmDrop, setConfirmDrop] = useIx(null);
+  // The unproven addresses live under a COLLAPSED disclosure ("Addresses being checked (n)"), so the sheet
+  // leads with what is actually carrying the church's traffic. Collapsed by default — but a half-finished drop
+  // inside it must not linger out of sight: clearing confirmDrop when the disclosure folds closes the same hole
+  // the sheet-close and row-not-removable effects below close. The Remove control only ever appears on these
+  // rows, so this is where an armed confirmation can hide.
+  const [showChecking, setShowChecking] = useIx(false);
+  useIxE(() => { if (!showChecking) setConfirmDrop(null); }, [showChecking]);
   // ⚠ AN ABANDONED CONFIRMATION MUST NOT SURVIVE THE SHEET CLOSING. `confirmDrop` holds a URL and nothing
   // cleared it, so: tap "Stop using", think better of it, close the sheet — and on reopening, the DESTRUCTIVE
   // "Confirm: stop using" button is sitting in the exact slot the harmless "asks you to confirm" button
@@ -652,6 +680,22 @@ function RelaysSheet({ open, onClose, ctx }) {
   const canRemove = (r) => r.status !== 'on' && !CANON.includes(r.url);
   const remove = (u) => { setConfirmDrop(null); if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
 
+  const relayRow = (r) => (
+    <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+      <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
+      <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bare(r.url)}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
+        <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
+        {r.status === 'on' ? 'Connected' : r.status === 'checking' ? 'Not in use' : 'Off'}</span>
+      {canRemove(r) ? (confirmDrop === r.url
+        ? <React.Fragment>
+            <button onClick={() => remove(r.url)} aria-label={'Confirm: stop using ' + bare(r.url)} style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>
+            <button onClick={() => setConfirmDrop(null)} aria-label="Keep it" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Keep</button>
+          </React.Fragment>
+        : <button onClick={() => setConfirmDrop(r.url)} aria-label={'Stop using ' + bare(r.url) + ' — asks you to confirm'} title="This address has not shown it is one of your church's relays. Remove it and nothing more is sent to it." style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>) : null}
+    </div>
+  );
+
   return (
     <BottomSheet open={open} onClose={onClose} z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -660,14 +704,6 @@ function RelaysSheet({ open, onClose, ctx }) {
       </div>
       <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, margin: '4px 0 16px' }}>
         Relays carry your church’s messages across Nostr. They’re set up by the churches you join — you connect to a church’s relay automatically when you scan its invite.</p>
-      {rows.some(r => r.status === 'checking') ? (
-        <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
-          <Icon name="shield" size={17} color="var(--ink-3)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <span style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-            Nothing is sent to an address until it has shown it is one of your church’s relays. The ones marked
-            “Not in use” haven’t shown that yet — they stay here and are checked again.</span>
-        </div>
-      ) : null}
 
       {!rows.length ? (
         <div style={{ display: 'flex', gap: 10, padding: '14px 15px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
@@ -676,21 +712,29 @@ function RelaysSheet({ open, onClose, ctx }) {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.map(r => (
-            <div key={r.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <Icon name="globe" size={17} color={r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)'} />
-              <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bare(r.url)}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
-                <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
-                {r.status === 'on' ? 'Connected' : r.status === 'checking' ? 'Not in use' : 'Off'}</span>
-              {canRemove(r) ? (confirmDrop === r.url
-                ? <React.Fragment>
-                    <button onClick={() => remove(r.url)} aria-label={'Confirm: stop using ' + bare(r.url)} style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>
-                    <button onClick={() => setConfirmDrop(null)} aria-label="Keep it" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Keep</button>
-                  </React.Fragment>
-                : <button onClick={() => setConfirmDrop(r.url)} aria-label={'Stop using ' + bare(r.url) + ' — asks you to confirm'} title="This address has not shown it is one of your church's relays. Remove it and nothing more is sent to it." style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>) : null}
-            </div>
-          ))}
+          {/* VERIFIED FIRST: the boxes actually carrying this church's traffic, one row per box. */}
+          {verifiedRows.map(relayRow)}
+
+          {/* The addresses still being checked are tucked under a collapsed disclosure, so the sheet leads with
+              what is in use. They are NOT hidden — "cached paints before authority": a sheet that showed nothing
+              until a proof landed would look empty on a cold boot. Opening it is also the only place the Remove
+              control appears (unproven rows only), and collapsing it clears any armed confirmDrop. */}
+          {checkingRows.length ? (
+            <React.Fragment>
+              <button onClick={() => setShowChecking(v => !v)} aria-label={'Addresses being checked (' + checkingRows.length + ')'} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left', width: '100%', color: 'var(--ink-2)' }}>
+                <Icon name="shield" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>Addresses being checked ({checkingRows.length})</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)' }}>{showChecking ? 'Hide' : 'Show'}</span>
+              </button>
+              {showChecking ? (
+                <React.Fragment>
+                  <p style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, margin: '2px 2px 4px' }}>
+                    Nothing is sent to these until they’ve shown they’re one of your church’s relays. They stay here and are checked again.</p>
+                  {checkingRows.map(relayRow)}
+                </React.Fragment>
+              ) : null}
+            </React.Fragment>
+          ) : null}
         </div>
       )}
     </BottomSheet>
