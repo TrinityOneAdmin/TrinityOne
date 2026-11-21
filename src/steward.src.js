@@ -8484,26 +8484,6 @@ const STEWARD_CARRY = Object.freeze({
     'finance/',                 // single-writer, sequence-pinned; the relay and console keep them anyway
   ]),
 });
-// WHICH CARRIED TYPES MAY BE KEPT FROM A PARTIAL ANSWER (owner answer u, 2026-11-19, after the Fable audit of the F1
-// round). Rule (k) — the church's copy dated one second after theirs, carried while a box is silent — is safe only where
-// BOTH the relay and the readers keep the newest copy at an address, so a later change sitting on the silent box still
-// wins when it wakes. Every carried type is in exactly one list (removing-a-steward-round-2.test.mjs checks it):
-//   newest  relay map newest-wins (group, roster, meals-settings — gateway LIVE_AT; rota-settings — ROTA_VIS by ts) or no
-//           relay map at all, and every reader newest-first (the shared document store, or its own newest check)
-//   strict  a relay map or a reader that still follows the last arrival — not carried while any relay is silent, listed
-// Until their maps/readers are made newest-wins in a later branch, the strict ones keep the strict rule.
-const STEWARD_CARRY_RULE = Object.freeze({
-  newest: Object.freeze([
-    'trinityone/group:', 'trinityone/category:', 'trinityone/service:', 'trinityone/room:', 'trinityone/booking:',
-    'trinityone/runsheet:', 'trinityone/rota:', 'trinityone/roster:', 'trinityone/msgtags', 'trinityone/rota-settings',
-    'trinityone/verse-prompt', 'trinityone/pinsermon:', 'trinityone/pin:', 'trinityone/hidden:', 'trinityone/reseat:',
-    'trinityone/careteam:', 'trinityone/meals-settings', 'trinityone/carereqstatus:',
-  ]),
-  strict: Object.freeze([
-    'trinityone/joinpolicy:', 'trinityone/nophoto:', 'trinityone/sermon:', 'trinityone/plan:', 'trinityone/devotional:',
-    'trinityone/event:', 'trinityone/care:', 'trinityone/request:',
-  ]),
-});
 // d-tags with no id or church suffix: the SAME string in every church, so another church's own (untagged) copy is
 // not a copy of this one's
 const _CARRY_BARE = ['trinityone/rota-settings', 'trinityone/verse-prompt', 'trinityone/meals-settings', 'trinityone/msgtags'];
@@ -8551,7 +8531,7 @@ async function _carryTemplate(S, blocked, who, pre) {
   if (!dead && d.startsWith('trinityone/careteam:')) {
     let body; try { body = JSON.parse(content); } catch (e) { return { skip: 'unreadable' }; }
     if (!body || typeof body !== 'object' || !Array.isArray(body.pubs)) return { skip: 'unreadable' };
-    // read ONCE by the carry before its read deadline (pre.minors) so it cannot eat the publish window (plan R-L1)
+    // read ONCE by the carry, bounded inside its limit (pre.minors) — a read that never answers must not hold the removal
     const m = (pre && 'minors' in pre) ? pre.minors : ((window.Steward && window.Steward.readMinors) ? await window.Steward.readMinors() : null);
     if (!m || !m.known) return { skip: 'children-unread' };
     const minors = new Set((m.list || []).map(p => String(p || '').toLowerCase()));

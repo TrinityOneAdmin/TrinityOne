@@ -21950,38 +21950,6 @@ zoo`.split("\n");
       // single-writer, sequence-pinned; the relay and console keep them anyway
     ])
   });
-  var STEWARD_CARRY_RULE = Object.freeze({
-    newest: Object.freeze([
-      "trinityone/group:",
-      "trinityone/category:",
-      "trinityone/service:",
-      "trinityone/room:",
-      "trinityone/booking:",
-      "trinityone/runsheet:",
-      "trinityone/rota:",
-      "trinityone/roster:",
-      "trinityone/msgtags",
-      "trinityone/rota-settings",
-      "trinityone/verse-prompt",
-      "trinityone/pinsermon:",
-      "trinityone/pin:",
-      "trinityone/hidden:",
-      "trinityone/reseat:",
-      "trinityone/careteam:",
-      "trinityone/meals-settings",
-      "trinityone/carereqstatus:"
-    ]),
-    strict: Object.freeze([
-      "trinityone/joinpolicy:",
-      "trinityone/nophoto:",
-      "trinityone/sermon:",
-      "trinityone/plan:",
-      "trinityone/devotional:",
-      "trinityone/event:",
-      "trinityone/care:",
-      "trinityone/request:"
-    ])
-  });
   var _CARRY_BARE = ["trinityone/rota-settings", "trinityone/verse-prompt", "trinityone/meals-settings", "trinityone/msgtags"];
   var STEWARD_CARRY_LIMIT_MS = 2e4;
   var _CARRY_WORDS = {
