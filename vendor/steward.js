@@ -20867,6 +20867,24 @@ zoo`.split("\n");
       return { ran: false, unknown: true };
     }
   }
+  var TOMB_PENDING_LS = "trinityone.steward.tomb-pending.";
+  function _pendingTomb() {
+    if (!pub) return [];
+    try {
+      const a = JSON.parse(lsGet(TOMB_PENDING_LS + pub) || "[]");
+      return Array.isArray(a) ? a.filter((p) => /^[0-9a-f]{64}$/.test(p)) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function _setPendingTomb(keys) {
+    if (!pub) return;
+    try {
+      const u = [...new Set((keys || []).map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p)))];
+      lsSet(TOMB_PENDING_LS + pub, JSON.stringify(u));
+    } catch (e) {
+    }
+  }
   async function _writeTombstone(opts) {
     const o = opts || {};
     const valid = (p) => /^[0-9a-f]{64}$/.test(p);
@@ -20874,6 +20892,12 @@ zoo`.split("\n");
     const remove = new Set((o.remove || []).map((p) => String(p || "").toLowerCase()).filter(valid));
     if (!add2.length && !remove.size) return { wrote: false };
     if (!sk || !pub || actingChurch || _viewingNetwork()) return { wrote: false, skipped: true };
+    if (remove.size) {
+      try {
+        _setPendingTomb(_pendingTomb().filter((p) => !remove.has(p)));
+      } catch (e) {
+      }
+    }
     const sk0 = o.sk0 || sk, pub0 = o.pub0 || pub;
     const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
     const leaving = o.leaving || "";
@@ -20996,8 +21020,13 @@ zoo`.split("\n");
         floorAt = (Number(newest.created_at) || 0) + 1;
       }
     }
-    const tomb = await _writeTombstone({ add: [...removedKeys], leaving: u, droppable, sk0, pub0 });
+    const pending = new Set(_pendingTomb());
+    if (closed) for (const k of removedKeys) pending.add(k);
+    const addKeys = [.../* @__PURE__ */ new Set([...removedKeys, ...pending])];
+    if (closed) _setPendingTomb([...pending]);
+    const tomb = await _writeTombstone({ add: addKeys, leaving: u, droppable, sk0, pub0 });
     if (tomb && tomb.partial) return { partial: true, closed };
+    _setPendingTomb(_pendingTomb().filter((p) => !addKeys.includes(p)));
     return { closed, tombstoned: !!(tomb && tomb.wrote) };
   }
   function _netDocDialUrl(raw) {
@@ -23323,7 +23352,20 @@ zoo`.split("\n");
         try {
           if (r && !r.unknown && (r.published || (r.proven || []).length > 0)) {
             const keys = (r.proven || []).map((x) => String(x && x.pubkey || "").toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k));
-            const un = keys.length ? enrolSerial(() => _writeTombstone({ remove: keys })) : Promise.resolve(null);
+            const _k0 = (x) => {
+              try {
+                return normalizeURL2(x);
+              } catch (e) {
+                return String(x || "");
+              }
+            };
+            let _dropp = /* @__PURE__ */ new Set();
+            try {
+              _dropp = new Set(extraRelays().map(_k0));
+            } catch (e) {
+              _dropp = /* @__PURE__ */ new Set();
+            }
+            const un = keys.length ? enrolSerial(() => _writeTombstone({ remove: keys, droppable: _dropp })) : Promise.resolve(null);
             const heal = () => {
               const h = autoSyncHeal({ force: true });
               if (h && h.catch) h.catch(() => {

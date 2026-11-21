@@ -26,15 +26,21 @@ const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const PUB = 'a'.repeat(64);
 const NOW = 1763650000;
 const KEY_A = '1a'.repeat(32), KEY_B = '2b'.repeat(32), KEY_C = '3c'.repeat(32);
+const settle = () => new Promise(r => setImmediate(r));
 
 const LIFT = [
   ['st', 'var RELAY_NET_D = '],
   ['st', 'var RELAYS_REMOVED_D = '],
+  ['st', 'var TOMB_PENDING_LS = '],
   ['fn', 'function _syncRelayBase'],
   ['st', 'var _syncRelayKey = '],
   ['fn', 'function _isPrivateRelayBase(u) {'],
   ['fn', 'function parseRelayNet(content) {'],
   ['fn', 'function _readCovers'],
+  ['fn', 'function lsGet(k) {'],
+  ['fn', 'function lsSet(k, v) {'],
+  ['fn', 'function _pendingTomb'],
+  ['fn', 'function _setPendingTomb'],
   ['fn', 'function relayNetDoc() {'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
@@ -61,12 +67,19 @@ function makeWorld(cfg) {
   if (cfg.sync != null) put({ kind: 30078, pubkey: PUB, created_at: NOW - 1000, tags: [['d', 'trinityone/relays']], content: typeof cfg.sync === 'string' ? cfg.sync : JSON.stringify(cfg.sync) });
   if (cfg.tombs) put({ kind: 30078, pubkey: cfg.tombAuthor || PUB, created_at: NOW - 900, tags: [['d', 'trinityone/relays-removed']], content: JSON.stringify(cfg.tombs) });
   const writes = [];
-  let ids = 0, reads = 0;
+  let ids = 0, reads = 0, dropped = false;
   const byUrl = (u) => relays.find(r => r.url === u);
+  const lsMap = new Map();
   const scope = {
     sk: new Uint8Array(32).fill(7), pub: PUB, actingChurch: '', _viewingNetwork: () => false,
     normalizeURL, normalizeURL2: normalizeURL,
     JSON, Math, Set, Map, Array, Object, String, Number, Promise, Error, Date,
+    // The per-church pending-tombstone store (plan A2, FIX 2) is persisted via lsGet/lsSet; a Map-backed
+    // localStorage stub lets the REAL lsGet/lsSet run, and it SURVIVES across two unenrolRelayNet calls on the
+    // same world — exactly the reload-durable retry the fix depends on.
+    localStorage: { getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null), setItem: (k, v) => { lsMap.set(k, String(v)); }, removeItem: (k) => { lsMap.delete(k); } },
+    enrolRelayNet: cfg.enrol || (async () => ({ published: false, proven: [] })),
+    autoSyncHeal: async () => ({}),   // signRelay chains a forced heal; the heal itself is point-of-use tested in sync-list-heals-itself
     now: () => NOW, _monotonic: (t) => t,
     _isHex64: (p) => /^[0-9a-f]{64}$/.test(String(p || '')),
     finalizeEvent: (t) => ({ ...t, pubkey: PUB, id: 'w' + (++ids) }),
@@ -86,7 +99,7 @@ function makeWorld(cfg) {
     publish: async (ev) => { writes.push(ev); put(ev); return ev; },
     _oneComplete: async (filters) => {
       reads++;
-      if (cfg.dropAfterReads && reads > cfg.dropAfterReads && cfg.dropUrl) { const r = byUrl(cfg.dropUrl); if (r) { r.up = false; r.key = ''; } }
+      if (cfg.dropAfterReads && !dropped && reads > cfg.dropAfterReads && cfg.dropUrl) { dropped = true; const r = byUrl(cfg.dropUrl); if (r) { r.up = false; r.key = ''; } }
       const d = (filters[0]['#d'] || [])[0];
       const evs = (store.get(d) || []).slice().sort((x, y) => (y.created_at - x.created_at) || ((store.get(d) || []).indexOf(y) - (store.get(d) || []).indexOf(x)));
       const askedUrls = relays.map(r => r.url);
@@ -100,13 +113,14 @@ function makeWorld(cfg) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   const api = new Function('scope', 'with (scope) {' + LIFT +
-    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial }; }')(proxy);
+    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, ' +
+    fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
   // Read the NEWEST copy exactly as _oneComplete / the engine does: created_at desc, and on a tie the
   // LAST-written wins (insertion index) — a constant now() + identity _monotonic make every write in a test tie,
   // and breaking the tie any other way would let a later re-sign hide behind an earlier one (it masked a real
   // re-add during sabotage).
   const docOf = (d) => { const arr = store.get(d) || []; const a = arr.slice().sort((x, y) => (y.created_at - x.created_at) || (arr.indexOf(y) - arr.indexOf(x))); return a[0] ? JSON.parse(a[0].content) : null; };
-  return { api, writes, scope, store,
+  return { api, writes, scope, store, relays,
     sync: () => docOf('trinityone/relays'),
     tombs: () => docOf('trinityone/relays-removed'),
     writesTo: (d) => writes.filter(w => ((w.tags || []).find(t => t[0] === 'd') || [])[1] === d) };
@@ -215,4 +229,67 @@ test('removing a relay in a church with no sync doc writes neither a sync doc no
   assert.equal(r.syncClosed, false, 'a church with no sync trust reported closing some');
   assert.equal(w.writesTo('trinityone/relays').length, 0, 'an ordinary Remove started writing a sync doc for a non-self-hosting church');
   assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'an ordinary Remove started writing tombstones for a non-self-hosting church');
+});
+
+// ── 7. FIX 1: the un-tombstone (re-Add) is NOT frozen by one unreachable EXTRA relay ─────────────────────
+test('FIX 1: a deliberate re-Add un-tombstones the box even while ONE church-added EXTRA relay is unreachable, and the chained heal re-signs it', async () => {
+  const dead = 'wss://dead-extra.example/relay';
+  const w = makeWorld({
+    relays: [{ url: 'wss://x.example/relay', key: KEY_B, up: true }, { url: dead, key: '', up: false }],
+    sync: [{ pubkey: KEY_A, url: 'https://a.example' }],
+    tombs: [{ pubkey: KEY_B, at: NOW }],
+    extra: [dead],   // the unreachable relay is a church-added extra → droppable, exactly as unenrol/_closeSyncTrust use it
+    enrol: async () => ({ published: true, proven: [{ url: 'wss://x.example/relay', pubkey: KEY_B }] }),
+  });
+  await w.api.signRelay('wss://x.example/relay');
+  await settle(); await settle(); await settle(); await settle();
+  assert.deepEqual(tombKeys(w.tombs()), [],
+    'ONE UNREACHABLE EXTRA FROZE THE UN-TOMBSTONE — the box the steward just re-Added is still tombstoned, so every later heal refuses it (FIX 1): ' + JSON.stringify(w.tombs()));
+  // the tombstone is gone → a heal now RE-ADDS B (it was refused while tombstoned)
+  const h = await w.api.syncHeal();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_B].sort(),
+    'the un-tombstoned box was not re-signed into trinityone/relays by the heal: ' + JSON.stringify({ h, sync: w.sync() }));
+});
+
+// ── 8. FIX 1 control: a NON-droppable unreachable relay still ABORTS the un-tombstone (no clobber) ───────
+test('FIX 1 control: a NON-droppable unreachable relay keeps the un-tombstone PARTIAL and clobbers no other console\'s tombstone (the completeness protection is intact)', async () => {
+  const deadCanon = 'wss://shared-pool.example/relay';
+  const w = makeWorld({
+    relays: [{ url: 'wss://x.example/relay', key: KEY_B, up: true }, { url: deadCanon, key: '', up: false }],
+    sync: [{ pubkey: KEY_A, url: 'https://a.example' }],
+    tombs: [{ pubkey: KEY_B, at: NOW }, { pubkey: KEY_C, at: NOW }],   // KEY_C stands for another console's tombstone that must NOT be lost
+    canonical: [deadCanon],   // a shared/canonical address is NOT droppable — it must answer before any re-sign
+    enrol: async () => ({ published: true, proven: [{ url: 'wss://x.example/relay', pubkey: KEY_B }] }),
+  });
+  await w.api.signRelay('wss://x.example/relay');
+  await settle(); await settle(); await settle(); await settle();
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B, KEY_C].sort(),
+    'THE TOMBSTONE DOC WAS CLOBBERED over a read a non-droppable relay never answered — droppable was widened past the church-added extras and the a8/completeness protection lost: ' + JSON.stringify(w.tombs()));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0,
+    'the un-tombstone re-signed the tombstone doc over an incomplete read');
+});
+
+// ── 9. FIX 2: a key pruned from the sync doc ALWAYS ends up tombstoned, even across a partial op + retry ──
+test('FIX 2: a DEAD box removed mid-op (prune lands, tombstone read fails → partial) STILL ends up tombstoned on the retry — no un-tombstoned pruned key', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay', C = 'wss://bystander.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: true }, { url: B, key: '', up: false }, { url: C, key: '', up: true }],
+    net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: B }],   // B DEAD, listed by url; its key is known only from the row
+    sync: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: 'https://b.example' }],
+    extra: [B],   // B is a church-added, now-dead address → droppable, so the removal is not frozen by B itself
+    dropAfterReads: 4, dropUrl: C,   // C (a non-droppable bystander) drops right after the sync read-back → the TOMBSTONE read cannot complete
+  });
+  // ── op 1: the prune lands, but the tombstone write cannot complete → the removal is reported PARTIAL
+  const r1 = await w.api.unenrolRelayNet(B);
+  assert.equal(r1.syncPartial, true, 'op1 did not report the removal as partial: ' + JSON.stringify(r1));
+  assert.deepEqual(keysOf(w.sync()), [KEY_A], 'op1 did not actually prune B from the sync doc: ' + JSON.stringify(w.sync()));
+  assert.equal(w.tombs(), null, 'op1 unexpectedly wrote a tombstone (the partial was staged wrong): ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [KEY_B],
+    'the pruned key was not persisted as pending — a retry would then have NOTHING to tombstone: ' + JSON.stringify(w.api._pendingTomb()));
+  // ── op 2: the bystander answers again; the steward retries Remove on the now-DEAD, already-pruned box
+  w.relays.find(r => r.url === C).up = true;
+  const r2 = await w.api.unenrolRelayNet(B);
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
+    'THE PRUNED KEY WAS NEVER TOMBSTONED: on the retry B is gone from both relay-net and the sync doc, so removedKeys is empty and only the persisted pending key saves it — a peer console would re-add the removed box (FIX 2): ' + JSON.stringify({ r2, tombs: w.tombs() }));
+  assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared once its tombstone landed: ' + JSON.stringify(w.api._pendingTomb()));
 });

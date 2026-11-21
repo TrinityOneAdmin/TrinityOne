@@ -6842,6 +6842,23 @@ async function autoSyncHeal(opts) {
   try { return await syncHeal(); } catch (e) { return { ran: false, unknown: true }; }
 }
 
+// ── PENDING TOMBSTONES (plan A2, FIX 2) ─────────────────────────────────────────────────────────────────
+//
+// The invariant _closeSyncTrust must hold: a key PRUNED from trinityone/relays is ALWAYS tombstoned, even if the
+// tombstone write could not complete in the same op. Without this, a box could be pruned from the sync doc and
+// then — on the steward's retry — be gone from BOTH relay-net and the sync doc, so there is no key left to
+// tombstone and a peer console still listing it re-adds it for ever. The pruned keys are therefore persisted per
+// church (survives a reload) until their tombstone is confirmed present; the next Remove / retry flushes them.
+const TOMB_PENDING_LS = 'trinityone.steward.tomb-pending.';   // + pub: [hex pubkey, …] pruned from sync, not yet tombstoned
+function _pendingTomb() {
+  if (!pub) return [];
+  try { const a = JSON.parse(lsGet(TOMB_PENDING_LS + pub) || '[]'); return Array.isArray(a) ? a.filter(p => /^[0-9a-f]{64}$/.test(p)) : []; } catch (e) { return []; }
+}
+function _setPendingTomb(keys) {
+  if (!pub) return;
+  try { const u = [...new Set((keys || []).map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)))]; lsSet(TOMB_PENDING_LS + pub, JSON.stringify(u)); } catch (e) {}
+}
+
 // ── THE TOMBSTONE WRITER (plan A2) ──────────────────────────────────────────────────────────────────────
 //
 // The companion to syncHeal's tombstone READER above (RELAYS_REMOVED_D, content [{pubkey, at}], newest `at`
@@ -6862,6 +6879,9 @@ async function _writeTombstone(opts) {
   const remove = new Set((o.remove || []).map(p => String(p || '').toLowerCase()).filter(valid));
   if (!add.length && !remove.size) return { wrote: false };
   if (!sk || !pub || actingChurch || _viewingNetwork()) return { wrote: false, skipped: true };
+  // A key being UN-tombstoned (a deliberate re-Add) must also leave the pending-tombstone set, so a later
+  // _closeSyncTrust flush cannot re-tombstone the box the steward just chose to bring back (plan A2, FIX 2).
+  if (remove.size) { try { _setPendingTomb(_pendingTomb().filter(p => !remove.has(p))); } catch (e) {} }
   const sk0 = o.sk0 || sk, pub0 = o.pub0 || pub;
   const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
   const leaving = o.leaving || '';
@@ -6947,6 +6967,12 @@ async function _closeSyncTrust(opts) {
     // A doc left with ONE entry is published as-is: it is the honest state, and the syncOn display already
     // shows sync ineffective below two boxes. The removed key never comes back in a repair (matches() filters
     // it from every re-apply onto the newer list).
+    // KNOWN, INTENDED EDGE (plan A2, FIX 3 — no behaviour change): removing the LAST sync box signs `[]` into
+    // trinityone/relays, which is byte-for-byte a deliberate Turn-off. So after a prune-to-zero, A4's
+    // autoSyncIfRedundant will NOT auto-resurrect sync even once the church is back to ≥2 boxes — a manual
+    // toggle is required. That is honest (the church did remove its whole sync set), not a heal bug; do not
+    // "fix" it by making the heal re-enable over a `[]`, which is the exact A4 resurrection bug the `[]` guard
+    // exists to refuse.
     let list = arr.filter(e => !matches(e)), floorAt = 0, repairs = 0;
     for (;;) {
       if (moved()) return { partial: true };
@@ -6970,8 +6996,20 @@ async function _closeSyncTrust(opts) {
   }
   // The tombstone: written whenever the church has a sync doc, so a later re-enable or another console's heal
   // cannot re-admit the box, even if THIS console's own sync copy did not happen to name it.
-  const tomb = await _writeTombstone({ add: [...removedKeys], leaving: u, droppable, sk0, pub0 });
-  if (tomb && tomb.partial) return { partial: true, closed };
+  //
+  // FIX 2 — the invariant: a key PRUNED from the sync doc is ALWAYS tombstoned, even across a partial op + a
+  // retry. Once the prune has landed (`closed`), the box may be gone from BOTH relay-net and the sync doc on
+  // the steward's retry, so `removedKeys` would then be empty and the box would NEVER get its tombstone. Persist
+  // the pruned keys BEFORE the write so a retry (or the next Remove) still flushes them; carry forward any
+  // earlier op's un-landed keys; clear them only once the tombstone is confirmed present. (_writeTombstone drops
+  // a key from this pending set whenever it is un-tombstoned, so a box the steward re-Adds is never re-tombstoned.)
+  const pending = new Set(_pendingTomb());
+  if (closed) for (const k of removedKeys) pending.add(k);
+  const addKeys = [...new Set([...removedKeys, ...pending])];
+  if (closed) _setPendingTomb([...pending]);
+  const tomb = await _writeTombstone({ add: addKeys, leaving: u, droppable, sk0, pub0 });
+  if (tomb && tomb.partial) return { partial: true, closed };   // pruned keys stay persisted → a retry writes the tombstone
+  _setPendingTomb(_pendingTomb().filter(p => !addKeys.includes(p)));   // tombstone confirmed present → safe to clear
   return { closed, tombstoned: !!(tomb && tomb.wrote) };
 }
 
@@ -9710,7 +9748,17 @@ window.Steward = {
           // heal reads a tombstone that no longer names the box. Swallowed on failure like the heal itself: the
           // next deliberate Add retries, and signRelay's own result is unchanged.
           const keys = (r.proven || []).map(x => String((x && x.pubkey) || '').toLowerCase()).filter(k => /^[0-9a-f]{64}$/.test(k));
-          const un = keys.length ? enrolSerial(() => _writeTombstone({ remove: keys })) : Promise.resolve(null);
+          // FIX 1 (plan A2): give the un-tombstone the SAME droppable set unenrolRelayNet / _closeSyncTrust use —
+          // the normalised church-added extras — so one UNREACHABLE extra relay cannot make _writeTombstone's read
+          // incomplete and leave the box the steward just PROVED still tombstoned (the forced heal below would then
+          // refuse the very box they re-Added — the self-hosting churny-tunnel case this feature serves). Clearing a
+          // tombstone for a key just proved at its dialled address re-admits nothing (admission still needs a fresh
+          // identity proof); and _writeTombstone still ABORTS on an incomplete/ABSENT read of a NON-droppable relay,
+          // so no other console's tombstones are ever clobbered (the a8/completeness protection is untouched).
+          const _k0 = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+          let _dropp = new Set();
+          try { _dropp = new Set(extraRelays().map(_k0)); } catch (e) { _dropp = new Set(); }
+          const un = keys.length ? enrolSerial(() => _writeTombstone({ remove: keys, droppable: _dropp })) : Promise.resolve(null);
           const heal = () => { const h = autoSyncHeal({ force: true }); if (h && h.catch) h.catch(() => {}); };
           un.then(heal, heal);
         }
