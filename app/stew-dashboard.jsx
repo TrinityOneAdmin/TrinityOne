@@ -9326,6 +9326,12 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       return null;
     }
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
+    // _askedAt BEFORE the write, so the spread read below is THIS write's and never one left by an earlier
+    // save of the same document (integration audit 2026-11-21, S1). setGuardians can refuse without writing
+    // anything at all -- an unauthed console, a view that may not write -- and the spread of the LAST write
+    // that did go out is still sitting there: read unchecked, it made a write that reached no relay say
+    // "saved on N of your N relay machines, partly in force". Mirrors createEncryptedGroup's _madeAt.
+    const _askedAt = Date.now();
     let okG = null;
     try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
@@ -9333,7 +9339,8 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       // the guardians doc had LANDED on the other — yet this line said "nobody has been linked" and the
       // pending row was gone on the next reload. writeSpread says which relays took the write; say that,
       // and claim total failure only when it was total.
-      let sp = null; try { sp = window.Steward.writeSpread ? window.Steward.writeSpread('guardians') : null; } catch (e) { sp = null; }
+      let sp = null;
+      try { const _s = window.Steward.writeSpread ? window.Steward.writeSpread('guardians') : null; if (_s && _s.at >= _askedAt) sp = _s; } catch (e) { sp = null; }
       const landedN = (sp && Array.isArray(sp.landed)) ? sp.landed.length : 0;
       const totalN = sp ? Math.max((sp.configured || []).length, landedN + ((sp.missed || []) || []).length) : 0;
       setMinorNotice({ pk: r.child, tone: 'fail', text: landedN > 0
