@@ -8334,7 +8334,15 @@ window.BulkInviteModal = BulkInviteModal;
 // CSV: header-aware, quoted fields. There is deliberately NO age column — TrinityOne does not decide who
 // is a child, the steward marks and the software enforces (reference/DOMAIN.md, mechanism not policy).
 // Auto-detection only PRE-FILLS the child toggles; the steward sees every row and can change any of them.
-function parseAccountsCsv(txt) {
+//
+// `info` (optional, integration audit 2026-11-21 S4) is filled in for the caller: info.childColumn is true
+// only when a header named one of CHILD_COLS. A file with no such column comes back all-adults, which is
+// indistinguishable in the rows from a file whose children were all left blank -- so the modal asks, and
+// SAYS when no child column was found. The yes-values and column names are deliberately NOT widened: a
+// wrongly pre-filled mark is its own harm, and the notice is the fix. Callers (rule 2): SetupAccountsModal's
+// onFile only.
+function parseAccountsCsv(txt, info) {
+  if (info) info.childColumn = false;
   const lines = String(txt || '').split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return [];
   // European Excel exports semicolon-separated "CSV" — pick whichever delimiter the FIRST line uses more
@@ -8360,6 +8368,7 @@ function parseAccountsCsv(txt) {
   // no recognisable header: every line is a bare name (quoted "Smith, John" stays one name)
   if (nameAt === -1) return lines.map(l => ({ name: splitLine(l)[0] || '', isChild: false })).filter(r => r.name);
   const childAt = head.findIndex(h => CHILD_COLS.includes(h));
+  if (info) info.childColumn = childAt !== -1;
   return lines.slice(1)
     .map(l => { const f = splitLine(l); return { name: f[nameAt] || '', isChild: childAt !== -1 && YES.includes(String(f[childAt] || '').toLowerCase()) }; })
     .filter(r => r.name);
@@ -8377,6 +8386,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   const [err, setErr] = React.useState('');
   const [closing, setClosing] = React.useState(false);      // the close-without-print warning
   const [cleaning, setCleaning] = React.useState(false);
+  const [csvNoChildCol, setCsvNoChildCol] = React.useState(false);   // the last imported file had no child column: said above the list (audit S4)
   const [photoNote, setPhotoNote] = React.useState('');     // the batch's no-photo write did not happen: said on the done screen (audit S5)
   // Moment-of-use gates for the UI; the ENGINE re-reads auth and both lists again when it runs, so these
   // only decide what the screen offers, never what is written.
@@ -8407,7 +8417,9 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     const f = e.target.files && e.target.files[0]; if (!f) return;
     const rdr = new FileReader();
     rdr.onload = () => {
-      const parsed = parseAccountsCsv(String(rdr.result || ''));
+      const info = {};
+      const parsed = parseAccountsCsv(String(rdr.result || ''), info);
+      setCsvNoChildCol(parsed.length > 0 && !info.childColumn);
       setNames(parsed.map(r => r.name).join('\n'));
       const marks = {}, occ = Object.create(null);   // same name#occurrence keys as the rows (audit F6)
       parsed.forEach(r => { const i = occ[r.name] || 0; occ[r.name] = i + 1; if (r.isChild) marks[r.name + '#' + i] = true; });
@@ -8530,6 +8542,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
           <label className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, cursor: 'pointer' }}><Icon name="globe" size={14} color="currentColor" /> Import CSV<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} /></label>
           <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{rows.length} name{rows.length === 1 ? '' : 's'}{rows.length ? ` · ${kids.length} child${kids.length === 1 ? '' : 'ren'}` : ''}</span>
         </div>
+        {csvNoChildCol && rows.length ? <div role="status" style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 24%, transparent)', marginBottom: 10, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}><Icon name="shield" size={15} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} /><div><b>No child column found in that file</b>{' \u2014 everyone was imported as an adult. Mark children by hand below.'}</div></div> : null}
         <textarea value={names} onChange={e => setNames(e.target.value)} placeholder={'Maria Gonzalez\nJohn Park\nGrace Okafor\n…'} style={{ width: '100%', boxSizing: 'border-box', minHeight: 120, border: '1px solid var(--line)', borderRadius: 12, padding: 12, fontSize: 14, fontFamily: 'var(--font-ui)', background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', resize: 'vertical' }} />
         {rows.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10, maxHeight: 200, overflowY: 'auto' }}>
           {rows.map((r, i) => (

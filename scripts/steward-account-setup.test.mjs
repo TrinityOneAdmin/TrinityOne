@@ -379,7 +379,7 @@ test('finishRestore: empty lookup WITHOUT a follow keeps the no-church screen an
 });
 
 // ── the CSV parser: headers, quotes, child column — and NEVER an age column ──────────────────────────────
-function liftCsv() { return lift(STEW, 'function parseAccountsCsv(txt) {', 'parseAccountsCsv', {}); }
+function liftCsv() { return lift(STEW, 'function parseAccountsCsv(txt, info) {', 'parseAccountsCsv', {}); }
 
 test('the CSV parser reads headered and bare files, quoted commas, and the child column — never age', () => {
   const parse = liftCsv();
@@ -401,7 +401,7 @@ test('the CSV parser reads headered and bare files, quoted commas, and the child
 // ── point of use: the REAL modal, rendered and driven end to end ─────────────────────────────────────────
 function loadModal({ steward, gate, skPrintableLog }) {
   const { React, draw } = miniReact();
-  const src = fnBody(STEW, 'function parseAccountsCsv(txt) {', 'parseAccountsCsv')
+  const src = fnBody(STEW, 'function parseAccountsCsv(txt, info) {', 'parseAccountsCsv')
     + '\n' + fnBody(STEW, 'function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegated }) {', 'SetupAccountsModal');
   const tmp = join(tmpdir(), 'setupmodal-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
@@ -841,4 +841,46 @@ test('POINT OF USE: an accepted no-photo write, and a church that allows childre
   const b = await batchOneChild({ setNoPhoto: () => Promise.resolve(null), sg: { loaded: false, nophoto: [] }, kidPhotosAllowed: true });
   assert.ok(!b.log.some(l => l[0] === 'setNoPhoto'));
   assert.doesNotMatch(b.all, NOT_ON_LIST, 'a church that allows children’s photos has nothing to report');
+});
+
+// ── S4 (integration audit 2026-11-21): a file with NO child column must not be a silent all-adult list ───
+test('the CSV parser tells its caller whether the file HAD a child column — and reads the rows exactly as before', () => {
+  const parse = liftCsv();
+  const ask = (txt) => { const info = {}; const rows = parse(txt, info); return { rows, col: info.childColumn }; };
+  assert.equal(ask('name,child\nAna,yes\nBob,').col, true);
+  assert.equal(ask('name,child\nAna,\nBob,').col, true, 'a child column with nobody marked is still a child column');
+  assert.equal(ask('name,age\nAna,9').col, false, 'an age column is not a child column');
+  assert.equal(ask('name,is child\nAna,yes').col, false, 'an unrecognised header is NOT guessed at — it is reported as absent');
+  assert.deepEqual(ask('name,is child\nAna,yes').rows, [{ name: 'Ana', isChild: false }], 'and nothing is pre-marked from it');
+  assert.equal(ask('Ana\nBob').col, false, 'a bare list of names has no child column');
+  assert.equal(ask('').col, false);
+  assert.deepEqual(parse('name,child\nAna,yes'), [{ name: 'Ana', isChild: true }], 'the second argument stays optional');
+});
+
+const NO_CHILD_COL = /No child column found in that file/;
+test('POINT OF USE: importing a file with no child column SAYS so above the list; a file with one stays quiet', async () => {
+  const props = { onClose: () => {}, sg: { loaded: true, nophoto: [] }, kidPhotosAllowed: true, nameByPub: {}, delegated: false };
+  for (const csv of ['name,age\nAna,9\nBob,41', 'Ana\nBob', 'name,is child\nAna,yes']) {
+    const { draw, load } = loadModal({ steward: stewardSpy([]) });
+    const { SetupAccountsModal } = await load;
+    let tree = draw(SetupAccountsModal, props);
+    assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL, 'control: nothing is said before a file is imported');
+    feedCsv(tree, csv);
+    tree = draw(SetupAccountsModal, props);
+    assert.equal(button(tree, 'Child ✓').length, 0, 'control: the file marked nobody');
+    assert.match(texts(tree).join(' '), NO_CHILD_COL, 'an all-adult import with no child column was handed over in silence: ' + JSON.stringify(csv));
+    assert.match(texts(tree).join(' '), /everyone was imported as an adult/);
+    // a second import that DOES carry the column clears it
+    feedCsv(tree, MARKED_CSV);
+    tree = draw(SetupAccountsModal, props);
+    assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL, 'the notice outlived the file it was about');
+    assert.equal(button(tree, 'Child ✓').length, 2);
+  }
+  // a file WITH the column but nobody marked: the steward's file answered the question, so no notice
+  const { draw, load } = loadModal({ steward: stewardSpy([]) });
+  const { SetupAccountsModal } = await load;
+  let tree = draw(SetupAccountsModal, props);
+  feedCsv(tree, 'name,child\nAna,\nBob,');
+  tree = draw(SetupAccountsModal, props);
+  assert.doesNotMatch(texts(tree).join(' '), NO_CHILD_COL);
 });
