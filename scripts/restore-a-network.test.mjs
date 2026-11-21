@@ -46,11 +46,12 @@ function rig(opts) {
   const src = 'return ({' + slice('async _networkKeyProbe(m) {') + ',' + slice('async restoreNetwork(mnemonic) {') + '});';
   const S = new Function('privateKeyFromSeedWords', 'getPublicKey', 'getPublicKey2', 'getPublicKey3',
     'npubEncode', 'npubEncode2', '_queryAsKey', 'relays', 'relaysRaw', 'CANONICAL_RELAYS', 'NETWORK_D', 'NETKEY_D',
-    'netKeys', 'saveNetKey', 'CustomEvent', 'window',
+    'netKeys', 'saveNetKey', 'CustomEvent', 'window', 'churchPub', 'churchSk',
     src)(privateKeyFromSeedWords, getPublicKey, getPublicKey, getPublicKey,
     npubEncode, npubEncode, q, () => ['ws://127.0.0.1:1/relay'], () => [], ['wss://canonical/relay'],
     'trinityone/network:', 'trinityone/netkey:',
-    () => (opts.held || []), (rec) => calls.saved.push(rec), class { constructor(t) { this.type = t; } }, holder);
+    () => (opts.held || []), (rec) => { calls.saved.push(rec); return opts.saveRefuses ? false : true; }, class { constructor(t) { this.type = t; } }, holder,
+    'churchPub' in opts ? opts.churchPub : 'c'.repeat(64), 'churchSk' in opts ? opts.churchSk : new Uint8Array(32).fill(7));
   holder.Steward._networkKeyProbe = (m) => S._networkKeyProbe(m);
   return { S, calls };
 }
@@ -90,6 +91,35 @@ test('words that are provably NOT a network’s are refused with the church poin
   assert.equal(r.stage, 'verify');
   assert.match(r.reason, /not a network/i);
   assert.equal(calls.saved.length, 0);
+});
+
+// ── slice3-F1/F2 (integration audit 2026-11-21): the evidence must be the network key's OWN document ─────
+test('FORGED: a network:<np> join declaration authored by a church is NOT evidence — refused as not-a-network, nothing stored', async () => {
+  const OTHER = getPublicKey(privateKeyFromSeedWords(generateSeedWords()));
+  const forged = { id: 'f', kind: 30078, pubkey: OTHER, tags: [['d', 'trinityone/network:' + NP], ['p', NP]], content: '{"joined":true,"v":1}' };
+  const { S, calls } = rig({ queryImpl: () => ({ events: [forged, { id: 'g', kind: 30078, pubkey: OTHER, tags: [['d', 'trinityone/netkey:' + NP]] }], complete: true }) });
+  const r = await S.restoreNetwork(WORDS);
+  assert.equal(r.ok, false, 'a random phrase was stored as an owned network on a third party’s say-so');
+  assert.equal(r.stage, 'verify');
+  assert.equal(calls.saved.length, 0);
+  // and with the relays NOT all answered, the same forged evidence still does not flip it to "yes"
+  const { S: S2, calls: c2 } = rig({ queryImpl: () => ({ events: [forged], complete: false }) });
+  const r2 = await S2.restoreNetwork(WORDS);
+  assert.equal(r2.stage, 'relay');
+  assert.equal(c2.saved.length, 0);
+});
+
+test('this church’s OWN words are refused as a network before any relay is asked (the joinNetwork guard)', async () => {
+  const { S, calls } = rig({
+    churchPub: NP,
+    queryImpl: () => ({ events: [{ id: 'k', kind: 30078, pubkey: NP, tags: [['d', 'trinityone/netkey:' + NP]] }], complete: true }),
+  });
+  const r = await S.restoreNetwork(WORDS);
+  assert.equal(r.ok, false);
+  assert.equal(r.stage, 'verify');
+  assert.match(r.reason, /this church.s own recovery words/i);
+  assert.equal(calls.saved.length, 0, 'the church key was stored as a network this console owns');
+  assert.equal(calls.query.length, 0);
 });
 
 test('idempotent: an already-held network says so and the store is untouched', async () => {

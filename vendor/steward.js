@@ -23514,14 +23514,16 @@ zoo`.split("\n");
     // true when the network key IS the church — and that console then published church artifacts as the
     // network (joinpolicy, checkinkey, kind-0) and self-registered the network npub as a church (sim
     // 2026-11-20, D2; the create panel itself pointed people down this road). The right door is the founder
-    // console's "Tap to switch view → Network console". Detection: every created network has at least its
-    // founder's `network:<np>` join declaration, and the relay's N5c gate serves those to the authed network
-    // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
+    // console's "Tap to switch view → Network console". Detection (since 2026-11-21, slice3-F1): the
+    // network's own `netkey:<np>` document, signed by the network key — see _networkKeyProbe. It was the
+    // founder's `network:<np>` join declaration, which any church can write for any np. A network that
+    // never got as far as writing its first netkey document is therefore NOT detected. FAIL-OPEN on purpose when
     // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
     // check and unreachable publishes fail together; the flap window between them is the accepted residual.
     // The richer answer behind _phraseIsNetworkKey, shared with restoreNetwork — which needs the OPPOSITE
     // failure polarity. -> { network, checked, np, name }:
-    //   network  true when the key provably IS a network's (any netkey:/network: copy, even a tombstone)
+    //   network  true when the key provably IS a network's: a netkey:<np> document AUTHORED BY np (any copy,
+    //            even a tombstone). NOTHING ELSE COUNTS — see the decision below.
     //   checked  true when the answer is DEFINITIVE: evidence was seen, or every probed relay answered EOSE
     //            with none. false = the relays could not be asked properly, and "not a network" is unproven.
     // adoptChurch treats !network as "carry on as a church" (fail-open: refusing a church restore on a flaky
@@ -23544,12 +23546,11 @@ zoo`.split("\n");
         for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
         const q = await _queryAsKey(probeSet, nsk, [
           { kinds: [30078], authors: [np], "#d": [NETKEY_D + np], limit: 2 },
-          { kinds: [30078], "#d": [NETWORK_D + np], limit: 8 },
           { kinds: [0], authors: [np], limit: 2 }
           // the network's own name, for restoreNetwork's confirmation
         ], 4e3);
         const evs = q && Array.isArray(q.events) ? q.events : [];
-        const network = evs.some((e) => e && e.kind === 30078);
+        const network = evs.some((e) => e && e.kind === 30078 && e.pubkey === np && Array.isArray(e.tags) && e.tags.some((t) => Array.isArray(t) && t[0] === "d" && t[1] === NETKEY_D + np));
         let name = "";
         try {
           const k0 = evs.filter((e) => e && e.kind === 0 && e.pubkey === np).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
@@ -30740,6 +30741,7 @@ zoo`.split("\n");
       } catch (e) {
         return { ok: false, stage: "words", reason: "That is not a valid recovery phrase \u2014 check the words and their order." };
       }
+      if (np === churchPub) return { ok: false, stage: "verify", reason: "These are this church\u2019s own recovery words, not a network\u2019s \u2014 nothing has been added." };
       const held = netKeys().find((r) => r.pub === np);
       if (held) return { ok: true, already: true, npub: npubEncode(np), name: held.name || "Network" };
       const p = await window.Steward._networkKeyProbe(mm);

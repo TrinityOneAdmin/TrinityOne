@@ -9916,14 +9916,16 @@ window.Steward = {
   // true when the network key IS the church — and that console then published church artifacts as the
   // network (joinpolicy, checkinkey, kind-0) and self-registered the network npub as a church (sim
   // 2026-11-20, D2; the create panel itself pointed people down this road). The right door is the founder
-  // console's "Tap to switch view → Network console". Detection: every created network has at least its
-  // founder's `network:<np>` join declaration, and the relay's N5c gate serves those to the authed network
-  // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
+  // console's "Tap to switch view → Network console". Detection (since 2026-11-21, slice3-F1): the
+  // network's own `netkey:<np>` document, signed by the network key — see _networkKeyProbe. It was the
+  // founder's `network:<np>` join declaration, which any church can write for any np. A network that
+  // never got as far as writing its first netkey document is therefore NOT detected. FAIL-OPEN on purpose when
   // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
   // check and unreachable publishes fail together; the flap window between them is the accepted residual.
   // The richer answer behind _phraseIsNetworkKey, shared with restoreNetwork — which needs the OPPOSITE
   // failure polarity. -> { network, checked, np, name }:
-  //   network  true when the key provably IS a network's (any netkey:/network: copy, even a tombstone)
+  //   network  true when the key provably IS a network's: a netkey:<np> document AUTHORED BY np (any copy,
+  //            even a tombstone). NOTHING ELSE COUNTS — see the decision below.
   //   checked  true when the answer is DEFINITIVE: evidence was seen, or every probed relay answered EOSE
   //            with none. false = the relays could not be asked properly, and "not a network" is unproven.
   // adoptChurch treats !network as "carry on as a church" (fail-open: refusing a church restore on a flaky
@@ -9940,8 +9942,13 @@ window.Steward = {
       //   • netkey:<np> AUTHORED BY np — the ring doc every created network writes about itself. The
       //     relay's FIRST read rule (your own event is always readable by you) serves it to the authed np
       //     unconditionally, and no church key ever authors a netkey doc for its own pubkey.
-      //   • network:<np> join declarations — kept as the second signal for networks whose relays do serve
-      //     them here.
+      //   • network:<np> join declarations — NO LONGER A SIGNAL (integration audit 2026-11-21, slice3-F1).
+      //     A join declaration is written by the JOINING CHURCH under its own key, so its author is not np
+      //     and the relay takes one from any registered church for any np. A co-tenant church could
+      //     therefore publish network:<victim church's pubkey> and make that church's genuine word-restore
+      //     refuse as "a network's words" — and make restoreNetwork store a non-network key as a network.
+      //     The decision rests ONLY on the document nobody but the key itself can sign; the join
+      //     declarations are not even asked for. Client-only: what the relay accepts is unchanged.
       // THE PROBE SET MUST NOT BE EMPTY ON A FRESH CONSOLE (re-sim RS-3 second round, 2026-11-21): the
       // ?adopt= door runs at page load on a KEYLESS profile, where relays() — the gate-ADMITTED set — is
       // still []. The read then answered instantly with nothing, the check fell open, and the church
@@ -9954,11 +9961,13 @@ window.Steward = {
       for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
       const q = await _queryAsKey(probeSet, nsk, [
         { kinds: [30078], authors: [np], '#d': [NETKEY_D + np], limit: 2 },
-        { kinds: [30078], '#d': [NETWORK_D + np], limit: 8 },
         { kinds: [0], authors: [np], limit: 2 },   // the network's own name, for restoreNetwork's confirmation
       ], 4000);
       const evs = (q && Array.isArray(q.events)) ? q.events : [];
-      const network = evs.some(e => e && e.kind === 30078);   // any copy — even a tombstone — marks the KEY as a network's
+      // AUTHOR and D-TAG are checked HERE, not left to the filter: a relay is free to answer a filter with
+      // anything, and an event is only this key's own netkey document if it says so itself.
+      const network = evs.some(e => e && e.kind === 30078 && e.pubkey === np
+        && Array.isArray(e.tags) && e.tags.some(t => Array.isArray(t) && t[0] === 'd' && t[1] === NETKEY_D + np));   // any copy — even a tombstone
       let name = '';
       try {
         const k0 = evs.filter(e => e && e.kind === 0 && e.pubkey === np).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
@@ -16858,6 +16867,9 @@ window.Steward = {
     if (mm.split(' ').length < 12) return { ok: false, stage: 'words', reason: 'Enter the full 12-word recovery phrase.' };
     let np = '';
     try { np = getPublicKey(privateKeyFromSeedWords(mm)); } catch (e) { return { ok: false, stage: 'words', reason: 'That is not a valid recovery phrase — check the words and their order.' }; }
+    // A CHURCH'S OWN WORDS ARE NOT A NETWORK'S — the same refusal joinNetwork makes for np === churchPub.
+    // Stored as a network, the church key would be offered in the switcher as a network console.
+    if (np === churchPub) return { ok: false, stage: 'verify', reason: 'These are this church’s own recovery words, not a network’s — nothing has been added.' };
     const held = netKeys().find(r => r.pub === np);
     if (held) return { ok: true, already: true, npub: npubEncode(np), name: held.name || 'Network' };   // idempotent: nothing stored twice
     const p = await window.Steward._networkKeyProbe(mm);
