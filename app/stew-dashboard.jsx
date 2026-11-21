@@ -9392,38 +9392,69 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     const _askedAt = Date.now();
     let okG = null;
     try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
-    if (!okG) {
-      // THE WRITE IS ALL-OR-NOTHING; THE TRUTH OFTEN IS NOT (sim 2026-11-20 D4): with one relay refusing,
-      // the guardians doc had LANDED on the other — yet this line said "nobody has been linked" and the
-      // pending row was gone on the next reload. writeSpread says which relays took the write; say that,
-      // and claim total failure only when it was total.
+    // HOW MANY of the church's relay machines took a write that did not land on all of them -- from THIS
+    // write's spread only (S1). -> { landedN, totalN }, landedN 0 when nothing landed or nothing is known.
+    const _landing = (which, since) => {
       let sp = null;
-      try { const _s = window.Steward.writeSpread ? window.Steward.writeSpread('guardians') : null; if (_s && _s.at >= _askedAt) sp = _s; } catch (e) { sp = null; }
+      try { const _s = window.Steward.writeSpread ? window.Steward.writeSpread(which) : null; if (_s && _s.at >= since) sp = _s; } catch (e) { sp = null; }
       const landedN = (sp && Array.isArray(sp.landed)) ? sp.landed.length : 0;
-      const totalN = sp ? Math.max((sp.configured || []).length, landedN + ((sp.missed || []) || []).length) : 0;
-      setMinorNotice({ pk: r.child, tone: 'fail', text: landedN > 0
-        ? ('That guardian link saved on ' + landedN + ' of your ' + totalN + ' relay machines, so it is partly in force. Confirm again to retry the others — until then a machine that missed it won’t enforce the link.')
-        : 'Couldn’t confirm that guardian link — no relay accepted it, so nobody has been linked and the request is still waiting. Check the relay and try again.' });
-      return null;
-    }
-    // A LINKED CHILD IS A MINOR, and if that half fails the link exists without the protection that is its
-    // whole point — so say which half landed rather than resealing over a half-written state.
-    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];
-    if (!minorsSet.has(r.child)) {
-      let okM = null;
-      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
-      if (!okM) {
-        setMinorNotice({ pk: r.child, tone: 'fail', text: 'The guardian link was saved, but marking them as a child was '
-          + 'NOT — the relay refused it. They are linked to a parent and are not yet treated as a child. Try again.' });
-        _reseal(sg.minors || [], sg.approved || [], [r.child], nextG);
+      return { landedN, totalN: sp ? Math.max((sp.configured || []).length, landedN + (sp.missed || []).length) : 0 };
+    };
+    // THE WRITE IS ALL-OR-NOTHING; THE TRUTH OFTEN IS NOT (sim 2026-11-20 D4): with one relay refusing,
+    // the guardians doc had LANDED on the other -- yet this line said "nobody has been linked" and the
+    // pending row was gone on the next reload. writeSpread says which relays took the write; say that,
+    // and claim total failure only when it was total.
+    let partG = null;
+    if (!okG) {
+      partG = _landing('guardians', _askedAt);
+      if (!(partG.landedN > 0)) {
+        setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn\u2019t confirm that guardian link \u2014 no relay accepted it, so nobody has been linked and the request is still waiting. Check the relay and try again.' });
         return null;
       }
     }
-    // Re-seal UNCONDITIONALLY once both halves are in. This used to run only when the child was not already
-    // marked a minor, so linking a parent to an already-marked child never reached that child's phone at all.
+    // A LINKED CHILD IS A MINOR -- AND THAT INCLUDES A LINK THAT ONLY PARTLY LANDED (integration audit
+    // 2026-11-21, S2). This returned as soon as the link missed any relay, BEFORE marking the child. But the
+    // link was real wherever it landed, and this request's card leaves the list as soon as the console reads
+    // that link back -- so the child stayed linked, UNMARKED, and with no card left to press: the notice said
+    // "Confirm again to retry" about a button that was no longer there. reference/DOMAIN.md: a child linked
+    // to a guardian must become a minor, so the mark is attempted whenever the link landed ANYWHERE. Failing
+    // toward the mark is the protective direction: an unmarked child is an adult to every relay.
+    // What is NOT retried from here is the link on the machines that missed it -- nothing on this screen can
+    // (the card is gone), so the notice no longer offers that; it says where the link reached.
+    const child = nameByPub[r.child] || 'This child';
+    const nextM = minorsSet.has(r.child) ? (sg.minors || []) : [...(sg.minors || []), r.child];
+    let mark = 'already', partM = null;   // 'already' | 'ok' | 'part' (some machines) | 'none' (no machine)
+    if (!minorsSet.has(r.child)) {
+      const _markAt = Date.now();
+      let okM = null;
+      try { okM = await Promise.resolve(window.Steward.setMinors(nextM)); } catch (e) { okM = null; }
+      if (okM) mark = 'ok';
+      else { partM = _landing('minors', _markAt); mark = partM.landedN > 0 ? 'part' : 'none'; }
+    }
+    const linkLine = partG
+      ? 'That guardian link saved on ' + partG.landedN + ' of your ' + partG.totalN + ' relay machines, so it is partly in force.'
+      : 'The guardian link was saved.';
+    if (mark === 'none') {
+      // the link exists without the protection that is its whole point -- say which half landed, and the step
+      // that is really there: the Child control on their own row (this card will not come back)
+      setMinorNotice({ pk: r.child, tone: 'fail', text: linkLine + ' Marking them as a child was NOT saved \u2014 no relay accepted it. '
+        + 'They are linked to a parent and are not yet treated as a child. Mark them as a child from their own row in the members list.' });
+      _reseal(sg.minors || [], sg.approved || [], [r.child], nextG);
+      return null;
+    }
+    // Re-seal UNCONDITIONALLY once the mark is in (anywhere). This used to run only when the child was not
+    // already marked a minor, so linking a parent to an already-marked child never reached that child's phone.
     _reseal(nextM, sg.approved || [], [r.child], nextG);
-    // …and the parent's app gets its whole list, so the child it asked for reads as linked (owner, 2026-10-01).
+    // ...and the parent's app gets its whole list, so the child it asked for reads as linked (owner, 2026-10-01).
     if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, nextG, guardiansClosed, noticeScope); } catch (e) {} }
+    if (partG || mark === 'part') {
+      const markLine = mark === 'part'
+        ? ' Marking them as a child reached ' + partM.landedN + ' of your ' + partM.totalN + ' relay machines.'
+        : ' ' + child + ' is marked as a child.';
+      setMinorNotice({ pk: r.child, tone: 'fail', text: linkLine + markLine
+        + ' A machine that missed either does not have it until it is back and in sync \u2014 the Relays page shows which.' });
+      return null;
+    }
     return true;
   };
   const declineGuardian = async (r) => {
