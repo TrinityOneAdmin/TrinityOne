@@ -6774,7 +6774,78 @@ function DashRelayHistoryCard() {
         })() : null}
         {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
       </Panel>
+        {/* community relays on by default (plan B1): one switch + how many public boxes to aim for */}
+      <DashCommunityRelaysCard />
     </React.Fragment>
+  );
+}
+
+// COMMUNITY RELAYS ON BY DEFAULT (plan B1). One switch (publicAuto) and one target control (publicTarget), both bound
+// to the church-signed, owner-only trinityone/relayprefs document through window.Steward. The switch DRIVES
+// publicAuto — a tap calls setPublicAuto — so a point-of-use test that renders this card and presses it goes red if
+// the wire is deleted (CLAUDE.md rule 1). Owner-only like the sync controls beside it (aria-disabled, not disabled, so
+// a delegate's press still answers on screen — there is no hover on a phone).
+function DashCommunityRelaysCard() {
+  const [prefs, setPrefs] = React.useState(null);   // { complete, publicAuto, publicTarget, chosen }
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  const _churchOnly = !stewCapState('content').owner;
+  React.useEffect(() => {
+    let live = true;
+    try { const p = window.Steward && window.Steward.relayPrefs && window.Steward.relayPrefs(); if (p && p.then) p.then((v) => { if (live) setPrefs(v); }, () => {}); } catch (e) {}
+    return () => { live = false; };
+  }, []);
+  const setAuto = async (on) => {
+    if (_churchOnly) { setMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.Steward.setPublicAuto(on);
+      if (r && r.written) { setPrefs((p) => (p ? { ...p, publicAuto: on } : p)); setMsg({ ok: true, text: on ? 'Community relays on — new backups are found automatically.' : 'Community relays off — only relays you add yourself are used.' }); }
+      else setMsg({ ok: false, text: 'Couldn’t save that yet — try again when your relays are answering.' });
+    } catch (e) { setMsg({ ok: false, text: (e && e.message) || 'Couldn’t save that.' }); }
+    setBusy(false);
+  };
+  const setTarget = async (n) => {
+    if (_churchOnly) { setMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
+    const v = Math.max(0, Math.min(10, Math.floor(Number(n) || 0)));
+    setBusy(true); setMsg(null);
+    try {
+      const r = await window.Steward.setPublicTarget(v);
+      if (r && r.written) setPrefs((p) => (p ? { ...p, publicTarget: v } : p));
+      else setMsg({ ok: false, text: 'Couldn’t save that yet — try again when your relays are answering.' });
+    } catch (e) { setMsg({ ok: false, text: (e && e.message) || 'Couldn’t save that.' }); }
+    setBusy(false);
+  };
+  const on = !!(prefs && prefs.publicAuto === true);
+  const checking = !prefs || prefs.publicAuto == null;
+  const target = (prefs && Number.isFinite(prefs.publicTarget)) ? prefs.publicTarget : 5;
+  return (
+    <Panel title="Community relays">
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Other churches’ relays can keep a backup of your records, so your data survives even if your own relay goes down. New ones are added automatically, fastest first, up to your limit.</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setAuto(checking ? true : !on)} disabled={busy}
+          role="switch" aria-checked={on}
+          aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined}
+          aria-label="Use community relays automatically"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : (checking ? 0.7 : 1), fontFamily: 'var(--font-ui)' }}>
+          <span aria-hidden="true" style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, flexShrink: 0, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+            <span style={{ position: 'absolute', top: 3, left: on ? 21 : 3, width: 18, height: 18, borderRadius: 999, background: 'var(--surface)', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{_churchOnly ? <Icon name="lock" size={13} color="currentColor" /> : null}{busy ? 'Saving…' : checking ? 'Checking…' : (on ? 'Using community relays' : 'Not using community relays')}</span>
+        </button>
+      </div>
+      {on ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Aim for</span>
+          <button aria-label="Fewer community relays" disabled={busy || _churchOnly} onClick={() => setTarget(target - 1)} className="sk-btn sk-btn--ghost" style={{ padding: '4px 11px', fontSize: 15, lineHeight: 1, opacity: (busy || _churchOnly) ? 0.5 : 1 }}>−</button>
+          <span aria-label="Public relay limit" style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)', minWidth: 16, textAlign: 'center' }}>{target}</span>
+          <button aria-label="More community relays" disabled={busy || _churchOnly} onClick={() => setTarget(target + 1)} className="sk-btn sk-btn--ghost" style={{ padding: '4px 11px', fontSize: 15, lineHeight: 1, opacity: (busy || _churchOnly) ? 0.5 : 1 }}>+</button>
+          <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>public relays in all</span>
+        </div>
+      ) : null}
+      {msg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: msg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg.text}</div> : null}
+    </Panel>
   );
 }
 

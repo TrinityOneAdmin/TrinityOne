@@ -6842,6 +6842,112 @@ async function autoSyncHeal(opts) {
   try { return await syncHeal(); } catch (e) { return { ran: false, unknown: true }; }
 }
 
+// ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2, 2026-11-20) ───────────────────────────────────────────────
+//
+// THE OPT-OUT + CHOSEN SET live in ONE church-signed, OWNER-ONLY document (trinityone/relayprefs):
+//   { publicAuto: bool, publicTarget: number, chosen: [{pubkey, url, name}] }.
+// B2 (autoJoinPublicRelays) reads it and, when the church has not opted out, adopts open community relays up to a
+// per-CHURCH cap, fastest-first, through EXACTLY the manual Auto-find mechanics (addRelay + name/key binding +
+// signRelay + publishRelayList). Nothing about admission, sync or safeguarding enforcement changes: a community box
+// is admitted by the same identity proof as any other, and it is only ADOPTED once it has REGISTERED the church (an
+// unregistered box refuses the church's events and 401s every peer, so adopting it would deliver nothing).
+const RELAYPREFS_D = 'trinityone/relayprefs';
+const PUBLIC_TARGET_DEFAULT = 5;
+// 0-10, floored; anything unreadable falls back to the default. `0` means "adopt no NEW community relays" without
+// touching publicAuto (owner Q3: a setting to stop adoption that removes nothing already there).
+function _clampPublicTarget(n) {
+  n = Math.floor(Number(n));
+  if (!Number.isFinite(n)) return PUBLIC_TARGET_DEFAULT;
+  return Math.max(0, Math.min(10, n));
+}
+// THE PER-CHURCH COMMUNITY CAP. The shipped canonical relay (a8) counts as ONE toward publicTarget (owner Q3), so the
+// COMMUNITY slice is the target minus the canonical pins. This is what makes the cap "LISTED, not answering": it is a
+// function of publicTarget and a ship-time constant only — no relay's online/answering state can change it, so an
+// outage can never open a slot. Only a steward Remove (which drops a box from `chosen`) frees one.
+function _communityCap(publicTarget) {
+  return Math.max(0, _clampPublicTarget(publicTarget) - CANONICAL_RELAYS.length);
+}
+// Union two chosen lists by pubkey (prev first, so existing — typically own-box-adjacent — entries keep their place).
+function _mergeChosen(a, b) {
+  const out = [], seen = new Set();
+  for (const c of [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]) {
+    const p = String((c && c.pubkey) || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(p) || seen.has(p)) continue;
+    seen.add(p);
+    out.push({ pubkey: p, url: (c && typeof c.url === 'string') ? c.url : '', name: (c && typeof c.name === 'string') ? c.name : '' });
+  }
+  return out;
+}
+// THE THREE-STATE READ (plan B1, audit finding 13b) — the SAME completeness discipline backupState/syncHeal use:
+//   · a signed copy from the church key arrived            -> { prefs: <obj>, complete: true }
+//   · no copy, but EVERY relay asked answered (absent doc)  -> { prefs: null,  complete: true }   (opt-out DEFAULT = ON)
+//   · no copy and some relay did not answer (inconclusive)  -> { prefs: null,  complete: false }  (FAIL CLOSED = OFF)
+// Authenticated (privateDoc) like every other owner-document read here, so a login-pending box that may be WITHHOLDING
+// the document is never counted as "answered no doc". A 2G church that opted out must never be auto-joined because a
+// read timed out.
+async function _readRelayPrefs() {
+  if (!pub) return { prefs: null, complete: false };
+  let r;
+  try { r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYPREFS_D] }], 6000, true); }
+  catch (e) { return { prefs: null, complete: false }; }
+  const ev = (r && r.ev && r.ev.pubkey === pub) ? r.ev : null;   // re-check the author: a relay need not honour the filter
+  if (ev) {
+    let o = null; try { o = JSON.parse(ev.content || '{}'); } catch (e) { o = null; }
+    return { prefs: (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}, complete: true, ev };
+  }
+  const asked = (r && r.askedUrls) || [];
+  const said = new Set((r && r.answeredUrls) || []);
+  const fullyAnswered = asked.length > 0 && asked.every((u) => said.has(u));
+  return { prefs: null, complete: fullyAnswered };
+}
+// THE ONE WRITER, owner-key-only and inside the one signing queue (so it never interleaves with a heal/enrol).
+// `mutate(cur)` returns the next prefs object; it is normalised (publicAuto defaults ON, publicTarget clamped, chosen
+// deduped and capped at the per-church community cap) and signed with the M-5 read-back/merge discipline — at most two
+// repairs, newest-wins, so two consoles extending `chosen` converge on one set rather than unioning past the cap.
+async function _writeRelayPrefs(mutate) {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
+  const sk0 = sk, pub0 = pub;
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  const norm = (o) => {
+    const n = (o && typeof o === 'object') ? { ...o } : {};
+    n.publicAuto = n.publicAuto !== false;
+    n.publicTarget = _clampPublicTarget('publicTarget' in n ? n.publicTarget : PUBLIC_TARGET_DEFAULT);
+    n.chosen = _mergeChosen(Array.isArray(n.chosen) ? n.chosen : [], []).slice(0, _communityCap(n.publicTarget));
+    return n;
+  };
+  return enrolSerial(async () => {
+    if (moved()) return { written: false, unknown: true };
+    const readPrefs = () => _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYPREFS_D] }], 6000, true);
+    const read = await readPrefs();
+    if (moved()) return { written: false, unknown: true };
+    if (!_readCovers(read)) return { written: false, unknown: true };   // a partial read never over-writes the church's prefs
+    const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
+    let cur = {}; if (mine) { try { cur = JSON.parse(mine.content || '{}') || {}; } catch (e) { cur = {}; } }
+    let next = norm(mutate({ ...cur }) || cur), floorAt = 0, repairs = 0;
+    for (;;) {
+      if (moved()) return { written: false, unknown: true };
+      const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAYPREFS_D]], content: JSON.stringify(next) }), sk);
+      const ev = await publish(signed, { background: true });
+      if (moved()) return { written: false, unknown: true };
+      if (!ev) return { written: false, failed: true };
+      const back = await readPrefs();
+      if (moved()) return { written: false, unknown: true };
+      if (!_readCovers(back)) return { written: false, unknown: true, unverified: true };
+      const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+      let got = null; if (newest) { try { got = JSON.parse(newest.content || '{}'); } catch (e) { got = null; } }
+      const landed = got && got.publicAuto === next.publicAuto && Number(got.publicTarget) === next.publicTarget
+        && next.chosen.every(c => (got.chosen || []).some(g => String((g && g.pubkey) || '').toLowerCase() === c.pubkey));
+      if (landed) return { written: true, prefs: got };
+      if (repairs >= 2) return { written: false, lost: true };
+      repairs++;
+      // Re-apply the mutation to the NEWEST doc (newest-wins), re-normalise, and bump the floor so the sign out-dates it.
+      let base = {}; try { base = JSON.parse(newest ? (newest.content || '{}') : '{}') || {}; } catch (e) { base = {}; }
+      next = norm(mutate({ ...base }) || base);
+      floorAt = (Number(newest && newest.created_at) || 0) + 1;
+    }
+  });
+}
+
 // ── PENDING TOMBSTONES (plan A2, FIX 2) ─────────────────────────────────────────────────────────────────
 //
 // The invariant _closeSyncTrust must hold: a key PRUNED from trinityone/relays is ALWAYS tombstoned, even if the
@@ -9778,6 +9884,28 @@ window.Steward = {
   // 10-minute damper, `{ force: true }` to bypass it once.
   syncHeal: () => syncHeal(),
   autoSyncHeal,
+  // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
+  //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
+  //    through the same Auto-find mechanics. SAFEGUARDING NOTE (plan finding 18): a community operator sees only
+  //    pubkey-level data — the minors:/guardians:/approved: lists hold PUBKEYS (cleartext because the relay enforces
+  //    with them), and member NAMES are sealed under the congregation name key.
+  //
+  // READ for the console UI: { complete, publicAuto, publicTarget, chosen }. publicAuto is null while the read is
+  // inconclusive (the switch shows "Checking…"), true when the doc is absent and the read was complete (the opt-out
+  // DEFAULT), else the doc's value. B2 reads its own raw copy (fail-closed) — this resolved view is for the screen.
+  async relayPrefs() {
+    const { prefs, complete } = await _readRelayPrefs();
+    return {
+      complete,
+      publicAuto: complete ? (prefs ? prefs.publicAuto !== false : true) : null,
+      publicTarget: _clampPublicTarget(prefs && 'publicTarget' in prefs ? prefs.publicTarget : PUBLIC_TARGET_DEFAULT),
+      chosen: (prefs && Array.isArray(prefs.chosen)) ? prefs.chosen : [],
+    };
+  },
+  // The Settings switch and the target control — owner-key-only (a delegated console's write is refused at the relay
+  // and _writeRelayPrefs returns `skipped` on this console before it even tries).
+  setPublicAuto(on) { return _writeRelayPrefs((prev) => ({ ...prev, publicAuto: !!on })); },
+  setPublicTarget(n) { const v = _clampPublicTarget(n); return _writeRelayPrefs((prev) => ({ ...prev, publicTarget: v })); },
   // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
   // C1: a Remove that actually changed the church's signed list republishes the authoritative kind-10002 so
   // member phones — which retire a row the newest 10002 omits — learn the drop and, with the member-side

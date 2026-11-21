@@ -20867,6 +20867,109 @@ zoo`.split("\n");
       return { ran: false, unknown: true };
     }
   }
+  var RELAYPREFS_D = "trinityone/relayprefs";
+  var PUBLIC_TARGET_DEFAULT = 5;
+  function _clampPublicTarget(n) {
+    n = Math.floor(Number(n));
+    if (!Number.isFinite(n)) return PUBLIC_TARGET_DEFAULT;
+    return Math.max(0, Math.min(10, n));
+  }
+  function _communityCap(publicTarget) {
+    return Math.max(0, _clampPublicTarget(publicTarget) - CANONICAL_RELAYS.length);
+  }
+  function _mergeChosen(a, b) {
+    const out = [], seen = /* @__PURE__ */ new Set();
+    for (const c of [...Array.isArray(a) ? a : [], ...Array.isArray(b) ? b : []]) {
+      const p = String(c && c.pubkey || "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(p) || seen.has(p)) continue;
+      seen.add(p);
+      out.push({ pubkey: p, url: c && typeof c.url === "string" ? c.url : "", name: c && typeof c.name === "string" ? c.name : "" });
+    }
+    return out;
+  }
+  async function _readRelayPrefs() {
+    if (!pub) return { prefs: null, complete: false };
+    let r;
+    try {
+      r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYPREFS_D] }], 6e3, true);
+    } catch (e) {
+      return { prefs: null, complete: false };
+    }
+    const ev = r && r.ev && r.ev.pubkey === pub ? r.ev : null;
+    if (ev) {
+      let o = null;
+      try {
+        o = JSON.parse(ev.content || "{}");
+      } catch (e) {
+        o = null;
+      }
+      return { prefs: o && typeof o === "object" && !Array.isArray(o) ? o : {}, complete: true, ev };
+    }
+    const asked = r && r.askedUrls || [];
+    const said = new Set(r && r.answeredUrls || []);
+    const fullyAnswered = asked.length > 0 && asked.every((u) => said.has(u));
+    return { prefs: null, complete: fullyAnswered };
+  }
+  async function _writeRelayPrefs(mutate) {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
+    const sk0 = sk, pub0 = pub;
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const norm = (o) => {
+      const n = o && typeof o === "object" ? { ...o } : {};
+      n.publicAuto = n.publicAuto !== false;
+      n.publicTarget = _clampPublicTarget("publicTarget" in n ? n.publicTarget : PUBLIC_TARGET_DEFAULT);
+      n.chosen = _mergeChosen(Array.isArray(n.chosen) ? n.chosen : [], []).slice(0, _communityCap(n.publicTarget));
+      return n;
+    };
+    return enrolSerial(async () => {
+      if (moved()) return { written: false, unknown: true };
+      const readPrefs = () => _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYPREFS_D] }], 6e3, true);
+      const read = await readPrefs();
+      if (moved()) return { written: false, unknown: true };
+      if (!_readCovers(read)) return { written: false, unknown: true };
+      const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
+      let cur = {};
+      if (mine) {
+        try {
+          cur = JSON.parse(mine.content || "{}") || {};
+        } catch (e) {
+          cur = {};
+        }
+      }
+      let next = norm(mutate({ ...cur }) || cur), floorAt = 0, repairs = 0;
+      for (; ; ) {
+        if (moved()) return { written: false, unknown: true };
+        const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAYPREFS_D]], content: JSON.stringify(next) }), sk);
+        const ev = await publish(signed, { background: true });
+        if (moved()) return { written: false, unknown: true };
+        if (!ev) return { written: false, failed: true };
+        const back = await readPrefs();
+        if (moved()) return { written: false, unknown: true };
+        if (!_readCovers(back)) return { written: false, unknown: true, unverified: true };
+        const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+        let got = null;
+        if (newest) {
+          try {
+            got = JSON.parse(newest.content || "{}");
+          } catch (e) {
+            got = null;
+          }
+        }
+        const landed = got && got.publicAuto === next.publicAuto && Number(got.publicTarget) === next.publicTarget && next.chosen.every((c) => (got.chosen || []).some((g) => String(g && g.pubkey || "").toLowerCase() === c.pubkey));
+        if (landed) return { written: true, prefs: got };
+        if (repairs >= 2) return { written: false, lost: true };
+        repairs++;
+        let base = {};
+        try {
+          base = JSON.parse(newest ? newest.content || "{}" : "{}") || {};
+        } catch (e) {
+          base = {};
+        }
+        next = norm(mutate({ ...base }) || base);
+        floorAt = (Number(newest && newest.created_at) || 0) + 1;
+      }
+    });
+  }
   var TOMB_PENDING_LS = "trinityone.steward.tomb-pending.";
   function _pendingTomb() {
     if (!pub) return [];
@@ -23390,6 +23493,33 @@ zoo`.split("\n");
     // 10-minute damper, `{ force: true }` to bypass it once.
     syncHeal: () => syncHeal(),
     autoSyncHeal,
+    // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
+    //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
+    //    through the same Auto-find mechanics. SAFEGUARDING NOTE (plan finding 18): a community operator sees only
+    //    pubkey-level data — the minors:/guardians:/approved: lists hold PUBKEYS (cleartext because the relay enforces
+    //    with them), and member NAMES are sealed under the congregation name key.
+    //
+    // READ for the console UI: { complete, publicAuto, publicTarget, chosen }. publicAuto is null while the read is
+    // inconclusive (the switch shows "Checking…"), true when the doc is absent and the read was complete (the opt-out
+    // DEFAULT), else the doc's value. B2 reads its own raw copy (fail-closed) — this resolved view is for the screen.
+    async relayPrefs() {
+      const { prefs, complete } = await _readRelayPrefs();
+      return {
+        complete,
+        publicAuto: complete ? prefs ? prefs.publicAuto !== false : true : null,
+        publicTarget: _clampPublicTarget(prefs && "publicTarget" in prefs ? prefs.publicTarget : PUBLIC_TARGET_DEFAULT),
+        chosen: prefs && Array.isArray(prefs.chosen) ? prefs.chosen : []
+      };
+    },
+    // The Settings switch and the target control — owner-key-only (a delegated console's write is refused at the relay
+    // and _writeRelayPrefs returns `skipped` on this console before it even tries).
+    setPublicAuto(on) {
+      return _writeRelayPrefs((prev) => ({ ...prev, publicAuto: !!on }));
+    },
+    setPublicTarget(n) {
+      const v = _clampPublicTarget(n);
+      return _writeRelayPrefs((prev) => ({ ...prev, publicTarget: v }));
+    },
     // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
     // C1: a Remove that actually changed the church's signed list republishes the authoritative kind-10002 so
     // member phones — which retire a row the newest 10002 omits — learn the drop and, with the member-side

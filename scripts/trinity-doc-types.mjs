@@ -128,6 +128,14 @@ export const DOC_TYPES = Object.freeze({
   // as RELAYS_D — this says WHICH boxes lose the whole corpus, so a delegated steward is not the authority for
   // it. The relay never READS it (note() has no branch); only consoles do, over authors:[churchpub].
   'trinityone/relays-removed': { write: 'church',    read: 'members', scope: 'author', note: 'plan A2 — the church\'s relay-removal tombstones [{pubkey, at}]: a Removed box\'s key, so heal/autoSync/B2 stop re-adding it and it loses full-corpus sync trust. OWNER-ONLY, sibling of trinityone/relays; a deliberate Add/Connect clears the key (the one un-tombstone path)' },
+  // THE COMMUNITY-RELAY OPT-OUT + CHOSEN SET (plan B1, 2026-11-20). { publicAuto, publicTarget, chosen:[{pubkey,url,name}] }.
+  // OWNER-ONLY, the same CHURCH_PUBS.has rule as RELAYS_D / RELAYS_REMOVED_D and for the same CLAUDE.md rule-10 reason:
+  // it decides whether, and up to how many, OTHER PEOPLE'S relay boxes auto-hold this church's whole corpus, so a
+  // delegated steward is not the authority for it (audit finding 13a). The relay NEVER INGESTS it (note() has no branch
+  // — it only STORES and SERVES it so the console can read it back); only the console reads it, over authors:[churchpub].
+  // Today's gateways already ACCEPT a church-signed copy via the kind-30078 church catch-all (re-audit finding 3); the
+  // explicit branch below is the hardening doc-registry demands once the type is registered, not a behaviour change.
+  'trinityone/relayprefs':    { write: 'church',    read: 'members', scope: 'author', note: 'plan B1 — the church\'s community-relay preferences { publicAuto, publicTarget, chosen:[{pubkey,url,name}] }: whether open community relays are adopted by default (opt-out), how many public boxes to aim for (default 5, 0-10), and the church-wide set adopted so the cap is per-CHURCH not per-console. OWNER-ONLY, sibling of trinityone/relays; the relay never ingests it, only consoles read it' },
   'trinityone/relay-net':     { write: 'church',    read: 'public',  scope: 'author', note: 'closed-network plan C3 — the church\'s own statement of WHICH RELAY BOXES ARE ITS NETWORK, as [{pubkey, alwaysOn, url?}]. NOT trinityone/relays, which means "cross-relay sync is on": syncEnable refuses to write that below two boxes (so a single-relay church could never author its own membership) and syncDisable writes [] to it (which would un-admit a church\'s own relay as a side effect of turning mirroring off). Add, never repurpose. The client matches on PUBKEY ONLY — `url` is an advisory hint about where the box was last seen, because a tunnelled relay changes address on every restart. READ IS PUBLIC (C4): under the client gate a phone will not publish anywhere until it has read this, so a newcomer who has scanned an invite must be able to read it BEFORE joining — the same reason joinpolicy: is public. It carries relay pubkeys and nothing about any person, and kind-10002 already publishes the same church\'s relay addresses to anyone' },
   'trinityone/network:':      { write: 'church',    read: 'members', scope: 'author', note: 'the church declares it joined a network, {joined, v, scopes}. N5c (2026-10-21, ported 2026-11-18): ALSO served to the network key it names while the join is live -- the ONE church document a network key may read; the scopes are the consent netReader enforces' },
   // THE CHAT TAG LABELS A CHURCH DEFINES (Prayer request, Testimony, …). UNDECLARED until 2026-09-22.
@@ -516,6 +524,7 @@ export const D = Object.freeze({
   RUNSHEET:       k('trinityone/runsheet:'),
   RELAYS:         k('trinityone/relays'),
   RELAYS_REMOVED: k('trinityone/relays-removed'),
+  RELAYPREFS:     k('trinityone/relayprefs'),
   RELAY_NET:      k('trinityone/relay-net'),
   NETWORK:        k('trinityone/network:'),
   BLOCKED:        k('trinityone/blocked:'),
