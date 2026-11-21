@@ -6232,6 +6232,59 @@ function _readCovers(r, leaving, droppable) {
 }
 // This church's own signed membership document, newest wins.
 function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAY_NET_D] }]); }
+
+// ── SAFEGUARDING BACKFILL ON ADOPT (reference/SAFEGUARDING-BOUNDARY.md) ──────────────────────────────────
+//
+// The relay ENFORCES a church's safeguarding from its OWN copy of four OWNER-SIGNED documents — minors:,
+// approved:, guardians:, blocked: — read into gateway.mjs's MINORS_BY / APPROVED_BY / GUARDIANS_BY / BLOCKED_BY
+// (each `d=<prefix><churchpub>`, author === the church key). Those are the ONLY safeguarding/authority documents
+// the gate consults: a child's DM refusal, the care-request reader test, the no-public-need / no-helper-listing
+// rules and the child-photo default all rest on minors:; approved: is who a minor MAY message; guardians: is the
+// parent↔child DM exemption; blocked: is the ban. The sealed per-member clearance: is NOT in this set — the relay
+// does not enforce with it (SAFEGUARDING-BOUNDARY.md appendix), so it is deliberately not backfilled.
+//
+// THE GAP THIS CLOSES. setMinors/setApproved/setGuardians/setBlocked publish ONLY at edit time, to the relays
+// listed THEN. A box the church has JUST adopted — manual Add/Connect, Auto-find, or the B2 auto-join — holds none
+// of them, and a sync-off church (the default; cross-relay sync needs ≥2 own boxes) never mirrors them either. A
+// box in the publish set WITHOUT these lists cannot make the refusal the church's own box makes, so it fails OPEN.
+// So the instant a box enters the publish set, send it the church's CURRENT copy of each of the four.
+//
+// VERBATIM, NEVER RE-SIGNED. We re-send the existing owner-signed event as-is (the enrolRelayNet `resend`/`deliver`
+// pattern): the owner's signature and authority are unchanged, and a verbatim copy can never replace anything newer
+// (newest-wins keeps the relay's own copy if it somehow already holds a fresher one). TARGETED to the new box only
+// — small pipes (reference/churches-run-on-small-pipes), and the other relays already hold the docs.
+//
+// EMPTY == ABSENT, SO NOTHING IS FABRICATED. The gate consults every list as `(MAP.get(cp) || EMPTY_SET).has(x)`,
+// so a church that created no document and an explicit empty list enforce identically. A document that never
+// existed has nothing to send; publishing a fabricated empty one would buy no enforcement. The residual — a child
+// in a church that marked NOBODY, for whom no minors: doc was ever published — is the pre-existing gap named in
+// SAFEGUARDING-BOUNDARY.md, not this fix's job.
+//
+// NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types; this only re-sends
+// documents it already accepts. Own-console only, matching every other church-doc writer (publishRelayList etc.):
+// a delegated/network view cannot author these owner-only docs, so it does not backfill them.
+//
+// CALLER (rule 2): addRelay — the ONE writer every adopt path passes through (manual Add/Connect in
+// app/stew-dashboard.jsx:6320/6455/6492, Auto-find's connectFoundRelays + autoPickRelays, and the B2
+// autoJoinPublicRelays pass all call window.Steward.addRelay). Centralised there so no path can skip the backstop.
+async function _backfillSafeguardTo(urls) {
+  try {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return;
+    const targets = [...new Set((urls || []).map(u => String(u || '')).filter(u => /^wss?:\/\//i.test(u)))];
+    if (!targets.length) return;
+    const cp = pub;
+    const ds = [MINORS_D + cp, APPROVED_D + cp, GUARDIANS_D + cp, BLOCKED_D + cp];
+    // Read all four current owner-signed docs IN PARALLEL (the smallest ordering window), from the relays that
+    // already hold them. _oneComplete returns the NEWEST event it saw across relaysRaw(), so the freshly-adopted
+    // empty box now in that set cannot blank the answer. Re-send each one, verbatim, to the new box.
+    await Promise.all(ds.map(async (d) => {
+      let ev = null;
+      try { const r = await _oneComplete([{ kinds: [30078], authors: [cp], '#d': [d] }]); ev = (r && r.ev && r.ev.pubkey === cp) ? r.ev : null; } catch (e) { ev = null; }
+      if (!ev || pub !== cp) return;   // never created -> nothing to enforce; or the console switched church mid-read
+      try { pool.publish(targets, ev); } catch (e) {}
+    }));
+  } catch (e) {}
+}
 async function relayNetEntries(cp) {
   if (!pub || (cp && cp !== pub)) return [];   // this console speaks for one church: its own
   const { ev } = await relayNetDoc();
@@ -18476,6 +18529,14 @@ window.Steward = {
     // only place it can clear. Without it an address removed once could never be adopted again, and a
     // steward who re-added it by hand would be the only thing holding it in the list.
     undeclineRelay(url);
+    // SAFEGUARDING BACKFILL: this box is now in the publish set (relaysRaw() -> extraRelays()), so send it the
+    // church's current safeguarding/authority documents — minors:/approved:/guardians:/blocked: — before church
+    // traffic routes to it, or it fails OPEN where the church's own box refuses. addRelay is the one writer every
+    // adopt path (manual Add/Connect, Auto-find, B2 auto-join) passes through, so the backstop can never be skipped
+    // by one of them; reached only when the box is genuinely NEW (the own/shared/duplicate guards returned above).
+    // Fire-and-forget and targeted; see _backfillSafeguardTo. The reads are async, so a small ordering window
+    // remains (the app-side audience choice is still primary — this is the relay-side backstop).
+    try { _backfillSafeguardTo([url]); } catch (e) {}
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },

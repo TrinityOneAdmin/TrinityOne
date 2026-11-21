@@ -20372,6 +20372,30 @@ zoo`.split("\n");
   function relayNetDoc() {
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
+  async function _backfillSafeguardTo(urls) {
+    try {
+      if (!sk || !pub || actingChurch || _viewingNetwork()) return;
+      const targets = [...new Set((urls || []).map((u) => String(u || "")).filter((u) => /^wss?:\/\//i.test(u)))];
+      if (!targets.length) return;
+      const cp = pub;
+      const ds = [MINORS_D + cp, APPROVED_D + cp, GUARDIANS_D + cp, BLOCKED_D + cp];
+      await Promise.all(ds.map(async (d) => {
+        let ev = null;
+        try {
+          const r = await _oneComplete([{ kinds: [30078], authors: [cp], "#d": [d] }]);
+          ev = r && r.ev && r.ev.pubkey === cp ? r.ev : null;
+        } catch (e) {
+          ev = null;
+        }
+        if (!ev || pub !== cp) return;
+        try {
+          pool.publish(targets, ev);
+        } catch (e) {
+        }
+      }));
+    } catch (e) {
+    }
+  }
   async function relayNetEntries(cp) {
     if (!pub || cp && cp !== pub) return [];
     const { ev } = await relayNetDoc();
@@ -32430,6 +32454,10 @@ zoo`.split("\n");
       if (cur.includes(url)) return false;
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
       undeclineRelay(url);
+      try {
+        _backfillSafeguardTo([url]);
+      } catch (e) {
+      }
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return url;
     },
