@@ -9279,6 +9279,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const _guardData = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
   const guardians = _guardData.links || {};
   const guardiansClosed = _guardData.closed || {};
+  const guardiansAt = Number(_guardData.at) || 0;   // which copy of the guardians document this screen holds (0 = none) -- approveGuardian
   const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)) && !guardiansClosed[r.child + '|' + r.parent]);
   const parentSet = new Set(); Object.values(guardians).forEach(ps => (ps || []).forEach(p => parentSet.add(p)));
   const nameByPub = {}; members.forEach(m => { if (m.name) nameByPub[m.pubkey] = m.name; });
@@ -9376,6 +9377,30 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = async (r) => {
     const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
+    // BOTH LISTS MUST BE REAL BEFORE EITHER IS REPLACED (integration audit 2026-11-21, the cold-list wipe).
+    // setGuardians and setMinors below each REPLACE a whole document, built from what this screen holds. On a
+    // console those documents have not reached, that is {} and [] -- so one Confirm published a parent-link
+    // map of ONE link (and no closed pairs) and a children list of ONE child. toggleMinor has refused this for
+    // the children list since 2026-10-13; this path never did.
+    //
+    // HERE, BEFORE setGuardians, and not at setMinors: refusing after the link is written would leave a child
+    // linked and unmarked.
+    //
+    // THREE things, because the two documents reach this screen by TWO subscriptions:
+    //   sg.minorsKnown     the children list is known (see toggleMinor for why this and not `loaded`: a church
+    //                      that has never marked a child must still be able to confirm its first guardian)
+    //   sg.guardiansKnown  the parent-link map is known TO subscribeSafeguard, on the same kind of evidence
+    //   guardiansAt        ...but `guardians` / `guardiansClosed` here come from subscribeGuardians, a separate
+    //                      subscription whose bare EOSE proves nothing. So the copy this screen would write from
+    //                      must be at least the copy subscribeSafeguard holds (both 0 = no document exists).
+    // Fails CLOSED: a hook default, or an engine that does not say, carries none of these and is refused.
+    // NOT covered, deliberately (owner, 2026-11-21): linkParent has the same shape and is scheduled separately,
+    // and so is a relay that answers while logged in without holding the document.
+    if (sg.minorsKnown !== true || sg.guardiansKnown !== true || guardiansAt < (Number(sg.guardiansAt) || 0)) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Nothing was changed \u2014 this console hasn\u2019t received your church\u2019s '
+        + 'list of children and parent links yet, and confirming now would take every other child and every other parent link off them. Try again in a moment.' });
+      return null;
+    }
     // The guard linkParent has always had, and this path did not: a request from someone the church has marked
     // as a child must be refused, not confirmed. A child is never a guardian (D2; reference/DOMAIN.md).
     if (minorsSet.has(r.parent)) {

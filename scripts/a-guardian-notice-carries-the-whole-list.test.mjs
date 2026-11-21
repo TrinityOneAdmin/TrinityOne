@@ -93,7 +93,7 @@ function run(anchor, what, scope) {
   return new Function('scope', 'with (scope) { ' + body + '\nreturn ' + what + '; }')(P_);
 }
 const baseScope = (guardians, Steward, extra = {}) => ({
-  window: { Steward }, guardians, guardiansClosed: {}, sg: { minors: [], approved: [], minorsKnown: true },   // WARM: toggleMinor refuses a cold whole-list replace (FIX 1, 2026-10-13)
+  window: { Steward }, guardians, guardiansClosed: {}, guardiansAt: 0, sg: { minors: [], approved: [], minorsKnown: true, guardiansKnown: true, guardiansAt: 0 },   // WARM: toggleMinor refuses a cold whole-list replace (FIX 1, 2026-10-13), and approveGuardian a cold confirm (2026-11-21)
   minorsSet: new Set(), setMinorNotice: () => {}, _reseal: () => {}, nameByPub: { [C1]: 'Cleo' }, Promise, Math, Date, Set, Object, Array,
   ...extra,
 });

@@ -12410,6 +12410,15 @@ window.Steward = {
     // Same shape as clearedKnown, for the same reason: bare EOSE also fires on a 4.4s client timeout and on a
     // dropped socket, so it is evidence only WHILE AUTHENTICATED. Audit 2026-09-02 #3.
     const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed()) || lateAuthed();
+    // IS THE PARENT-LINK MAP KNOWN? A FOURTH QUESTION (2026-11-21, integration audit: the cold-list wipe).
+    // Same shape as the two above, on the guardians document's own evidence: we hold it, or the relay finished
+    // while we were logged in. NOT minorsKnown under another name: minorsKnown turns true the moment the minors
+    // document arrives, which can be before the guardians document riding the same REQ has. `guardiansAt` is
+    // the created_at of the copy held here (0 = none) -- so a screen that reads the map from the SEPARATE
+    // subscribeGuardians (which has no evidence of its own: its EOSE is the bare pool one) can tell whether what
+    // it holds is at least this copy. Both ADDITIVE. User of the two fields: approveGuardian (stew-dashboard.jsx).
+    let sawGuardians = false;
+    const guardiansKnown = () => sawGuardians || (sawEose && _isRelayAuthed()) || lateAuthed();
     // …AND WHEN THE LOGIN COMES AFTER THE ANSWER (2026-11-11, audit F1). With this REQ narrowed to its own four
     // documents it is often the FIRST on a fresh socket, and when none of the gated documents exists the relay
     // answers EOSE at once, with no login challenge — so both questions above were asked at a moment no login had
@@ -12431,7 +12440,7 @@ window.Steward = {
     };
     let stopped = false, waiting = null;
     const reaskOnLogin = () => {
-      if (stopped || waiting || !eoseOn.size || (minorsKnown() && clearedKnown())) return;
+      if (stopped || waiting || !eoseOn.size || (minorsKnown() && clearedKnown() && guardiansKnown())) return;
       waiting = () => { waiting = null; if (stopped) return; emit(); reaskOnLogin(); };
       _keyReadAfterAuth(waiting);
     };
@@ -12453,7 +12462,7 @@ window.Steward = {
     // ONLY the Overview renewal banner reads the *Seed fields, and only until clearedKnown. So AUDIT-2026-07-27
     // stays shut AND no fail-closed cold-start becomes fail-open.
     const _sgSeed = _sgClearGet(pub);
-    const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
+    const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, guardiansKnown: guardiansKnown(), guardiansAt: tGuardians, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
     if (_sgSeed) emit();   // paint the last-known clearance instantly via the *Seed fields (approved/expiry stay [])
     // ONE SUBSCRIPTION PER RELAY (2026-11-11, audit of dfd1a66c). The pool-level read this replaced could not say WHICH
     // relay answered: its oneose fires once every relay is "finished", a relay's CLOSED counts as finished while its
@@ -12515,7 +12524,7 @@ window.Steward = {
           emit(); }
         else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); emit(); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; sawGuardians = true; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -13274,9 +13283,12 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  subscribeGuardians(onData) {   // delivers { links: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs } }
+  subscribeGuardians(onData) {   // delivers { links: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs }, at }
     let cur = {}, curClosed = {}, latest = 0;
-    const _emit = () => onData({ links: cur, closed: curClosed });
+    // `at` (2026-11-21, ADDITIVE): the created_at of the copy this map was read from, 0 while none has arrived.
+    // This subscription cannot say whether an empty map is honest; subscribeSafeguard can (guardiansKnown), and
+    // `at` is what lets a caller check the two hold the same copy. User: approveGuardian (stew-dashboard.jsx).
+    const _emit = () => onData({ links: cur, closed: curClosed, at: latest });
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [GUARDIANS_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';

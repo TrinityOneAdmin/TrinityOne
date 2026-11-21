@@ -26209,6 +26209,8 @@ zoo`.split("\n");
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed() || lateAuthed();
       const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed() || lateAuthed();
+      let sawGuardians = false;
+      const guardiansKnown = () => sawGuardians || sawEose && _isRelayAuthed() || lateAuthed();
       const eoseOn = /* @__PURE__ */ new Map();
       const lateAuthed = () => {
         try {
@@ -26219,7 +26221,7 @@ zoo`.split("\n");
       };
       let stopped = false, waiting = null;
       const reaskOnLogin = () => {
-        if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown()) return;
+        if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown() && guardiansKnown()) return;
         waiting = () => {
           waiting = null;
           if (stopped) return;
@@ -26229,7 +26231,7 @@ zoo`.split("\n");
         _keyReadAfterAuth(waiting);
       };
       const _sgSeed = _sgClearGet(pub);
-      const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
+      const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, guardiansKnown: guardiansKnown(), guardiansAt: tGuardians, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
       if (_sgSeed) emit();
       const relayUp = (url) => {
         try {
@@ -26333,6 +26335,7 @@ zoo`.split("\n");
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
             tGuardians = e.created_at;
+            sawGuardians = true;
             try {
               guardians = JSON.parse(e.content).links || {};
             } catch {
@@ -26912,7 +26915,7 @@ zoo`.split("\n");
     },
     subscribeGuardians(onData) {
       let cur = {}, curClosed = {}, latest = 0;
-      const _emit = () => onData({ links: cur, closed: curClosed });
+      const _emit = () => onData({ links: cur, closed: curClosed, at: latest });
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [GUARDIANS_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";

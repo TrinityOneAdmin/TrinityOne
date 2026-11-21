@@ -37,20 +37,23 @@ test('writeSpread: the shipped engine reports landed/missed beside the CONFIGURE
 // write that never went out — in which case whatever `stale` spread an EARLIER write left behind is what
 // writeSpread still answers with. `mark` is the same for setMinors (default: lands everywhere).
 const ALL = (...r) => ({ ok: true, landed: r, missed: [], configured: r });
-function liftApprove({ write, stale, mark, minors = [], names = {} }) {
-  const notices = [], calls = { setMinors: [], reseal: [], notified: [] };
+// `sg` / `links` / `closed` / `at` are what the two hooks hand the screen. The default is a WARM console: both
+// lists known, and the screen's copy of the guardians document the one the engine holds (the cold-list rows
+// at the foot of this file turn each of those off in turn).
+function liftApprove({ write, stale, mark, minors = [], names = {}, sg, links = {}, closed, at = 0 }) {
+  const notices = [], calls = { setMinors: [], setGuardians: [], reseal: [], notified: [] };
   const spreads = { guardians: stale || null, minors: null };
   const doWrite = (which, impl) => { const sp = impl(); if (!sp) return null; spreads[which] = { landed: sp.landed, missed: sp.missed, configured: sp.configured, at: Date.now() }; return sp.ok ? true : null; };
   const body = fnBody(DASH, 'const approveGuardian = async (r) => {', 'approveGuardian') + '; return approveGuardian;';
-  const fn = new Function('window', 'minorsSet', 'nameByPub', 'guardians', 'guardiansClosed', 'setMinorNotice', 'sg', '_reseal', body)(
+  const fn = new Function('window', 'minorsSet', 'nameByPub', 'guardians', 'guardiansClosed', 'guardiansAt', 'setMinorNotice', 'sg', '_reseal', body)(
     { Steward: {
-      setGuardians: async () => doWrite('guardians', write),
+      setGuardians: async (map, cl) => { calls.setGuardians.push([map, cl]); return doWrite('guardians', write); },
       setMinors: async (list) => { calls.setMinors.push(list); return doWrite('minors', mark || (() => ALL('r1', 'r2'))); },
       writeSpread: (which) => spreads[which] || null,
       notifyGuardianList: (parent, links) => { calls.notified.push([parent, links]); },
     } },
-    new Set(minors), names, {}, undefined, (n) => notices.push(n),
-    { minors: minors.slice(), approved: [], minorsKnown: true }, (mins, appr, who, guards) => calls.reseal.push({ mins, who, guards }));
+    new Set(minors), names, links, closed, at, (n) => notices.push(n),
+    sg || { minors: minors.slice(), approved: [], minorsKnown: true, guardiansKnown: true, guardiansAt: at }, (mins, appr, who, guards) => calls.reseal.push({ mins, who, guards }));
   return { fn, notices, calls };
 }
 const CHILD = 'c'.repeat(64), PARENT = 'p'.repeat(64);
@@ -98,9 +101,9 @@ test('a guardian link NO relay accepted still says so plainly (control)', async 
 test('a spread the engine cannot give falls back to the total-failure wording, never a crash', async () => {
   const notices = [];
   const body = fnBody(DASH, 'const approveGuardian = async (r) => {', 'approveGuardian') + '; return approveGuardian;';
-  const fn = new Function('window', 'minorsSet', 'nameByPub', 'guardians', 'guardiansClosed', 'setMinorNotice', body)(
+  const fn = new Function('window', 'minorsSet', 'nameByPub', 'guardians', 'guardiansClosed', 'guardiansAt', 'sg', 'setMinorNotice', body)(
     { Steward: { setGuardians: async () => null, writeSpread: () => { throw new Error('old engine'); } } },
-    new Set(), {}, {}, undefined, (n) => notices.push(n));
+    new Set(), {}, {}, undefined, 0, { minors: [], minorsKnown: true, guardiansKnown: true, guardiansAt: 0 }, (n) => notices.push(n));
   await fn({ child: 'c'.repeat(64), parent: 'p'.repeat(64) });
   assert.match(notices[0].text, /nobody has been linked/);
 });
@@ -206,4 +209,91 @@ test('marking a child with every configured relay landed stays as quiet as befor
   const { fn, notices } = liftToggle({ spread: { landed: ['r1', 'r2'], missed: [], configured: ['r1', 'r2'], at: 1 } });
   await fn('k'.repeat(64));
   assert.deepEqual(notices, [null], 'full coverage must not grow a warning');
+});
+
+// ── THE COLD-LIST WIPE (integration audit 2026-11-21) ───────────────────────────────────────────────────
+// approveGuardian REPLACES two whole documents built from what the screen holds. On a console they have not
+// reached, that is {} and [] -- one Confirm published a parent-link map of one link and a children list of
+// one child. These drive the real function (sliced above, verbatim) and read what it handed the engine.
+const KID1 = '1'.repeat(64), KID2 = '2'.repeat(64), MUM1 = 'a'.repeat(64);
+const EVERYWHERE = () => ALL('r1', 'r2');
+const refused = async (opts, why) => {
+  const a = liftApprove({ write: EVERYWHERE, ...opts });
+  const r = await a.fn({ child: CHILD, parent: PARENT });
+  assert.deepEqual(a.calls.setGuardians, [], why + ': the parent-link map was REPLACED');
+  assert.deepEqual(a.calls.setMinors, [], why + ': the children list was REPLACED');
+  assert.deepEqual(a.calls.reseal, [], why + ': a child’s phone was re-sealed off lists nobody holds');
+  assert.deepEqual(a.calls.notified, [], why + ': the parent was told of a link that was not made');
+  assert.equal(r, null);
+  assert.equal(a.notices.length, 1, why + ': the steward was told nothing');
+  assert.equal(a.notices[0].tone, 'fail');
+  assert.equal(a.notices[0].pk, CHILD);
+  assert.match(a.notices[0].text, /^Nothing was changed/);
+  assert.match(a.notices[0].text, /hasn’t received your church’s list of children and parent links yet/);
+  assert.match(a.notices[0].text, /Try again in a moment/);
+};
+
+test('COLD: a Confirm pressed before either list has arrived writes NOTHING and says so', async () => {
+  // exactly what the two hooks hand a screen on first paint (app/steward-root.jsx)
+  await refused({ sg: { minors: [], approved: [], expiry: {}, minorsKnown: false, minorsDocSeen: false }, links: {}, closed: {} }, 'a cold console');
+});
+
+test('COLD, fail closed: a console with no safeguarding subscription at all (no flags) is refused', async () => {
+  await refused({ sg: { minors: [] } }, 'a console whose engine says nothing about what is known');
+});
+
+test('the children list known but the parent-link map NOT: still refused — minorsKnown alone is not the gate', async () => {
+  await refused({ minors: [KID1, KID2], sg: { minors: [KID1, KID2], approved: [], minorsKnown: true, guardiansKnown: false, guardiansAt: 0 } }, 'a console that holds the children list only');
+});
+
+test('…and the other way round — the parent-link map known and current, the children list NOT: still refused', async () => {
+  // the guardians document can equally be the one that arrives first; the children list is then still []
+  await refused({ links: { [KID1]: [MUM1] }, at: 900, sg: { minors: [], approved: [], minorsKnown: false, guardiansKnown: true, guardiansAt: 900 } }, 'a console that holds the parent links only');
+});
+
+test('both known, but the screen’s own copy of the map is OLDER than the one the engine holds: refused', async () => {
+  // the screen reads the map from a second subscription; here that one has delivered nothing (at 0) or an old copy
+  const known = { minors: [KID1], approved: [], minorsKnown: true, guardiansKnown: true, guardiansAt: 900 };
+  await refused({ minors: [KID1], sg: known, links: {}, at: 0 }, 'a screen whose map has not arrived');
+  await refused({ minors: [KID1], sg: known, links: { [KID1]: [MUM1] }, at: 899 }, 'a screen holding a stale map');
+});
+
+test('CONTROL, WARM: with both lists known the confirm goes through, and KEEPS every other child, link and closed pair', async () => {
+  const closed = { [KID2 + '|' + MUM1]: 1700000000 };
+  const a = liftApprove({ write: EVERYWHERE, minors: [KID1, KID2], links: { [KID1]: [MUM1] }, closed, at: 900,
+    sg: { minors: [KID1, KID2], approved: [], minorsKnown: true, guardiansKnown: true, guardiansAt: 900 } });
+  assert.equal(await a.fn({ child: CHILD, parent: PARENT }), true, 'a legitimate confirm on a warm console was refused');
+  assert.deepEqual(a.calls.setGuardians, [[{ [KID1]: [MUM1], [CHILD]: [PARENT] }, closed]]);
+  assert.deepEqual(a.calls.setMinors, [[KID1, KID2, CHILD]]);
+  assert.deepEqual(a.notices, []);
+});
+
+test('CONTROL: the screen’s map NEWER than the engine’s copy is not a refusal, and neither is a church’s FIRST guardian', async () => {
+  const newer = liftApprove({ write: EVERYWHERE, minors: [KID1], links: { [KID1]: [MUM1] }, at: 901,
+    sg: { minors: [KID1], approved: [], minorsKnown: true, guardiansKnown: true, guardiansAt: 900 } });
+  assert.equal(await newer.fn({ child: CHILD, parent: PARENT }), true);
+  assert.deepEqual(newer.calls.setMinors, [[KID1, CHILD]]);
+  // a church that has never marked a child or linked a parent: no document of either kind exists, `loaded` is
+  // false for ever, and the relay's authenticated answer is the only evidence there will ever be
+  const first = liftApprove({ write: EVERYWHERE, links: {}, at: 0,
+    sg: { minors: [], approved: [], loaded: false, minorsDocSeen: false, minorsKnown: true, guardiansKnown: true, guardiansAt: 0 } });
+  assert.equal(await first.fn({ child: CHILD, parent: PARENT }), true, 'a church cannot confirm its first guardian');
+  assert.deepEqual(first.calls.setGuardians, [[{ [CHILD]: [PARENT] }, undefined]]);
+  assert.deepEqual(first.calls.setMinors, [[CHILD]]);
+});
+
+// ── the engine half, from the SHIPPED bundle: subscribeGuardians says WHICH copy it delivered ────────────
+test('subscribeGuardians (shipped): `at` is 0 until a document arrives, then that document’s created_at — newest wins', () => {
+  const body = fnBody(BUNDLE, 'subscribeGuardians(onData) {', 'subscribeGuardians');
+  let h = null; const out = [];
+  const S = new Function('pool', 'relays', 'pub', 'GUARDIANS_D', 'NET', '_authFuture', '_byChurch', 'return ({ ' + body + ' });')(
+    { subscribeMany: (u, f, handlers) => { h = handlers; return { close() {} }; } }, () => ['r1'], 'CP', 'trinityone/guardians:', 'trinityone', () => false, () => true);
+  S.subscribeGuardians((d) => out.push(d));
+  const doc = (ts, links) => ({ created_at: ts, tags: [['d', 'trinityone/guardians:CP']], content: JSON.stringify({ links }) });
+  h.oneose();
+  assert.deepEqual(out.pop(), { links: {}, closed: {}, at: 0 }, 'an answer with no document must read as "no copy held"');
+  h.onevent(doc(900, { [KID1]: [MUM1] }));
+  assert.deepEqual(out.pop(), { links: { [KID1]: [MUM1] }, closed: {}, at: 900 });
+  h.onevent(doc(800, {}));
+  assert.equal(out.length, 0, 'an OLDER copy was delivered over a newer one');
 });
