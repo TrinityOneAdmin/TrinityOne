@@ -23555,7 +23555,10 @@ zoo`.split("\n");
       try {
         const nsk = privateKeyFromSeedWords(m);
         const np = getPublicKey2(nsk);
-        const q = await _queryAsKey(relays(), nsk, [{ kinds: [30078], "#d": [NETWORK_D + np], limit: 8 }], 4e3);
+        const q = await _queryAsKey(relays(), nsk, [
+          { kinds: [30078], authors: [np], "#d": [NETKEY_D + np], limit: 2 },
+          { kinds: [30078], "#d": [NETWORK_D + np], limit: 8 }
+        ], 4e3);
         return !!(q && Array.isArray(q.events) && q.events.length > 0);
       } catch (e) {
         return false;

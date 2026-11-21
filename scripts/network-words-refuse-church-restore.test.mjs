@@ -32,9 +32,9 @@ function rig({ queryImpl }) {
   const q = async (urls, sk, filters, maxWait) => { calls.query.push({ urls, filters, maxWait }); return queryImpl(); };
   const src = 'return ({' + slice('async _phraseIsNetworkKey(m) {') + ',' + slice('async adoptChurch(payload) {') + '});';
   const S = new Function('privateKeyFromSeedWords', 'getPublicKey', 'getPublicKey2', 'getPublicKey3',
-    '_queryAsKey', 'relays', 'NETWORK_D', 'window',
+    '_queryAsKey', 'relays', 'NETWORK_D', 'NETKEY_D', 'window',
     src)(privateKeyFromSeedWords, getPublicKey, getPublicKey, getPublicKey,
-    q, () => ['ws://127.0.0.1:1/relay'], NETWORK_D, holder);
+    q, () => ['ws://127.0.0.1:1/relay'], NETWORK_D, 'trinityone/netkey:', holder);
   holder.Steward._phraseIsNetworkKey = (m) => S._phraseIsNetworkKey(m);
   holder.Steward.restoreKey = (m) => { calls.restore.push(m); return { npub: 'npub1test' }; };
   return { S, calls };
@@ -51,7 +51,18 @@ test('network words are REFUSED: nothing restored, the error says where the netw
   // control that the rig asked the real question: the shipped code derived THIS phrase's pubkey and asked
   // for ITS network declaration — a broken derivation or a stubbed-over guard both fail here.
   assert.equal(calls.query.length, 1);
-  assert.deepEqual(calls.query[0].filters[0]['#d'], [NETWORK_D + NP]);
+  // RS-3 (2026-11-21): the join-declaration filter alone failed LIVE — the relay's N5c gate can withhold
+  // every join doc from the derived key, and the detection fell open. The FIRST filter must be the
+  // network's own self-authored netkey doc, which the own-events read rule serves unconditionally.
+  assert.deepEqual(calls.query[0].filters[0], { kinds: [30078], authors: [NP], '#d': ['trinityone/netkey:' + NP], limit: 2 },
+    'the self-authored netkey signal is gone — detection depends on the gated join docs again (RS-3)');
+  assert.deepEqual(calls.query[0].filters[1]['#d'], [NETWORK_D + NP]);
+});
+
+test('a rig that serves ONLY the self-authored netkey doc still refuses (the live RS-3 shape)', async () => {
+  const { S, calls } = rig({ queryImpl: () => ({ events: [{ id: 'k', pubkey: NP, tags: [['d', 'trinityone/netkey:' + NP]] }], complete: true }) });
+  await assert.rejects(() => S.adoptChurch(WORDS), (e) => e.networkKey === true);
+  assert.equal(calls.restore.length, 0, 'the N5c-gated rig booted the church console again (RS-3 live failure)');
 });
 
 test('a tombstoned network declaration still marks the key as a network’s (any copy counts)', async () => {

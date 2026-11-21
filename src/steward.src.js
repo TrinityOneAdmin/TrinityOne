@@ -9945,7 +9945,19 @@ window.Steward = {
     try {
       const nsk = privateKeyFromSeedWords(m);   // a bad phrase throws → not our question; restoreKey answers it
       const np = getPublicKey(nsk);
-      const q = await _queryAsKey(relays(), nsk, [{ kinds: [30078], '#d': [NETWORK_D + np], limit: 8 }], 4000);
+      // TWO SIGNALS, read AS the derived key on one short-lived socket (sim 2026-11-21 RS-3: the join
+      // declarations alone were NOT enough live — the relay's N5c gate serves them only when it can place
+      // the authors as this network's registered churches, and on the failing rig it served NONE, so the
+      // detection fell open and the church console booted as the network after all):
+      //   • netkey:<np> AUTHORED BY np — the ring doc every created network writes about itself. The
+      //     relay's FIRST read rule (your own event is always readable by you) serves it to the authed np
+      //     unconditionally, and no church key ever authors a netkey doc for its own pubkey.
+      //   • network:<np> join declarations — kept as the second signal for networks whose relays do serve
+      //     them here.
+      const q = await _queryAsKey(relays(), nsk, [
+        { kinds: [30078], authors: [np], '#d': [NETKEY_D + np], limit: 2 },
+        { kinds: [30078], '#d': [NETWORK_D + np], limit: 8 },
+      ], 4000);
       return !!(q && Array.isArray(q.events) && q.events.length > 0);   // any copy — even a tombstone — marks the KEY as a network's
     } catch (e) { return false; }
   },
