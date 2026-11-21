@@ -1405,6 +1405,13 @@ async function adoptChurchNetDocAddresses(cp, opts) {
       if (gone.length) _dropRevokedNetDocRows(cp, gone, rec);
     }
     const added = [];
+    // OWN-FIRST ORDERING IS EMERGENT, NOT AN EXPLICIT SORT. This loop adopts `entries` in document order and stops
+    // at MEMBER_NETDOC_ADOPT_MAX, so WHICH boxes fill a phone's 8 slots depends entirely on that order. Today the
+    // church's OWN box lands first because the console signs it (enrolRelayNet) before the background B2 auto-join
+    // pass APPENDS community boxes — relay-net is built own-then-community, so a phone keeps its own box. Nothing
+    // here enforces that: a future writer that PREPENDED a community key to the relay-net document would make a
+    // phone fill its cap community-first and could push the church's own box past slot 8. If that ever matters,
+    // sort own-first HERE rather than relying on the document's accidental order.
     for (const e of (entries || [])) {
       const u = _netDocDialUrl(e && e.url);
       if (!u) continue;

@@ -400,20 +400,27 @@ function runKeyDistributorEffect(steward) {
   return { timers, fire: (t) => (listeners.get(t) || []).slice().forEach(f => f()) };
 }
 
-test('POINT OF USE: the console asks for a sync heal on boot and on every churn signal — cut the wire and this goes red', async () => {
-  let heals = 0, enrols = 0;
+test('POINT OF USE: the console asks for a sync heal AND the community auto-join on boot and on every churn signal — cut either wire and this goes red', async () => {
+  let heals = 0, enrols = 0, joins = 0;
   const e = runKeyDistributorEffect({
     autoEnrolRelayNet: async () => { enrols++; return null; },
     autoSyncHeal: async (opts) => { heals++; assert.equal(opts, undefined, 'the background trigger must NOT force past the damper'); return {}; },
+    // FIX 2 (rule 1): the B2 community auto-join is wired to the SAME effect. Without this assertion, deleting the
+    // autoJoinPublicRelaysAuto call from the effect left the whole suite green — a well-tested engine nobody calls.
+    autoJoinPublicRelaysAuto: async (opts) => { joins++; assert.equal(opts, undefined, 'the background auto-join must NOT force past its own damper'); return {}; },
   });
   assert.equal(heals, 0, 'the heal ran before the deferred timer — it competes with first paint');
+  assert.equal(joins, 0, 'the auto-join ran before the deferred timer — it competes with first paint');
   for (const fn of e.timers) fn();
   await settle();
   assert.equal(heals, 1,
     'THE CONSOLE NEVER ASKS FOR A HEAL — syncHeal is an engine nobody calls, so no church\'s sync list ever heals (rule 1)');
+  assert.equal(joins, 1,
+    'THE CONSOLE NEVER ASKS FOR THE COMMUNITY AUTO-JOIN — autoJoinPublicRelaysAuto is wired to nothing, so community relays are never adopted (rule 1)');
   e.fire('steward-relay-returned'); e.fire('focus'); e.fire('steward-relays');
   await settle();
-  assert.equal(heals, 4, 'the churn signals (relay returned / focus / steward-relays) do not re-ask');
+  assert.equal(heals, 4, 'the churn signals (relay returned / focus / steward-relays) do not re-ask for the heal');
+  assert.equal(joins, 4, 'the churn signals (relay returned / focus / steward-relays) do not re-ask for the auto-join');
   assert.ok(enrols >= 1, 'CONTROL: the enrolment half of the same effect stopped running — the slice is broken, not the wire');
 });
 
