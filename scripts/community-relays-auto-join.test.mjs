@@ -5,7 +5,8 @@
 // It proves, with the real rankOffersByLatency / _communityCap / _mergeChosen lifted beside it (never stubbed, so the
 // cap and the ordering are the shipped ones):
 //   1. it skips unless own console, prefs read COMPLETE, publicAuto on;
-//   2. the cap counts LISTED (chosen + canonical pins), NOT answering — an outage never opens a slot;
+//   2. the cap counts the LIVE relay-net community set (excluding canonical/shared pins + the church's own box),
+//      NOT the `chosen` bookkeeping doc and NOT who answered — so a stale/empty `chosen` can't over-adopt (FIX 1);
 //   3. a pick is REGISTERED before it counts, and a 403 / 429 skips to the next candidate;
 //   4. declined / tombstoned / shared / already-listed candidates are skipped;
 //   5. a successful pick is signRelay'd into relay-net, recorded in `chosen`, and publishRelayList is called;
@@ -50,7 +51,15 @@ function runJoin(opts = {}) {
     _isDeclined: (u) => declined.includes(u),
     isSharedRelaySpelling: (u) => shared.includes(u),
     verifyRelayIdentity: async (u) => ({ relayPub: keyOf(u) }),
-    _writeRelayPrefs: async (mutate) => { const r = mutate({ chosen: prefs && prefs.chosen }); writtenChosen.push(r.chosen); return { written: true }; },
+    // FIX 1 collaborators: the live-count deficit excludes canonical/shared pins (sharedRelayKeys) and this
+    // church's OWN box(es) (the gate's ALREADY-PROVED key — a synchronous cache read, never a probe). The default
+    // world has none of either, so every relay-net / chosen key counts as community exactly as before.
+    sharedRelayKeys: () => opts.sharedKeys || [],
+    relayNetCandidates: () => opts.ownUrls || [],
+    selfPublicRelay: () => '',
+    ownRelay: () => '',
+    _gate: { provedKey: (u) => (opts.ownKeyAt && opts.ownKeyAt(u)) || '' },
+    _writeRelayPrefs: async (mutate) => { const r = mutate({ chosen: prefs && prefs.chosen }); writtenChosen.push(r.chosen); return opts.writePrefs || { written: true }; },
     window: { Steward: {
       registerAtRelay: async (u) => { log.push('reg:' + u); return reg(u); },
       addRelay: (u) => { log.push('add:' + u); return u; },
@@ -105,6 +114,42 @@ test('2. the cap counts LISTED (chosen + canonical), NOT answering — an outage
   const lr = await lowered.run();
   assert.equal(lr.atTarget, true, 'target below current chosen still adopted');
   assert.equal(lowered.adopted().length, 0);
+});
+
+test('FIX 1 — the deficit counts the LIVE relay-net community set (excluding pins + own box), not the stale `chosen`', async () => {
+  const canonical = key('ca');                                          // a canonical/shared pin, signed into relay-net
+  const own = key('07');                                                // this church's OWN box key, proved at its address
+  const comm = (n) => Array.from({ length: n }, (_, i) => key('8' + i));// community-box keys already in relay-net
+
+  // (a) NO OVER-ADOPTION. 4 community boxes are ALREADY in relay-net, but this console's `chosen` read came back
+  //     EMPTY (a swallowed write-back, or a SECOND owner console). cap 4. Counted from reality the church is full →
+  //     adopt NOTHING. Counted from the stale `chosen` the deficit is 4 and the pass would DOUBLE the church past
+  //     its cap, with nothing to auto-remove it — the exact defect FIX 1 closes.
+  {
+    const offers = [offer(1, 10), offer(2, 20), offer(3, 30), offer(4, 40)];   // fresh keys, NOT in relay-net
+    const j = runJoin({ offers, prefs: { publicAuto: true, publicTarget: 5, chosen: [] }, listedKeys: comm(4) });
+    const r = await j.run();
+    assert.equal(r.cap, 4);
+    assert.equal(r.atTarget, true, 'the live relay-net set already fills the cap — the pass must NOT adopt more');
+    assert.equal(j.adopted().length, 0, 'OVER-ADOPTION: it counted the stale `chosen`, not relay-net, and adopted past the cap');
+  }
+
+  // (b) PINS AND THE OWN BOX DO NOT COUNT as community. relay-net lists 2 community boxes + the canonical pin + the
+  //     church's own box (4 keys), cap 4. If those two were counted the deficit would be 0 and nothing would adopt;
+  //     counted correctly the community deficit is 2, so the two fastest fresh candidates are taken.
+  {
+    const offers = [offer(1, 10), offer(2, 20), offer(3, 30)];
+    const j = runJoin({
+      offers, prefs: { publicAuto: true, publicTarget: 5, chosen: [] },
+      listedKeys: [...comm(2), canonical, own],
+      sharedKeys: [canonical],
+      ownUrls: ['wss://self.example/relay'],
+      ownKeyAt: (u) => (u === 'wss://self.example/relay' ? own : ''),   // the gate's CACHED proof — no probe
+    });
+    const r = await j.run();
+    assert.equal(r.listed, 2, 'the canonical pin and/or the own box were counted toward the community cap');
+    assert.equal(j.adopted().length, 2, 'pins/own box ate community slots — the live-community count must exclude them');
+  }
 });
 
 test('3. a pick is REGISTERED before it counts; a 403 / 429 skips to the next candidate', async () => {

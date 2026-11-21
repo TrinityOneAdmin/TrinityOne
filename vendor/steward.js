@@ -20982,9 +20982,39 @@ zoo`.split("\n");
     if (!publicAuto) return { ran: false, optedOut: true };
     const publicTarget = _clampPublicTarget(prefs && "publicTarget" in prefs ? prefs.publicTarget : PUBLIC_TARGET_DEFAULT);
     const chosen = _mergeChosen(prefs && prefs.chosen, []);
+    const chosenKeys = new Set(chosen.map((c) => c.pubkey));
     const cap = _communityCap(publicTarget);
-    let deficit = cap - chosen.length;
-    if (deficit <= 0) return { ran: false, atTarget: true, chosen: chosen.length, cap };
+    let listedKeys = /* @__PURE__ */ new Set();
+    try {
+      listedKeys = new Set((await relayNetEntries(pub)).map((e) => String(e && e.pubkey || "").toLowerCase()));
+    } catch (e) {
+    }
+    if (moved()) return { ran: false, unknown: true };
+    const notCommunity = /* @__PURE__ */ new Set();
+    try {
+      for (const k of sharedRelayKeys()) {
+        const h = String(k || "").toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(h)) notCommunity.add(h);
+      }
+    } catch (e) {
+    }
+    try {
+      for (const u of [...relayNetCandidates(), selfPublicRelay(), ownRelay()]) {
+        let ok = "";
+        try {
+          ok = String(_gate.provedKey(u, pub) || "").toLowerCase();
+        } catch (e) {
+          ok = "";
+        }
+        if (/^[0-9a-f]{64}$/.test(ok)) notCommunity.add(ok);
+      }
+    } catch (e) {
+    }
+    const liveCommunity = /* @__PURE__ */ new Set();
+    for (const p of listedKeys) if (!notCommunity.has(p)) liveCommunity.add(p);
+    for (const p of chosenKeys) if (!notCommunity.has(p)) liveCommunity.add(p);
+    let deficit = cap - liveCommunity.size;
+    if (deficit <= 0) return { ran: false, atTarget: true, chosen: chosen.length, listed: liveCommunity.size, cap };
     let offers = [];
     try {
       offers = rankOffersByLatency(await discoverRelayOffers(null, null));
@@ -20993,13 +21023,6 @@ zoo`.split("\n");
     }
     if (moved()) return { ran: false, unknown: true };
     const have = new Set(relays());
-    const chosenKeys = new Set(chosen.map((c) => c.pubkey));
-    let listedKeys = /* @__PURE__ */ new Set();
-    try {
-      listedKeys = new Set((await relayNetEntries(pub)).map((e) => String(e && e.pubkey || "").toLowerCase()));
-    } catch (e) {
-    }
-    if (moved()) return { ran: false, unknown: true };
     let tombKeys = /* @__PURE__ */ new Set();
     try {
       const t = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
@@ -21088,10 +21111,12 @@ zoo`.split("\n");
       added.push({ url: addr, pubkey: p });
       deficit--;
     }
+    let recorded = null;
     if (added.length) {
       try {
-        await _writeRelayPrefs((prev) => ({ ...prev, chosen: _mergeChosen(prev && prev.chosen, chosen) }));
+        recorded = await _writeRelayPrefs((prev) => ({ ...prev, chosen: _mergeChosen(prev && prev.chosen, chosen) }));
       } catch (e) {
+        recorded = { written: false, failed: true };
       }
       try {
         const pl = window.Steward.publishRelayList();
@@ -21100,7 +21125,7 @@ zoo`.split("\n");
       } catch (e) {
       }
     }
-    return { ran: true, added, skipped, chosen: chosen.length, cap };
+    return { ran: true, added, skipped, chosen: chosen.length, listed: liveCommunity.size, cap, recorded: !!(recorded && recorded.written) };
   }
   var _autoJoinLastAt = 0;
   async function autoJoinPublicRelaysAuto(opts) {

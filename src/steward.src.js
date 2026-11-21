@@ -6962,21 +6962,41 @@ async function autoJoinPublicRelays() {
   if (!publicAuto) return { ran: false, optedOut: true };
   const publicTarget = _clampPublicTarget(prefs && 'publicTarget' in prefs ? prefs.publicTarget : PUBLIC_TARGET_DEFAULT);
   const chosen = _mergeChosen(prefs && prefs.chosen, []);
-  // 2. CAP CHECK AGAINST LISTED, NOT ANSWERING: community cap (target minus canonical pins) minus the chosen count.
-  //    An outage changes neither, so it never creates a deficit; `0` target yields a 0 cap (opt out of new adoption).
+  const chosenKeys = new Set(chosen.map(c => c.pubkey));
   const cap = _communityCap(publicTarget);
-  let deficit = cap - chosen.length;
-  if (deficit <= 0) return { ran: false, atTarget: true, chosen: chosen.length, cap };
+  // 2. CAP CHECK AGAINST THE LIVE RELAY-NET COMMUNITY SET, NOT THE `chosen` BOOKKEEPING DOC (FIX 1, audit
+  //    2026-11-21). `chosen` is written back LAST, in a swallowed try/catch (see the write-back below), so on a
+  //    flaky link — or a SECOND owner console — it can read empty while the community boxes are ALREADY signed into
+  //    relay-net; a deficit taken from `chosen` would then adopt up to `cap` NEW boxes ON TOP, over-shooting
+  //    publicTarget with nothing to auto-remove it. relay-net is a CHURCH-SIGNED shared doc both consoles converge
+  //    on, so counting the community boxes already in it makes REALITY drive the cap. The count EXCLUDES the
+  //    canonical/shared pins (admitted on their own pin, already subtracted from `cap`) and this church's OWN
+  //    box(es) — identified by the gate's ALREADY-PROVED key, a SYNCHRONOUS cache read (_gate.provedKey), NEVER a
+  //    fresh probe, so no answering/online state enters the count and an outage still never opens a slot. Unioned
+  //    with `chosen` so a box in either source counts once. `listedKeys` (ALL relay-net keys) stays the raw set:
+  //    the adopt loop's per-pick "already" skip below must catch canonical/own spellings too, so it is UNCHANGED.
+  let listedKeys = new Set();
+  try { listedKeys = new Set((await relayNetEntries(pub)).map(e => String((e && e.pubkey) || '').toLowerCase())); } catch (e) {}
+  if (moved()) return { ran: false, unknown: true };
+  const notCommunity = new Set();   // canonical/shared pins + this church's own box(es): never counted as community
+  try { for (const k of sharedRelayKeys()) { const h = String(k || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(h)) notCommunity.add(h); } } catch (e) {}
+  try {
+    for (const u of [...relayNetCandidates(), selfPublicRelay(), ownRelay()]) {
+      let ok = ''; try { ok = String(_gate.provedKey(u, pub) || '').toLowerCase(); } catch (e) { ok = ''; }   // cache read, no probe
+      if (/^[0-9a-f]{64}$/.test(ok)) notCommunity.add(ok);
+    }
+  } catch (e) {}
+  const liveCommunity = new Set();
+  for (const p of listedKeys) if (!notCommunity.has(p)) liveCommunity.add(p);
+  for (const p of chosenKeys) if (!notCommunity.has(p)) liveCommunity.add(p);
+  let deficit = cap - liveCommunity.size;
+  if (deficit <= 0) return { ran: false, atTarget: true, chosen: chosen.length, listed: liveCommunity.size, cap };
   // 3. CANDIDATES from the OPEN /relay-names/offers directory, ranked FASTEST MEASURED ACCESS FIRST (reuse the
   //    existing Auto-find NIP-11 timing). Each offer has already passed admitRemoteRelay + _probeRelayEnforces.
   let offers = [];
   try { offers = rankOffersByLatency(await discoverRelayOffers(null, null)); } catch (e) { offers = []; }
   if (moved()) return { ran: false, unknown: true };
   const have = new Set(relays());
-  const chosenKeys = new Set(chosen.map(c => c.pubkey));
-  let listedKeys = new Set();
-  try { listedKeys = new Set((await relayNetEntries(pub)).map(e => String((e && e.pubkey) || '').toLowerCase())); } catch (e) {}
-  if (moved()) return { ran: false, unknown: true };
   // Tombstoned keys: a box a steward Removed must not be auto-re-added (plan A2). Absent is normal.
   let tombKeys = new Set();
   try {
@@ -7023,11 +7043,16 @@ async function autoJoinPublicRelays() {
   }
   // Record the CHURCH-WIDE chosen set so the cap is per-church (newest-wins merge), then publish the authoritative
   // 10002 once more from the freshly re-signed relay-net doc. 6. Nothing is ever auto-removed.
+  let recorded = null;
   if (added.length) {
-    try { await _writeRelayPrefs(prev => ({ ...prev, chosen: _mergeChosen(prev && prev.chosen, chosen) })); } catch (e) {}
+    // FIX 1 (belt-and-suspenders): do NOT swallow the write-back's result. The live-count deficit above already
+    // stops a lost `chosen` write from causing over-adoption; but a pass that could not record `chosen` has not
+    // finished its bookkeeping, so the return now SAYS whether it did (`recorded`) rather than claiming progress
+    // it never made. Adoption itself is unchanged — still proof + register + signRelay per pick.
+    try { recorded = await _writeRelayPrefs(prev => ({ ...prev, chosen: _mergeChosen(prev && prev.chosen, chosen) })); } catch (e) { recorded = { written: false, failed: true }; }
     try { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } catch (e) {}
   }
-  return { ran: true, added, skipped, chosen: chosen.length, cap };
+  return { ran: true, added, skipped, chosen: chosen.length, listed: liveCommunity.size, cap, recorded: !!(recorded && recorded.written) };
 }
 // THE TRIGGER VALVE, the same shape as autoSyncHeal's: event-driven off the console's existing churn (no new
 // wall-clock timer — the 2G rule), at most one pass per 10 minutes, `force` bypasses the damper once.
