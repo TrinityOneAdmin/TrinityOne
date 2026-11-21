@@ -1602,7 +1602,7 @@ async function _readNetworkJoin(np) {
     const evs = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [NETWORK_D + np], limit: 5 }]);
     const e = (evs || []).filter(x => x && x.pubkey === churchPub).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
     if (!e || !e.content || (e.tags || []).some(t => t[0] === 'deleted')) return null;
-    return { doc: JSON.parse(e.content), ts: e.created_at };
+    return { doc: JSON.parse(e.content), ts: e.created_at, id: e.id };   // id: so a read-back can prove it read THE write, not a stale predecessor (sim 2026-11-20 U1)
   } catch { return null; }
 }
 // READ AS ANOTHER KEY than the one this console's pool is logged in as (N5c, dff88ecf). The relay authenticates a socket as exactly one
@@ -2724,57 +2724,6 @@ function _relayInfo(wssUrl) {
   _relayInfoCache.set(wssUrl, p);
   return p;
 }
-// DOES THIS RELAY RUN THE NEWEST-WINS BUILD? (owner answers p and s, 2026-11-19; plan §0c (s), §0d H-s). A removed
-// helper's settings are carried from a PARTIAL answer (owner answer k: one box asleep) only once EVERY relay in relays()
-// has said, in its NIP-11 `trinityone` block, that it keeps only the newest copy at an address (liveNewest); until then
-// the carry keeps the strict rule. An unauthenticated claim — it decides how cautious the carry is, never admission
-// (rule 10); a relay lying about it harms only its own copies.
-//   · probed for every relay in relays() at console start and whenever a relay comes back (steward-relay-returned);
-//     _relayInfo is NOT used — it caches a failure for the page's life, and this must be retried;
-//   · a positive answer is REMEMBERED (localStorage) under the relay's URL AND the identity key the admission proof
-//     established for it (_gate.provedKey) — a different box answering at that address does not inherit it; no proved key
-//     = nothing remembered;
-//   · no answer (down, asleep, timeout) changes nothing — a relay silent NOW that said yes before still counts as yes;
-//   · an answer WITHOUT the field, or without a trinityone block at all, clears it (a box downgraded, once next seen up);
-//   · the carry counts EVERY CONFIGURED relay (relaysRaw), not only the proved ones: one that is configured but not
-//     admitted, or admitted but not remembered, means the strict rule (Fable audit MED-1; it dials nothing new);
-//   · read synchronously at carry time: _relaysAllLiveNewest(urls).
-// Stated limit: a relay at a URL path other than /relay never answers (NIP-11 is served there only) → strict.
-const LIVE_NEWEST_LS = 'trinityone.steward.livenewest:';
-function _liveNewestKey(url, key) { return LIVE_NEWEST_LS + String(url || '').replace(/\/+$/, '') + '|' + key; }
-function _liveNewestRemembered(url) {
-  let key = ''; try { key = _gate.provedKey(url, pub); } catch (e) { key = ''; }
-  if (!key) return false;
-  try { const v = JSON.parse(lsGet(_liveNewestKey(url, key)) || 'null'); return !!(v && v.liveNewest === 2); } catch (e) { return false; }
-}
-function _relaysAllLiveNewest(urls) { return Array.isArray(urls) && urls.length > 0 && urls.every(_liveNewestRemembered); }
-async function _relayLiveNewest(url) {
-  let info = null;
-  try {
-    const httpUrl = String(url).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/+$/, '');
-    const ctrl = new AbortController(); const to = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
-    info = await Promise.race([
-      (async () => { const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' }, signal: ctrl.signal }); return res.ok ? res.json() : null; })(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('relay-info timeout')), 6500)),
-    ]);
-    clearTimeout(to);
-  } catch (e) { info = null; }
-  if (!info || typeof info !== 'object') return null;   // no answer: nothing changes
-  const tri = (info.trinityone && typeof info.trinityone === 'object') ? info.trinityone : {};   // no trinityone block: a no
-  let key = ''; try { key = _gate.provedKey(url, pub); } catch (e) { key = ''; }
-  if (!key) return null;
-  const k = _liveNewestKey(url, key);
-  // the build is not stored: nothing would read it back (Fable audit NIT); a downgrade is caught by its next answer
-  // 2 = newest-wins + the void floor + (bb)/(cc); a 3dc90605-era box answers 1 and keeps the strict rule (plan 0e rev 8)
-  if (tri.liveNewest === 2) { lsSet(k, JSON.stringify({ liveNewest: 2, at: now() })); return true; }
-  try { localStorage.removeItem(k); } catch (e) {}
-  return false;
-}
-function _probeLiveNewestAll() { let urls = []; try { urls = relays(); } catch (e) { urls = []; } for (const u of urls) _relayLiveNewest(u).catch(() => {}); }
-try {
-  setTimeout(_probeLiveNewestAll, 3000);
-  window.addEventListener('steward-relay-returned', () => { setTimeout(_probeLiveNewestAll, 3000); });
-} catch (e) {}
 // find relays that OFFERED to host new churches: enforcing + open + not full + reachable. Ranked region-first,
 // then lightest load. Empty when nothing is open (e.g. the pilot today, where a8 doesn't advertise an offer).
 // bootstrap discovery seed: relays to PROBE for offers that a new church doesn't already know. Kept small +
@@ -9216,6 +9165,21 @@ window.Steward = {
   // existing internal _myOwnPub(). Callers: app/stew-finance.jsx — recordBill, approveBill, and the Bills-row
   // self-approval guard (the only three readers; see finance-dual-control-anchors-on-the-signer.test.mjs).
   signerPub() { return _myOwnPub(); },
+  // WHERE DID MY LAST WRITE LAND? The honest-partial surface for this console's own replaceable documents
+  // (sim 2026-11-20, fixes F3/F7): _publishToRelays records per-relay spread for every write (_noteSpread);
+  // this exposes the one the caller names, beside the CONFIGURED relay list (relaysRaw). The distinction the
+  // callers need: a relay that is DOWN leaves relays() entirely, so it appears in neither `landed` nor
+  // `missed` — only `configured` still remembers it, which is exactly the outage the N-of-M lines exist to
+  // say out loud. `landed: null` = this console has not written that document this session.
+  // CALLERS: approveGuardian (app/stew-dashboard.jsx, honest-partial wording) and the two child-mark success
+  // surfaces (toggleMinor's notice + SetupAccountsModal's done state).
+  writeSpread(which) {
+    const d = which === 'guardians' ? (GUARDIANS_D + pub) : which === 'minors' ? (MINORS_D + pub) : '';
+    if (!d) return null;
+    let configured = []; try { configured = relaysRaw().slice(); } catch (e) { configured = []; }
+    const s = _spreadOf(d);
+    return s ? { landed: s.landed, missed: s.missed, configured, at: s.at } : { landed: null, missed: null, configured, at: 0 };
+  },
 
   // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
   // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
@@ -9967,12 +9931,59 @@ window.Steward = {
   // The payload carries the church's 12-word seed (same trust model as revealing the phrase — anyone
   // who reads it controls the church), tagged so the scanner knows it's a church handoff.
   handoffPayload() { const m = currentMnemonic || lsGet(KEY_LS); return m ? ('trinityone-church:' + m) : ''; },
+  // A NETWORK'S RECOVERY WORDS ARE NOT A CHURCH'S. Restoring them through the church flow used to boot a
+  // plain church console ON THE NETWORK KEY — `_viewingNetwork()` is `pub !== churchPub`, which can never be
+  // true when the network key IS the church — and that console then published church artifacts as the
+  // network (joinpolicy, checkinkey, kind-0) and self-registered the network npub as a church (sim
+  // 2026-11-20, D2; the create panel itself pointed people down this road). The right door is the founder
+  // console's "Tap to switch view → Network console". Detection: every created network has at least its
+  // founder's `network:<np>` join declaration, and the relay's N5c gate serves those to the authed network
+  // key itself — a church key never has one (joinNetwork refuses np===churchPub). FAIL-OPEN on purpose when
+  // no relay answers (conductor decision 2026-11-20): pollution needs reachable relays, so an unreachable
+  // check and unreachable publishes fail together; the flap window between them is the accepted residual.
+  async _phraseIsNetworkKey(m) {
+    try {
+      const nsk = privateKeyFromSeedWords(m);   // a bad phrase throws → not our question; restoreKey answers it
+      const np = getPublicKey(nsk);
+      // TWO SIGNALS, read AS the derived key on one short-lived socket (sim 2026-11-21 RS-3: the join
+      // declarations alone were NOT enough live — the relay's N5c gate serves them only when it can place
+      // the authors as this network's registered churches, and on the failing rig it served NONE, so the
+      // detection fell open and the church console booted as the network after all):
+      //   • netkey:<np> AUTHORED BY np — the ring doc every created network writes about itself. The
+      //     relay's FIRST read rule (your own event is always readable by you) serves it to the authed np
+      //     unconditionally, and no church key ever authors a netkey doc for its own pubkey.
+      //   • network:<np> join declarations — kept as the second signal for networks whose relays do serve
+      //     them here.
+      // THE PROBE SET MUST NOT BE EMPTY ON A FRESH CONSOLE (re-sim RS-3 second round, 2026-11-21): the
+      // ?adopt= door runs at page load on a KEYLESS profile, where relays() — the gate-ADMITTED set — is
+      // still []. The read then answered instantly with nothing, the check fell open, and the church
+      // console booted as the network after all (no pollution this time, but the wrong console). A
+      // read-only identity probe may dial the configured and shipped addresses the way every bootstrap
+      // read does (reference/RELAY-ADMISSION.md trap 3): nothing is written and nothing is admitted here.
+      let probeSet = [];
+      try { probeSet = relays(); } catch (e) { probeSet = []; }
+      try { for (const u of relaysRaw()) if (!probeSet.includes(u)) probeSet.push(u); } catch (e) {}
+      for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
+      const q = await _queryAsKey(probeSet, nsk, [
+        { kinds: [30078], authors: [np], '#d': [NETKEY_D + np], limit: 2 },
+        { kinds: [30078], '#d': [NETWORK_D + np], limit: 8 },
+      ], 4000);
+      return !!(q && Array.isArray(q.events) && q.events.length > 0);   // any copy — even a tombstone — marks the KEY as a network's
+    } catch (e) { return false; }
+  },
   // adopt a church from a scanned QR / pasted code / link → restore its key on THIS device.
-  adoptChurch(payload) {
+  // ASYNC since 2026-11-20 (the network-words refusal above needs a relay read): callers await inside their
+  // own try/catch — a sync try around a bare call no longer catches the refusal or a bad phrase.
+  async adoptChurch(payload) {
     let m = (payload || '').trim();
     const q = m.match(/[?&#](?:adopt|church)=([^&#\s]+)/);   // also accept a URL form
     if (q) { try { m = decodeURIComponent(q[1]); } catch {} }
     m = m.replace(/^trinityone-church:/i, '').trim();
+    if (await window.Steward._phraseIsNetworkKey(m)) {
+      const err = new Error('These are a NETWORK\u2019s recovery words, not a church\u2019s \u2014 nothing has been restored. To manage the network, open your church\u2019s console and use \u2018Tap to switch view\u2019 \u2192 Network console.');
+      err.networkKey = true;
+      throw err;
+    }
     // validates; throws on a bad phrase. Does NOT persist — the seed is memory-only until the forced-PIN
     // modal encrypts it (see restoreKey). Callers must NOT reload, or the restored key is lost.
     return window.Steward.restoreKey(m);   // restoreKey clears any helper mark for the key it loads (see there)
@@ -16690,11 +16701,17 @@ window.Steward = {
     if (want) doc.scopes = want;
     else if (Array.isArray(doc.scopes)) doc.scopes = doc.scopes.filter(x => typeof x === 'string' && NETWORK_SCOPES.includes(x));   // a stored 'feed' (Oct 2026 builds) is dropped on rewrite
     const o = {};
-    const r = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content: JSON.stringify(doc) }), churchSk), o);
+    const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content: JSON.stringify(doc) }), churchSk);
+    const r = await publish(signed, o);
     if (!r) return { ok: false, stage: 'join', reason: o.reason || 'No relay accepted it.' };
-    // EVIDENCE, NOT THE PROMISE: read the document back. A relay acknowledged it; this is the proof it is stored.
+    // EVIDENCE, NOT THE PROMISE: read the document back — and it must be THE document just signed, by id.
+    // The sim's leave-then-rejoin (2026-11-20, U1) read back the STALE join from before the leave: same
+    // author, same d, joined:true — so a rejoin whose write never reached any relay still reported ok, and
+    // the screen said "You have joined" over a relay that held the old state. Existence is not evidence;
+    // the id is.
     const back = await _readNetworkJoin(np);
     if (!back || !back.doc || back.doc.joined !== true) return { ok: false, stage: 'readback', reason: 'A relay accepted it, but it could not be read back, so it may not have been saved. Try again.' };
+    if (back.id !== signed.id) return { ok: false, stage: 'readback', reason: 'A relay answered with an OLDER copy of this church’s membership, not the one just written — the join may not have been saved. Check the relay and try again.' };
     try { if (_joinedNets) _joinedNets.add(np); } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch (x) {}
     return { ok: true, networkPub: np, npub: npubEncode(np), scopes: back.doc.scopes };

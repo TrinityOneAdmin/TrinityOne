@@ -620,6 +620,19 @@ function publishErrorMessage(reason, evt, opts) {
   // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
   // their key, which overwrites it. Only the church's own documents can imply a key mismatch.
   if (evt && evt.kind === 10002) return { wrongChurch: false, sticky: false, msg: '' };
+  // ANOTHER IDENTITY'S REFUSED EVENT IS NOT THIS CHURCH'S FAILED CHANGE. In the network view this console
+  // signs as the NETWORK key; a refused network write must not raise the church-level "Changes weren't
+  // saved" banner (sim 2026-11-20: a refused network post raised it beside a network-settings save that had
+  // SUCCEEDED). Only an event signed by the church key — or by this console's own signer, a delegate's
+  // refusals being handled in their own branch below — may speak for the church. Not silence: the network
+  // surfaces report their own failures inline, and the log line below keeps the refusal visible to anyone
+  // reading the console.
+  const cpOwn = (typeof window !== 'undefined' && window.Steward && window.Steward.churchPub) || '';
+  const spOwn = (typeof window !== 'undefined' && window.Steward && window.Steward.signerPub) ? window.Steward.signerPub() : '';
+  if (evt && evt.pubkey && cpOwn && evt.pubkey !== cpOwn && (!spOwn || evt.pubkey !== spOwn)) {
+    try { console.warn('[console] a write by another identity was refused (not shown as a church failure):', r); } catch (x) {}
+    return { wrongChurch: false, sticky: false, msg: '' };
+  }
   // A CAPABILITY REFUSAL IS NOT A WRONG KEY EITHER — and for a DELEGATED steward it never can be.
   // "not a member or not permitted" is also what the relay says when a delegate writes something their
   // grant does not cover, and a delegate signs with their OWN key by design: they do not hold the church
@@ -2076,7 +2089,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       <div style={{ ...lbl, marginTop: 12 }}>CONFIRM</div>
       <input aria-label="Repeat the PIN or passphrase" type="password" value={pinB} onChange={e => { setPinB(e.target.value); setPinErr(''); }} onKeyDown={e => { if (e.key === 'Enter') savePin(); }} placeholder="Type it again" autoComplete="new-password" style={fld} />
       {pinErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 9, fontWeight: 600 }}>{pinErr}</div> : null}
-      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Security</b>.</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.5 }}>We can’t reset this for you — if you forget it, restore the church from your 12 words. You can add or change it later in <b>Settings → Master key → Church key</b>.</div>
     </WizShell>
   );
 
@@ -2764,7 +2777,7 @@ function StewDashboard({ initial = 'overview' }) {
     return (
       <ConsoleChrome accentStyle={accentStyle}>
         {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
-        {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
+        {posting ? (stewNetView(church) ? <NetworkHeaderPostModal onClose={() => setPosting(false)} /> : <NewPostModal onClose={() => setPosting(false)} />) : null}
         <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
         <MemberChatDock />
         {netView ? null : <React.Fragment><JoinNotifier /><KeyDistributor /></React.Fragment>}
@@ -2812,7 +2825,7 @@ function StewDashboard({ initial = 'overview' }) {
   return (
     <ConsoleChrome accentStyle={accentStyle}>
       {invite ? <JoinModal onClose={() => setInvite(false)} /> : null}
-      {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
+      {posting ? (stewNetView(church) ? <NetworkHeaderPostModal onClose={() => setPosting(false)} /> : <NewPostModal onClose={() => setPosting(false)} />) : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
       <RelayPanelHost />
@@ -3674,6 +3687,26 @@ function JoinModal({ onClose }) {
 }
 
 // post a signed announcement to the church (kind-1), targeting a broadcast room
+// THE HEADER'S "New post" IN NETWORK VIEW (sim 2026-11-20 D1). It opened the generic NewPostModal, whose
+// publishPost emits a kind-1 signed by the ACTIVE key — in network view that is the NETWORK key, and the
+// relay refuses it ("not a member or not permitted for this group"): the legacy cleartext net-announce path
+// was RETIRED by the N5a port, and network content is the SEALED kind-30078 netann:/netevent: documents
+// that publishNetworkPost writes. So in network view the header button opens the network composer — the
+// same NetworkAnnounceComposer the Settings network panel uses — and the church view keeps NewPostModal
+// byte-for-byte as it was. CLIENT ROUTING ONLY; the relay's acceptance is deliberately unchanged (rule 10 —
+// accepting network-key kind-1s would re-open the retired cleartext door).
+function NetworkHeaderPostModal({ onClose }) {
+  const dlgRef = useStewDialog(onClose, true);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', overflowY: 'auto' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Post to the network" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '93%', maxHeight: '90%', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 24 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, marginBottom: 6 }}>Post to the network</div>
+        <NetworkAnnounceComposer />
+        <div style={{ display: 'flex', marginTop: 14 }}><button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>Close</button></div>
+      </div>
+    </div>
+  );
+}
 function NewPostModal({ onClose }) {
   const groups = window.useStewardGroups();
   const targets = groups;   // post to any chat group or team (not only Announcements)
@@ -4066,7 +4099,7 @@ function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={22} color="#fff" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
-        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Security → Helpers.</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Helpers.</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
@@ -5675,7 +5708,9 @@ function NewTeamModal({ open, onClose }) {
   const [accent, setAccent] = React.useState('#C25A38');
   const [roles, setRoles] = React.useState('');
   const [selId, setSelId] = React.useState('');   // which preset is applied (so switching repopulates)
-  React.useEffect(() => { if (open) { setName(''); setDesc(''); setIcon('hand'); setAccent('#C25A38'); setRoles(''); setSelId(''); } }, [open]);
+  const [creating, setCreating] = React.useState(false);
+  const [createErr, setCreateErr] = React.useState('');
+  React.useEffect(() => { if (open) { setName(''); setDesc(''); setIcon('hand'); setAccent('#C25A38'); setRoles(''); setSelId(''); setCreating(false); setCreateErr(''); } }, [open]);
   const dlgRef = useStewDialog(onClose, open);   // a11y: Escape + focus — before the early return so hook order is stable
   if (!open) return null;
   const applyPreset = (p) => {
@@ -5687,12 +5722,33 @@ function NewTeamModal({ open, onClose }) {
     if (!roles.trim() || (prev && roles === prev.roles)) setRoles(p.roles);
     setSelId(p.id);
   };
+  // THE WIZARD'S RULES, HERE TOO (sim 2026-11-20 D5). This used to be fire-and-forget: onClose() ran before
+  // either write settled, an empty role list went through as-is, and both answers were discarded — so a
+  // refused team vanished silently, and refused ROLES left the "0/0 roles — No roles" card the steward only
+  // met later on the Rota page (with the sim's fixture, the roster doc reached NO relay and nothing said so).
+  // Now: an empty list is seeded like the wizard's (preset match → its roles; else Lead/Helper/Helper — a
+  // team with no roles cannot hold a rota), both writes are awaited, every failure is said in the dialog
+  // with everything typed still there, and the dialog closes only on full success.
+  const seedRolesLikeWizard = (teamName) => {
+    const n = String(teamName || '').toLowerCase();
+    const hit = (window.TEAM_PRESETS || []).find(p => n.indexOf(String(p.name || '').toLowerCase()) >= 0);
+    return (hit ? String(hit.roles || '').split('\n') : ['Lead', 'Helper', 'Helper']).map(r => r.trim()).filter(Boolean);
+  };
   const create = () => {
-    if (!name.trim()) return;
-    const roleList = roles.split('\n').map(s => s.trim()).filter(Boolean).map(n => ({ name: n }));
+    if (!name.trim() || creating) return;
+    setCreateErr(''); setCreating(true);
+    const typed = roles.split('\n').map(s => s.trim()).filter(Boolean);
+    const roleList = (typed.length ? typed : seedRolesLikeWizard(name)).map(n2 => ({ name: n2 }));
     Promise.resolve(window.Steward.publishGroup({ name: name.trim(), kind: 'team', sub: desc.trim(), icon, accent }))
-      .then(g => { if (g && g.id) window.Steward.publishRoster(g.id, { roles: roleList, people: [] }); });
-    onClose();
+      .then(g => {
+        if (!g || !g.id) { setCreating(false); setCreateErr('Couldn’t create that team — the relay didn’t accept it. Check you’re online and try again; everything you typed is still here.'); return; }
+        return Promise.resolve(window.Steward.publishRoster(g.id, { roles: roleList, people: [] })).then(ok => {
+          setCreating(false);
+          if (!ok) { setCreateErr('The team was created, but its roles didn’t save — open it on the Rota page and add them, or nobody can be put on a Sunday.'); return; }
+          onClose();
+        });
+      })
+      .catch(() => { setCreating(false); setCreateErr('Couldn’t create that team — the relay didn’t accept it. Check you’re online and try again; everything you typed is still here.'); });
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
   const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
@@ -5722,9 +5778,10 @@ function NewTeamModal({ open, onClose }) {
         <div style={lbl}>What's it for (optional)</div>
         <input aria-label="What's it for (optional)" value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
         </div>
+        {createErr ? <div role="alert" style={{ margin: '0 28px', padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{createErr}</div> : null}
         <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create team</button>
+          <button onClick={create} disabled={!name.trim() || creating} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (name.trim() && !creating) ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {creating ? 'Creating…' : 'Create team'}</button>
         </div>
       </div>
     </div>
@@ -8502,8 +8559,25 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
       </React.Fragment> : null}
       {stage === 'done' ? (() => {
         const ok = (results || []).filter(r => r.ok), failed = (results || []).filter(r => !r.ok);
+        // THE CHILD MARK REACHED N OF M MACHINES (sim 2026-11-20 D3; owner-approved line, F7 — same rule and
+        // wording family as toggleMinor's). Batch creation marks children via one setMinors to the CONNECTED
+        // relays; a configured machine that is down misses the mark and treats those children as adults until
+        // it is back AND in sync. Shown once for the batch, only when children were created and a configured
+        // relay is not in the landed set.
+        const kidSpread = (() => {
+          if (!ok.some(r => r.isChild)) return '';
+          try {
+            const sp = window.Steward.writeSpread ? window.Steward.writeSpread('minors') : null;
+            const landedN = (sp && Array.isArray(sp.landed)) ? sp.landed.length : 0;
+            const M = sp ? Math.max((sp.configured || []).length, landedN + ((sp.missed || []) || []).length) : 0;
+            return (landedN > 0 && M > landedN)
+              ? ('The children\u2019s protection reached ' + landedN + ' of your ' + M + ' relay machines \u2014 a machine that is off or away does not have it until it is back and in sync. The Relays page shows which.')
+              : '';
+          } catch (e) { return ''; }
+        })();
         return <React.Fragment>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{ok.length} account{ok.length === 1 ? '' : 's'} created{failed.length ? ` · ${failed.length} failed` : ''}.</div>
+          {kidSpread ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--ink)', background: 'var(--clay-soft)', border: '1px solid var(--clay)', borderRadius: 10, padding: '9px 11px', marginBottom: 8, lineHeight: 1.5 }}>{kidSpread}</div> : null}
           {err ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 8 }}>{err}</div> : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 10 }}>
             {(results || []).map((r, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{r.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{r.name}{r.isChild ? ' (child)' : ''}</span>{!r.ok && r.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{r.reason}</span> : null}</div>)}
@@ -9099,11 +9173,27 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       _reseal(next, sg.approved || [], [pk]);
       return r;
     }
+    // THEIR PROTECTION REACHED N OF M MACHINES (sim 2026-11-20 D3; owner-approved honesty line, F7).
+    // setMinors writes to the relays that are CONNECTED — one that is down leaves relays() entirely, so the
+    // write "succeeds" without it, and that machine treats this member as an adult until it is back AND in
+    // sync. The mechanics belong to the relay-sync roadmap; this line only ends the silence. M counts the
+    // CONFIGURED list (relaysRaw via writeSpread) on purpose: a relay that is gone for good keeps the line
+    // showing, which matches the Relays page's own single-point-of-failure warning and is the steward's cue
+    // to remove it there.
+    let outage = '';
+    if (!unmarking) {
+      try {
+        const sp = window.Steward.writeSpread ? window.Steward.writeSpread('minors') : null;
+        const landedN = (sp && Array.isArray(sp.landed)) ? sp.landed.length : 0;
+        const M = sp ? Math.max((sp.configured || []).length, landedN + ((sp.missed || []) || []).length) : 0;
+        if (landedN > 0 && M > landedN) outage = ' Their child protection reached ' + landedN + ' of your ' + M + ' relay machines — a machine that is off or away does not have it until it is back and in sync. The Relays page shows which.';
+      } catch (e) {}
+    }
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
       ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
       : (unlinkedFrom.length
-        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian. Un-marking them will not put those links back.' }
-        : null));
+        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian. Un-marking them will not put those links back.' + outage }
+        : (outage ? { pk, text: 'Marked as a child.' + outage } : null)));
     // With the new map when a link was removed: the unlinked children's sealed clearances are the only place
     // their phones learn who their confirmed parents are now.
     _reseal(next, nextApproved, nextG ? [pk, ...unlinkedFrom] : [pk], nextG || undefined); return r;
@@ -9239,8 +9329,16 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     let okG = null;
     try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
-      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t confirm that guardian link — the relay didn’t accept it, '
-        + 'so nobody has been linked and the request is still waiting. Check the relay and try again.' });
+      // THE WRITE IS ALL-OR-NOTHING; THE TRUTH OFTEN IS NOT (sim 2026-11-20 D4): with one relay refusing,
+      // the guardians doc had LANDED on the other — yet this line said "nobody has been linked" and the
+      // pending row was gone on the next reload. writeSpread says which relays took the write; say that,
+      // and claim total failure only when it was total.
+      let sp = null; try { sp = window.Steward.writeSpread ? window.Steward.writeSpread('guardians') : null; } catch (e) { sp = null; }
+      const landedN = (sp && Array.isArray(sp.landed)) ? sp.landed.length : 0;
+      const totalN = sp ? Math.max((sp.configured || []).length, landedN + ((sp.missed || []) || []).length) : 0;
+      setMinorNotice({ pk: r.child, tone: 'fail', text: landedN > 0
+        ? ('That guardian link saved on ' + landedN + ' of your ' + totalN + ' relay machines, so it is partly in force. Confirm again to retry the others — until then a machine that missed it won’t enforce the link.')
+        : 'Couldn’t confirm that guardian link — no relay accepted it, so nobody has been linked and the request is still waiting. Check the relay and try again.' });
       return null;
     }
     // A LINKED CHILD IS A MINOR, and if that half fails the link exists without the protection that is its
@@ -9966,7 +10064,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
         They sign in with their own keys, not yours. {delegated
           ? 'Only whoever holds the church key can change what they may do, or remove them.'
-          : 'Change what they may do, or remove them, under Settings → Security → Helpers.'}
+          : 'Change what they may do, or remove them, under Settings → Helpers.'}
       </div>
     </div>
   ) : null;
@@ -11522,6 +11620,11 @@ function NetworkRow({ net, onLeave }) {
       <button onClick={() => onLeave(net)} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}>Leave</button>
     </div>
     {statusLine ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 2px 0' }}>{statusLine}</div> : null}
+    {/* The founder's door to everything else — name, full code, the network's own recovery words — is the
+        header view switcher, which nothing on this panel pointed at: C1's sim run searched this panel's DOM
+        and concluded the code was shown once and lost (U2). Owner-only: a joined church holds no network key
+        and has no network console to switch to. */}
+    {st && st.owner ? <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '6px 2px 0' }}>{"To manage this network — its name, full code and recovery words — use ‘Tap to switch view’ → ‘Network console’ at the top."}</div> : null}
     </div>
   );
 }
@@ -15164,8 +15267,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
     // SO THE HAZARD A RELOAD CAUSES IS THE OPPOSITE ONE, AND QUIETER: the restored seed is lost, the OLD key
     // is still there, and the console comes back looking perfectly normal as the church it was before. The
     // steward believes they adopted a church and did not. Same rule, right reason. Audit item 13, 2026-09-14.
-    try { window.Steward.adoptChurch(payload); }
-    catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
+    // adoptChurch is ASYNC since 2026-11-20 (network-words refusal reads the relays first).
+    Promise.resolve().then(() => window.Steward.adoptChurch(payload))
+      .catch((e) => { window.alert((e && e.networkKey && e.message) || 'That QR isn’t a valid church handoff.'); });
   };
   const doRestore = () => {
     setRestoreErr('');
@@ -15180,7 +15284,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
       // deleting the eager wipe. Describing the fixed code as though it were still broken is worse than
       // saying nothing: the next reader looks for a wipe that is not there, or restores one thinking it was
       // an oversight. Audit item 13, 2026-09-14 — checked against setKey(), which touches memory only.
-      window.Steward.restoreKey(restorePhrase);
+      // THROUGH adoptChurch since 2026-11-20, not restoreKey directly: a bare phrase passes through
+      // unchanged, and the network-words refusal (async) covers this door too — sim D2's fifth door.
+      Promise.resolve().then(() => window.Steward.adoptChurch(restorePhrase))
+        .catch((e) => setRestoreErr((e && e.message) || 'That phrase isn’t valid.'));
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
   // 1 · read and recognise the file first, so a wrong one costs the steward nothing.

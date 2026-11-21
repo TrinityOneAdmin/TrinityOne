@@ -565,7 +565,19 @@ function initChurch() {
   const inject = params.get('churchkey');                 // test hook: load a known church key (dev only)
   if (inject && isDevHost && !window.Steward.hasKey) { window.Steward.init(inject); return; }
   const adopt = params.get('adopt');                      // QR/link handoff: adopt a church on launch
-  if (adopt && !window.Steward.hasKey) { try { window.Steward.adoptChurch(adopt); try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {} } catch (e) {} }
+  // adoptChurch is ASYNC since 2026-11-20 (network-words refusal reads the relays first). This door is
+  // HEADLESS — a refusal here lands on the normal landing as a message (sessionStorage for a pre-mount
+  // resolution, the event for a late one); any other failure stays silent exactly as before.
+  if (adopt && !window.Steward.hasKey) {
+    Promise.resolve().then(() => window.Steward.adoptChurch(adopt)).then(() => {
+      try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {}
+    }).catch((e) => {
+      if (!(e && e.networkKey)) return;
+      const msg = String((e && e.message) || '');
+      try { sessionStorage.setItem('trinityone.steward.adoptrefused', msg); } catch (x) {}
+      try { window.dispatchEvent(new CustomEvent('steward-adopt-refused', { detail: { message: msg } })); } catch (x) {}
+    });
+  }
   // Scrub the seed-bearing params from the URL immediately — a church seed must never persist in history,
   // bookmarks, Referer, or the service-worker cache (see sw.js SENSITIVE_QS). Mirrors app.jsx's member-seed scrub.
   if (params.has('churchkey') || params.has('adopt') || params.has('church')) {
@@ -657,13 +669,23 @@ function StewardWelcome() {
   };
   const adopt = (payload) => {
     setErr('');
-    try {
-      window.Steward.adoptChurch(payload);
+    // adoptChurch is ASYNC since 2026-11-20 (network-words refusal) — a sync try around it catches nothing.
+    Promise.resolve().then(() => window.Steward.adoptChurch(payload)).then(() => {
       // a restored church already exists (name, groups) — don't run the new-church setup wizard
       try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {}
       if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
-    } catch (e) { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); }
+    }).catch((e) => { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); });
   };
+  // A HEADLESS ?adopt= refusal (network words in a link) has no screen of its own: it lands here on the
+  // normal landing. One-shot sessionStorage covers a refusal that resolved before this mounted; the event
+  // covers one that resolves after. Sim 2026-11-20 D2.
+  React.useEffect(() => {
+    let m = ''; try { m = sessionStorage.getItem('trinityone.steward.adoptrefused') || ''; if (m) sessionStorage.removeItem('trinityone.steward.adoptrefused'); } catch (e) {}
+    if (m) { setMode('restore'); setErr(m); }
+    const h = (e) => { const t = (e && e.detail && e.detail.message) || ''; if (t) { setMode('restore'); setErr(t); } };
+    window.addEventListener('steward-adopt-refused', h);
+    return () => window.removeEventListener('steward-adopt-refused', h);
+  }, []);
   // "Help run a church": mint an identity quietly (no church registration) and show its steward code, so a
   // newcomer can become a steward without first creating their own church. They give the code to the owner.
   const becomeSteward = () => {
@@ -759,7 +781,7 @@ function StewardWelcome() {
                 {showQR && window.Steward.qrSVG ? <div role="img" aria-label="Your steward code QR" style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(code) }} /> : null}
               </div> : null}
               <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--ghost" style={{ padding: '11px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 14 }}>Set a PIN & continue <Icon name="chevR" size={15} color="currentColor" /></button>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find the invite box again anytime under Settings → Security → Help run a church.</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find the invite box again anytime under Settings → Helpers → Help run a church.</div>
             </div>
           )
         ) : mode === 'steward-pin' ? (
@@ -778,7 +800,7 @@ function StewardWelcome() {
                 needsPin resets to false, and an unpersisted seed goes with it — which is exactly the key
                 loss found on a phone on 2026-08-04. Do not rely on this screen surviving a reload; the
                 protection is that nothing on the restore paths reloads, plus lock()'s needsPin guard. */}
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can change this later under Settings → Security → Console lock.</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can change this later under Settings → Master key → Church key → Console lock.</div>
           </div>
         ) : mode === 'scanning' ? (
           <div>
@@ -1320,7 +1342,7 @@ function StewardRoot() {
           <div role="status" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 32%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <span style={{ flex: 1 }}>
               This device finished an interrupted change to its stored church key, and cannot tell which change it was.
-              <b> If you meant to remove this church from this device, do it again</b> — Settings → Security → Remove this church. Otherwise nothing is wrong and you can dismiss this.
+              <b> If you meant to remove this church from this device, do it again</b> — Settings → Master key → Hand over the church → Remove this church from this device. Otherwise nothing is wrong and you can dismiss this.
             </span>
             <button onClick={() => { try { window.Steward.keyResumedUnknown = false; } catch (e) {} setResumed(false); }}
               style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
