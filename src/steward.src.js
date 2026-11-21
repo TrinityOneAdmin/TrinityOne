@@ -9954,7 +9954,17 @@ window.Steward = {
       //     unconditionally, and no church key ever authors a netkey doc for its own pubkey.
       //   • network:<np> join declarations — kept as the second signal for networks whose relays do serve
       //     them here.
-      const q = await _queryAsKey(relays(), nsk, [
+      // THE PROBE SET MUST NOT BE EMPTY ON A FRESH CONSOLE (re-sim RS-3 second round, 2026-11-21): the
+      // ?adopt= door runs at page load on a KEYLESS profile, where relays() — the gate-ADMITTED set — is
+      // still []. The read then answered instantly with nothing, the check fell open, and the church
+      // console booted as the network after all (no pollution this time, but the wrong console). A
+      // read-only identity probe may dial the configured and shipped addresses the way every bootstrap
+      // read does (reference/RELAY-ADMISSION.md trap 3): nothing is written and nothing is admitted here.
+      let probeSet = [];
+      try { probeSet = relays(); } catch (e) { probeSet = []; }
+      try { for (const u of relaysRaw()) if (!probeSet.includes(u)) probeSet.push(u); } catch (e) {}
+      for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
+      const q = await _queryAsKey(probeSet, nsk, [
         { kinds: [30078], authors: [np], '#d': [NETKEY_D + np], limit: 2 },
         { kinds: [30078], '#d': [NETWORK_D + np], limit: 8 },
       ], 4000);

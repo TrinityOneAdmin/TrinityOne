@@ -23555,7 +23555,18 @@ zoo`.split("\n");
       try {
         const nsk = privateKeyFromSeedWords(m);
         const np = getPublicKey2(nsk);
-        const q = await _queryAsKey(relays(), nsk, [
+        let probeSet = [];
+        try {
+          probeSet = relays();
+        } catch (e) {
+          probeSet = [];
+        }
+        try {
+          for (const u of relaysRaw()) if (!probeSet.includes(u)) probeSet.push(u);
+        } catch (e) {
+        }
+        for (const u of CANONICAL_RELAYS) if (!probeSet.includes(u)) probeSet.push(u);
+        const q = await _queryAsKey(probeSet, nsk, [
           { kinds: [30078], authors: [np], "#d": [NETKEY_D + np], limit: 2 },
           { kinds: [30078], "#d": [NETWORK_D + np], limit: 8 }
         ], 4e3);
