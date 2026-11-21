@@ -11620,6 +11620,11 @@ function NetworkRow({ net, onLeave }) {
       <button onClick={() => onLeave(net)} className="sk-btn sk-btn--ghost" style={{ padding: '6px 11px', fontSize: 12.5 }}>Leave</button>
     </div>
     {statusLine ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '8px 2px 0' }}>{statusLine}</div> : null}
+    {/* The founder's door to everything else — name, full code, the network's own recovery words — is the
+        header view switcher, which nothing on this panel pointed at: C1's sim run searched this panel's DOM
+        and concluded the code was shown once and lost (U2). Owner-only: a joined church holds no network key
+        and has no network console to switch to. */}
+    {st && st.owner ? <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, margin: '6px 2px 0' }}>{"To manage this network — its name, full code and recovery words — use ‘Tap to switch view’ → ‘Network console’ at the top."}</div> : null}
     </div>
   );
 }

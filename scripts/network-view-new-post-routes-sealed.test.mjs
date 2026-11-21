@@ -88,3 +88,39 @@ test('the real network post modal posts through publishNetworkPost — the seale
   assert.equal(call[3].text, 'Advent carol service — all welcome');
   assert.ok(!calls.some(c => c[0] === 'publishPost'), 'the modal fell through to the church kind-1 publisher — the relay refuses that for a network key');
 });
+
+// U2 (sim 2026-11-20): the church-side Network panel is where a founder looks, but the full code and the
+// network's recovery words live behind the header view switcher — this pins the pointer that says so.
+// Rendered from the compiled component (a `false &&` in the jsx leaves the text and still fails here).
+test('the founder-side Network row points at the view switcher; a joined church is not sent to a console it has no key for', async () => {
+  const src = fnBody(DASH, 'function NetworkRow({ net, onLeave }) {', 'NetworkRow');
+  const tmp = join(tmpdir(), 'netrow-' + process.pid + '.jsx');
+  let js;
+  try {
+    writeFileSync(tmp, src + '\nexport { NetworkRow };\n');
+    js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
+  } finally { rmSync(tmp, { force: true }); }
+  const render = async (status) => {
+    // a FRESH harness per render: draw() re-renders a persistent mounted tree, so reusing one would keep
+    // the first render's useState(readStatus) and never consult the second status (found writing this test)
+    const { React, draw } = miniReact();
+    const globals = {
+      React,
+      Icon: () => null,
+      window: {
+        NETWORKS_ENABLED: true,
+        addEventListener: () => {}, removeEventListener: () => {},
+        Steward: { subscribeNetworkProfile: () => () => {}, networkStatus: () => status, syncNetworkKeys: () => {} },
+      },
+    };
+    const fn = new Function(...Object.keys(globals), js.replace(/export\s*\{\s*NetworkRow\s*\};?/, 'return NetworkRow;'));
+    const NetworkRow = fn(...Object.values(globals));
+    return draw(NetworkRow, { net: { networkPub: 'np1', npub: 'npub1y8jh3f5qhy6rza5wheg9scv4gs' }, onLeave: () => {} });
+  };
+  const owner = await render({ owner: true, joiners: 1 });
+  assert.ok(texts(owner).join(' ').includes('Tap to switch view'),
+    'the founder panel must point at the view switcher — the sim founder searched this panel and concluded the code was shown once and lost');
+  const joinedChurch = await render({ owner: false, key: 'active' });
+  assert.ok(!texts(joinedChurch).join(' ').includes('Tap to switch view'),
+    'a joined church has no network key — do not send it to a console it cannot open');
+});
