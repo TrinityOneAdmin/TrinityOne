@@ -196,6 +196,117 @@ test('Auto-find (autoPickRelays): each auto-picked box is sent the four safeguar
   }
 });
 
+// ── THE TWO SWAP PATHS THAT BYPASS addRelay ──────────────────────────────────────────────────────────────
+// `extraRelays()` is also rewritten DIRECTLY through _writeExtraRelays — never through addRelay — by two swap
+// branches: refreshNamedRelays (the tunnel-address swap of a named relay) and adoptNetDocAddresses' stale-swap
+// (a box re-pointed, from the church's own relay-net document, to a genuinely different address). When the new
+// address is a DIFFERENT admitted box (an unpinned/legacy re-point, a same-key replaced machine), that box
+// enters the church's publish set holding none of the four safeguarding docs and fails OPEN — exactly what the
+// backfill closes. Each branch now fires the SAME _backfillSafeguardTo, but only when the address actually
+// changed; a same-url refresh must not re-publish. Both functions are lifted WHOLE from the shipped
+// vendor/steward.js with the REAL _writeExtraRelays and REAL _backfillSafeguardTo, so deleting either backfill
+// call makes these go red.
+
+// refreshNamedRelays over the world's scope, with the REAL _writeExtraRelays + REAL _backfillSafeguardTo. The
+// named-relay resolve/admit collaborators are stubbed; the swap write + backfill are the shipped code.
+function refreshWorld(opts = {}) {
+  const w = world(opts);
+  const extra = {
+    ...w.scope,
+    _refreshingNames: false,
+    getNamedRelays: () => (opts.named || []).map((e) => ({ ...e })),
+    resolveRelayName: async (name) => (opts.resolve ? opts.resolve(name) : null),
+    verifyRelayIdentity: async () => ({ relayPub: '' }),   // not consulted on the unpinned (no entry.pub) path
+    admitRemoteRelay: async () => (opts.admit === undefined ? true : opts.admit),
+    setNamedRelays: () => {},
+  };
+  const names = Object.keys(extra);
+  const src = [
+    fnBody(STEWARD, 'function _writeExtraRelays(list) {'),
+    fnBody(STEWARD, 'async function _backfillSafeguardTo(urls) {'),
+    fnBody(STEWARD, 'async function refreshNamedRelays() {'),
+    'return refreshNamedRelays;',
+  ].join('\n');
+  const refreshNamedRelays = new Function(...names, src)(...names.map((k) => extra[k]));
+  return { ...w, refreshNamedRelays };
+}
+
+test('refreshNamedRelays: a swap to a DIFFERENT address backfills the four safeguarding docs to the new url', async () => {
+  const old = 'wss://old.example/relay', neu = 'wss://new.example/relay';
+  const w = refreshWorld({ startStore: [old], named: [{ name: 'box', url: old }], resolve: () => ({ url: neu }), admit: true });
+  await w.refreshNamedRelays();
+  await tick();
+  assert.ok(w.store().includes(neu) && !w.store().includes(old), 'the swap did not land in the store');
+  for (const k of ['trinityone/minors:', 'trinityone/approved:', 'trinityone/guardians:', 'trinityone/blocked:']) {
+    const sent = w.published.filter((p) => p.urls[0] === neu && p.ev.tags.some((t) => t[0] === 'd' && t[1].startsWith(k)));
+    assert.equal(sent.length, 1, `the swapped-in box was not sent the ${k} document — it fails OPEN`);
+    assert.deepEqual(sent[0].urls, [neu], `${k} was not TARGETED to the new url only`);
+    assert.equal(sent[0].ev.pubkey, CP, `${k} was not the owner's verbatim event`);
+  }
+});
+
+test('refreshNamedRelays: a same-url refresh does NOT backfill (no address change, no re-publish)', async () => {
+  const same = 'wss://same.example/relay';
+  const w = refreshWorld({ startStore: [same], named: [{ name: 'box', url: same }], resolve: () => ({ url: same }), admit: true });
+  await w.refreshNamedRelays();
+  await tick();
+  assert.deepEqual(w.store(), [same], 'a same-url refresh must not change the store');
+  assert.equal(w.published.length, 0, 'a same-url refresh re-published the safeguarding docs — the backfill must fire only on an address change');
+});
+
+// adoptNetDocAddresses over the world's scope, with the REAL _writeExtraRelays + REAL _backfillSafeguardTo. The
+// net-doc read/prove/admit collaborators are stubbed so a single entry drives the STALE-SWAP branch; the swap
+// write + backfill are the shipped code. `_staleBoxSpelling` returns the already-listed (undiallable) spelling
+// of the same box, so the branch replaces it with the new diallable address.
+function adoptWorld(opts = {}) {
+  const w = world(opts);
+  const { addr, stale, key = 'f'.repeat(64) } = opts;
+  const extra = {
+    ...w.scope,
+    churchPub: CP,
+    relayNetDoc: async () => ({ ev: { pubkey: CP, content: '{}' } }),
+    parseRelayNet: () => [{ url: addr, pubkey: key }],
+    _readCovers: () => false,
+    retireDeadAdoptedRows: async () => {},
+    _netDocDialUrl: (u) => String(u || ''),
+    _isDeclined: () => false,
+    _staleBoxSpelling: (u) => (u === addr ? stale : ''),
+    isOwnRelaySpelling: () => false,
+    _alreadyACandidate: () => false,
+    verifyRelayIdentity: async () => ({ relayPub: key }),
+    admitRemoteRelay: async () => true,
+    setAdoptedRelays: () => {},
+    adoptedRelays: () => [],
+    _rememberAdoptedName: () => {},
+    _tagAdopted: () => {},
+    NETDOC_ADOPT_MAX: 8,
+  };
+  const names = Object.keys(extra);
+  const src = [
+    fnBody(STEWARD, 'function _writeExtraRelays(list) {'),
+    fnBody(STEWARD, 'async function _backfillSafeguardTo(urls) {'),
+    fnBody(STEWARD, 'async function adoptNetDocAddresses() {'),
+    'return adoptNetDocAddresses;',
+  ].join('\n');
+  const adoptNetDocAddresses = new Function(...names, src)(...names.map((k) => extra[k]));
+  return { ...w, adoptNetDocAddresses };
+}
+
+test('net-doc stale-swap: re-pointing a box to a DIFFERENT address backfills the four safeguarding docs to it', async () => {
+  const addr = 'wss://moved.example/relay', stale = 'wss://stale.example/relay';
+  const w = adoptWorld({ startStore: [stale], addr, stale });
+  const added = await w.adoptNetDocAddresses();
+  await tick();
+  assert.deepEqual(added, [addr], 'the stale-swap did not adopt the moved address');
+  assert.ok(w.store().includes(addr) && !w.store().includes(stale), 'the store was not swapped to the new address');
+  for (const k of ['trinityone/minors:', 'trinityone/approved:', 'trinityone/guardians:', 'trinityone/blocked:']) {
+    const sent = w.published.filter((p) => p.urls[0] === addr && p.ev.tags.some((t) => t[0] === 'd' && t[1].startsWith(k)));
+    assert.equal(sent.length, 1, `the stale-swapped box was not sent the ${k} document — it fails OPEN`);
+    assert.deepEqual(sent[0].urls, [addr], `${k} was not TARGETED to the new url only`);
+    assert.equal(sent[0].ev.pubkey, CP, `${k} was not the owner's verbatim event`);
+  }
+});
+
 test('B2 auto-join (autoJoinPublicRelays): the community box it adopts is sent the four safeguarding docs', async () => {
   const w = world();
   const names = w.names;

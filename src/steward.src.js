@@ -2227,6 +2227,7 @@ async function refreshNamedRelays() {
   const named = getNamedRelays(); if (!named.length) return;
   _refreshingNames = true;
   let extra = extraRelays(), changed = false;
+  const swappedIn = [];
   for (const entry of named) {
     try {
       const j = await resolveRelayName(entry.name); const newUrl = normRelay(j && j.url);
@@ -2258,10 +2259,16 @@ async function refreshNamedRelays() {
       if (!(await admitRemoteRelay(newUrl))) continue;
       if (isSharedRelaySpelling(newUrl)) continue;   // never a second spelling of a shared relay (ninth audit)
       extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true;
+      swappedIn.push(newUrl);   // a genuinely NEW address (the `newUrl === entry.url` guard above skipped a same-url refresh)
     } catch (e) {}
   }
   if (changed) {
     _writeExtraRelays(extra); setNamedRelays(named);
+    // SAFEGUARDING BACKFILL (mirrors addRelay): a swap writes `extraRelays()` straight through _writeExtraRelays,
+    // bypassing addRelay, so a box swapped in here would hold none of the church's minors:/approved:/guardians:/
+    // blocked: docs and fail OPEN. Every url in `swappedIn` is a genuinely new address (a same-url refresh never
+    // reaches the push), so re-send the four owner-signed docs, verbatim and targeted, to the addresses just added.
+    try { _backfillSafeguardTo(swappedIn); } catch (e) {}
     // M-7a: republish the kind-10002 relay list so member phones learn the new tunnel address. Without
     // this, the console follows the move (refreshNamedRelays runs every 90s) but members keep trying the
     // dead address and fall back to the shared relays until someone hands out a new slip.
@@ -7823,6 +7830,12 @@ async function adoptNetDocAddresses() {
       let now = []; try { now = extraRelays(); } catch (err) { now = []; }
       if (!now.includes(stale) || now.includes(u)) continue;
       _writeExtraRelays(now.map(r => (r === stale ? u : r)));
+      // SAFEGUARDING BACKFILL (mirrors addRelay): this swap writes `extraRelays()` directly, bypassing addRelay, so
+      // the box swapped in holds none of the church's minors:/approved:/guardians:/blocked: docs and fails OPEN.
+      // `u` is a genuinely NEW address here (the guard above `continue`d if it was already in the store, and `stale`
+      // is), so re-send the four owner-signed docs, verbatim and targeted, to it. The non-stale branch below adopts
+      // through addRelay, which backfills itself.
+      try { _backfillSafeguardTo([u]); } catch (e) {}
       setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
       _rememberAdoptedName(e, u, proved);
       added.push(u);

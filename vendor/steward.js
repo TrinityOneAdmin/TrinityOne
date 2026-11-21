@@ -17071,6 +17071,7 @@ zoo`.split("\n");
     if (!named.length) return;
     _refreshingNames = true;
     let extra = extraRelays(), changed = false;
+    const swappedIn = [];
     for (const entry of named) {
       try {
         const j = await resolveRelayName(entry.name);
@@ -17093,12 +17094,17 @@ zoo`.split("\n");
         extra.push(newUrl);
         entry.url = newUrl;
         changed = true;
+        swappedIn.push(newUrl);
       } catch (e) {
       }
     }
     if (changed) {
       _writeExtraRelays(extra);
       setNamedRelays(named);
+      try {
+        _backfillSafeguardTo(swappedIn);
+      } catch (e) {
+      }
       try {
         if (window.Steward && window.Steward.publishRelayList) window.Steward.publishRelayList();
       } catch (e) {
@@ -21615,6 +21621,10 @@ zoo`.split("\n");
         }
         if (!now2.includes(stale) || now2.includes(u)) continue;
         _writeExtraRelays(now2.map((r) => r === stale ? u : r));
+        try {
+          _backfillSafeguardTo([u]);
+        } catch (e2) {
+        }
         setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
         _rememberAdoptedName(e, u, proved);
         added.push(u);
