@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { normalizeURL } from 'nostr-tools/utils';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { parseRelayNet } from '../src/relay-net.src.js';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SRC = readFileSync(join(ROOT, 'src/steward.src.js'), 'utf8');
@@ -112,9 +112,29 @@ function runUnenrol({ removingUnreachable = true } = {}) {
     finalizeEvent,
     _monotonic: (tmpl) => tmpl,
     now: () => 2000,
+    // A2 (977fbaea + 2dc4e053): the removal path now runs the REAL _closeSyncTrust, which reads the church's
+    // trinityone/relays sync doc. This church never granted sync trust (no sync doc), so a covering read with
+    // no event is honest: _closeSyncTrust returns {closed:false} and nothing is tombstoned. lsGet/lsSet back
+    // the real _pendingTomb/_setPendingTomb (unreached here — the no-sync-doc branch returns first).
+    _oneComplete: async () => ({ ev: null, askedUrls: [OWN], answeredUrls: [OWN] }),
+    lsGet: () => null,
+    lsSet: () => {},
   };
   const names = Object.keys(scope);
-  const fn = new Function(...names, fnBody(SRC, 'async function unenrolRelayNet(', 'unenrolRelayNet') + '\nreturn unenrolRelayNet;')(...names.map(n => scope[n]));
+  // A2 transitive chain the real unenrolRelayNet now calls, lifted from source alongside it so the removal
+  // runs the shipped sync-trust close rather than a stub: _closeSyncTrust -> _writeTombstone ->
+  // _pendingTomb/_setPendingTomb, plus the sync-url key helpers and the two consts they read.
+  const A2 = [
+    fnBody(SRC, 'function _syncRelayBase(u) {', '_syncRelayBase'),
+    stmt(SRC, 'const _syncRelayKey = ', '_syncRelayKey'),
+    stmt(SRC, 'const RELAYS_REMOVED_D = ', 'RELAYS_REMOVED_D'),
+    stmt(SRC, 'const TOMB_PENDING_LS = ', 'TOMB_PENDING_LS'),
+    fnBody(SRC, 'function _pendingTomb() {', '_pendingTomb'),
+    fnBody(SRC, 'function _setPendingTomb(keys) {', '_setPendingTomb'),
+    fnBody(SRC, 'async function _writeTombstone(opts) {', '_writeTombstone'),
+    fnBody(SRC, 'async function _closeSyncTrust(opts) {', '_closeSyncTrust'),
+  ].join('\n');
+  const fn = new Function(...names, A2 + '\n' + fnBody(SRC, 'async function unenrolRelayNet(', 'unenrolRelayNet') + '\nreturn unenrolRelayNet;')(...names.map(n => scope[n]));
   return { fn, published, removing: removingUnreachable ? DEAD_A : OWN };
 }
 

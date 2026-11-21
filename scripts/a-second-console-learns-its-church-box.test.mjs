@@ -292,6 +292,17 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function _readCovers', '_readCovers'),
     stmt(src, 'var _viewingNetwork = ', '_viewingNetwork'),
     fnBody(src, 'async function unenrolRelayNet', 'unenrolRelayNet'),
+    // A2 (977fbaea + 2dc4e053): unenrolRelayNet now closes a removed box's sync trust. The transitive chain
+    // _closeSyncTrust -> _writeTombstone -> _pendingTomb/_setPendingTomb, plus the sync-url key helpers and
+    // the two d-tag/localStorage-prefix consts they read.
+    fnBody(src, 'async function _closeSyncTrust(opts) {', '_closeSyncTrust'),
+    fnBody(src, 'async function _writeTombstone(opts) {', '_writeTombstone'),
+    fnBody(src, 'function _pendingTomb() {', '_pendingTomb'),
+    fnBody(src, 'function _setPendingTomb(keys) {', '_setPendingTomb'),
+    fnBody(src, 'function _syncRelayBase(u) {', '_syncRelayBase'),
+    stmt(src, 'var _syncRelayKey = ', '_syncRelayKey'),
+    stmt(src, 'var RELAYS_REMOVED_D = ', 'RELAYS_REMOVED_D'),
+    stmt(src, 'var TOMB_PENDING_LS = ', 'TOMB_PENDING_LS'),
     stmt(src, 'var NET = ', 'NET'),
     stmt(src, 'var GROUP_D = ', 'GROUP_D'),
     fnBody(src, 'function _monotonic', '_monotonic'),
