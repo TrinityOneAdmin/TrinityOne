@@ -509,13 +509,13 @@ test('A5: autoPickRelays hands each pick to signRelay — documents first, then 
 function ownBoxWorld(opts = {}) {
   const log = [], enrols = [];
   const net = opts.net || [];
-  const flags = { sharedDown: !!opts.sharedDown };   // the shared relay — the only holder of the documents — is not answering
+  const flags = { sharedDown: !!opts.sharedDown, netWhole: opts.netWhole !== false };   // the shared relay — the only holder of the documents — is not answering
   const w = world({ ...opts, relays: [OWN, POOL],
     read: (name) => (flags.sharedDown ? { ev: null, complete: false, askedUrls: [OWN, POOL], answeredUrls: [] }
       : { ev: fullDocs()[name] || null, complete: true, askedUrls: [OWN, POOL], answeredUrls: [POOL] }),   // the documents live on the shared relay; the own box is the empty one
     lifts: [['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['fn', 'function parseRelayNet'], ['fn', 'async function _ownBoxBackfill(own) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _autoEnrolled = '], ['st', 'var _ownGateLast = '], ['st', 'var _ownOwed = '], ['fn', 'async function autoEnrolRelayNet() {']],
     scope: { _boxHostsUs: true, selfPublicRelay: () => '', selfRelayName: () => '',
-      relayNetDoc: async () => ({ ev: { pubkey: CP, content: JSON.stringify(net) }, askedUrls: [OWN, POOL], answeredUrls: opts.netWhole === false ? [OWN] : [OWN, POOL] }),
+      relayNetDoc: async () => ({ ev: { pubkey: CP, content: JSON.stringify(net) }, askedUrls: [OWN, POOL], answeredUrls: flags.netWhole ? [OWN, POOL] : [OWN] }),
       enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o); return { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; },
       ...(opts.scope || {}) },
     expose: ', autoEnrolRelayNet' });
@@ -696,4 +696,27 @@ test('F1: an own box whose documents landed on the first pass is NOT owed: later
   w.state.t += 11 * 60 * 1000;
   await w.api.autoEnrolRelayNet();
   assert.equal(w.published.length, sent, 'a landed own box is re-sent its documents on every signal');
+});
+
+// ── 18. FF3 (final combined audit): the damper never reuses a "cannot tell" go-ahead ──────────────────────
+// Boot: the church's relay-net document cannot be read whole, so the gate cannot tell whether the own box is
+// entering and lets the enrolment through best-effort (the third-audit exception). That enrolment answers unknown.
+// A moment later the read IS whole and shows the box entering — and it has not taken the child list.
+test('FF3: a go-ahead given on an UNREADABLE list is not reused — the next signal inside the window does not sign an entering box that has no child list', async () => {
+  let n = 0;
+  const w = ownBoxWorld({ net: [], netWhole: false, answers: { minors: 'refuse', blocked: 'refuse' },
+    scope: { enrolRelayNet: async () => { n++; return n === 1 ? { unknown: true, proven: [] } : { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; } } });
+  await w.api.autoEnrolRelayNet();
+  assert.equal(n, 1, 're-anchor: the cannot-tell pass did not reach the enrolment (the third-audit exception is gone)');
+  w.flags.netWhole = true;                        // the shared relay answers now: the list does not name the own box
+  const r2 = await w.api.autoEnrolRelayNet();     // a focus, seconds later
+  assert.equal(n, 1,
+    'AN ENTERING OWN BOX WITH NO CHILD LIST WAS SIGNED ON A REUSED "CANNOT TELL" GO-AHEAD — the damper skipped the gate (FF3)');
+  assert.equal(r2 && r2.pending, true, JSON.stringify(r2));
+  w.state.t += 11 * 60 * 1000;                    // past the window: the gate runs for real, sees it entering, and holds it
+  await w.api.autoEnrolRelayNet();
+  assert.equal(n, 1, 'past the window an entering box that still refuses was signed');
+  w.state.answers = {}; w.state.t += 11 * 60 * 1000;
+  await w.api.autoEnrolRelayNet();
+  assert.equal(n, 2, 'once the documents land the own box is never enrolled');
 });

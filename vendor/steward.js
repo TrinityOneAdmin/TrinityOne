@@ -20842,7 +20842,7 @@ zoo`.split("\n");
     return { proceed: entering !== true || !!(bf && bf.landed), entering, landed: !!(bf && bf.landed), results: bf && bf.results || null, why: bf && bf.why || "" };
   }
   var _autoEnrolled = /* @__PURE__ */ new Set();
-  var _ownGateLast = { key: "", at: 0, proceed: false };
+  var _ownGateLast = { key: "", at: 0, proceed: false, known: false };
   var _ownOwed = /* @__PURE__ */ new Set();
   async function autoEnrolRelayNet() {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
@@ -20869,14 +20869,14 @@ zoo`.split("\n");
     const _sk0 = sk, _pub0 = pub;
     let _gate8 = null;
     const _t8 = Date.now();
-    if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true, results: null, damped: true };
+    if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true && _ownGateLast.known === true, results: null, damped: true };
     else {
       try {
         _gate8 = await _ownBoxBackfill(own);
       } catch (e) {
         _gate8 = null;
       }
-      _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true) };
+      _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true), known: !!(_gate8 && (_gate8.landed === true || _gate8.entering === false)) };
       if (_gate8 && typeof _gate8.landed === "boolean" && pub === _pub0) {
         if (_gate8.landed) _ownOwed.delete(pub + "|" + own);
         else _ownOwed.add(pub + "|" + own);

@@ -6897,7 +6897,7 @@ async function _ownBoxBackfill(own) {
 const _autoEnrolled = new Set();
 // The own-box gate's last answer, and when (F2): a pass that is tried again inside the damper window — because the
 // enrolment did not work, or the box was held — reuses that answer instead of proving, reading and sending again.
-let _ownGateLast = { key: '', at: 0, proceed: false };
+let _ownGateLast = { key: '', at: 0, proceed: false, known: false };
 // THE OWN BOX CAN BE SIGNED WITHOUT ITS DOCUMENTS HAVING LANDED (F1, 2026-11-22) — it is already in the list, or
 // the list could not be read whole, so the gate lets the enrolment through on a best-effort send; that is the
 // restore-with-the-shared-relays-down case. Once the enrolment has WORKED the pass is remembered as done and never
@@ -6940,12 +6940,18 @@ async function autoEnrolRelayNet() {
   // today — it is the shape that stays safe if that ever stops being true.
   // …AND DAMPED (F2): inside ten minutes of the last gate pass for this same (church, box, address, name) the
   // answer is reused — a hold stays a hold, a go-ahead stays a go-ahead — and nothing is proved, read or sent.
+  // …BUT ONLY A GO-AHEAD THAT KNEW WHAT IT WAS SAYING IS REUSED (FF3, 2026-11-22). A go-ahead given because the
+  // relay-net read was not whole ("cannot tell whether this box is entering") is a best-effort answer about ONE
+  // moment. Reused, it let the next signal sign the box ungated after the read had become whole and the box WAS
+  // entering — with no child list landed. So a go-ahead is reused only when the documents landed or the box was
+  // known to be in the list already; a "cannot tell" go-ahead is spent by the one enrolment it allowed, and
+  // inside the window every further pass for that key is HELD, like a hold.
   let _gate8 = null;
   const _t8 = Date.now();
-  if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true, results: null, damped: true };
+  if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true && _ownGateLast.known === true, results: null, damped: true };
   else {
     try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
-    _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true) };
+    _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true), known: !!(_gate8 && (_gate8.landed === true || _gate8.entering === false)) };
     // F1: what this pass learned about the own box's documents — owed until they land.
     if (_gate8 && typeof _gate8.landed === 'boolean' && pub === _pub0) { if (_gate8.landed) _ownOwed.delete(pub + '|' + own); else _ownOwed.add(pub + '|' + own); }
   }
