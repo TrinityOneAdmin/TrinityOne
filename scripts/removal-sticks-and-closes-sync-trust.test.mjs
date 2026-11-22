@@ -666,3 +666,31 @@ test('BF1: a chosen entry at the removed address that carries a SHARED relay key
   assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'a shared relay key was tombstoned through `chosen`');
   assert.equal(w.writesTo('trinityone/relayprefs').length, 0, 'the entry was dropped although nothing was tombstoned');
 });
+
+// ── BF4 (Part B audit, rule 4): two comment claims that no test proved ───────────────────────────────────
+// 1. "the address IS the own box → no tombstone at all" (skipTomb). The own KEY is excluded separately (`never`), so
+//    this only shows where a DIFFERENT key sits at the own box's address — here a stale sync entry recorded under it.
+test('BF4: removing the OWN box\'s address tombstones NOTHING — not even another key the sync doc records at that address', async () => {
+  const OWN = 'wss://own.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_B, url: B }],                                                  // the list does not name the own box
+    sync: [{ pubkey: KEY_C, url: 'https://own.example' }, { pubkey: KEY_B, url: 'https://b.example' }],   // KEY_C: an older key recorded at the own address
+    own: OWN,
+  });
+  const r = await w.api.unenrolRelayNet(OWN);
+  assert.equal(r.notListed, true, 'precondition: the own address is not in relay-net, so the admission step\'s own-box refusal did not run: ' + JSON.stringify(r));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0,
+    'A KEY RECORDED AT THE OWN BOX\'S ADDRESS WAS TOMBSTONED by removing that address: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 'a key at the own box\'s address was left pending');
+});
+
+// 2. _unprovedDroppable: "never the own box". The own box is listed, proves nothing and answers nothing; it must still
+//    be REQUIRED to answer before sync is switched on (it may hold the tombstones).
+test('BF4: syncEnable does not excuse the OWN box from the tombstone read when it is the one not answering', async () => {
+  const OWN = 'wss://own.example/relay';
+  const w = makeWorld({ relays: [...THREE(), { url: OWN, key: '', up: false }], sync: null, own: OWN });
+  await assert.rejects(() => w.api.syncEnable(), /could not be checked/,
+    'THE OWN BOX WAS TREATED AS DROPPABLE — sync was switched on without hearing from the box most likely to hold the church\'s tombstones');
+  assert.equal(w.writesTo('trinityone/relays').length, 0);
+});
