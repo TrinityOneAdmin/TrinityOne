@@ -34,7 +34,7 @@ const OFFERS = [
   { url: 'wss://r7/relay', name: 'golf',    operator: 'op-g', region: 'uk', churches: 2, ms: 390 },
 ];
 
-function card({ offers = OFFERS, onConnect = () => {} } = {}) {
+function card({ offers = OFFERS, onConnect = () => {}, signRelay = null } = {}) {
   const { React, draw } = miniReact();
   const listeners = new Map();
   const steward = {
@@ -46,7 +46,7 @@ function card({ offers = OFFERS, onConnect = () => {} } = {}) {
     knownRelay: () => '',
     rememberRelayName: () => {},
     publishRelayList: async () => null,
-    signRelay: async () => '',   // '' from signOutcome == signed into the church list (success)
+    signRelay: signRelay || (async () => ''),   // (the default answers nothing useful; the point-of-use test below passes a spy)
     connectFoundRelays: async (picks) => { onConnect(picks); return picks; },
   };
   const win = {
@@ -138,4 +138,28 @@ test('connecting sends exactly the ticked offers to the engine — the card inve
   assert.ok(Array.isArray(sent), 'connectFoundRelays was never called');
   assert.deepEqual(sent.map(o => o.url), ['wss://r1/relay', 'wss://r2/relay'],
     'the connect path sent relays other than the two the steward ticked — selection or admission was bypassed');
+});
+
+// ── POINT OF USE (rule 1; Part A audit test gap): the card SIGNS each relay it connects ───────────────────
+// connectFoundRelays only writes the picks down. What proves a box, sends it the church's safeguarding documents and
+// signs it into the church's list is Steward.signRelay, and this card is the one that calls it for Auto-find. Delete
+// that call and every Auto-find box stays an unsigned row for ever — the safe direction, and until now untested.
+test('POINT OF USE: after connectFoundRelays, the card calls signRelay for EACH connected relay — and a pending answer is shown as waiting, never as added', async () => {
+  const order = [];
+  const signed = (u) => ({ published: true, proven: [{ url: u, pubkey: 'k' }], entries: [{ pubkey: 'k', url: u }] });
+  const c = card({
+    onConnect: (picks) => { order.push('connect:' + picks.map(p => p.url).join(',')); },
+    signRelay: async (u) => { order.push('sign:' + u); return u === 'wss://r2/relay' ? { pending: true, url: u } : signed(u); },
+  });
+  let tree = await search(c);
+  btn(tree, 'Connect selected')[0].props.onClick();
+  tree = c.draw();
+  find(tree, n => n.type === 'button' && texts(n).join(' ').includes('Yes, connect'))[0].props.onClick();
+  for (let i = 0; i < 8; i++) await settle();
+  assert.deepEqual(order, ['connect:wss://r1/relay,wss://r2/relay', 'sign:wss://r1/relay', 'sign:wss://r2/relay'],
+    'THE AUTO-FIND CARD DOES NOT SIGN THE RELAYS IT CONNECTS — they are never proved, never sent the safeguarding documents and never put in the church\'s list: ' + JSON.stringify(order));
+  const said = reads(c.draw());
+  assert.ok(said.includes('✓ Added 1 relay'), 'the relay that was signed in is not reported as added: ' + said);
+  assert.ok(/bravo: .*waiting for the relay to accept your church/.test(said), 'the pending relay is not shown as waiting: ' + said);
+  assert.ok(!/✓ Added 2 relay/.test(said), 'A PENDING RELAY WAS COUNTED AS ADDED: ' + said);
 });
