@@ -127,7 +127,7 @@ function runSign({ enrolResult }) {
     window: { Steward: { publishRelayList: () => { calls++; return Promise.resolve(null); } } },
     Promise, Set,
   });
-  const api = new Function('scope', `with (scope) { ${fnBody(STEWARD, 'async function _adoptRelay(u) {', '_adoptRelay')}\n${fnBody(STEWARD, 'function _signedIn(r, u) {', '_signedIn')}\nconst _o = { ${body} }; return _o; }`)(scope);
+  const api = new Function('scope', `with (scope) { ${fnBody(STEWARD, 'async function _adoptRelay(u, opts) {', '_adoptRelay')}\n${fnBody(STEWARD, 'function _signedIn(r, u) {', '_signedIn')}\nconst _o = { ${body} }; return _o; }`)(scope);
   return api.signRelay('wss://new.example/relay').then(async () => { await new Promise(r => setTimeout(r, 0)); return calls; });
 }
 

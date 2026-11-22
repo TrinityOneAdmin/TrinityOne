@@ -50,7 +50,7 @@ const LIFT = [
   ['fn', 'function _readCovers'], ['fn', 'function _unprovedDroppable(provedUrls) {'], ['fn', 'async function _backfillSafeguardTo(target) {'],
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'], ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
-  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '], ['fn', 'function _pendingTomb() {'], ['fn', 'function _tombable(keys, never) {'], ['fn', 'async function _removedKeysRead(droppable) {'],
+  ['fn', 'async function _adoptRelay(u, opts) {'], ['fn', 'function _adoptRelayAuto(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '], ['fn', 'function _pendingTomb() {'], ['fn', 'function _tombable(keys, never) {'], ['fn', 'async function _removedKeysRead(droppable) {'],
   ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
 ].map(([k, a]) => (k === 'fn' ? fnBody(STEWARD, a, a) : stmt(STEWARD, a, a))).join('\n');
 

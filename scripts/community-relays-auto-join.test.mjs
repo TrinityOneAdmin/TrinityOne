@@ -73,14 +73,18 @@ function runJoin(opts = {}) {
     ownRelay: () => '',
     _gate: { provedKey: (u) => (opts.ownKeyAt && opts.ownKeyAt(u)) || '' },
     _writeRelayPrefs: async (mutate) => { const r = mutate({ chosen: prefs && prefs.chosen }); writtenChosen.push(r.chosen); return opts.writePrefs || { written: true }; },
+    // THE ADOPT STEP (FF1 in-flight, 2026-11-22): the pass hands each pick to the module's _adoptRelayAuto — the
+    // automatic adopt, which never clears a removal tombstone — and NOT to Steward.signRelay (below: reaching that
+    // throws). Default answer: SIGNED IN — the shape the real one returns when the box proved, its documents landed
+    // and the church's list now names it (F5: the pass reads this through the shipped _signedIn). `signResult(url)`
+    // lets a test answer something else for one address. The real _adoptRelayAuto is run, from this pass, in
+    // an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    _adoptRelayAuto: async (...a) => { const u = a[0]; log.push('sign:' + u); const alt = opts.signResult && opts.signResult(u); return alt || { published: true, proven: [{ url: u, pubkey: keyOf(u) }], entries: [{ pubkey: keyOf(u), url: u }] }; },
     window: { Steward: {
       registerAtRelay: async (u) => { log.push('reg:' + u); return reg(u); },
       addRelay: (u) => { log.push('add:' + u); return u; },
       rememberRelayName: (n, u, p) => { log.push('remember:' + u + ':' + (p || '').slice(0, 2)); },
-      // What Steward.signRelay answers. Default: SIGNED IN — the shape the real one returns when the box proved, its
-      // documents landed and the church's list now names it (F5: the pass reads this through the shipped _signedIn).
-      // `signResult(url)` lets a test answer something else for one address.
-      signRelay: async (u) => { log.push('sign:' + u); const alt = opts.signResult && opts.signResult(u); return alt || { published: true, proven: [{ url: u, pubkey: keyOf(u) }], entries: [{ pubkey: keyOf(u), url: u }] }; },
+      signRelay: (...a) => { log.push('STEWARD.signRelay:' + a[0]); throw new Error('autoJoin must NEVER adopt through Steward.signRelay — its success path clears the removal tombstone of the key it signs (FF1)'); },
       publishRelayList: () => { log.push('publishRelayList'); return Promise.resolve(null); },
       removeRelay: () => { throw new Error('autoJoin must NEVER auto-remove'); },
       unsignRelay: () => { throw new Error('autoJoin must NEVER auto-unsign'); },

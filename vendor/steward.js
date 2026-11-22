@@ -20425,8 +20425,9 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  async function _adoptRelay(u) {
+  async function _adoptRelay(u, opts) {
     if (!sk || !pub) throw new Error("No church key on this device");
+    const automatic = !!(opts && opts.automatic);
     if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
     const cp = pub, sk0 = sk;
     const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
@@ -20438,9 +20439,84 @@ zoo`.split("\n");
       return { pending: true, url: u, backfill: bf && bf.results || null };
     }
     _setOwedBackfill(cp, u, true);
+    if (automatic) {
+      const _kA = (x) => {
+        try {
+          return normalizeURL2(x);
+        } catch (e) {
+          return String(x || "");
+        }
+      };
+      const ra = await enrolSerial(async () => {
+        let listed = [];
+        try {
+          listed = extraRelays();
+        } catch (e) {
+          listed = [];
+        }
+        if (!listed.includes(u)) return { removedMidFlight: true, withdrawn: true };
+        let key = "";
+        try {
+          key = String(_gate.provedKey(u, cp) || "").toLowerCase();
+        } catch (e) {
+          key = "";
+        }
+        if (!/^[0-9a-f]{64}$/.test(key)) {
+          try {
+            const pr = await verifyRelayIdentity(u);
+            key = String(pr && pr.relayPub || "").toLowerCase();
+          } catch (e) {
+            key = "";
+          }
+        }
+        if (!/^[0-9a-f]{64}$/.test(key)) return { removedMidFlight: true, unproven: true };
+        let gone = null;
+        try {
+          gone = await _removedKeysRead(new Set(listed.map(_kA)));
+        } catch (e) {
+          gone = null;
+        }
+        if (!gone || !gone.complete) return { removedMidFlight: true, removedUnknown: true };
+        if (gone.keys.has(key) || _pendingTomb().some((k) => k === key)) return { removedMidFlight: true, removed: true };
+        if (moved()) return { published: false, unknown: true, changed: true };
+        return enrolRelayNet({ extra: [u] });
+      });
+      if (ra && ra.removedMidFlight) {
+        if (!moved() && (ra.removed || ra.withdrawn)) _setOwedBackfill(cp, u, false);
+        return ra;
+      }
+      if (!moved() && _signedIn(ra, u)) _setOwedBackfill(cp, u, false);
+      return ra;
+    }
     const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
     if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
     return r;
+  }
+  function _adoptRelayAuto(u) {
+    const a = normRelay(u);
+    if (!a) return Promise.resolve(null);
+    const p = _adoptRelay(a, { automatic: true });
+    p.then((r) => {
+      try {
+        if (r && !r.unknown && !r.removedMidFlight && (r.published || (r.proven || []).length > 0)) {
+          try {
+            const h = autoSyncHeal({ force: true });
+            if (h && h.catch) h.catch(() => {
+            });
+          } catch (e) {
+          }
+          try {
+            const pl = window.Steward.publishRelayList();
+            if (pl && pl.catch) pl.catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+      } catch (e) {
+      }
+    }, () => {
+    });
+    return p;
   }
   function _signedIn(r, u) {
     if (!r || r.unknown || r.skipped || r.pending) return false;
@@ -20547,7 +20623,7 @@ zoo`.split("\n");
         }
         let r = null;
         try {
-          r = await window.Steward.signRelay(e.url);
+          r = await _adoptRelayAuto(e.url);
         } catch (x) {
           r = null;
         }
@@ -21421,7 +21497,7 @@ zoo`.split("\n");
       }
       let _sr = null;
       try {
-        _sr = await window.Steward.signRelay(addr);
+        _sr = await _adoptRelayAuto(addr);
       } catch (e) {
         _sr = null;
       }
@@ -24022,8 +24098,10 @@ zoo`.split("\n");
     // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
     // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
     // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
-    // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
-    // retryOwedBackfills.
+    // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoPickRelays (a
+    // devtools helper, no screen). NOT the two automatic passes any more (FF1 in-flight, 2026-11-22):
+    // retryOwedBackfills and autoJoinPublicRelays call _adoptRelayAuto, which shares _adoptRelay with this method and
+    // never runs the un-tombstone below.
     signRelay(url) {
       const u = normRelay(url);
       if (!u) return Promise.resolve(null);

@@ -548,7 +548,7 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       set: (t, k, v) => { t[k] = v; return true; },
     });
     const api = new Function('scope', 'with (scope) { ' +
-      fnBody(BUNDLE, 'function normRelay(input) {', 'normRelay') + '\n' + fnBody(BUNDLE, 'async function _adoptRelay(u) {', '_adoptRelay') + '\n' + fnBody(BUNDLE, 'function _signedIn(r, u) {', '_signedIn') + '\nreturn { ' +
+      fnBody(BUNDLE, 'function normRelay(input) {', 'normRelay') + '\n' + fnBody(BUNDLE, 'async function _adoptRelay(u, opts) {', '_adoptRelay') + '\n' + fnBody(BUNDLE, 'function _signedIn(r, u) {', '_signedIn') + '\nreturn { ' +
       fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
     return { api, order };
   };
