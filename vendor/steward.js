@@ -20621,7 +20621,7 @@ zoo`.split("\n");
         holdTomb: !!_own && !_ownKey
       });
       if (close && close.partial) {
-        return { removed: false, unknown: true, syncPartial: true };
+        return { removed: false, unknown: true, syncPartial: true, pruned: netResult.removed === true };
       }
       return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned), removedKeys: close && close.keys || [] };
     }
@@ -23795,7 +23795,7 @@ zoo`.split("\n");
       const p = enrolSerial(() => unenrolRelayNet(url));
       p.then((r) => {
         try {
-          if (r && r.removed === true) {
+          if (r && (r.removed === true || r.pruned === true)) {
             const pl = window.Steward.publishRelayList();
             if (pl && pl.catch) pl.catch(() => {
             });

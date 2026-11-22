@@ -155,6 +155,10 @@ test('5. a successful Remove publishes a 10002; a notListed/unknown Remove does 
   assert.equal(await runUnsign({ removeResult: { removed: true } }), 1, 'a successful Remove did not republish the relay list');
   assert.equal(await runUnsign({ removeResult: { removed: false, notListed: true } }), 0, 'a Remove that changed nothing still republished');
   assert.equal(await runUnsign({ removeResult: { removed: false, unknown: true } }), 0, 'a Remove over an incomplete read republished anyway');
+  // BF3 (2026-11-22): the relay-net prune LANDED but the sync-tombstone step was partial — the steward is told to retry,
+  // but member phones route by the 10002, so it is republished now.
+  assert.equal(await runUnsign({ removeResult: { removed: false, unknown: true, syncPartial: true, pruned: true } }), 1, 'a Remove whose prune landed (tombstone partial) did not republish the relay list');
+  assert.equal(await runUnsign({ removeResult: { removed: false, unknown: true, syncPartial: true, pruned: false } }), 0, 'a partial Remove that pruned nothing republished anyway');
 });
 
 // ── N2: the WIRE from Remove into the `chosen` drop (rule 1: fails if the call is deleted) ─────────────────

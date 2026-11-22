@@ -46,6 +46,10 @@ const LIFT = [
   ['fn', 'async function _flushPendingTomb() {'],
   ['fn', 'async function _removedKeysRead(droppable) {'],
   ['fn', 'function _unprovedDroppable(provedUrls) {'],
+  // BF3/BF1: the relay-prefs reader/writer and the chosen drop, real, so unsignRelay's two follow-ups run for real.
+  ['st', 'var RELAYPREFS_D = '], ['st', 'var PUBLIC_TARGET_DEFAULT = '],
+  ['fn', 'function _clampPublicTarget(n) {'], ['fn', 'function _communityCap(publicTarget) {'], ['fn', 'function _mergeChosen(a, b) {'],
+  ['fn', 'async function _readRelayPrefs() {'], ['fn', 'async function _writeRelayPrefs(mutate) {'], ['fn', 'async function _dropChosen(url, keys) {'],
   ['fn', 'function relayNetDoc() {'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
@@ -74,6 +78,7 @@ function makeWorld(cfg) {
   const put = (ev) => { const a = store.get(dOf(ev)) || []; a.push(ev); store.set(dOf(ev), a); };
   if (cfg.net != null) put({ kind: 30078, pubkey: PUB, created_at: NOW - 1000, tags: [['d', 'trinityone/relay-net']], content: JSON.stringify(cfg.net) });
   if (cfg.sync != null) put({ kind: 30078, pubkey: PUB, created_at: NOW - 1000, tags: [['d', 'trinityone/relays']], content: typeof cfg.sync === 'string' ? cfg.sync : JSON.stringify(cfg.sync) });
+  if (cfg.prefs) put({ kind: 30078, pubkey: PUB, created_at: NOW - 800, tags: [['d', 'trinityone/relayprefs']], content: JSON.stringify(cfg.prefs) });
   if (cfg.tombs) put({ kind: 30078, pubkey: cfg.tombAuthor || PUB, created_at: NOW - 900, tags: [['d', 'trinityone/relays-removed']], content: JSON.stringify(cfg.tombs) });
   const writes = [];
   let ids = 0, reads = 0, dropped = false;
@@ -112,7 +117,8 @@ function makeWorld(cfg) {
       const d = (filters[0]['#d'] || [])[0];
       const evs = (store.get(d) || []).slice().sort((x, y) => (y.created_at - x.created_at) || ((store.get(d) || []).indexOf(y) - (store.get(d) || []).indexOf(x)));
       const askedUrls = relays.map(r => r.url);
-      const answeredUrls = relays.filter(r => r.up).map(r => r.url);
+      // cfg.incompleteD: reads of THAT document never finish (a relay mid-login withholding a private doc), while every other read is whole.
+      const answeredUrls = (cfg.incompleteD && cfg.incompleteD === d) ? [] : relays.filter(r => r.up).map(r => r.url);
       return { ev: evs[0] || null, complete: answeredUrls.length > 0, asked: askedUrls.length, askedUrls, answeredUrls };
     },
   };
@@ -124,10 +130,12 @@ function makeWorld(cfg) {
   const api = new Function('scope', 'with (scope) {' + LIFT + (cfg.realHeal ? '\n' + LIFT_HEAL : '') +
     '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, autoSyncHeal, ' +
     fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ', ' +
-    fnBody(BUNDLE, 'async syncEnable() {', 'syncEnable in the shipped bundle') + ' }; }')(proxy);
+    fnBody(BUNDLE, 'async syncEnable() {', 'syncEnable in the shipped bundle') + ', ' +
+    fnBody(BUNDLE, '  unsignRelay(url) {', 'unsignRelay in the shipped bundle') + ', ' +
+    fnBody(BUNDLE, 'async publishRelayList() {', 'publishRelayList in the shipped bundle') + ' }; }')(proxy);
   // B1: the console's own probe pass, as relayIdentities reports it — every relay this console LISTS, with the key it
   // proves right now ('' when it proves none). syncEnable signs from this snapshot.
-  scope.window = { Steward: { relayIdentities: async () => relays.map(r => ({ url: r.url, base: String(r.url).replace(/^wss:/, 'https:').replace(/\/relay$/, ''), pubkey: (r.up && r.key) || '', name: '', online: !!r.up })) } };
+  scope.window = { Steward: { publishRelayList: () => api.publishRelayList(), relayIdentities: async () => relays.map(r => ({ url: r.url, base: String(r.url).replace(/^wss:/, 'https:').replace(/\/relay$/, ''), pubkey: (r.up && r.key) || '', name: '', online: !!r.up })) } };
   // Read the NEWEST copy exactly as _oneComplete / the engine does: created_at desc, and on a tie the
   // LAST-written wins (insertion index) — a constant now() + identity _monotonic make every write in a test tie,
   // and breaking the tie any other way would let a later re-sign hide behind an earlier one (it masked a real
@@ -547,4 +555,39 @@ test('BF2: a key held PENDING is not re-added by a direct syncHeal when its box 
   const cb = c.relays.find(x => x.url === B); cb.up = true; cb.key = KEY_B;
   await c.api.syncHeal();
   assert.deepEqual(keysOf(c.sync()), [KEY_A, KEY_B, KEY_C].sort(), 'CONTROL: with nothing pending and no tombstone the heal should add the proving box');
+});
+
+// ── BF3 (Part B audit): the member-facing kind-10002 is republished when the relay-net prune LANDED ──────
+// …even though the sync-tombstone step was partial and the steward is told "remove it again". The REAL unsignRelay,
+// unenrolRelayNet and publishRelayList. Default church (no sync doc); the tombstone doc cannot be read (a relay
+// mid-login withholds it), every other read is whole.
+test('BF3: a Remove whose tombstone step is PARTIAL still republishes a kind-10002 that omits the box', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_A, url: A }, { pubkey: KEY_B, url: B }],
+    sync: null, incompleteD: 'trinityone/relays-removed',
+  });
+  const r = await w.api.unsignRelay(B);
+  await settle(); await settle(); await settle(); await settle();
+  assert.equal(r.syncPartial, true, 'precondition: the tombstone step was not partial: ' + JSON.stringify(r));
+  assert.notEqual(r.removed, true, 'precondition: a partial removal must not claim it finished');
+  assert.equal(r.pruned, true, 'the result does not say the relay-net prune landed: ' + JSON.stringify(r));
+  const lists = w.writes.filter(e => e.kind === 10002);
+  assert.equal(lists.length, 1,
+    'NO kind-10002 WAS REPUBLISHED — member phones keep routing to the Removed relay until some other change (BF3): ' + JSON.stringify(w.writes.map(e => e.kind)));
+  assert.deepEqual(lists[0].tags.filter(t => t[0] === 'r').map(t => t[1]), [A], 'the republished list still names the Removed relay, or dropped the one that stays');
+});
+
+test('BF3: a Remove that did NOT prune (the list could not be read) republishes nothing', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: false }, { url: B, key: KEY_B, up: true }],   // A (non-droppable) is silent → relay-net read incomplete
+    net: [{ pubkey: KEY_A, url: A }, { pubkey: KEY_B, url: B }], sync: null,
+  });
+  const r = await w.api.unsignRelay(B);
+  await settle(); await settle(); await settle(); await settle();
+  assert.equal(r.unknown, true);
+  assert.notEqual(r.pruned, true);
+  assert.equal(w.writes.filter(e => e.kind === 10002).length, 0, 'a kind-10002 was published although nothing was pruned');
 });

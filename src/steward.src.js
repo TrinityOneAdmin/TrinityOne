@@ -6644,7 +6644,10 @@ async function unenrolRelayNet(url) {
       // now … remove it again once your relays are answering"), so the steward retries and nothing claims the
       // trust was closed when it was not. The next press finds the box already out of admission (notListed) and
       // runs the sync-close again — it converges once the relays answer.
-      return { removed: false, unknown: true, syncPartial: true };
+      // `pruned` (BF3, 2026-11-22): whether THIS press's relay-net prune landed (a complete read-back no longer
+      // names the box). The steward-facing answer stays "partial", but member phones route from the kind-10002
+      // built from relay-net, so Steward.unsignRelay republishes it on `pruned` without waiting for the tombstone.
+      return { removed: false, unknown: true, syncPartial: true, pruned: netResult.removed === true };
     }
     return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned), removedKeys: (close && close.keys) || [] };
   }
@@ -10216,7 +10219,9 @@ window.Steward = {
   // removal just re-signed; fire-and-forget, swallowed on failure like the heal.
   unsignRelay(url) {
     const p = enrolSerial(() => unenrolRelayNet(url));
-    p.then((r) => { try { if (r && r.removed === true) { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } } catch (e) {} }, () => {});
+    // BF3 (2026-11-22): …or `pruned` — the relay-net prune landed but the sync-tombstone step was partial, so the
+    // result says removed:false. The 10002 is what member phones route by; it must not wait on the tombstone.
+    p.then((r) => { try { if (r && (r.removed === true || r.pruned === true)) { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } } catch (e) {} }, () => {});
     // N2 (2026-11-22): …and a Removed box leaves the community `chosen` set, freeing its cap slot. Here, in the
     // `.then` — AFTER the Remove's queue slot has resolved — because _dropChosen's write enters enrolSerial itself
     // and would deadlock if it ran inside unenrolRelayNet. Only when the Remove FINISHED: the box is out of the
