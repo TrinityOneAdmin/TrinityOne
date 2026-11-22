@@ -2819,6 +2819,11 @@ async function discoverRelayOffers(seedExtra, region) {
   // Global discovery: ask the shared directory which relays have advertised they're open to host, so we can
   // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
   // probed below, so a stale/dishonest directory entry can't fake an offer.
+  // NOT ONLY SHOWN ANY MORE (corrected 2026-11-22). Since plan B2 this list is also what autoJoinPublicRelays
+  // ADOPTS from, with nobody pressing anything, in every church that has not opted out (community relays are ON
+  // by default — owner ruling 2026-11-22: intended). An offer that survives the gates here is then identity-proved
+  // again at its address and must register the church before it is adopted, up to the per-church cap. "Proved"
+  // means "runs our relay software" (CLAUDE.md rule 10) — not "a box this church chose".
   let dirUrls = [];
   // url → claimed directory HANDLE (SPEC self-healing 2026-11-03, item 4b). The /relay-names/offers record
   // already carries each box's handle; it was being discarded here (only `.url` was kept), which is why every
@@ -6238,9 +6243,16 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // documents it already accepts. Own-console only, matching every other church-doc writer (publishRelayList etc.):
 // a delegated/network view cannot author these owner-only docs, so it does not backfill them.
 //
-// CALLER (rule 2): addRelay — the ONE writer every adopt path passes through (manual Add/Connect in
-// app/stew-dashboard.jsx:6320/6455/6492, Auto-find's connectFoundRelays + autoPickRelays, and the B2
-// autoJoinPublicRelays pass all call window.Steward.addRelay). Centralised there so no path can skip the backstop.
+// CALLERS (rule 2; corrected 2026-11-22 — this said addRelay was "the ONE writer every adopt path passes
+// through", and it is not). THREE call sites at this tip:
+//   · addRelay — reached by the manual Add/Connect paths (app/stew-dashboard.jsx:6377 field, :6512 card, :6549),
+//     Auto-find's connectFoundRelays + autoPickRelays, the community auto-join (autoJoinPublicRelays) and the
+//     non-stale branch of adoptNetDocAddresses;
+//   · refreshNamedRelays' tunnel swap and adoptNetDocAddresses' stale-spelling swap, which write the relay store
+//     directly and so call this themselves.
+// NOT COVERED: the console's own box entering the set (audit 2026-11-22, F8). And on the two manual typed paths
+// addRelay runs BEFORE the identity proof (audit H1) — "no path can skip the backstop" was never the whole truth.
+// Both are Part A of PLAN-FIX-BACKFILL-AND-REMOVE-DOORS-2026-11-22; nothing here fixes them.
 async function _backfillSafeguardTo(urls) {
   try {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return;
@@ -6924,7 +6936,10 @@ function _clampPublicTarget(n) {
 // THE PER-CHURCH COMMUNITY CAP. The shipped canonical relay (a8) counts as ONE toward publicTarget (owner Q3), so the
 // COMMUNITY slice is the target minus the canonical pins. This is what makes the cap "LISTED, not answering": it is a
 // function of publicTarget and a ship-time constant only — no relay's online/answering state can change it, so an
-// outage can never open a slot. Only a steward Remove (which drops a box from `chosen`) frees one.
+// outage can never open a slot. Only a steward Remove frees one — and only since N2 (2026-11-22): before it,
+// Remove never touched `chosen`, and this line said it did. The drop is _dropChosen, called by
+// Steward.unsignRelay once the Remove has finished; a Remove that read partial, or whose prefs read was
+// inconclusive, leaves the entry (and the slot) in place.
 function _communityCap(publicTarget) {
   return Math.max(0, _clampPublicTarget(publicTarget) - CANONICAL_RELAYS.length);
 }
@@ -7333,7 +7348,11 @@ async function _writeTombstone(opts) {
 // Called from unenrolRelayNet's EXISTING queue slot (NEVER a nested enrolSerial — that deadlocks). After the
 // box is out of the admission list (relay-net), this re-signs trinityone/relays WITHOUT its key — the actual
 // security fix: the key's full-corpus pull rights on every peer holding the doc are pruned — and writes the
-// tombstone so no other console's additive heal can put it back. Same completeness discipline as the relay-net
+// tombstone (for EVERY church, sync doc or none — B0, 2026-11-22). WHAT THE TOMBSTONE DOES, exactly: once it has
+// landed, a console running this build will not put the key back by syncHeal, by syncEnable (the toggle and the
+// boot-time default-on) or by the community auto-join. WHAT IT DOES NOT DO: stop a deliberate Add/Connect of that
+// address (which clears it, by design); bind a console on an older build; or bind any console before it has
+// landed — until then the keys are only in THIS console's pending set. Same completeness discipline as the relay-net
 // removal (the `leaving` box + the `droppable` unreachable extras, so a DEAD or SEIZED box can still be
 // removed — audit finding 4), the same M-5 read-back / ≤2-repair loop, and the same aborts as syncHeal: an
 // ABSENT or `[]` read-back is a racing Turn-off (or delete) and the key holds no trust either way, so it
@@ -7395,8 +7414,8 @@ async function _closeSyncTrust(opts) {
       floorAt = (Number(newest.created_at) || 0) + 1;
     }
   }
-  // The tombstone: written whenever the church has a sync doc, so a later re-enable or another console's heal
-  // cannot re-admit the box, even if THIS console's own sync copy did not happen to name it.
+  // The tombstone: written for every church (B0), even if THIS console's own sync copy did not happen to name
+  // the box. What it stops, and what it does not, is stated once in the header above.
   //
   // FIX 2 — the invariant: a key PRUNED from the sync doc is ALWAYS tombstoned, even across a partial op + a
   // retry. Once the prune has landed (`closed`), the box may be gone from BOTH relay-net and the sync doc on
@@ -11473,8 +11492,9 @@ window.Steward = {
   //  · url-less relay-net entries are excluded (`url` is optional in that doc; a pubkey with no dialable wss
   //    address is nothing a member could put in an `r` tag).
   // CALLERS (rule 2): refreshNamedRelays (tunnel move), connectFoundRelays + autoPickRelays (Auto-find), and
-  // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). B2 adoption will
-  // add its own call when Work Item B is built; the source list stays the signed doc so B only widens it.
+  // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). The community
+  // auto-join (autoJoinPublicRelays, plan B2 — BUILT; this said "will add its own call when built") calls it once
+  // more after a pass that adopted something, on top of the call each pick's signRelay makes.
   async publishRelayList() {
     if (!sk || actingChurch || _viewingNetwork()) return null;
     const read = await relayNetDoc();

@@ -25135,8 +25135,9 @@ zoo`.split("\n");
     //  · url-less relay-net entries are excluded (`url` is optional in that doc; a pubkey with no dialable wss
     //    address is nothing a member could put in an `r` tag).
     // CALLERS (rule 2): refreshNamedRelays (tunnel move), connectFoundRelays + autoPickRelays (Auto-find), and
-    // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). B2 adoption will
-    // add its own call when Work Item B is built; the source list stays the signed doc so B only widens it.
+    // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). The community
+    // auto-join (autoJoinPublicRelays, plan B2 — BUILT; this said "will add its own call when built") calls it once
+    // more after a pass that adopted something, on top of the call each pick's signRelay makes.
     async publishRelayList() {
       if (!sk || actingChurch || _viewingNetwork()) return null;
       const read = await relayNetDoc();

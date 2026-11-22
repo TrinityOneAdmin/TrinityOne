@@ -122,12 +122,14 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/relays':        { write: 'church',    read: 'members', scope: 'author', note: 'the church\'s trusted-relay list — OWNER-ONLY (CLAUDE.md rule 10): it decides which relay boxes exchange the full corpus' },
   // ITS TOMBSTONE SIBLING (plan A2, 2026-11-20). When a steward Removes a relay, its key is signed into this
   // [{pubkey, at}] list AND dropped from trinityone/relays, so a removed box loses full-corpus pull rights on
-  // every peer and cannot be re-added for ever by another console's additive heal (which refuses a key whose
-  // tombstone `at` is newer than the sync doc). A SEPARATE document, never a new shape for trinityone/relays
+  // every peer. Written for EVERY church since 2026-11-22 (it used to be skipped when the church had no sync doc —
+  // the default). Once it has landed, a console on that build does not put the key back by its heal, by turning
+  // sync on, or by the community auto-join; a deliberate Add/Connect of the box clears it, and a console on an
+  // older build does not honour it. A SEPARATE document, never a new shape for trinityone/relays
   // (pilot back-compat: old gateways keep parsing the array they know). OWNER-ONLY, same CHURCH_PUBS.has rule
   // as RELAYS_D — this says WHICH boxes lose the whole corpus, so a delegated steward is not the authority for
   // it. The relay never READS it (note() has no branch); only consoles do, over authors:[churchpub].
-  'trinityone/relays-removed': { write: 'church',    read: 'members', scope: 'author', note: 'plan A2 — the church\'s relay-removal tombstones [{pubkey, at}]: a Removed box\'s key, so heal/autoSync/B2 stop re-adding it and it loses full-corpus sync trust. OWNER-ONLY, sibling of trinityone/relays; a deliberate Add/Connect clears the key (the one un-tombstone path)' },
+  'trinityone/relays-removed': { write: 'church',    read: 'members', scope: 'author', note: 'plan A2 — the church\'s relay-removal tombstones [{pubkey, at}]: a Removed box\'s key. Once landed, the console\'s heal, sync turn-on and community auto-join do not re-add that key, and it loses full-corpus sync trust. OWNER-ONLY, sibling of trinityone/relays; a deliberate Add/Connect of that address clears its key (the one un-tombstone path)' },
   // THE COMMUNITY-RELAY OPT-OUT + CHOSEN SET (plan B1, 2026-11-20). { publicAuto, publicTarget, chosen:[{pubkey,url,name}] }.
   // OWNER-ONLY, the same CHURCH_PUBS.has rule as RELAYS_D / RELAYS_REMOVED_D and for the same CLAUDE.md rule-10 reason:
   // it decides whether, and up to how many, OTHER PEOPLE'S relay boxes auto-hold this church's whole corpus, so a
