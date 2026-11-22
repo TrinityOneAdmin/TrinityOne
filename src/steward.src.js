@@ -19104,11 +19104,20 @@ window.Steward = {
     if ((picks || []).length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks || [];
   },
+  // A5 (plan Part A, 2026-11-22). NO SCREEN CALLS THIS — the Auto-find card uses findRelays + connectFoundRelays and
+  // signs each pick itself; this one-step form is reachable from scripts and devtools only (and ci/ui-smoke-eval.js
+  // checks it exists). It added the picks and republished the relay list WITHOUT ever going through signRelay, so it
+  // was an adopt path with no identity-proof-then-backfill step at all. It now goes through the same choke point as
+  // every other adopt path: each pick is handed to Steward.signRelay, which proves it, sends it the church's
+  // safeguarding documents, and signs it only if they landed (otherwise the pick is left owed, not signed).
   async autoPickRelays(n) {
     const offers = await discoverRelayOffers(null, null);
     const have = new Set(relays());
     const picks = pickRelays(offers.filter(o => !have.has(o.url)), n || 2);
-    for (const p of picks) { try { window.Steward.addRelay(p.url); } catch (e) {} }
+    for (const p of picks) {
+      try { window.Steward.addRelay(p.url); } catch (e) {}
+      try { await window.Steward.signRelay(p.url); } catch (e) {}
+    }
     if (picks.length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks;
   },

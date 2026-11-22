@@ -471,3 +471,30 @@ test('A6 adoptNetDocAddresses: both branches — the stale-spelling swap and a n
   assert.ok(fresh.sentTo(MOVED).includes('minors') && fresh.sentTo(MOVED).includes('blocked'),
     'AN ADDRESS LEARNED FROM THE CHURCH\'S SIGNED LIST GOT NOTHING — addRelay no longer sends (A1), and nothing else did: ' + JSON.stringify(fresh.sentTo(MOVED)));
 });
+
+// ── 10. A5: autoPickRelays (no screen calls it; scripts and devtools can) goes through the same choke point ─
+function autoPickWorld(opts = {}) {
+  const added = [];
+  const w = adoptWorld({ ...opts, scope: { discoverRelayOffers: async () => [{ url: NEW, name: 'newbox' }], relays: () => [OWN, POOL], pickRelays: (o, n) => o.slice(0, n), ...(opts.scope || {}) } });
+  // The REAL autoPickRelays, with window.Steward wired to the REAL signRelay the world already built.
+  // (Everything the lifted code names must live ON the scope: inside `with (scope)` the proxy claims every
+  // non-global identifier, so a Function parameter would be shadowed by `undefined`.)
+  w.scope.__picked = added; w.scope.__sign = w.api.signRelay;
+  const pick = new Function('scope', 'with (scope) { const _o = { ' + fnBody(STEWARD, 'async autoPickRelays(n) {', 'autoPickRelays') +
+    ' }; window.Steward = { addRelay: (u) => { __picked.push(u); return u; }, signRelay: __sign, publishRelayList: () => Promise.resolve(null) }; return (n) => _o.autoPickRelays(n); }')(
+    new Proxy(w.scope, { has: (t, k) => (k in t) || !(String(k) in globalThis), get: (t, k) => (k === Symbol.unscopables ? undefined : t[k]) }));
+  return { ...w, added, autoPickRelays: pick };
+}
+test('A5: autoPickRelays hands each pick to signRelay — documents first, then signed; a box that refuses is left owed and NOT signed', async () => {
+  const ok = autoPickWorld();
+  await ok.autoPickRelays(1);
+  assert.deepEqual(ok.added, [NEW], 're-anchor: autoPickRelays picked nothing');
+  assert.ok(ok.sentTo(NEW).includes('minors') && ok.sentTo(NEW).includes('blocked'),
+    'autoPickRelays ADOPTED A BOX WITHOUT THE BACKFILL — an adopt path that never reaches the choke point: ' + JSON.stringify(ok.log));
+  assert.equal(ok.enrols.length, 1, 'the auto-picked box was not signed after its documents landed');
+  assert.ok(ok.log.indexOf('enrol') > ok.log.indexOf('send:minors'), 'signed before the child list was sent: ' + JSON.stringify(ok.log));
+  const refused = autoPickWorld({ answers: { minors: 'refuse', blocked: 'refuse' } });
+  await refused.autoPickRelays(1);
+  assert.equal(refused.enrols.length, 0, 'an auto-picked box that refused the child list was signed');
+  assert.deepEqual(refused.owed(), [{ churchPub: CP, url: NEW }]);
+});
