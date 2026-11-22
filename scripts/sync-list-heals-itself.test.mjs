@@ -36,6 +36,7 @@ const LIFT = [
   ['fn', 'function _readCovers'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
+  ['fn', 'function _tombable(keys, never) {'],
   ['fn', 'async function syncHeal() {'],
   ['st', 'var _syncHealLastAt = '],
   ['fn', 'async function autoSyncHeal'],
@@ -68,6 +69,9 @@ function makeWorld(cfg) {
     finalizeEvent: (t) => ({ ...t, pubkey: PUB, id: 'w' + (++ids) }),
     finalizeEvent2: (t) => ({ ...t, pubkey: PUB, id: 'w' + (++ids) }),
     relaysRaw: () => relays.map(r => r.url),
+    // BF2 (2026-11-22): syncHeal refuses to ADD a key this console still holds pending. None here; the refusal is
+    // run for real (real _pendingTomb over localStorage) in removal-sticks-and-closes-sync-trust.test.mjs.
+    _pendingTomb: () => [], sharedRelayKeys: () => [],
     relayNetCandidates: () => (cfg.own ? [cfg.own] : []),
     selfPublicRelay: () => cfg.selfPub || '',
     verifyRelayIdentity: async (u) => {

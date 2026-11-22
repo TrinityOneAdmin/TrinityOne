@@ -20763,6 +20763,7 @@ zoo`.split("\n");
         }
       }
       const keyOf = (e) => String(e && e.pubkey || "").toLowerCase();
+      const pendingGone = new Set(_tombable(_pendingTomb()));
       const basesByKey = /* @__PURE__ */ new Map();
       for (const r of probed) {
         const a = basesByKey.get(r.provedKey) || [];
@@ -20780,7 +20781,7 @@ zoo`.split("\n");
             cur.url = pubBase;
             wanted.push({ pubkey: p, url: pubBase });
           }
-        } else if (!tombAt.has(p) && pubBase) {
+        } else if (!tombAt.has(p) && !pendingGone.has(p) && pubBase) {
           entries.push({ pubkey: p, url: pubBase });
           wanted.push({ pubkey: p, url: pubBase });
         }

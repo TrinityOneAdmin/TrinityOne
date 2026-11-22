@@ -6823,6 +6823,11 @@ async function syncHeal() {
     // The merge. `wanted` is what THIS call means to change (the M-5 contract: the read-back asks whether
     // these are in the newest document, not whether a relay accepted the write).
     const keyOf = (e) => String((e && e.pubkey) || '').toLowerCase();
+    // BF2 (2026-11-22): a key this console still holds PENDING — a Remove whose tombstone has not landed, e.g.
+    // held because the own box could not prove its key — is refused on the ADD path exactly like a tombstoned
+    // one. Without this the console's own heal re-added the box it had just removed as soon as the box proved
+    // again. Add path only: a pending key already IN the doc is left to the Remove's own prune.
+    const pendingGone = new Set(_tombable(_pendingTomb()));
     const basesByKey = new Map();
     for (const r of probed) { const a = basesByKey.get(r.provedKey) || []; a.push(r.base); basesByKey.set(r.provedKey, a); }
     const entries = arr.map(e => ({ ...e }));
@@ -6838,7 +6843,7 @@ async function syncHeal() {
           cur.url = pubBase;
           wanted.push({ pubkey: p, url: pubBase });
         }
-      } else if (!tombAt.has(p) && pubBase) {
+      } else if (!tombAt.has(p) && !pendingGone.has(p) && pubBase) {
         entries.push({ pubkey: p, url: pubBase });
         wanted.push({ pubkey: p, url: pubBase });
       }
@@ -7201,8 +7206,10 @@ function _tombable(keys, never) {
   const no = new Set([...(never || [])].map(p => String(p || '').toLowerCase()));
   return [...new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
 }
-// WHICH KEYS HAS THIS CHURCH REMOVED — THE ONE READ every path that could put a box BACK must make (B1/B3,
-// 2026-11-22; audit F1/F4). The keys in the church's trinityone/relays-removed document, plus this console's own
+// WHICH KEYS HAS THIS CHURCH REMOVED — the read syncEnable (B1) and the community auto-join (B3) make before
+// they could put a box back (2026-11-22; audit F1/F4). syncHeal does NOT call this: it reads the tombstone doc
+// itself, in its own queue slot beside the sync doc (it needs each tombstone's `at`, which this discards), and
+// consults the pending set separately on its add path (BF2). The keys in the church's trinityone/relays-removed document, plus this console's own
 // pending set (a Remove whose tombstone has not landed yet is still a Remove). THREE-STATE, FAIL CLOSED:
 // `complete` is false unless every relay asked answered — bar the `droppable` addresses that are themselves
 // unreachable (_readCovers) — and a caller must treat "not complete" as "this box may have been removed".

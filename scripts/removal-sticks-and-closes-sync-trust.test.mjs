@@ -517,3 +517,34 @@ test('B2: signRelay never clears a SHARED relay key\'s tombstone, even when the 
   assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'the tombstone doc was re-signed for a shared relay key: ' + JSON.stringify(w.tombs()));
   assert.deepEqual(tombKeys(w.tombs()), [KEY_C, KEY_SHARED].sort());
 });
+
+// ── BF2 (Part B audit): this console's OWN heal must not re-add a box whose Remove is still pending ──────
+// Reached like this: the own box cannot prove its key, so the Remove's tombstone is HELD (B0) — pruned from the
+// sync doc, key pending, no tombstone. Then the removed box comes back and proves its key. The REAL syncHeal, called
+// directly (not through autoSyncHeal, whose flush would hide the gap).
+test('BF2: a key held PENDING is not re-added by a direct syncHeal when its box proves again (control: with nothing pending it is added)', async () => {
+  const OWN = 'wss://own.example/relay', A = 'wss://a.example/relay', B = 'wss://b.example/relay';
+  const mk = () => makeWorld({
+    relays: [{ url: OWN, key: '', up: true }, { url: A, key: KEY_A, up: true }, { url: B, key: '', up: false }],
+    net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: B }],
+    sync: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_C, url: 'https://c.example' }, { pubkey: KEY_B, url: 'https://b.example' }],
+    own: OWN, extra: [B],
+  });
+  const w = mk();
+  const r = await w.api.unenrolRelayNet(B);
+  assert.equal(r.syncPartial, true, 'precondition: the tombstone was not held: ' + JSON.stringify(r));
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(), 'precondition: the prune did not land');
+  assert.deepEqual(w.api._pendingTomb(), [KEY_B], 'precondition: the key is not pending');
+  assert.equal(w.tombs(), null, 'precondition: a tombstone exists, so this would not be testing the pending set');
+  const b = w.relays.find(x => x.url === B); b.up = true; b.key = KEY_B;   // the removed box is back and proves its key
+  await w.api.syncHeal();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(),
+    'THIS CONSOLE\'S OWN HEAL RE-ADDED THE BOX IT HAD JUST REMOVED — the pending set is not consulted on syncHeal\'s add path (BF2): ' + JSON.stringify(w.sync()));
+  // CONTROL: the same world with the pending set emptied — the heal DOES add the proving box, so the refusal above is the pending set's doing.
+  const c = mk();
+  await c.api.unenrolRelayNet(B);
+  c.api._setPendingTomb([]);
+  const cb = c.relays.find(x => x.url === B); cb.up = true; cb.key = KEY_B;
+  await c.api.syncHeal();
+  assert.deepEqual(keysOf(c.sync()), [KEY_A, KEY_B, KEY_C].sort(), 'CONTROL: with nothing pending and no tombstone the heal should add the proving box');
+});
