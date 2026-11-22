@@ -90,6 +90,7 @@ function runUnenrol({ removingUnreachable = true } = {}) {
   ];
   let nRead = 0;
   const published = [];
+  const ls = new Map();   // the console's localStorage, for the pending-tombstone set
 
   const scope = {
     sk, pub,
@@ -114,11 +115,18 @@ function runUnenrol({ removingUnreachable = true } = {}) {
     now: () => 2000,
     // A2 (977fbaea + 2dc4e053): the removal path now runs the REAL _closeSyncTrust, which reads the church's
     // trinityone/relays sync doc. This church never granted sync trust (no sync doc), so a covering read with
-    // no event is honest: _closeSyncTrust returns {closed:false} and nothing is tombstoned. lsGet/lsSet back
-    // the real _pendingTomb/_setPendingTomb (unreached here — the no-sync-doc branch returns first).
-    _oneComplete: async () => ({ ev: null, askedUrls: [OWN], answeredUrls: [OWN] }),
-    lsGet: () => null,
-    lsSet: () => {},
+    // no event is honest for that doc. B0 (2026-11-22): a sync-off church's Remove now DOES write a
+    // trinityone/relays-removed tombstone, and _writeTombstone reads it back — so this read answers with the
+    // newest event PUBLISHED under the d-tag asked for (a constant "no event" would make the read-back look like
+    // a lost write and the removal read partial). lsGet/lsSet back the real _pendingTomb/_setPendingTomb.
+    _oneComplete: async (filters) => {
+      const d = ((filters && filters[0] && filters[0]['#d']) || [])[0];
+      const mine = published.filter(e => ((e.tags || []).find(t => t[0] === 'd') || [])[1] === d);
+      return { ev: mine.length ? mine[mine.length - 1] : null, askedUrls: [OWN], answeredUrls: [OWN] };
+    },
+    lsGet: (key) => (ls.has(key) ? ls.get(key) : null),
+    lsSet: (key, v) => { ls.set(key, String(v)); },
+    sharedRelayKeys: () => [],   // this fixture ships no shared pin: KEY_OWN is the console's own box, excluded as such
   };
   const names = Object.keys(scope);
   // A2 transitive chain the real unenrolRelayNet now calls, lifted from source alongside it so the removal
@@ -131,6 +139,7 @@ function runUnenrol({ removingUnreachable = true } = {}) {
     stmt(SRC, 'const TOMB_PENDING_LS = ', 'TOMB_PENDING_LS'),
     fnBody(SRC, 'function _pendingTomb() {', '_pendingTomb'),
     fnBody(SRC, 'function _setPendingTomb(keys) {', '_setPendingTomb'),
+    fnBody(SRC, 'function _tombable(keys, never) {', '_tombable'),
     fnBody(SRC, 'async function _writeTombstone(opts) {', '_writeTombstone'),
     fnBody(SRC, 'async function _closeSyncTrust(opts) {', '_closeSyncTrust'),
   ].join('\n');

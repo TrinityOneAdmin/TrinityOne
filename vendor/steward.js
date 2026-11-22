@@ -20526,6 +20526,15 @@ zoo`.split("\n");
     }
     let pk = "";
     let _droppedNet = [];
+    let _own = "", _ownKey = "", _ownResolved = false, _opPending = [];
+    const keyAt0 = async (x) => {
+      try {
+        const proof = await verifyRelayIdentity(x);
+        return String(proof && proof.relayPub || "").toLowerCase();
+      } catch (e) {
+        return "";
+      }
+    };
     const netResult = await (async () => {
       const read = await relayNetDoc();
       const { ev: existing } = read;
@@ -20558,6 +20567,15 @@ zoo`.split("\n");
       if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
       const keep = entries.filter((e) => !drop.includes(e));
       if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      _own = own;
+      _ownKey = ownKey;
+      _ownResolved = true;
+      {
+        const mark = _tombable([pk, ...drop.map((e) => e && e.pubkey)], [ownKey]);
+        const before = _pendingTomb();
+        _opPending = mark.filter((p) => !before.includes(p));
+        if (_opPending.length) _setPendingTomb([...before, ...mark]);
+      }
       const isDropped = (e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u);
       let list = keep, floorAt = 0, repairs = 0;
       for (; ; ) {
@@ -20571,7 +20589,10 @@ zoo`.split("\n");
         if (!still.length) return { removed: true, entries: found, repaired: repairs };
         if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
         if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-        if (still.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+        if (still.some((e) => ownKey && e.pubkey === ownKey)) {
+          if (_opPending.length) _setPendingTomb(_pendingTomb().filter((p) => !_opPending.includes(p)));
+          return { removed: false, ownBox: true };
+        }
         repairs++;
         list = found.filter((e) => !isDropped(e));
         floorAt = newest ? (newest.created_at || 0) + 1 : 0;
@@ -20584,11 +20605,25 @@ zoo`.split("\n");
         const p = String(e && e.pubkey || "").toLowerCase();
         if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
       }
-      const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0 });
+      if (!_ownResolved) {
+        _own = relayNetCandidates()[0] || "";
+        _ownKey = !_own ? "" : _k0(_own) === _k0(u) ? pk : await keyAt0(_own);
+        if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      }
+      const close = await _closeSyncTrust({
+        removedKeys,
+        u,
+        droppable: _droppable,
+        sk0,
+        pub0,
+        never: _ownKey ? [_ownKey] : [],
+        skipTomb: !!_own && _k0(_own) === _k0(u),
+        holdTomb: !!_own && !_ownKey
+      });
       if (close && close.partial) {
         return { removed: false, unknown: true, syncPartial: true };
       }
-      return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned) };
+      return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned), removedKeys: close && close.keys || [] };
     }
     return netResult;
   }
@@ -20814,6 +20849,10 @@ zoo`.split("\n");
     const t = Date.now();
     if (!force && t - _syncHealLastAt < 6e5) return { ran: false, debounced: true };
     _syncHealLastAt = t;
+    try {
+      await _flushPendingTomb();
+    } catch (e) {
+    }
     try {
       return await syncHeal();
     } catch (e) {
@@ -21111,6 +21150,53 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  function _tombable(keys, never) {
+    const shared = new Set(sharedRelayKeys());
+    const no = new Set([...never || []].map((p) => String(p || "").toLowerCase()));
+    return [...new Set([...keys || []].map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
+  }
+  async function _flushPendingTomb() {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { flushed: false };
+    if (!_pendingTomb().length) return { flushed: false, none: true };
+    const sk0 = sk, pub0 = pub;
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const own = relayNetCandidates()[0] || "";
+    let ownKey = "";
+    if (own) {
+      try {
+        const proof = await verifyRelayIdentity(own);
+        ownKey = String(proof && proof.relayPub || "").toLowerCase();
+      } catch (e) {
+        ownKey = "";
+      }
+    }
+    if (moved()) return { flushed: false };
+    if (own && !/^[0-9a-f]{64}$/.test(ownKey)) return { flushed: false, held: true };
+    const _k0 = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    let droppable = /* @__PURE__ */ new Set();
+    try {
+      droppable = new Set(extraRelays().map(_k0));
+    } catch (e) {
+      droppable = /* @__PURE__ */ new Set();
+    }
+    return enrolSerial(async () => {
+      if (moved()) return { flushed: false };
+      const never = ownKey ? [ownKey] : [];
+      const add2 = _tombable(_pendingTomb(), never);
+      const tomb = add2.length ? await _writeTombstone({ add: add2, droppable, sk0, pub0 }) : { wrote: false };
+      if (moved()) return { flushed: false };
+      if (tomb && (tomb.partial || tomb.skipped)) return { flushed: false, partial: true };
+      const done = /* @__PURE__ */ new Set([...add2, ..._pendingTomb().filter((p) => !_tombable([p], never).length)]);
+      _setPendingTomb(_pendingTomb().filter((p) => !done.has(p)));
+      return { flushed: true, keys: add2 };
+    });
+  }
   async function _writeTombstone(opts) {
     const o = opts || {};
     const valid = (p) => /^[0-9a-f]{64}$/.test(p);
@@ -21198,12 +21284,13 @@ zoo`.split("\n");
     if (moved()) return { partial: true };
     if (!_readCovers(read, u, droppable)) return { partial: true };
     const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
-    if (!mine) return { closed: false, tombstoned: false };
-    let arr = null;
-    try {
-      arr = JSON.parse(mine.content || "[]");
-    } catch (e) {
-      arr = null;
+    let arr = [];
+    if (mine) {
+      try {
+        arr = JSON.parse(mine.content || "[]");
+      } catch (e) {
+        arr = null;
+      }
     }
     if (!Array.isArray(arr)) return { partial: true };
     for (const e of arr) {
@@ -21246,14 +21333,18 @@ zoo`.split("\n");
         floorAt = (Number(newest.created_at) || 0) + 1;
       }
     }
-    const pending = new Set(_pendingTomb());
-    if (closed) for (const k of removedKeys) pending.add(k);
-    const addKeys = [.../* @__PURE__ */ new Set([...removedKeys, ...pending])];
-    if (closed) _setPendingTomb([...pending]);
+    if (o.skipTomb) return { closed, tombstoned: false, keys: [] };
+    const never = [...o.never || []];
+    const mineKeys = _tombable(removedKeys, never);
+    const pendingNow = _pendingTomb();
+    if (mineKeys.some((k) => !pendingNow.includes(k))) _setPendingTomb([...pendingNow, ...mineKeys]);
+    if (o.holdTomb) return { partial: true, closed };
+    const addKeys = _tombable([...mineKeys, ...pendingNow], never);
     const tomb = await _writeTombstone({ add: addKeys, leaving: u, droppable, sk0, pub0 });
-    if (tomb && tomb.partial) return { partial: true, closed };
-    _setPendingTomb(_pendingTomb().filter((p) => !addKeys.includes(p)));
-    return { closed, tombstoned: !!(tomb && tomb.wrote) };
+    if (tomb && (tomb.partial || tomb.skipped)) return { partial: true, closed };
+    const done = /* @__PURE__ */ new Set([...addKeys, ..._pendingTomb().filter((p) => !_tombable([p], never).length)]);
+    _setPendingTomb(_pendingTomb().filter((p) => !done.has(p)));
+    return { closed, tombstoned: !!(tomb && tomb.wrote), keys: mineKeys };
   }
   function _netDocDialUrl(raw) {
     let s = String(raw || "").trim();

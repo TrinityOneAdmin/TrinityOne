@@ -6538,6 +6538,10 @@ async function unenrolRelayNet(url) {
   // DEAD box, whose key it learns from the rows it dropped rather than from a probe it cannot answer.
   let pk = '';
   let _droppedNet = [];
+  // B0 (2026-11-22): what the tombstone step must know about the console's OWN box (never tombstoned), and which
+  // pending keys THIS press persisted (withdrawn again if the press turns out to be an own-box refusal).
+  let _own = '', _ownKey = '', _ownResolved = false, _opPending = [];
+  const keyAt0 = async (x) => { try { const proof = await verifyRelayIdentity(x); return String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { return ''; } };
   const netResult = await (async () => {
     const read = await relayNetDoc();
     const { ev: existing } = read;
@@ -6561,6 +6565,19 @@ async function unenrolRelayNet(url) {
     // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
     const keep = entries.filter(e => !drop.includes(e));
     if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+    // B0 — REMEMBER WHAT THIS REMOVE MUST TOMBSTONE, BEFORE ANYTHING IS PUBLISHED. Every return in the prune loop
+    // below (publish refused, read-back incomplete, repairs exhausted, church switched) leaves before
+    // _closeSyncTrust runs, and on the retry a DEAD box is already out of relay-net and proves no key — so there
+    // would be nothing left to tombstone (audit 2026-11-22, F2). The keys are persisted per church here, past the
+    // own-box and alias refusals above, and flushed by the next Remove or the next heal pass (_flushPendingTomb).
+    // Never a shared relay key, never the own box's key (_tombable).
+    _own = own; _ownKey = ownKey; _ownResolved = true;
+    {
+      const mark = _tombable([pk, ...drop.map(e => e && e.pubkey)], [ownKey]);
+      const before = _pendingTomb();
+      _opPending = mark.filter(p => !before.includes(p));
+      if (_opPending.length) _setPendingTomb([...before, ...mark]);
+    }
     // READ BACK, AND REPAIR A LOST REMOVE (audit M-5): a console that signed an addition from the old list at the same
     // moment can replace this Remove with a newer document that still names the relay. `removed` is true only when a
     // COMPLETE read-back no longer names it; an incomplete one is unknown and re-signs nothing. At most two repairs.
@@ -6578,7 +6595,11 @@ async function unenrolRelayNet(url) {
       if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
       if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
       // the own-box refusal still applies to whatever the newer list names under that address
-      if (still.some(e => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+      if (still.some(e => ownKey && e.pubkey === ownKey)) {
+        // B0: the press is REFUSED as the own box, so nothing it persisted may be tombstoned later.
+        if (_opPending.length) _setPendingTomb(_pendingTomb().filter(p => !_opPending.includes(p)));
+        return { removed: false, ownBox: true };
+      }
       repairs++;
       list = found.filter(e => !isDropped(e));
       floorAt = newest ? (newest.created_at || 0) + 1 : 0;
@@ -6593,7 +6614,18 @@ async function unenrolRelayNet(url) {
     const removedKeys = new Set();
     if (/^[0-9a-f]{64}$/.test(pk)) removedKeys.add(pk);
     for (const e of _droppedNet) { const p = String((e && e.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p); }
-    const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0 });
+    // B0 — THE OWN BOX IS NEVER TOMBSTONED. A relay the list never named (`notListed`) left the admission step
+    // before the own-box check ran, so it is made here. Three outcomes: the address IS the own box → no tombstone
+    // at all; the own box proves its key → that key is excluded; the own box exists but cannot say which key is
+    // its own → the tombstone is HELD (the keys stay pending, the removal reads partial) rather than risk
+    // tombstoning the own box under an alias — the same fail-closed rule as the alias refusal above.
+    if (!_ownResolved) {
+      _own = relayNetCandidates()[0] || '';
+      _ownKey = !_own ? '' : (_k0(_own) === _k0(u)) ? pk : await keyAt0(_own);
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+    }
+    const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0,
+      never: _ownKey ? [_ownKey] : [], skipTomb: !!_own && _k0(_own) === _k0(u), holdTomb: !!_own && !_ownKey });
     if (close && close.partial) {
       // The box is still TRUSTED to pull the whole corpus on every peer holding the sync doc — the removal is
       // only PARTIAL. Reported with unenrol's EXISTING honesty shape (dropOutcome's "could not be updated right
@@ -6602,7 +6634,7 @@ async function unenrolRelayNet(url) {
       // runs the sync-close again — it converges once the relays answer.
       return { removed: false, unknown: true, syncPartial: true };
     }
-    return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned) };
+    return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned), removedKeys: (close && close.keys) || [] };
   }
   return netResult;
 }
@@ -6866,6 +6898,8 @@ async function autoSyncHeal(opts) {
   const t = Date.now();
   if (!force && t - _syncHealLastAt < 600000) return { ran: false, debounced: true };
   _syncHealLastAt = t;
+  // B0: a Remove whose tombstone has not landed yet is retried here, BEFORE the heal reads the tombstones.
+  try { await _flushPendingTomb(); } catch (e) {}
   try { return await syncHeal(); } catch (e) { return { ran: false, unknown: true }; }
 }
 
@@ -7100,6 +7134,8 @@ async function autoJoinPublicRelaysAuto(opts) {
 // then — on the steward's retry — be gone from BOTH relay-net and the sync doc, so there is no key left to
 // tombstone and a peer console still listing it re-adds it for ever. The pruned keys are therefore persisted per
 // church (survives a reload) until their tombstone is confirmed present; the next Remove / retry flushes them.
+// B0 (2026-11-22): the set now also holds every key a Remove MEANS to tombstone, written before its first prune
+// publish (unenrolRelayNet), and the heal pass flushes it too (_flushPendingTomb) — see both.
 const TOMB_PENDING_LS = 'trinityone.steward.tomb-pending.';   // + pub: [hex pubkey, …] pruned from sync, not yet tombstoned
 function _pendingTomb() {
   if (!pub) return [];
@@ -7108,6 +7144,47 @@ function _pendingTomb() {
 function _setPendingTomb(keys) {
   if (!pub) return;
   try { const u = [...new Set((keys || []).map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)))]; lsSet(TOMB_PENDING_LS + pub, JSON.stringify(u)); } catch (e) {}
+}
+// WHICH KEYS MAY BE TOMBSTONED (B0, 2026-11-22). Never a SHARED relay key: the shared relays are where every
+// console finds the church's documents, a shared box can sit in the list under several addresses, and a
+// tombstone on its key would have every console refuse it at all of them. Never a key in `never` — the
+// console's own box. Returns the valid, de-duplicated remainder.
+function _tombable(keys, never) {
+  const shared = new Set(sharedRelayKeys());
+  const no = new Set([...(never || [])].map(p => String(p || '').toLowerCase()));
+  return [...new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
+}
+// THE FLUSH ON THE HEAL PASS (B0, 2026-11-22). A Remove whose tombstone could not be written leaves its keys in
+// the pending set; before this only the NEXT REMOVE flushed them, and a steward who has removed the box has no
+// reason to press Remove again. autoSyncHeal calls this first, on the console's existing triggers. No pending
+// keys → returns at once: no probe, no read, no write. Otherwise: prove the own box's key OUTSIDE the queue
+// (never tombstoned; if the own box cannot say which key is its own, nothing is written this pass), then one
+// queue slot for _writeTombstone, with the same droppable set the Remove path uses (the church-added extras).
+// The keys leave the pending set only once the tombstone is confirmed present.
+async function _flushPendingTomb() {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { flushed: false };
+  if (!_pendingTomb().length) return { flushed: false, none: true };
+  const sk0 = sk, pub0 = pub;
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  const own = relayNetCandidates()[0] || '';
+  let ownKey = '';
+  if (own) { try { const proof = await verifyRelayIdentity(own); ownKey = String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { ownKey = ''; } }
+  if (moved()) return { flushed: false };
+  if (own && !/^[0-9a-f]{64}$/.test(ownKey)) return { flushed: false, held: true };
+  const _k0 = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  let droppable = new Set();
+  try { droppable = new Set(extraRelays().map(_k0)); } catch (e) { droppable = new Set(); }
+  return enrolSerial(async () => {
+    if (moved()) return { flushed: false };
+    const never = ownKey ? [ownKey] : [];
+    const add = _tombable(_pendingTomb(), never);   // read INSIDE the slot: a re-Add queued ahead may have withdrawn a key
+    const tomb = add.length ? await _writeTombstone({ add, droppable, sk0, pub0 }) : { wrote: false };
+    if (moved()) return { flushed: false };
+    if (tomb && (tomb.partial || tomb.skipped)) return { flushed: false, partial: true };
+    const done = new Set([...add, ..._pendingTomb().filter(p => !_tombable([p], never).length)]);
+    _setPendingTomb(_pendingTomb().filter(p => !done.has(p)));
+    return { flushed: true, keys: add };
+  });
 }
 
 // ── THE TOMBSTONE WRITER (plan A2) ──────────────────────────────────────────────────────────────────────
@@ -7205,10 +7282,11 @@ async function _closeSyncTrust(opts) {
   if (moved()) return { partial: true };
   if (!_readCovers(read, u, droppable)) return { partial: true };
   const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
-  // No sync doc at all → the church never granted sync trust: nothing to close, and nothing to tombstone (a
-  // church that does not self-host must stay exactly as it was — an ordinary Remove adds no new writes).
-  if (!mine) return { closed: false, tombstoned: false };
-  let arr = null; try { arr = JSON.parse(mine.content || '[]'); } catch (e) { arr = null; }
+  // No sync doc at all → the church never granted sync trust, so there is nothing to CLOSE and no sync doc is
+  // ever written for it. The TOMBSTONE below is still written (B0, 2026-11-22): sync-off is the DEFAULT church,
+  // and a later syncEnable, another console's heal or the community auto-join can only refuse a Removed box if
+  // its removal was recorded.
+  let arr = []; if (mine) { try { arr = JSON.parse(mine.content || '[]'); } catch (e) { arr = null; } }
   if (!Array.isArray(arr)) return { partial: true };
   // Every sync entry naming the removed box — by key, or by the address it is listed under — carries a key we
   // must also tombstone, so even a box listed only by url (identity unprovable because it is dead) is pruned.
@@ -7254,14 +7332,24 @@ async function _closeSyncTrust(opts) {
   // the pruned keys BEFORE the write so a retry (or the next Remove) still flushes them; carry forward any
   // earlier op's un-landed keys; clear them only once the tombstone is confirmed present. (_writeTombstone drops
   // a key from this pending set whenever it is un-tombstoned, so a box the steward re-Adds is never re-tombstoned.)
-  const pending = new Set(_pendingTomb());
-  if (closed) for (const k of removedKeys) pending.add(k);
-  const addKeys = [...new Set([...removedKeys, ...pending])];
-  if (closed) _setPendingTomb([...pending]);
+  //
+  // B0 (2026-11-22): UNCONDITIONAL — written whether or not the church has a sync doc, and for every key this
+  // Remove names, not only one it just pruned. Never a shared relay key, never the own box's key (`never`);
+  // `skipTomb` (the address IS the own box) writes nothing, and `holdTomb` (the own box could not say which key
+  // is its own) persists the keys and reports partial instead of writing.
+  if (o.skipTomb) return { closed, tombstoned: false, keys: [] };
+  const never = [...(o.never || [])];
+  const mineKeys = _tombable(removedKeys, never);
+  const pendingNow = _pendingTomb();
+  if (mineKeys.some(k => !pendingNow.includes(k))) _setPendingTomb([...pendingNow, ...mineKeys]);   // BEFORE the write
+  if (o.holdTomb) return { partial: true, closed };
+  const addKeys = _tombable([...mineKeys, ...pendingNow], never);
   const tomb = await _writeTombstone({ add: addKeys, leaving: u, droppable, sk0, pub0 });
-  if (tomb && tomb.partial) return { partial: true, closed };   // pruned keys stay persisted → a retry writes the tombstone
-  _setPendingTomb(_pendingTomb().filter(p => !addKeys.includes(p)));   // tombstone confirmed present → safe to clear
-  return { closed, tombstoned: !!(tomb && tomb.wrote) };
+  if (tomb && (tomb.partial || tomb.skipped)) return { partial: true, closed };   // keys stay persisted → a retry or the next heal pass writes the tombstone
+  // tombstone confirmed present → safe to clear (and a key that may never be tombstoned leaves the set with it)
+  const done = new Set([...addKeys, ..._pendingTomb().filter(p => !_tombable([p], never).length)]);
+  _setPendingTomb(_pendingTomb().filter(p => !done.has(p)));
+  return { closed, tombstoned: !!(tomb && tomb.wrote), keys: mineKeys };
 }
 
 // ── STEP 1: USE THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ──────────────────────────────────────────────

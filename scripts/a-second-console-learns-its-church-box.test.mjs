@@ -299,10 +299,16 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'async function _writeTombstone(opts) {', '_writeTombstone'),
     fnBody(src, 'function _pendingTomb() {', '_pendingTomb'),
     fnBody(src, 'function _setPendingTomb(keys) {', '_setPendingTomb'),
+    fnBody(src, 'function _tombable(keys, never) {', '_tombable'),   // B0 (2026-11-22): which keys may be tombstoned
     fnBody(src, 'function _syncRelayBase(u) {', '_syncRelayBase'),
     stmt(src, 'var _syncRelayKey = ', '_syncRelayKey'),
     stmt(src, 'var RELAYS_REMOVED_D = ', 'RELAYS_REMOVED_D'),
     stmt(src, 'var TOMB_PENDING_LS = ', 'TOMB_PENDING_LS'),
+    // B0 (2026-11-22): a Remove now writes trinityone/relays-removed and reads it back; a real relay serves that
+    // document only to the church's own login, and _oneComplete's private read asks _authAccepted whether the
+    // relay ACCEPTED it. The shipped signer glue is what records that, so it is lifted here (it replaces the
+    // look-alike signer makeConsole installs on the pool).
+    stmt(src, 'pool.automaticallyAuth = (url) => async (authEvent) => {', 'pool.automaticallyAuth'),
     stmt(src, 'var NET = ', 'NET'),
     stmt(src, 'var GROUP_D = ', 'GROUP_D'),
     fnBody(src, 'function _monotonic', '_monotonic'),
@@ -363,6 +369,7 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     _waitForRegistration: async () => {},
     _lastStamp: new Map(),
     _skewShift: () => 0,
+    _authAccepted: new Map(), _authedRelays: new Map(), _authFailed: new Map(), _runKeyReadAuthWaiters: () => {},
     ...CAPS,
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));
