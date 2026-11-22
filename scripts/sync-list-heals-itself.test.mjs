@@ -36,6 +36,7 @@ const LIFT = [
   ['fn', 'function _readCovers'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
+  ['fn', 'function _tombable(keys, never) {'],
   ['fn', 'async function syncHeal() {'],
   ['st', 'var _syncHealLastAt = '],
   ['fn', 'async function autoSyncHeal'],
@@ -68,6 +69,9 @@ function makeWorld(cfg) {
     finalizeEvent: (t) => ({ ...t, pubkey: PUB, id: 'w' + (++ids) }),
     finalizeEvent2: (t) => ({ ...t, pubkey: PUB, id: 'w' + (++ids) }),
     relaysRaw: () => relays.map(r => r.url),
+    // BF2 (2026-11-22): syncHeal refuses to ADD a key this console still holds pending. None here; the refusal is
+    // run for real (real _pendingTomb over localStorage) in removal-sticks-and-closes-sync-trust.test.mjs.
+    _pendingTomb: () => [], sharedRelayKeys: () => [],
     relayNetCandidates: () => (cfg.own ? [cfg.own] : []),
     selfPublicRelay: () => cfg.selfPub || '',
     verifyRelayIdentity: async (u) => {
@@ -530,6 +534,12 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       // forced heal that follows does not refuse the box the steward just chose to re-add.
       _writeTombstone: async (o) => { order.push('untomb:' + JSON.stringify((o && o.remove) || null)); return { wrote: true }; },
       autoSyncHeal: async (opts) => { order.push('heal:' + JSON.stringify(opts)); return {}; },
+      sharedRelayKeys: () => [],   // B2 (2026-11-22): signRelay never clears a shared relay key's tombstone; none shipped in this fixture
+      // A2 (2026-11-22): signRelay goes through the REAL _adoptRelay (lifted below). Its backfill is answered "landed"
+      // (run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs) and takes no queue slot, so the
+      // slot order asserted below is unchanged.
+      sk: new Uint8Array(32).fill(7), pub: PUB, actingChurch: '', _viewingNetwork: () => false,
+      _backfillSafeguardTo: async () => ({ landed: true, results: {} }), _setOwedBackfill: () => {},
       Promise, JSON, String,
     };
     const proxy = new Proxy(scope, {
@@ -538,11 +548,13 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       set: (t, k, v) => { t[k] = v; return true; },
     });
     const api = new Function('scope', 'with (scope) { ' +
-      fnBody(BUNDLE, 'function normRelay(input) {', 'normRelay') + '\nreturn { ' +
+      fnBody(BUNDLE, 'function normRelay(input) {', 'normRelay') + '\n' + fnBody(BUNDLE, 'async function _adoptRelay(u) {', '_adoptRelay') + '\n' + fnBody(BUNDLE, 'function _signedIn(r, u) {', '_signedIn') + '\nreturn { ' +
       fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
     return { api, order };
   };
-  const ok = mk({ published: true, proven: [{ url: 'wss://x.example/relay', pubkey: KEY_A }], entries: [{ pubkey: KEY_A }] });
+  // B2 (2026-11-22, audit F3): the enrol proves the box SERVING this console too (KEY_B here), and signRelay used to
+  // clear every proved key. Only the key proved at the address being added may be un-tombstoned.
+  const ok = mk({ published: true, proven: [{ url: 'wss://own.example/relay', pubkey: KEY_B }, { url: 'wss://x.example/relay', pubkey: KEY_A }], entries: [{ pubkey: KEY_A }] });
   await ok.api.signRelay('wss://x.example/relay');
   await settle(); await settle(); await settle();
   assert.deepEqual(ok.order, ['slot', 'slot-end', 'slot', 'untomb:["' + KEY_A + '"]', 'slot-end', 'heal:{"force":true}'],

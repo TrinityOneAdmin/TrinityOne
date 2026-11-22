@@ -25,6 +25,7 @@ const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 // signed copy the relay holds. publish() stamps the author (a church-key signature), exactly what the re-check guards on.
 function prefsApi({ sk = 'sk', pub = 'CHURCHPUB', actingChurch = '', network = false, complete = true } = {}) {
   const store = { ev: null };
+  const writes = { n: 0 };
   let clock = 1000;
   const read = () => ({
     ev: store.ev,
@@ -41,7 +42,9 @@ function prefsApi({ sk = 'sk', pub = 'CHURCHPUB', actingChurch = '', network = f
     finalizeEvent: (e) => ({ ...e, pubkey: pub }), finalizeEvent2: (e) => ({ ...e, pubkey: pub }),
     _monotonic: (e) => e,
     now: () => ++clock,
-    publish: async (ev) => { store.ev = ev; return ev; },
+    publish: async (ev) => { writes.n++; store.ev = ev; return ev; },
+    // N2 (2026-11-22): _dropChosen normalises the address it is given and the ones `chosen` recorded.
+    normRelay: (u) => String(u || '').trim(), normalizeURL: (u) => String(u).toLowerCase(), normalizeURL2: (u) => String(u).toLowerCase(),
     Math, JSON, Number, Array, Set, String, Object, Promise, Boolean,
   };
   const names = Object.keys(scope);
@@ -51,14 +54,15 @@ function prefsApi({ sk = 'sk', pub = 'CHURCHPUB', actingChurch = '', network = f
     fnBody(STEWARD, 'function _mergeChosen(a, b) {', '_mergeChosen'),
     fnBody(STEWARD, 'async function _readRelayPrefs() {', '_readRelayPrefs'),
     fnBody(STEWARD, 'async function _writeRelayPrefs(mutate) {', '_writeRelayPrefs'),
+    fnBody(STEWARD, 'async function _dropChosen(url, keys) {', '_dropChosen'),
   ].join('\n');
-  const methods = '{ ' + [
+  const methods = '{ _dropChosen, _writeRelayPrefs, ' + [
     fnBody(STEWARD, 'async relayPrefs() {', 'relayPrefs'),
     fnBody(STEWARD, 'setPublicAuto(on) {', 'setPublicAuto'),
     fnBody(STEWARD, 'setPublicTarget(n) {', 'setPublicTarget'),
   ].join(', ') + ' }';
   const api = new Function(...names, src + '\nreturn (' + methods + ');')(...names.map((k) => scope[k]));
-  return { api, store };
+  return { api, store, writes };
 }
 
 test('1. an ABSENT doc read in FULL is auto ON (the opt-out default); an INCOMPLETE read is OFF-this-pass', async () => {
@@ -177,4 +181,40 @@ test('5c. a delegated console cannot flip the switch — the press reaches the o
   await settle();
   assert.equal(calls.length, 0, 'A DELEGATED CONSOLE WROTE THE OPT-OUT FROM THE SCREEN — the UI did not honour owner-only');
   assert.match(said(c.draw()), /Only the church’s own console/, 'the delegate was not told why the switch did nothing');
+});
+
+// ── N2 (2026-11-22): a Removed box leaves `chosen` — the REAL _dropChosen over the real reader and writer ───
+const CK = (n) => String(n).padStart(2, '0').repeat(32);
+test('N2. _dropChosen takes the Removed box out of chosen by a key the Remove TOMBSTONED — never by address alone — and leaves everything else as it was', async () => {
+  const { api } = prefsApi({});
+  const seed = [{ pubkey: CK(1), url: 'wss://box-1.example/relay', name: 'one' }, { pubkey: CK(2), url: 'wss://box-2.example/relay', name: 'two' }, { pubkey: CK(3), url: 'wss://box-3.example/relay', name: 'three' }];
+  await api._writeRelayPrefs((prev) => ({ ...prev, publicAuto: false, publicTarget: 7, chosen: seed }));
+  assert.equal((await api.relayPrefs()).chosen.length, 3, 'precondition: three chosen boxes');
+  const byKey = await api._dropChosen('wss://some-other-spelling.example/relay', [CK(2)]);
+  assert.equal(byKey.dropped, true, 'the box was not dropped by its key: ' + JSON.stringify(byKey));
+  // BF1 (2026-11-22): the ADDRESS alone is not a match. A `chosen` key is a church-wide "do not auto-adopt"; with no
+  // key tombstoned, dropping the entry would delete that guard and put nothing in its place.
+  const byUrl = await api._dropChosen('wss://box-3.example/relay', []);
+  assert.notEqual(byUrl.written, true, 'A chosen ENTRY WAS DROPPED BY ADDRESS WITH NOTHING TOMBSTONED — the box lost its last church-wide guard (BF1): ' + JSON.stringify(byUrl));
+  const after = await api.relayPrefs();
+  assert.deepEqual(after.chosen.map((c) => c.pubkey), [CK(1), CK(3)], 'the wrong boxes are in `chosen`: ' + JSON.stringify(after.chosen));
+  assert.equal(after.publicAuto, false, 'dropping a box from chosen changed the opt-out');
+  assert.equal(after.publicTarget, 7, 'dropping a box from chosen changed the target');
+});
+
+test('N2. _dropChosen writes NOTHING when the box is not in chosen, when there is no prefs doc, on an incomplete read, or on a delegated console', async () => {
+  const none = prefsApi({});
+  assert.equal((await none.api._dropChosen('wss://box-9.example/relay', [CK(9)])).absent, true);
+  assert.equal(none.store.ev, null, 'AN ORDINARY REMOVE STARTED WRITING A relayprefs DOC for a church that never had one');
+  const other = prefsApi({});
+  await other.api._writeRelayPrefs((prev) => ({ ...prev, chosen: [{ pubkey: CK(1), url: 'wss://box-1.example/relay', name: '' }] }));
+  const n0 = other.writes.n;
+  assert.equal((await other.api._dropChosen('wss://box-9.example/relay', [CK(9)])).absent, true);
+  assert.equal(other.writes.n, n0, 'the prefs doc was re-signed although the Removed box was never in chosen');
+  const partial = prefsApi({ complete: false });
+  assert.equal((await partial.api._dropChosen('wss://box-1.example/relay', [CK(1)])).unknown, true);
+  assert.equal(partial.writes.n, 0, 'the prefs doc was written over an incomplete read');
+  const delegated = prefsApi({ actingChurch: 'f'.repeat(64) });
+  assert.equal((await delegated.api._dropChosen('wss://box-1.example/relay', [CK(1)])).skipped, true);
+  assert.equal(delegated.writes.n, 0, 'a delegated console wrote the church\'s relay prefs');
 });

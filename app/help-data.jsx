@@ -540,7 +540,7 @@ window.HelpData = {
         { type: 'steps', label: 'Turning off automatic community relays', items: [
           'Open Settings → Infrastructure → Move or copy history, and find “Community relays”.',
           'Turn off “Use community relays automatically”. From then on, only relays you add yourself are used.',
-          'If a community relay has already been added, open Settings → Infrastructure → Relays and Remove it. Removing it also tells your church’s devices to stop using it, and stops it being added back.',
+          'If a community relay has already been added, open Settings → Infrastructure → Relays and Remove it. Removing it also tells your church’s devices to stop using it, and automatic community relays will not add it back. (You can still add it again yourself.)',
         ] },
         { type: 'note', text: 'What anyone running a relay can see is limited — your content and private messages are encrypted — but they can see who is in your church and that messages are being sent. Only connect to people you would trust with that.' },
       ],

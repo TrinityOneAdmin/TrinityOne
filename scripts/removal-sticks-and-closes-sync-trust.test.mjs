@@ -41,6 +41,17 @@ const LIFT = [
   ['fn', 'function lsSet(k, v) {'],
   ['fn', 'function _pendingTomb'],
   ['fn', 'function _setPendingTomb'],
+  ['fn', 'function sharedRelayKeys'],
+  ['fn', 'function _tombable(keys, never) {'],
+  ['fn', 'async function _flushPendingTomb() {'],
+  // A2 (2026-11-22): signRelay goes through the real _adoptRelay; its backfill is a scope stub answering "landed".
+  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'], ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'],
+  ['fn', 'async function _removedKeysRead(droppable) {'],
+  ['fn', 'function _unprovedDroppable(provedUrls) {'],
+  // BF3/BF1: the relay-prefs reader/writer and the chosen drop, real, so unsignRelay's two follow-ups run for real.
+  ['st', 'var RELAYPREFS_D = '], ['st', 'var PUBLIC_TARGET_DEFAULT = '],
+  ['fn', 'function _clampPublicTarget(n) {'], ['fn', 'function _communityCap(publicTarget) {'], ['fn', 'function _mergeChosen(a, b) {'],
+  ['fn', 'async function _readRelayPrefs() {'], ['fn', 'async function _writeRelayPrefs(mutate) {'], ['fn', 'async function _dropChosen(url, keys) {'],
   ['fn', 'function relayNetDoc() {'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
@@ -49,6 +60,10 @@ const LIFT = [
   ['fn', 'async function unenrolRelayNet(url) {'],
   ['fn', 'async function syncHeal() {'],
 ].map(([k, a]) => (k === 'fn' ? fnBody(BUNDLE, a, a) : stmt(BUNDLE, a, a))).join('\n');
+// B0: the REAL trigger valve (autoSyncHeal), lifted only for the worlds that ask for it (cfg.realHeal) — every
+// other world keeps the stub, because signRelay chains a heal those tests deliberately do not run.
+const LIFT_HEAL = [stmt(BUNDLE, 'var _syncHealLastAt = ', '_syncHealLastAt'), fnBody(BUNDLE, 'async function autoSyncHeal(opts) {', 'autoSyncHeal')].join('\n');
+const KEY_SHARED = 'f'.repeat(64);
 
 // A console over an in-memory relay fleet. cfg:
 //   relays:     [{ url, key: hex|'', up }] — up:false answers neither probe nor read
@@ -65,6 +80,7 @@ function makeWorld(cfg) {
   const put = (ev) => { const a = store.get(dOf(ev)) || []; a.push(ev); store.set(dOf(ev), a); };
   if (cfg.net != null) put({ kind: 30078, pubkey: PUB, created_at: NOW - 1000, tags: [['d', 'trinityone/relay-net']], content: JSON.stringify(cfg.net) });
   if (cfg.sync != null) put({ kind: 30078, pubkey: PUB, created_at: NOW - 1000, tags: [['d', 'trinityone/relays']], content: typeof cfg.sync === 'string' ? cfg.sync : JSON.stringify(cfg.sync) });
+  if (cfg.prefs) put({ kind: 30078, pubkey: PUB, created_at: NOW - 800, tags: [['d', 'trinityone/relayprefs']], content: JSON.stringify(cfg.prefs) });
   if (cfg.tombs) put({ kind: 30078, pubkey: cfg.tombAuthor || PUB, created_at: NOW - 900, tags: [['d', 'trinityone/relays-removed']], content: JSON.stringify(cfg.tombs) });
   const writes = [];
   let ids = 0, reads = 0, dropped = false;
@@ -79,6 +95,7 @@ function makeWorld(cfg) {
     // same world — exactly the reload-durable retry the fix depends on.
     localStorage: { getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null), setItem: (k, v) => { lsMap.set(k, String(v)); }, removeItem: (k) => { lsMap.delete(k); } },
     enrolRelayNet: cfg.enrol || (async () => ({ published: false, proven: [] })),
+    _backfillSafeguardTo: async () => ({ landed: true, results: {} }),   // A2: run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs
     autoSyncHeal: async () => ({}),   // signRelay chains a forced heal; the heal itself is point-of-use tested in sync-list-heals-itself
     now: () => NOW, _monotonic: (t) => t,
     _isHex64: (p) => /^[0-9a-f]{64}$/.test(String(p || '')),
@@ -103,8 +120,10 @@ function makeWorld(cfg) {
       const d = (filters[0]['#d'] || [])[0];
       const evs = (store.get(d) || []).slice().sort((x, y) => (y.created_at - x.created_at) || ((store.get(d) || []).indexOf(y) - (store.get(d) || []).indexOf(x)));
       const askedUrls = relays.map(r => r.url);
-      const answeredUrls = relays.filter(r => r.up).map(r => r.url);
-      return { ev: evs[0] || null, complete: answeredUrls.length > 0, asked: askedUrls.length, askedUrls, answeredUrls };
+      // cfg.incompleteD: reads of THAT document never finish (a relay mid-login withholding a private doc), while every other read is whole.
+      const withheld = !!cfg.incompleteD && cfg.incompleteD === d;
+      const answeredUrls = withheld ? [] : relays.filter(r => r.up).map(r => r.url);
+      return { ev: withheld ? null : (evs[0] || null), complete: answeredUrls.length > 0, asked: askedUrls.length, askedUrls, answeredUrls };
     },
   };
   const proxy = new Proxy(scope, {
@@ -112,9 +131,15 @@ function makeWorld(cfg) {
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k]; throw new ReferenceError('the lifted A2 engine needs `' + String(k) + '` — add a stub'); },
     set: (t, k, v) => { t[k] = v; return true; },
   });
-  const api = new Function('scope', 'with (scope) {' + LIFT +
-    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, ' +
-    fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
+  const api = new Function('scope', 'with (scope) {' + LIFT + (cfg.realHeal ? '\n' + LIFT_HEAL : '') +
+    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, _removedKeysRead, _owedBackfills, _setOwedBackfill, autoSyncHeal, ' +
+    fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ', ' +
+    fnBody(BUNDLE, 'async syncEnable() {', 'syncEnable in the shipped bundle') + ', ' +
+    fnBody(BUNDLE, '  unsignRelay(url) {', 'unsignRelay in the shipped bundle') + ', ' +
+    fnBody(BUNDLE, 'async publishRelayList() {', 'publishRelayList in the shipped bundle') + ' }; }')(proxy);
+  // B1: the console's own probe pass, as relayIdentities reports it — every relay this console LISTS, with the key it
+  // proves right now ('' when it proves none). syncEnable signs from this snapshot.
+  scope.window = { Steward: { publishRelayList: () => api.publishRelayList(), relayIdentities: async () => relays.map(r => ({ url: r.url, base: String(r.url).replace(/^wss:/, 'https:').replace(/\/relay$/, ''), pubkey: (r.up && r.key) || '', name: '', online: !!r.up })) } };
   // Read the NEWEST copy exactly as _oneComplete / the engine does: created_at desc, and on a tie the
   // LAST-written wins (insertion index) — a constant now() + identity _monotonic make every write in a test tie,
   // and breaking the tie any other way would let a later re-sign hide behind an earlier one (it masked a real
@@ -217,8 +242,11 @@ test('un-tombstone: clearing a pubkey from the tombstone lets a subsequent heal 
     'THE UN-TOMBSTONED BOX WAS NOT RE-ADDED — a steward can never re-add a box they once removed: ' + JSON.stringify(w.sync()));
 });
 
-// ── 6. a church that does NOT self-host (no sync doc) is left exactly as it was ──────────────────────────
-test('removing a relay in a church with no sync doc writes neither a sync doc nor a tombstone — no new writes', async () => {
+// ── 6. B0: a SYNC-OFF church (no sync doc — the DEFAULT church) still gets the tombstone ─────────────────
+// REPLACES the old test 6, which pinned the opposite ("writes neither a sync doc nor a tombstone"). Sync-off is the
+// default, so a Remove that recorded nothing there left every later syncEnable / heal / auto-join free to bring
+// the box back (audit 2026-11-22, F1-F4). Still true, and still asserted: no SYNC doc is ever written for it.
+test('B0: removing a relay in a church with NO sync doc (the default) DOES tombstone the removed key — and still writes no sync doc', async () => {
   const w = makeWorld({
     relays: [{ url: 'wss://a.example/relay', key: KEY_A, up: true }, { url: 'wss://b.example/relay', key: KEY_B, up: true }],
     net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: 'https://b.example' }],
@@ -227,8 +255,12 @@ test('removing a relay in a church with no sync doc writes neither a sync doc no
   const r = await w.api.unenrolRelayNet('wss://b.example/relay');
   assert.equal(r.removed, true, 'the box was not removed from admission: ' + JSON.stringify(r));
   assert.equal(r.syncClosed, false, 'a church with no sync trust reported closing some');
-  assert.equal(w.writesTo('trinityone/relays').length, 0, 'an ordinary Remove started writing a sync doc for a non-self-hosting church');
-  assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'an ordinary Remove started writing tombstones for a non-self-hosting church');
+  assert.equal(w.writesTo('trinityone/relays').length, 0, 'an ordinary Remove started writing a sync doc for a sync-off church');
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
+    'A SYNC-OFF CHURCH GOT NO TOMBSTONE — the default church records no removal, so nothing can refuse the box later (B0): ' + JSON.stringify(w.tombs()));
+  assert.equal(r.tombstoned, true, 'the result did not say the tombstone was written: ' + JSON.stringify(r));
+  assert.deepEqual(r.removedKeys, [KEY_B], 'the result did not name the key it tombstoned (unsignRelay hands it to the chosen drop): ' + JSON.stringify(r));
+  assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared once its tombstone landed');
 });
 
 // ── 7. FIX 1: the un-tombstone (re-Add) is NOT frozen by one unreachable EXTRA relay ─────────────────────
@@ -292,4 +324,395 @@ test('FIX 2: a DEAD box removed mid-op (prune lands, tombstone read fails → pa
   assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
     'THE PRUNED KEY WAS NEVER TOMBSTONED: on the retry B is gone from both relay-net and the sync doc, so removedKeys is empty and only the persisted pending key saves it — a peer console would re-add the removed box (FIX 2): ' + JSON.stringify({ r2, tombs: w.tombs() }));
   assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared once its tombstone landed: ' + JSON.stringify(w.api._pendingTomb()));
+});
+
+// ── 10. B0: the EARLIER loss point — the prune read-back is incomplete, so _closeSyncTrust never runs ────
+// (audit 2026-11-22, F2.) B is DEAD and listed by url. The prune is published, the read-back cannot complete, and
+// unenrolRelayNet returns before the sync-close step. On the retry B is out of relay-net and proves no key.
+const stageLostPrune = (extraCfg) => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay', C = 'wss://bystander.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: true }, { url: B, key: '', up: false }, { url: C, key: '', up: true }],
+    net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: B }],
+    sync: null,          // the DEFAULT church
+    extra: [B],
+    dropAfterReads: 1, dropUrl: C,   // C (non-droppable) drops after the first relay-net read → the prune READ-BACK is incomplete
+    ...(extraCfg || {}),
+  });
+  return { w, A, B, C };
+};
+test('B0: a dead box whose PRUNE read-back was incomplete is persisted as pending and tombstoned on the retry Remove', async () => {
+  const { w, B, C } = stageLostPrune();
+  const r1 = await w.api.unenrolRelayNet(B);
+  assert.equal(r1.unverified, true, 'op1 was not staged as an incomplete prune read-back: ' + JSON.stringify(r1));
+  assert.equal(r1.syncPartial, undefined, 'op1 reached the sync-close step — the earlier loss point was not staged: ' + JSON.stringify(r1));
+  assert.equal(w.tombs(), null, 'op1 unexpectedly wrote a tombstone');
+  assert.deepEqual(w.api._pendingTomb(), [KEY_B],
+    'THE KEY WAS NOT PERSISTED BEFORE THE PRUNE — on the retry the dead box is out of relay-net and proves nothing, so there is nothing left to tombstone (B0): ' + JSON.stringify(w.api._pendingTomb()));
+  w.relays.find(r => r.url === C).up = true;
+  const r2 = await w.api.unenrolRelayNet(B);
+  assert.equal(r2.notListed, true, 'precondition: on the retry the box should already be out of relay-net: ' + JSON.stringify(r2));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B], 'the retry did not tombstone the dead box: ' + JSON.stringify({ r2, tombs: w.tombs() }));
+  assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared once its tombstone landed');
+});
+
+// ── 11. B0: the flush on the HEAL PASS — no second Remove needed ─────────────────────────────────────────
+test('B0: a pending tombstone is flushed by the heal pass (the REAL autoSyncHeal), without the steward pressing Remove again', async () => {
+  const { w, B, C } = stageLostPrune({ realHeal: true });
+  await w.api.unenrolRelayNet(B);
+  assert.deepEqual(w.api._pendingTomb(), [KEY_B], 'precondition: the key is pending');
+  assert.equal(w.tombs(), null, 'precondition: no tombstone yet');
+  w.relays.find(r => r.url === C).up = true;
+  await w.api.autoSyncHeal({ force: true });
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
+    'THE HEAL PASS DID NOT FLUSH THE PENDING TOMBSTONE — it would wait for a Remove nobody has a reason to press (B0): ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared once its tombstone landed');
+});
+
+// ── 12. B0: a SHARED relay key is never tombstoned ───────────────────────────────────────────────────────
+test('B0: removing a church-added ALIAS of a shared relay takes the row out but does NOT tombstone the shared key', async () => {
+  const SHARED = 'wss://shared-pool.example/relay', ALIAS = 'wss://alias.example/relay';
+  const w = makeWorld({
+    relays: [{ url: SHARED, key: KEY_SHARED, up: true }, { url: ALIAS, key: KEY_SHARED, up: true }, { url: 'wss://a.example/relay', key: KEY_A, up: true }],
+    net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_SHARED, url: ALIAS }],
+    sync: null, canonical: [SHARED], extra: [ALIAS],
+  });
+  const r = await w.api.unenrolRelayNet(ALIAS);
+  assert.equal(r.removed, true, 'the alias row was not removed: ' + JSON.stringify(r));
+  assert.deepEqual(r.removedKeys, [], 'the result named a shared key as tombstoned: ' + JSON.stringify(r));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0,
+    'A SHARED RELAY KEY WAS TOMBSTONED — every console would then refuse the shared relay at all its addresses: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 'a shared key was left in the pending-tombstone set');
+});
+
+// ── 13. B0: the console's OWN box is never tombstoned (the not-listed path, where the admission step's own-box check never ran)
+test('B0: removing an address that proves the OWN box\'s key, which the list does not name, tombstones nothing', async () => {
+  const OWN = 'wss://own.example/relay', ALIAS = 'wss://own-alias.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: ALIAS, key: KEY_A, up: true }, { url: 'wss://b.example/relay', key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_B, url: 'https://b.example' }],
+    sync: null, own: OWN, extra: [ALIAS],
+  });
+  const r = await w.api.unenrolRelayNet(ALIAS);
+  assert.equal(r.notListed, true, 'precondition: the address is not in the list: ' + JSON.stringify(r));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0,
+    'THE OWN BOX\'S KEY WAS TOMBSTONED through an alias the list did not name: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 'the own key was left in the pending-tombstone set');
+});
+
+// ── 14. B0: own box cannot say which key is its own → the tombstone is HELD, then lands once it can ──────
+test('B0: while the OWN box cannot prove its key the tombstone is held (partial, key pending); the flush writes it once the own box proves', async () => {
+  const OWN = 'wss://own.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: '', up: true }, { url: B, key: '', up: false }],   // OWN answers reads but proves no key
+    net: [{ pubkey: KEY_B, url: B }],
+    sync: null, own: OWN, extra: [B],
+  });
+  const r = await w.api.unenrolRelayNet(B);
+  assert.equal(r.syncPartial, true, 'a removal whose tombstone was held did not read partial: ' + JSON.stringify(r));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'a tombstone was written while the own box\'s key was unknown');
+  assert.deepEqual(w.api._pendingTomb(), [KEY_B], 'the held key was not persisted');
+  w.relays.find(x => x.url === OWN).key = KEY_A;   // the own box proves its key again
+  const f = await w.api._flushPendingTomb();
+  assert.equal(f.flushed, true, 'the flush did not run: ' + JSON.stringify(f));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B], 'the held tombstone never landed: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared');
+});
+
+// ── 15. B0: an own-box refusal inside the repair loop withdraws what this press persisted ────────────────
+test('B0: a Remove refused as the OWN box in the repair loop leaves nothing pending and writes no tombstone', async () => {
+  const OWN = 'wss://own.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_B, url: B }],
+    sync: null, own: OWN,
+  });
+  // Another console signs, at the same moment, a newer list that names the OWN box's key under the address being removed.
+  const realPublish = w.scope.publish;
+  let pendingAtPublish = null;
+  w.scope.publish = async (ev) => {
+    const out = await realPublish(ev);
+    if (((ev.tags || []).find(t => t[0] === 'd') || [])[1] === 'trinityone/relay-net') {
+      pendingAtPublish = w.api._pendingTomb();
+      const a = w.store.get('trinityone/relay-net');
+      a.push({ kind: 30078, pubkey: PUB, created_at: ev.created_at, tags: [['d', 'trinityone/relay-net']], content: JSON.stringify([{ pubkey: KEY_A, url: B }]) });
+    }
+    return out;
+  };
+  const r = await w.api.unenrolRelayNet(B);
+  assert.equal(r.ownBox, true, 'precondition: the repair loop did not refuse as the own box: ' + JSON.stringify(r));
+  assert.deepEqual(pendingAtPublish, [KEY_B], 'precondition: the key was not persisted before the prune publish');
+  assert.deepEqual(w.api._pendingTomb(), [], 'a REFUSED Remove left its key pending — the next heal pass would tombstone a box the steward was told stays');
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'a refused Remove wrote a tombstone');
+});
+
+// ── B1 (audit 2026-11-22, F1): syncEnable does not sign a Removed box back in ────────────────────────────
+// The REAL syncEnable, the REAL _removedKeysRead and _unprovedDroppable. The console still LISTS the removed box
+// (a second owner console, or a browser that never saw the Remove) and the box still proves its key.
+const THREE = () => [{ url: 'wss://a.example/relay', key: KEY_A, up: true }, { url: 'wss://b.example/relay', key: KEY_B, up: true }, { url: 'wss://c.example/relay', key: KEY_C, up: true }];
+test('B1: syncEnable on a console still listing a TOMBSTONED box signs the list WITHOUT it (and with it when nothing is tombstoned)', async () => {
+  const control = makeWorld({ relays: THREE(), sync: null });
+  const rc = await control.api.syncEnable();
+  assert.deepEqual(keysOf(control.sync()), [KEY_A, KEY_B, KEY_C].sort(), 'CONTROL: with no tombstone all three proved boxes should be signed');
+  assert.equal(rc.relays, 3);
+  const w = makeWorld({ relays: THREE(), sync: null, tombs: [{ pubkey: KEY_B, at: NOW - 500 }] });
+  const r = await w.api.syncEnable();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(),
+    'A REMOVED BOX WAS SIGNED BACK INTO trinityone/relays by turning sync on — it holds full-corpus pull rights again, and the new doc out-stamps its tombstone so no heal prunes it (F1): ' + JSON.stringify(w.sync()));
+  assert.equal(r.relays, 2, 'the result counted the removed box');
+});
+
+test('B1: the whole door, default church — Remove a box (sync off), then turn sync on from a console that still lists it', async () => {
+  const w = makeWorld({ relays: THREE(), net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: 'https://b.example' }, { pubkey: KEY_C, url: 'https://c.example' }], sync: null });
+  const rm = await w.api.unenrolRelayNet('wss://b.example/relay');
+  assert.equal(rm.removed, true, 'precondition: the Remove did not land: ' + JSON.stringify(rm));
+  await w.api.syncEnable();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(), 'the box Removed while sync was off came back when sync was switched on: ' + JSON.stringify(w.sync()));
+});
+
+test('B1: a key still PENDING (its tombstone has not landed) is excluded too', async () => {
+  const w = makeWorld({ relays: THREE(), sync: null });
+  w.api._setPendingTomb([KEY_B]);
+  await w.api.syncEnable();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(), 'a box whose Remove is still pending on this console was signed into the sync list: ' + JSON.stringify(w.sync()));
+});
+
+test('B1: when the removed box was one of only two, syncEnable refuses rather than sign it', async () => {
+  const w = makeWorld({ relays: THREE().slice(0, 2), sync: null, tombs: [{ pubkey: KEY_B, at: NOW - 500 }] });
+  await assert.rejects(() => w.api.syncEnable(), /removed does not count/, 'a two-box church whose second box was Removed still switched sync on');
+  assert.equal(w.writesTo('trinityone/relays').length, 0, 'a sync doc was signed although fewer than two boxes remain');
+});
+
+test('B1: an INCOMPLETE tombstone read refuses to enable (fail closed) and signs nothing', async () => {
+  const deadCanon = 'wss://shared-pool.example/relay';
+  const w = makeWorld({ relays: [...THREE(), { url: deadCanon, key: '', up: false }], sync: null, canonical: [deadCanon] });
+  await assert.rejects(() => w.api.syncEnable(), /could not be checked/,
+    'SYNC WAS SWITCHED ON WITHOUT KNOWING WHICH RELAYS WERE REMOVED — a relay that may hold the tombstones never answered');
+  assert.equal(w.writesTo('trinityone/relays').length, 0, 'a sync doc was signed over an incomplete tombstone read');
+});
+
+test('B1: one DEAD church-added row does not block the switch (the droppable rule) — and the tombstone is still honoured', async () => {
+  const dead = 'wss://old-tunnel.example/relay';
+  const w = makeWorld({ relays: [...THREE(), { url: dead, key: '', up: false }], sync: null, extra: [dead], tombs: [{ pubkey: KEY_B, at: NOW - 500 }] });
+  const r = await w.api.syncEnable();
+  assert.equal(r.relays, 2, 'a dead old-tunnel row blocked turning sync on: ' + JSON.stringify(r));
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort());
+});
+
+// ── B2 (audit 2026-11-22, F3): a deliberate Add un-tombstones ONLY the address being added ───────────────
+// The REAL signRelay over the REAL _writeTombstone. The enrol it runs proves every box this console can — the
+// box SERVING the console as well as the relay being added — and it used to clear the tombstone of all of them.
+test('B2: signRelay(another relay) clears THAT relay\'s tombstone and leaves the own box\'s tombstone intact', async () => {
+  const OWN = 'wss://own.example/relay', X = 'wss://x.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: X, key: KEY_B, up: true }],
+    sync: null, own: OWN,
+    tombs: [{ pubkey: KEY_A, at: NOW }, { pubkey: KEY_B, at: NOW }],   // another console Removed this console's box (KEY_A); X was Removed too
+    enrol: async () => ({ published: true, proven: [{ url: OWN, pubkey: KEY_A }, { url: X, pubkey: KEY_B }] }),
+  });
+  await w.api.signRelay(X);
+  await settle(); await settle(); await settle(); await settle();
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_A],
+    'ADDING ONE RELAY CLEARED ANOTHER BOX\'S TOMBSTONE — the box another console Removed is free to be re-trusted by the next heal (F3): ' + JSON.stringify(w.tombs()));
+});
+
+test('B2: signRelay never clears a SHARED relay key\'s tombstone, even when the added address proves it', async () => {
+  const SHARED = 'wss://shared-pool.example/relay', ALIAS = 'wss://alias.example/relay';
+  const w = makeWorld({
+    relays: [{ url: SHARED, key: KEY_SHARED, up: true }, { url: ALIAS, key: KEY_SHARED, up: true }],
+    sync: null, canonical: [SHARED],
+    tombs: [{ pubkey: KEY_SHARED, at: NOW }, { pubkey: KEY_C, at: NOW }],
+    enrol: async () => ({ published: true, proven: [{ url: ALIAS, pubkey: KEY_SHARED, shared: true }] }),
+  });
+  await w.api.signRelay(ALIAS);
+  await settle(); await settle(); await settle(); await settle();
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'the tombstone doc was re-signed for a shared relay key: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_C, KEY_SHARED].sort());
+});
+
+// ── BF2 (Part B audit): this console's OWN heal must not re-add a box whose Remove is still pending ──────
+// Reached like this: the own box cannot prove its key, so the Remove's tombstone is HELD (B0) — pruned from the
+// sync doc, key pending, no tombstone. Then the removed box comes back and proves its key. The REAL syncHeal, called
+// directly (not through autoSyncHeal, whose flush would hide the gap).
+test('BF2: a key held PENDING is not re-added by a direct syncHeal when its box proves again (control: with nothing pending it is added)', async () => {
+  const OWN = 'wss://own.example/relay', A = 'wss://a.example/relay', B = 'wss://b.example/relay';
+  const mk = () => makeWorld({
+    relays: [{ url: OWN, key: '', up: true }, { url: A, key: KEY_A, up: true }, { url: B, key: '', up: false }],
+    net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: B }],
+    sync: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_C, url: 'https://c.example' }, { pubkey: KEY_B, url: 'https://b.example' }],
+    own: OWN, extra: [B],
+  });
+  const w = mk();
+  const r = await w.api.unenrolRelayNet(B);
+  assert.equal(r.syncPartial, true, 'precondition: the tombstone was not held: ' + JSON.stringify(r));
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(), 'precondition: the prune did not land');
+  assert.deepEqual(w.api._pendingTomb(), [KEY_B], 'precondition: the key is not pending');
+  assert.equal(w.tombs(), null, 'precondition: a tombstone exists, so this would not be testing the pending set');
+  const b = w.relays.find(x => x.url === B); b.up = true; b.key = KEY_B;   // the removed box is back and proves its key
+  await w.api.syncHeal();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(),
+    'THIS CONSOLE\'S OWN HEAL RE-ADDED THE BOX IT HAD JUST REMOVED — the pending set is not consulted on syncHeal\'s add path (BF2): ' + JSON.stringify(w.sync()));
+  // CONTROL: the same world with the pending set emptied — the heal DOES add the proving box, so the refusal above is the pending set's doing.
+  const c = mk();
+  await c.api.unenrolRelayNet(B);
+  c.api._setPendingTomb([]);
+  const cb = c.relays.find(x => x.url === B); cb.up = true; cb.key = KEY_B;
+  await c.api.syncHeal();
+  assert.deepEqual(keysOf(c.sync()), [KEY_A, KEY_B, KEY_C].sort(), 'CONTROL: with nothing pending and no tombstone the heal should add the proving box');
+});
+
+// ── BF3 (Part B audit): the member-facing kind-10002 is republished when the relay-net prune LANDED ──────
+// …even though the sync-tombstone step was partial and the steward is told "remove it again". The REAL unsignRelay,
+// unenrolRelayNet and publishRelayList. Default church (no sync doc); the tombstone doc cannot be read (a relay
+// mid-login withholds it), every other read is whole.
+test('BF3: a Remove whose tombstone step is PARTIAL still republishes a kind-10002 that omits the box', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_A, url: A }, { pubkey: KEY_B, url: B }],
+    sync: null, incompleteD: 'trinityone/relays-removed',
+  });
+  const r = await w.api.unsignRelay(B);
+  await settle(); await settle(); await settle(); await settle();
+  assert.equal(r.syncPartial, true, 'precondition: the tombstone step was not partial: ' + JSON.stringify(r));
+  assert.notEqual(r.removed, true, 'precondition: a partial removal must not claim it finished');
+  assert.equal(r.pruned, true, 'the result does not say the relay-net prune landed: ' + JSON.stringify(r));
+  const lists = w.writes.filter(e => e.kind === 10002);
+  assert.equal(lists.length, 1,
+    'NO kind-10002 WAS REPUBLISHED — member phones keep routing to the Removed relay until some other change (BF3): ' + JSON.stringify(w.writes.map(e => e.kind)));
+  assert.deepEqual(lists[0].tags.filter(t => t[0] === 'r').map(t => t[1]), [A], 'the republished list still names the Removed relay, or dropped the one that stays');
+});
+
+test('BF3: a Remove that did NOT prune (the list could not be read) republishes nothing', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: false }, { url: B, key: KEY_B, up: true }],   // A (non-droppable) is silent → relay-net read incomplete
+    net: [{ pubkey: KEY_A, url: A }, { pubkey: KEY_B, url: B }], sync: null,
+  });
+  const r = await w.api.unsignRelay(B);
+  await settle(); await settle(); await settle(); await settle();
+  assert.equal(r.unknown, true);
+  assert.notEqual(r.pruned, true);
+  assert.equal(w.writes.filter(e => e.kind === 10002).length, 0, 'a kind-10002 was published although nothing was pruned');
+});
+
+// ── BF1 (Part B audit): a dead box known ONLY through `chosen` keeps a church-wide guard ─────────────────
+// The community auto-join recorded X in relayprefs `chosen` as { pubkey, url }. X is now DEAD and no longer in
+// relay-net, so a Remove proves no key and drops no row. The REAL unsignRelay -> unenrolRelayNet -> _closeSyncTrust
+// -> _writeTombstone, then the REAL _dropChosen over the real prefs reader/writer.
+const prefsOf = (w) => { const a = w.store.get('trinityone/relayprefs') || []; const e = a.slice().sort((x, y) => (y.created_at - x.created_at) || (a.indexOf(y) - a.indexOf(x)))[0]; return e ? JSON.parse(e.content) : null; };
+const settleLong = async () => { for (let i = 0; i < 40; i++) await settle(); };
+const chosenOnly = (extraCfg) => {
+  const A = 'wss://a.example/relay', X = 'wss://x-community.example/relay';
+  const w = makeWorld({
+    relays: [{ url: A, key: KEY_A, up: true }, { url: X, key: '', up: false }],
+    net: [{ pubkey: KEY_A, url: A }],     // X is NOT in relay-net
+    sync: null, extra: [X],
+    prefs: { publicAuto: true, publicTarget: 5, chosen: [{ pubkey: KEY_B, url: X, name: 'x' }, { pubkey: KEY_C, url: 'wss://c.example/relay', name: 'c' }] },
+    ...(extraCfg || {}),
+  });
+  return { w, A, X };
+};
+test('BF1: Removing a box that is only in `chosen` and proves no key TOMBSTONES the key chosen recorded, and only then drops the entry', async () => {
+  // X ANSWERS reads but proves no key (the box at that address is no longer ours to prove), so the only place its key is known is `chosen`.
+  const { w, X } = chosenOnly({ relays: [{ url: 'wss://a.example/relay', key: KEY_A, up: true }, { url: 'wss://x-community.example/relay', key: '', up: true }] });
+  const realPublish = w.scope.publish;
+  let tombsWhenPrefsWritten = 'never-written';
+  w.scope.publish = async (ev, o) => { if (((ev.tags || []).find(t => t[0] === 'd') || [])[1] === 'trinityone/relayprefs') tombsWhenPrefsWritten = tombKeys(w.tombs()); return realPublish(ev, o); };
+  const r = await w.api.unsignRelay(X);
+  await settleLong();
+  assert.equal(r.notListed, true, 'precondition: X should not be in the church\'s relay-net: ' + JSON.stringify(r));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
+    'A BOX KNOWN ONLY THROUGH `chosen` GOT NO TOMBSTONE — once its chosen entry goes, nothing church-wide stops it being auto-adopted again (BF1): ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(r.removedKeys, [KEY_B]);
+  assert.deepEqual((prefsOf(w).chosen || []).map(c => c.pubkey), [KEY_C], 'the Removed box is still in `chosen` (its cap slot was not freed), or the other entry was lost: ' + JSON.stringify(prefsOf(w)));
+  assert.deepEqual(tombsWhenPrefsWritten, [KEY_B], 'the chosen entry was dropped BEFORE its tombstone existed: ' + JSON.stringify(tombsWhenPrefsWritten));
+  // What every console's syncEnable and community auto-join read before putting a box back: the church's doc, not
+  // this console's memory (the pending set is empty, so the key below can only have come from the document).
+  assert.deepEqual(w.api._pendingTomb(), []);
+  const gone = await w.api._removedKeysRead(new Set());
+  assert.equal(gone.complete, true);
+  assert.ok(gone.keys.has(KEY_B), 'the removed-keys read another console makes does not name the box');
+});
+
+test('BF1: the same for a DEAD box (it answers nothing) — its key is tombstoned from `chosen`; the entry is never gone without the tombstone', async () => {
+  const { w, X } = chosenOnly();
+  const r = await w.api.unsignRelay(X);
+  await settleLong();
+  assert.equal(r.notListed, true, JSON.stringify(r));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B], 'a DEAD box known only through `chosen` got no tombstone (BF1): ' + JSON.stringify(w.tombs()));
+  const gone = await w.api._removedKeysRead(new Set([X]));
+  assert.equal(gone.complete, true);
+  assert.ok(gone.keys.has(KEY_B));
+  // NOT asserted: that the entry has left `chosen`. While the dead address is still in this console's list the prefs
+  // writer's own read cannot complete, so the entry may stay (a cap slot, not a safety gap). Either way the tombstone is there.
+});
+
+test('BF1: when the prefs cannot be read, nothing is tombstoned for the dead chosen-only box AND its chosen entry is kept (the guard stays)', async () => {
+  const { w, X } = chosenOnly({ incompleteD: 'trinityone/relayprefs' });
+  const r = await w.api.unsignRelay(X);
+  await settleLong();
+  assert.equal(r.notListed, true, JSON.stringify(r));
+  assert.deepEqual(r.removedKeys, []);
+  assert.equal(w.writesTo('trinityone/relayprefs').length, 0, 'THE chosen ENTRY WAS DROPPED WITH NO TOMBSTONE IN ITS PLACE: ' + JSON.stringify(prefsOf(w)));
+  assert.deepEqual(prefsOf(w).chosen.map(c => c.pubkey), [KEY_B, KEY_C]);
+});
+
+test('BF1: a chosen entry at the removed address that carries a SHARED relay key is neither tombstoned nor dropped', async () => {
+  const SHARED = 'wss://shared-pool.example/relay';
+  const { w, X } = chosenOnly({ canonical: [SHARED],
+    relays: [{ url: 'wss://a.example/relay', key: KEY_A, up: true }, { url: 'wss://x-community.example/relay', key: '', up: false }, { url: SHARED, key: KEY_SHARED, up: true }],
+    prefs: { publicAuto: true, publicTarget: 5, chosen: [{ pubkey: KEY_SHARED, url: 'wss://x-community.example/relay', name: 'x' }] } });
+  const r = await w.api.unsignRelay(X);
+  await settleLong();
+  assert.equal(r.notListed, true, JSON.stringify(r));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'a shared relay key was tombstoned through `chosen`');
+  assert.equal(w.writesTo('trinityone/relayprefs').length, 0, 'the entry was dropped although nothing was tombstoned');
+});
+
+// ── BF4 (Part B audit, rule 4): two comment claims that no test proved ───────────────────────────────────
+// 1. "the address IS the own box → no tombstone at all" (skipTomb). The own KEY is excluded separately (`never`), so
+//    this only shows where a DIFFERENT key sits at the own box's address — here a stale sync entry recorded under it.
+test('BF4: removing the OWN box\'s address tombstones NOTHING — not even another key the sync doc records at that address', async () => {
+  const OWN = 'wss://own.example/relay', B = 'wss://b.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_B, url: B }],                                                  // the list does not name the own box
+    sync: [{ pubkey: KEY_C, url: 'https://own.example' }, { pubkey: KEY_B, url: 'https://b.example' }],   // KEY_C: an older key recorded at the own address
+    own: OWN,
+  });
+  const r = await w.api.unenrolRelayNet(OWN);
+  assert.equal(r.notListed, true, 'precondition: the own address is not in relay-net, so the admission step\'s own-box refusal did not run: ' + JSON.stringify(r));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0,
+    'A KEY RECORDED AT THE OWN BOX\'S ADDRESS WAS TOMBSTONED by removing that address: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 'a key at the own box\'s address was left pending');
+});
+
+// 2. _unprovedDroppable: "never the own box". The own box is listed, proves nothing and answers nothing; it must still
+//    be REQUIRED to answer before sync is switched on (it may hold the tombstones).
+test('BF4: syncEnable does not excuse the OWN box from the tombstone read when it is the one not answering', async () => {
+  const OWN = 'wss://own.example/relay';
+  const w = makeWorld({ relays: [...THREE(), { url: OWN, key: '', up: false }], sync: null, own: OWN });
+  await assert.rejects(() => w.api.syncEnable(), /could not be checked/,
+    'THE OWN BOX WAS TREATED AS DROPPABLE — sync was switched on without hearing from the box most likely to hold the church\'s tombstones');
+  assert.equal(w.writesTo('trinityone/relays').length, 0);
+});
+
+// ── FF1 (final combined audit): pressing Remove ends any OWED state for that address ──────────────────────
+// The REAL unsignRelay and owed-marker store. An owed marker is "the steward consented to connect this box and its
+// documents have not landed"; the owed retry acts on it with no further click.
+test('FF1: Remove clears the owed marker for that address — also when the Remove itself could not finish — and leaves another address\'s marker alone', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay', C = 'wss://c.example/relay';
+  const mk = (extra) => { const w = makeWorld({ relays: [{ url: A, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_A, url: A }, { pubkey: KEY_B, url: B }], sync: null, ...(extra || {}) });
+    w.api._setOwedBackfill(PUB, B, true); w.api._setOwedBackfill(PUB, C, true); return w; };
+  const done = mk();
+  const r = await done.api.unsignRelay(B);
+  assert.equal(r.removed, true, 'precondition: the Remove did not land: ' + JSON.stringify(r));
+  assert.deepEqual(done.api._owedBackfills().map(e => e.url), [C],
+    'A REMOVED RELAY IS STILL MARKED OWED — the retry would prove it, sign it back in and clear its tombstone with nobody pressing anything (FF1)');
+  const stuck = mk({ relays: [{ url: A, key: KEY_A, up: false }, { url: B, key: KEY_B, up: true }] });   // A silent → the Remove cannot read the list
+  const r2 = await stuck.api.unsignRelay(B);
+  assert.equal(r2.unknown, true, 'precondition: this Remove should not have been able to finish: ' + JSON.stringify(r2));
+  assert.deepEqual(stuck.api._owedBackfills().map(e => e.url), [C], 'a Remove that could not finish left the box owed');
 });

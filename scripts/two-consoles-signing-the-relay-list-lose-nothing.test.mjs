@@ -41,11 +41,17 @@ const PIECES = [
   // two d-tag/localStorage-prefix consts they read.
   ['fn', 'async function _closeSyncTrust(opts) {'], ['fn', 'async function _writeTombstone(opts) {'],
   ['fn', 'function _pendingTomb() {'], ['fn', 'function _setPendingTomb(keys) {'],
+  ['fn', 'function _tombable(keys, never) {'],   // B0 (2026-11-22): which keys may be tombstoned
   ['fn', 'function _syncRelayBase(u) {'], ['st', 'var _syncRelayKey = '],
   ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '],
   ['st', 'var RELAYNET_SEEN = '], ['st', 'var _isLoopbackRelay = '], ['st', 'var _RELAY_NAME_RE = '],
-  ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['st', 'var _autoEnrolled = '],
+  ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _autoEnrolled = '], ['st', 'var _ownGateLast = '], ['st', 'var _ownOwed = '],
   ['fn', 'async function autoEnrolRelayNet'],
+  // B0 (2026-11-22): a Remove now writes trinityone/relays-removed and reads it back, and a real relay serves that
+  // document only to the church's own login. The console's pool logs in through this shipped signer glue (it records
+  // the relay's OK in _authAccepted, which _oneComplete's private read consults); without it the read-back is
+  // "login pending" for ever and every Remove here reads partial.
+  ['st', 'pool.automaticallyAuth = (url) => async (authEvent) => {'],
 ];
 const LIFT = PIECES.map(([k, a]) => k === 'fn' ? fnBody(STEWARD, a, a) : stmt(STEWARD, a, a)).join('\n');
 
@@ -61,7 +67,9 @@ function makeConsole(d) {
     finalizeEvent, finalizeEvent2: finalizeEvent, fetch: globalThis.fetch, AbortController, URL, JSON, Promise,
     setTimeout, clearTimeout, Math, Object, String, Number, Array, Set, Map, Error, encodeURIComponent, console,
     globalThis, Uint8Array, location: undefined, window: undefined,
-    relaysRaw: () => d.raw(), _authAccepted: new Map(),
+    _ownBoxBackfill: async () => ({ proceed: true, entering: false, results: null }),   // F8 (2026-11-22): run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs
+    _readRelayPrefs: async () => ({ prefs: null, complete: true }),   // BF1 (2026-11-22): the Remove looks its address up in relayprefs `chosen`; this church has no prefs doc
+    relaysRaw: () => d.raw(), _authAccepted: new Map(), _authedRelays: new Map(), _authFailed: new Map(), _runKeyReadAuthWaiters: () => {},
     CANONICAL_RELAY_PUBS: Object.freeze({ 'wss://test-shared.invalid/relay': d.shared || [] }),
     CANONICAL_RELAYS: ['wss://test-shared.invalid/relay'],
     get sk() { return d.sk; }, get pub() { return d.pub; },

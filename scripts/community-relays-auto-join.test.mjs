@@ -46,7 +46,20 @@ function runJoin(opts = {}) {
     discoverRelayOffers: async () => offers.slice(),
     relays: () => [],
     relayNetEntries: async () => listedKeys.map((k) => ({ pubkey: k })),
-    _oneComplete: async () => ({ ev: tomb.length ? { pubkey: pub, content: JSON.stringify(tomb.map((k) => ({ pubkey: k, at: 9 }))) } : null, askedUrls: ['r'], answeredUrls: ['r'] }),
+    // The tombstone read. B3 (2026-11-22): the pass now makes it through the REAL _removedKeysRead (lifted below,
+    // with the real _readCovers / _tombable / _pendingTomb), so WHO was asked and WHO answered decide the outcome:
+    // `tombAsked` / `tombAnswered` stage a relay that never answered, `tombThrows` a read that throws, `extra` the
+    // church-added (droppable) addresses, `pending` this console's own not-yet-landed removals.
+    _oneComplete: async () => {
+      if (opts.tombThrows) throw new Error('read failed');
+      const asked = opts.tombAsked || ['r'];
+      return { ev: tomb.length ? { pubkey: pub, content: JSON.stringify(tomb.map((k) => ({ pubkey: k, at: 9 }))) } : null, askedUrls: asked, answeredUrls: opts.tombAnswered || asked };
+    },
+    extraRelays: () => opts.extra || [],
+    normalizeURL: (u) => String(u), normalizeURL2: (u) => String(u),
+    CANONICAL_RELAY_PUBS: {},
+    TOMB_PENDING_LS: 'trinityone.steward.tomb-pending.',
+    lsGet: () => (opts.pending ? JSON.stringify(opts.pending) : null),
     _ownChurchName: () => 'St Aidan',
     _isDeclined: (u) => declined.includes(u),
     isSharedRelaySpelling: (u) => shared.includes(u),
@@ -64,7 +77,10 @@ function runJoin(opts = {}) {
       registerAtRelay: async (u) => { log.push('reg:' + u); return reg(u); },
       addRelay: (u) => { log.push('add:' + u); return u; },
       rememberRelayName: (n, u, p) => { log.push('remember:' + u + ':' + (p || '').slice(0, 2)); },
-      signRelay: async (u) => { log.push('sign:' + u); return { published: true, proven: [{ url: u, pubkey: 'x' }] }; },
+      // What Steward.signRelay answers. Default: SIGNED IN — the shape the real one returns when the box proved, its
+      // documents landed and the church's list now names it (F5: the pass reads this through the shipped _signedIn).
+      // `signResult(url)` lets a test answer something else for one address.
+      signRelay: async (u) => { log.push('sign:' + u); const alt = opts.signResult && opts.signResult(u); return alt || { published: true, proven: [{ url: u, pubkey: keyOf(u) }], entries: [{ pubkey: keyOf(u), url: u }] }; },
       publishRelayList: () => { log.push('publishRelayList'); return Promise.resolve(null); },
       removeRelay: () => { throw new Error('autoJoin must NEVER auto-remove'); },
       unsignRelay: () => { throw new Error('autoJoin must NEVER auto-unsign'); },
@@ -77,6 +93,11 @@ function runJoin(opts = {}) {
     fnBody(STEWARD, 'function _communityCap(publicTarget) {', '_communityCap'),
     fnBody(STEWARD, 'function _mergeChosen(a, b) {', '_mergeChosen'),
     fnBody(STEWARD, 'function rankOffersByLatency(offers) {', 'rankOffersByLatency'),
+    fnBody(STEWARD, 'function _readCovers(r, leaving, droppable) {', '_readCovers'),
+    fnBody(STEWARD, 'function _pendingTomb() {', '_pendingTomb'),
+    fnBody(STEWARD, 'function _tombable(keys, never) {', '_tombable'),
+    fnBody(STEWARD, 'async function _removedKeysRead(droppable) {', '_removedKeysRead'),
+    fnBody(STEWARD, 'function _signedIn(r, u) {', '_signedIn'),
     fnBody(STEWARD, 'async function autoJoinPublicRelays() {', 'autoJoinPublicRelays'),
   ].join('\n');
   const fn = new Function(...names, src + '\nreturn autoJoinPublicRelays;')(...names.map((k) => scope[k]));
@@ -213,4 +234,76 @@ test('7. candidates are adopted FASTEST-MEASURED-ACCESS FIRST (within the defici
   await j.run();
   assert.deepEqual(j.adopted(), ['wss://box-2.example/relay', 'wss://box-4.example/relay'],
     'the pass did not take the fastest-measured candidates first');
+});
+
+// ── B3 (audit 2026-11-22, F4): the tombstone read FAILS CLOSED ───────────────────────────────────────────
+// The pass is ON by default and nobody presses it, so "I could not finish reading which relays were removed" must
+// never be read as "none were". All four run the real _removedKeysRead / _readCovers lifted from the bundle.
+test('B3: an INCOMPLETE tombstone read adopts NOTHING this pass (and a complete read with no tombstone doc still adopts)', async () => {
+  const offers = [offer(1, 10), offer(2, 20)];
+  const prefs = { publicAuto: true, publicTarget: 5, chosen: [] };
+  const control = runJoin({ offers, prefs, tombAsked: ['wss://own/relay', 'wss://pool/relay'] });
+  assert.equal((await control.run()).ran, true, 'CONTROL: a COMPLETE read that found no tombstone doc must still adopt — absent is normal');
+  assert.equal(control.adopted().length, 2, 'CONTROL: the complete-but-absent read adopted nothing');
+  // The same world, but the pool relay never answered the tombstone read. It may hold a tombstone for either box.
+  const j = runJoin({ offers, prefs, tombAsked: ['wss://own/relay', 'wss://pool/relay'], tombAnswered: ['wss://own/relay'] });
+  const r = await j.run();
+  assert.deepEqual(j.adopted(), [], 'A BOX WAS AUTO-ADOPTED OVER AN UNFINISHED TOMBSTONE READ — a relay a steward Removed comes back with nobody pressing anything (F4)');
+  assert.equal(j.log.length, 0, 'the pass registered / added / signed something before it knew which relays were removed: ' + JSON.stringify(j.log));
+  assert.equal(r.ran, false);
+  assert.equal(r.removedUnknown, true, 'the pass did not say WHY it stood down: ' + JSON.stringify(r));
+});
+
+test('B3: a tombstone read that THROWS adopts nothing (it used to be swallowed as "no tombstones")', async () => {
+  const j = runJoin({ offers: [offer(1, 10)], prefs: { publicAuto: true, publicTarget: 5, chosen: [] }, tombThrows: true });
+  const r = await j.run();
+  assert.deepEqual(j.adopted(), [], 'a thrown tombstone read was treated as "nothing removed"');
+  assert.equal(r.removedUnknown, true);
+});
+
+test('B3: one DEAD church-added row does not switch auto-join off (droppable) — and the tombstone is still honoured', async () => {
+  const dead = 'wss://old-tunnel.example/relay';
+  const j = runJoin({ offers: [offer(1, 10), offer(2, 20)], prefs: { publicAuto: true, publicTarget: 5, chosen: [] },
+    tombAsked: ['wss://own/relay', dead], tombAnswered: ['wss://own/relay'], extra: [dead], tomb: [key('1')] });
+  const r = await j.run();
+  assert.equal(r.ran, true, 'a dead old-tunnel row the church added itself blocked every auto-join: ' + JSON.stringify(r));
+  assert.deepEqual(j.adopted(), ['wss://box-2.example/relay'], 'the tombstoned box was adopted, or the clean one was not');
+});
+
+test('B3: a box whose Remove is still PENDING on this console is skipped as tombstoned', async () => {
+  const j = runJoin({ offers: [offer(1, 10), offer(2, 20)], prefs: { publicAuto: true, publicTarget: 5, chosen: [] }, pending: [key('1')] });
+  const r = await j.run();
+  assert.deepEqual(j.adopted(), ['wss://box-2.example/relay'], 'a box this console is still in the middle of removing was auto-adopted');
+  assert.equal(Object.fromEntries(r.skipped)['wss://box-1.example/relay'], 'tombstoned');
+});
+
+// ── F5 (Part A audit) + FF2 (final audit): a pick that did not get signed in is NOT recorded — and still counts as an attempt ──
+test('F5: a PENDING (or otherwise unsigned) pick is not recorded in chosen or reported as added; a pick that does sign in, in the same pass, is', async () => {
+  const prefs = { publicAuto: true, publicTarget: 4, chosen: [] };   // target 4 − the canonical pin = THREE community slots
+  const offers = [offer(1, 10), offer(2, 20), offer(3, 30), offer(4, 40)];
+  const control = runJoin({ offers, prefs });
+  await control.run();
+  assert.deepEqual(control.writtenChosen[0].map((c) => c.url), ['wss://box-1.example/relay', 'wss://box-2.example/relay', 'wss://box-3.example/relay'], 'CONTROL: with every pick signing in, the three slots go to the three fastest');
+  const j = runJoin({ offers, prefs, signResult: (u) => (u === 'wss://box-1.example/relay' ? { pending: true, url: u }
+    : u === 'wss://box-2.example/relay' ? { published: false, proven: [], unproven: [u], entries: [], unadmitted: true } : null) });
+  const r = await j.run();
+  assert.deepEqual(j.writtenChosen[0].map((c) => c.url), ['wss://box-3.example/relay'],
+    'A PICK THAT NEVER LANDED WAS RECORDED IN THE CHURCH-WIDE chosen SET — it holds a cap slot on every console for a box that is not in the church\'s list (F5): ' + JSON.stringify(j.writtenChosen));
+  assert.deepEqual(r.added.map((a) => a.url), ['wss://box-3.example/relay'], 'the pass reported an unsigned pick as added');
+  const why = Object.fromEntries(r.skipped);
+  assert.equal(why['wss://box-1.example/relay'], 'pending');
+  assert.equal(why['wss://box-2.example/relay'], 'unsigned');
+  assert.ok(!j.log.includes('sign:wss://box-4.example/relay'), 'the pass went past its three attempts (FF2)');
+});
+
+test('FF2: one pass is BOUNDED by the slots it has to fill — one slot and eight offers that all come back pending is ONE register/add/sign, not eight', async () => {
+  const offers = Array.from({ length: 8 }, (_, i) => offer(i + 1, 10 * (i + 1)));
+  const j = runJoin({ offers, prefs: { publicAuto: true, publicTarget: 2, chosen: [] }, signResult: (u) => ({ pending: true, url: u }) });
+  const r = await j.run();
+  const count = (p) => j.log.filter((x) => x.startsWith(p)).length;
+  assert.equal(count('sign:'), 1,
+    'ONE DEFAULT-ON PASS WALKED THE WHOLE OFFERS DIRECTORY — it registered this church with, added and tried to sign ' + count('sign:') + ' boxes for a single slot (FF2): ' + JSON.stringify(j.log));
+  assert.equal(count('reg:'), 1); assert.equal(count('add:'), 1);
+  assert.deepEqual(j.writtenChosen, [], 'a pending pick was recorded in chosen');
+  assert.deepEqual(r.added, []);
 });

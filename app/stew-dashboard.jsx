@@ -1224,6 +1224,9 @@ function KeyDistributor() {
       // heal that finds nothing changed publishes nothing. Guarded like the line above so an older bundle
       // without the method changes nothing.
       try { const h = window.Steward && window.Steward.autoSyncHeal && window.Steward.autoSyncHeal(); if (h && h.catch) h.catch(() => {}); } catch (e) {}
+      // …and try again any relay a steward connected whose safeguarding documents had not landed yet (it is not in
+      // the church's relay list until they do). No owed relay, nothing happens. Guarded like the lines above.
+      try { const o = window.Steward && window.Steward.retryOwedRelays && window.Steward.retryOwedRelays(); if (o && o.catch) o.catch(() => {}); } catch (e) {}
       // …and run the community-relay auto-join pass AFTER the heal, on the SAME signals (plan B2). It has its own
       // 10-minute damper and skips unless this is the church's own console, prefs read COMPLETE and publicAuto is on,
       // so this call is cheap to repeat; a church at target, or one that opted out, adopts nothing. Guarded like the
@@ -6436,6 +6439,10 @@ function signOutcome(r, url) {
   // `changed` first: a church switch mid-signing also reads as unknown, and is neither "a relay isn't answering"
   // nor "not your church's own console" (third audit, finding 8). And nothing is ever added automatically later —
   // the automatic pass signs only the console's own box (B4) — so the unknown line says to connect again (finding 2).
+  // `pending`: the relay proved itself but has not ACCEPTED the church's safeguarding lists (usually because the
+  // church is not registered on it yet), so it was not signed into the church's list. First, because it is not a
+  // signing result at all — nothing below may read it as added.
+  if (r.pending) return 'Added to this console, and waiting for the relay to accept your church. It isn’t in your church’s relay list yet, so your members aren’t sent to it. This console finishes connecting it once the relay accepts your church.';
   if (r.changed) return 'Added to this console, but it switched church while saving, so the relay isn’t in your church’s list yet. Connect it again.';
   if (r.skipped) return 'Added to this console. Only your church’s own console can put it in the church’s relay list.';
   // One line for two cases (fifth audit, finding 3): nothing was signed (`unknown`), or the list found names the relay

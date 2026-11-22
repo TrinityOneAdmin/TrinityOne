@@ -346,6 +346,10 @@ function liftBootTimer({ actingChurch }) {
     // A4 (2026-11-20) moved syncEnable's sign+publish half into the one enrolSerial signing queue.
     // Pass-through here: queue ordering is sync-default-on-cannot-undo-a-turn-off.test.mjs's subject.
     enrolSerial: (fn) => fn(),
+    // B1 (2026-11-22): syncEnable reads the church's removed-relay keys before signing. "Nothing removed, read
+    // complete" here; the read itself is run for real in removal-sticks-and-closes-sync-trust.test.mjs.
+    _unprovedDroppable: () => new Set(),
+    _removedKeysRead: async () => ({ complete: true, keys: new Set() }),
     // The shipped publish() dispatches steward-publish-error with `background: !!(opts && opts.background)`
     // on a total refusal and returns false. That is all this needs it to be.
     publish: async (evt, opts) => {

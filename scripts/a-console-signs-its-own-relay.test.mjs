@@ -355,15 +355,23 @@ test('connecting a relay that is ALREADY listed signs it, instead of refusing it
 // tries again; nothing at all without an own box, or for a console that is not this church's own.
 const VENDOR = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const OK = { proven: [{ url: 'ws://127.0.0.1:9/relay', pubkey: 'c'.repeat(64) }], published: true, entries: [{}], delivered: [] };
-function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null, self = { url: '', name: '' } }) {
+function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null, self = { url: '', name: '' }, ownBox = null }) {
   const body = fnBody(VENDOR, 'async function autoEnrolRelayNet()', 'autoEnrolRelayNet');
-  let n = 0; const args = [];
+  let n = 0; const args = []; let clock = 1800000000000;
   const fn = new Function('sk', 'pub', 'actingChurch', '_viewingNetwork', 'relayNetCandidates', 'enrolRelayNet', '_autoEnrolled',
-    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName',
+    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName', '_ownBoxBackfill', '_ownGateLast', 'BACKFILL_RETRY_MS', 'Date', '_ownOwed', '_backfillSafeguardTo',
     body + '\nreturn autoEnrolRelayNet;')(
     'sk', 'a'.repeat(64), acting, () => network, () => cands.slice(),
     async (o) => { args.push(o); const r = results[Math.min(n, results.length - 1)]; n++; if (r instanceof Error) throw r; return r; }, new Set(),
-    hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name);
+    hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name,
+    // F8 (2026-11-22): the own box is backfilled before it is signed. "Nothing to hold it back" here — the gate itself
+    // is run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    ownBox || (async () => ({ proceed: true, entering: false, results: null })),
+    // F2 (2026-11-22): the own-box gate is damped for ten minutes. Every pass in THIS file is its own window (the clock
+    // jumps eleven minutes per reading), so each row measures what it measured before; the damper itself is run in
+    // an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    { key: '', at: 0, proceed: false }, 600000, { now: () => (clock += 11 * 60 * 1000) },
+    new Set(), async () => ({ landed: true, results: {} }));   // F1: nothing owed for the own box in this file
   return { fn, calls: () => n, args };
 }
 
@@ -557,16 +565,25 @@ test('one signing at a time: a steward\'s Connect waits for an automatic pass, s
   assert.equal(await enrolSerial(async () => 'next'), 'next', 'one failed signing stopped every later one');
 });
 
-test('every signing path goes through the one queue (the automatic pass, Connect, and Remove)', () => {
+// What the lifted _adoptRelay reads besides the queue and the signing step: an unlocked owner console, a backfill
+// that LANDED, and the owed-marker writer.
+const ADOPT_NAMES = ['sk', 'pub', 'actingChurch', '_viewingNetwork', '_backfillSafeguardTo', '_setOwedBackfill'];
+const ADOPT_VALUES = () => [new Uint8Array(32).fill(7), 'c'.repeat(64), '', () => false, async () => ({ landed: true, results: {} }), () => {}];
+test('every signing path goes through the one queue (the automatic pass, Connect, and Remove)', async () => {
   // Executed, not text-matched: each caller is lifted out of the shipped bundle and run with a queue that records.
+  // A2 (2026-11-22): signRelay now goes through _adoptRelay — prove, backfill, and only then the signing step this
+  // test is about. The REAL _adoptRelay is lifted with it; its backfill is answered "landed" (that step is run for
+  // real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs), and because the backfill is awaited BEFORE
+  // the queue, Connect is awaited here before the queue is inspected.
   const seen = [];
   const enrolSerial = (fn) => { seen.push('queued'); return fn(); };
   const sign = fnBody(VENDOR, '  signRelay(url) {', 'signRelay');
   const unsign = fnBody(VENDOR, '  unsignRelay(url) {', 'unsignRelay');
   const norm = fnBody(VENDOR, 'function normRelay(input) {', 'normRelay');
-  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', norm + '\nreturn ({ ' + sign + ', ' + unsign + ' });')(
-    enrolSerial, async () => 'signed', async () => 'unsigned');
-  api.signRelay('wss://x.example/relay'); api.unsignRelay('wss://x.example/relay');
+  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay') + '\n' + fnBody(VENDOR, 'function _signedIn(r, u) {', '_signedIn');
+  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', ...ADOPT_NAMES, norm + '\n' + adopt + '\nreturn ({ ' + sign + ', ' + unsign + ' });')(
+    enrolSerial, async () => 'signed', async () => 'unsigned', ...ADOPT_VALUES());
+  await api.signRelay('wss://x.example/relay'); api.unsignRelay('wss://x.example/relay');
   assert.deepEqual(seen, ['queued', 'queued'], 'Connect or Remove signs outside the queue — it can overlap an automatic pass');
   const auto = autoEnrol({ results: [OK], queue: (fn) => { seen.push('auto-queued'); return fn(); } });
   return auto.fn().then(() => assert.ok(seen.includes('auto-queued'), 'the automatic pass signs outside the queue'));
@@ -584,8 +601,9 @@ test('only the automatic pass asks for the own-box exception; Connect and the ex
   const line = VENDOR.split('\n').find(l => /^\s*enrolRelayNet: \(opts\) => /.test(l));
   assert.ok(line, 're-anchor: Steward.enrolRelayNet is no longer the queued arrow');
   const queued = [];
-  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', norm + '\nreturn ({ ' + sign + ', ' + line.trim().replace(/,$/, '') + ' });')(
-    (fn) => { queued.push(1); return fn(); }, async (o) => { asked.push(o); return {}; }, async () => ({}));
+  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay') + '\n' + fnBody(VENDOR, 'function _signedIn(r, u) {', '_signedIn');   // A2: the real choke; its backfill answered "landed"
+  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', ...ADOPT_NAMES, norm + '\n' + adopt + '\nreturn ({ ' + sign + ', ' + line.trim().replace(/,$/, '') + ' });')(
+    (fn) => { queued.push(1); return fn(); }, async (o) => { asked.push(o); return {}; }, async () => ({}), ...ADOPT_VALUES());
   await api.signRelay('wss://typed.example/relay');
   await api.enrolRelayNet({ auto: true, extra: ['wss://x.example/relay'] });
   await api.enrolRelayNet();
@@ -1064,4 +1082,26 @@ test('Steward.connectFoundRelays adds every relay it is handed and republishes o
   log.length = 0;
   assert.deepEqual(await api.connectFoundRelays([]), []);
   assert.deepEqual(log, [], 'nothing found, and the relay list was republished anyway');
+});
+
+// ── the own-box backfill gate is FAIL-CLOSED in shape (Part A audit, nit) ─────────────────────────────────
+test('the automatic pass enrols ONLY on an explicit go-ahead from the own-box backfill: a throw, no answer, or a hold all stop it and are tried again', async () => {
+  for (const [why, ownBox] of [
+    ['a throw', async () => { throw new Error('boom'); }],
+    ['no answer', async () => undefined],
+    ['an answer without proceed:true', async () => ({ entering: null })],
+    ['a hold', async () => ({ proceed: false, entering: true, results: { minors: 'refused: x' } })],
+  ]) {
+    const a = autoEnrol({ results: [OK], ownBox });
+    const r = await a.fn();
+    assert.equal(a.calls(), 0, why + ': THE OWN BOX WAS ENROLLED WITHOUT A GO-AHEAD FROM ITS BACKFILL');
+    assert.equal(r && r.pending, true, why + ': the pass did not say it was held: ' + JSON.stringify(r));
+    await a.fn();
+    assert.equal(a.calls(), 0, why + ': re-anchor');   // still held — and it DID run again (not remembered as done), or this would be 0 for the wrong reason:
+  }
+  let asked = 0;
+  const again = autoEnrol({ results: [OK], ownBox: async () => { asked++; return asked < 2 ? { proceed: false } : { proceed: true }; } });
+  await again.fn(); await again.fn();
+  assert.equal(asked, 2, 'a held pass was remembered as done — the own box is never signed this session');
+  assert.equal(again.calls(), 1, 'the pass did not enrol once the backfill gave the go-ahead');
 });

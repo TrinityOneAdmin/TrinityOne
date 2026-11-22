@@ -2282,11 +2282,13 @@ async function refreshNamedRelays() {
   }
   if (changed) {
     _writeExtraRelays(extra); setNamedRelays(named);
-    // SAFEGUARDING BACKFILL (mirrors addRelay): a swap writes `extraRelays()` straight through _writeExtraRelays,
-    // bypassing addRelay, so a box swapped in here would hold none of the church's minors:/approved:/guardians:/
-    // blocked: docs and fail OPEN. Every url in `swappedIn` is a genuinely new address (a same-url refresh never
-    // reaches the push), so re-send the four owner-signed docs, verbatim and targeted, to the addresses just added.
-    try { _backfillSafeguardTo(swappedIn); } catch (e) {}
+    // SAFEGUARDING BACKFILL, BEST-EFFORT AND AWAITED (plan Part A, A6, 2026-11-22). A swap here is the SAME BOX at
+    // a new address — the pinned-key check above, or for an unpinned name the gate — so it creates no new place
+    // members are routed to, and it does not need the owed/pending machinery signRelay has. But a box that came
+    // back at a new address may have come back EMPTY, so the church's safeguarding documents are sent to each new
+    // address (proved, targeted, answers read — _backfillSafeguardTo) and waited for BEFORE the member relay list
+    // below advertises that address. The outcome does not block the swap: a box that refuses stays swapped in.
+    for (const _sw of swappedIn) { try { await _backfillSafeguardTo(_sw); } catch (e) {} }
     // M-7a: republish the kind-10002 relay list so member phones learn the new tunnel address. Without
     // this, the console follows the move (refreshNamedRelays runs every 90s) but members keep trying the
     // dead address and fall back to the shared relays until someone hands out a new slip.
@@ -2819,6 +2821,11 @@ async function discoverRelayOffers(seedExtra, region) {
   // Global discovery: ask the shared directory which relays have advertised they're open to host, so we can
   // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
   // probed below, so a stale/dishonest directory entry can't fake an offer.
+  // NOT ONLY SHOWN ANY MORE (corrected 2026-11-22). Since plan B2 this list is also what autoJoinPublicRelays
+  // ADOPTS from, with nobody pressing anything, in every church that has not opted out (community relays are ON
+  // by default — owner ruling 2026-11-22: intended). An offer that survives the gates here is then identity-proved
+  // again at its address and must register the church before it is adopted, up to the per-church cap. "Proved"
+  // means "runs our relay software" (CLAUDE.md rule 10) — not "a box this church chose".
   let dirUrls = [];
   // url → claimed directory HANDLE (SPEC self-healing 2026-11-03, item 4b). The /relay-names/offers record
   // already carries each box's handle; it was being discarded here (only `.url` was kept), which is why every
@@ -6209,55 +6216,266 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 
 // ── SAFEGUARDING BACKFILL ON ADOPT (reference/SAFEGUARDING-BOUNDARY.md) ──────────────────────────────────
 //
-// The relay ENFORCES a church's safeguarding from its OWN copy of four OWNER-SIGNED documents — minors:,
-// approved:, guardians:, blocked: — read into gateway.mjs's MINORS_BY / APPROVED_BY / GUARDIANS_BY / BLOCKED_BY
-// (each `d=<prefix><churchpub>`, author === the church key). Those are the ONLY safeguarding/authority documents
-// the gate consults: a child's DM refusal, the care-request reader test, the no-public-need / no-helper-listing
-// rules and the child-photo default all rest on minors:; approved: is who a minor MAY message; guardians: is the
-// parent↔child DM exemption; blocked: is the ban. The sealed per-member clearance: is NOT in this set — the relay
-// does not enforce with it (SAFEGUARDING-BOUNDARY.md appendix), so it is deliberately not backfilled.
+// The relay ENFORCES a church's safeguarding from its OWN copy of OWNER-SIGNED documents (each
+// `d=<prefix><churchpub>`, author === the church key), read into gateway.mjs's MINORS_BY / APPROVED_BY /
+// GUARDIANS_BY / BLOCKED_BY / NOPHOTO_BY. A child's DM refusal, the care-request reader test, the no-public-need
+// / no-helper-listing rules and the child-photo default all rest on minors:; approved: is who a minor MAY
+// message; guardians: is the parent↔child DM exemption; blocked: is the ban. The sealed per-member clearance: is
+// NOT in this set — the relay does not enforce with it — so it is deliberately not carried.
 //
-// THE GAP THIS CLOSES. setMinors/setApproved/setGuardians/setBlocked publish ONLY at edit time, to the relays
-// listed THEN. A box the church has JUST adopted — manual Add/Connect, Auto-find, or the B2 auto-join — holds none
-// of them, and a sync-off church (the default; cross-relay sync needs ≥2 own boxes) never mirrors them either. A
-// box in the publish set WITHOUT these lists cannot make the refusal the church's own box makes, so it fails OPEN.
-// So the instant a box enters the publish set, send it the church's CURRENT copy of each of the four.
+// THE GAP. setMinors/setApproved/setGuardians/setBlocked publish ONLY at edit time, to the relays listed THEN. A
+// box the church has just adopted holds none of them, and a sync-off church (the default) never mirrors them.
+// A box that members are routed to WITHOUT these lists cannot make the refusal the church's own box makes: a
+// child there reads as an adult.
 //
-// VERBATIM, NEVER RE-SIGNED. We re-send the existing owner-signed event as-is (the enrolRelayNet `resend`/`deliver`
-// pattern): the owner's signature and authority are unchanged, and a verbatim copy can never replace anything newer
-// (newest-wins keeps the relay's own copy if it somehow already holds a fresher one). TARGETED to the new box only
-// — small pipes (reference/churches-run-on-small-pipes), and the other relays already hold the docs.
+// WHAT THIS FUNCTION IS (rewritten 2026-11-22, plan PLAN-FIX-BACKFILL-AND-REMOVE-DOORS Part A, A3/A4 — the first
+// version fired and forgot: it published to an address nobody had proved (audit H1), threw the relay's answer
+// away so a refusal looked like success (H2), and read "the read did not finish" as "the church never made
+// one" (F6)). ONE target, AWAITED, and it answers one question: DID THE DOCUMENTS LAND ON THAT BOX?
+//
+//   1. PROVED FIRST. Nothing is sent to an address the relay gate does not admit. admitRemoteRelay is awaited:
+//      it STARTS a proof now and waits for it, so a brand-new address is decided before anything is sent, and an
+//      address that has never proved gets ZERO documents. (CORRECTED 2026-11-22 — this said "a fresh proof rather
+//      than the cache". It is not that: after the attempt the gate answers from its cache, so a box that proved
+//      EARLIER and does not answer right now is still admitted until that cached proof expires — up to 30 days.
+//      That is the same exposure as an ordinary setMinors publish, which goes to relays() on the same cache, not
+//      a wider one; and insisting on a fresh proof here would stall every owed retry behind a box that is
+//      briefly down.)
+//   2. READ, AND KNOW WHETHER THE READ WAS WHOLE. Every relay asked must answer, bar the target itself (it is the
+//      empty one) and the addresses that did not prove this pass and are neither canonical nor the own box
+//      (_unprovedDroppable — syncHeal's rule), so one dead church-added row cannot block every adoption. A read
+//      that was not whole is `unread`, never "the church has no such document".
+//   3. SEND VERBATIM, TO THE TARGET ONLY, AND READ ITS ANSWER. The owner's own signed event, never re-signed.
+//      OK true (or "duplicate") = landed. OK false "…a newer version…" = landed too: the box already holds a
+//      NEWER copy. Any other refusal, a timeout or a dead socket = not landed.
+//   4. `landed` = minors: AND blocked: each landed or are known not to exist. Those are the two whose ABSENCE is
+//      the dangerous direction. approved:, guardians: and nophoto: are carried BEST-EFFORT and never decide
+//      `landed`: their absence is the safe direction (nobody is cleared, no exemption, no suppression lifted) —
+//      and a stale approved: naming a current minor is refused by the relay for ever, which would otherwise
+//      strand the box. minors: is sent before approved: for the same reason.
 //
 // EMPTY == ABSENT, SO NOTHING IS FABRICATED. The gate consults every list as `(MAP.get(cp) || EMPTY_SET).has(x)`,
-// so a church that created no document and an explicit empty list enforce identically. A document that never
-// existed has nothing to send; publishing a fabricated empty one would buy no enforcement. The residual — a child
-// in a church that marked NOBODY, for whom no minors: doc was ever published — is the pre-existing gap named in
-// SAFEGUARDING-BOUNDARY.md, not this fix's job.
+// so a document that never existed has nothing to send — but only a WHOLE read may say it never existed.
 //
-// NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types; this only re-sends
-// documents it already accepts. Own-console only, matching every other church-doc writer (publishRelayList etc.):
-// a delegated/network view cannot author these owner-only docs, so it does not backfill them.
+// nophoto: (A4) — the OWNER-AUTHORED copy only (authors:[cp], author re-checked), like the other four. The relay
+// also honours a nophoto: signed by a safeguarding steward, which needs the church's stewards: document on the
+// new box first; that pair is NOT carried here and is deferred, so a steward-authored photo-suppression list is
+// cold on a newly adopted box until its next edit.
 //
-// CALLER (rule 2): addRelay — the ONE writer every adopt path passes through (manual Add/Connect in
-// app/stew-dashboard.jsx:6320/6455/6492, Auto-find's connectFoundRelays + autoPickRelays, and the B2
-// autoJoinPublicRelays pass all call window.Steward.addRelay). Centralised there so no path can skip the backstop.
-async function _backfillSafeguardTo(urls) {
+// Own console only: a delegated / network view returns { landed:false } and sends nothing.
+// NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types.
+//
+// CALLERS (rule 2): _adoptRelay (Steward.signRelay: sign, or owe) and _ownBoxBackfill (autoEnrolRelayNet: sign the
+// own box, or hold it) — the two whose result DECIDES something; refreshNamedRelays' tunnel swap and
+// adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
+const BACKFILL_SEND_MS = 8000;
+async function _backfillSafeguardTo(target) {
+  const u = String(target || '');
+  if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
+  if (!sk || !pub) return { landed: false, why: 'locked' };
+  if (actingChurch || _viewingNetwork()) return { landed: false, why: 'not-own-console' };
+  const cp = pub, sk0 = sk;
+  const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
+  // 1. the gate admits it (a proof is attempted now; a still-valid cached proof also admits — see the header)
+  let admitted = false;
+  try { admitted = !!(await admitRemoteRelay(u)); } catch (e) { admitted = false; }
+  if (moved()) return { landed: false, why: 'changed' };
+  if (!admitted) return { landed: false, why: 'unproven' };
+  // 2. which other relays may be excused from the read: the ones that do not prove right now (never canonical, never own)
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const proved = [];
+  let asked = []; try { asked = relaysRaw(); } catch (e) { asked = []; }
+  await Promise.all(asked.filter(x => _k(x) !== _k(u)).map(async (x) => {
+    try { const pr = await verifyRelayIdentity(x); if (/^[0-9a-f]{64}$/.test(String((pr && pr.relayPub) || '').toLowerCase())) proved.push(x); } catch (e) {}
+  }));
+  if (moved()) return { landed: false, why: 'changed' };
+  const droppable = _unprovedDroppable(proved);
+  const readDoc = async (d) => {
+    let r = null;
+    try { r = await _oneComplete([{ kinds: [30078], authors: [cp], '#d': [d] }], 6000, true); } catch (e) { return { ev: null, whole: false }; }
+    // A WRONG-AUTHOR ANSWER IS UNREAD, NOT ABSENT (F4, 2026-11-22). _oneComplete keeps the NEWEST event it was
+    // served with no author check, and a relay need not honour the `authors` filter. If the newest thing served
+    // under this d-tag is somebody else's, the church's own copy may be sitting behind it — so this is "we could
+    // not read the church's document", never "the church has none" (which would count as landed with nothing sent).
+    if (r && r.ev && r.ev.pubkey !== cp) return { ev: null, whole: false };
+    return { ev: (r && r.ev) ? r.ev : null, whole: _readCovers(r, u, droppable) };
+  };
+  // 3. one document, to the target only, and what the target said
+  // …BOUNDED: a publish call that never settles (a hung socket inside the library) must not stall the whole pass —
+  // and with it the signing it gates — for ever. Eight seconds, the bound enrolRelayNet's own delivery uses; no
+  // answer in that time is "not landed", and the retry asks again.
+  const sendDoc = async (ev) => {
+    let _t = null;
+    try {
+      const v = await Promise.race([pool.publish([u], ev)[0], new Promise((_, rej) => { _t = setTimeout(() => rej(new Error('timeout: no answer from the relay')), BACKFILL_SEND_MS); })]);
+      if (_t) { clearTimeout(_t); _t = null; }
+      if (typeof v === 'string' && v.startsWith('connection failure')) return 'failed';
+      return 'landed';
+    } catch (e) {
+      if (_t) { clearTimeout(_t); _t = null; }
+      const m = String((e && e.message) || e || '');
+      return /newer version/i.test(m) ? 'landed' : ('refused: ' + m);
+    }
+  };
+  const carry = async (got) => {
+    if (!got.whole) { if (got.ev) { try { await sendDoc(got.ev); } catch (e) {} } return 'unread'; }   // a partial view is sent for what it is worth, and never counted
+    if (!got.ev) return 'absent';
+    return sendDoc(got.ev);
+  };
+  const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+  const got = {};
+  await Promise.all(Object.keys(ds).map(async (k) => { got[k] = await readDoc(ds[k]); }));
+  if (moved()) return { landed: false, why: 'changed' };
+  const results = {};
+  results.minors = await carry(got.minors);          // FIRST: the relay refuses an approved: that names a minor it knows
+  if (moved()) return { landed: false, why: 'changed', results };
+  results.blocked = await carry(got.blocked);
+  for (const k of ['approved', 'guardians', 'nophoto']) {
+    if (moved()) return { landed: false, why: 'changed', results };
+    try { results[k] = await carry(got[k]); } catch (e) { results[k] = 'failed'; }
+  }
+  const ok = (x) => x === 'landed' || x === 'absent';
+  const landed = ok(results.minors) && ok(results.blocked);
+  return { landed, why: landed ? '' : 'not-landed', results };
+}
+// ── ADOPT ONE RELAY: PROVE → BACKFILL → ONLY THEN SIGN (plan Part A, A2, 2026-11-22) ─────────────────────────
+//
+// THE ONE CHOKE POINT. Steward.signRelay is what every path that turns a box into a place MEMBERS are routed to
+// goes through — the typed address field, the Add card, Auto-find's Connect, the community auto-join — because it
+// is what signs the box into the church's relay-net document and republishes the member relay list. So the
+// safeguarding backfill is decided HERE, before that signing, and not at the moment an address is written down:
+//
+//   1. the box is proved and the church's safeguarding documents are sent to it and its ANSWERS read
+//      (_backfillSafeguardTo — outside the signing queue; nothing in the queue may wait on it);
+//   2. LANDED → the box is signed into relay-net (enrolRelayNet, in the queue, exactly as before);
+//   3. NOT LANDED → nothing is signed. The box stays an unsigned row on this console: members are not routed to
+//      it. An OWED marker { churchPub, url } is written and the result is { pending: true } — never a signing
+//      result, so no caller can read it as "added".
+//   4. NOT PROVED → nothing is sent, nothing is signed, nothing is owed: the same "could not prove it" answer as
+//      before, and the steward connects it again.
+//
+// THE OWED MARKER MEANS "the steward consented to this box for this church; the documents have not landed yet".
+// Its ABSENCE means do nothing. (The other way round — a "landed" marker — would fail OPEN on cleared storage:
+// no marker would read as "not yet done", and a restore that carried one would read as "done" for a box that
+// never got anything.) retryOwedBackfills re-runs this whole function for each owed row on the console's churn
+// signals until it lands; a row the steward has since removed from the list is consent withdrawn, and its marker
+// is dropped.
+//
+// A box that never accepts the church is not a deadlock: it stays unsigned, Remove works on it, and the steward
+// is told it is waiting.
+//
+// A DELEGATED / NETWORK VIEW is unchanged: enrolRelayNet answers `skipped` there, nothing is sent and nothing is
+// owed — the consent on that screen is about the church being helped, which this console cannot sign for.
+const BACKFILL_OWED_LS = 'trinityone.steward.backfill-owed';   // [{ churchPub, url }] — consent given, documents not landed
+function _owedBackfills() {
   try {
-    if (!sk || !pub || actingChurch || _viewingNetwork()) return;
-    const targets = [...new Set((urls || []).map(u => String(u || '')).filter(u => /^wss?:\/\//i.test(u)))];
-    if (!targets.length) return;
-    const cp = pub;
-    const ds = [MINORS_D + cp, APPROVED_D + cp, GUARDIANS_D + cp, BLOCKED_D + cp];
-    // Read all four current owner-signed docs IN PARALLEL (the smallest ordering window), from the relays that
-    // already hold them. _oneComplete returns the NEWEST event it saw across relaysRaw(), so the freshly-adopted
-    // empty box now in that set cannot blank the answer. Re-send each one, verbatim, to the new box.
-    await Promise.all(ds.map(async (d) => {
-      let ev = null;
-      try { const r = await _oneComplete([{ kinds: [30078], authors: [cp], '#d': [d] }]); ev = (r && r.ev && r.ev.pubkey === cp) ? r.ev : null; } catch (e) { ev = null; }
-      if (!ev || pub !== cp) return;   // never created -> nothing to enforce; or the console switched church mid-read
-      try { pool.publish(targets, ev); } catch (e) {}
-    }));
+    const a = JSON.parse(lsGet(BACKFILL_OWED_LS) || '[]');
+    return Array.isArray(a) ? a.filter(e => e && /^[0-9a-f]{64}$/.test(String(e.churchPub || '')) && typeof e.url === 'string' && /^wss?:\/\//i.test(e.url)).map(e => ({ churchPub: e.churchPub, url: e.url })) : [];
+  } catch (e) { return []; }
+}
+function _setOwedBackfill(cp, url, on) {
+  try {
+    const rest = _owedBackfills().filter(e => !(e.churchPub === cp && e.url === url));
+    if (on) rest.push({ churchPub: cp, url });
+    lsSet(BACKFILL_OWED_LS, JSON.stringify(rest));
   } catch (e) {}
+}
+async function _adoptRelay(u) {
+  if (!sk || !pub) throw new Error('No church key on this device');
+  if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
+  const cp = pub, sk0 = sk;
+  const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
+  const bf = await _backfillSafeguardTo(u);
+  if (moved() || (bf && bf.why === 'changed')) return { published: false, unknown: true, changed: true };
+  if (bf && bf.why === 'unproven') return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
+  if (!bf || !bf.landed) {
+    _setOwedBackfill(cp, u, true);
+    return { pending: true, url: u, backfill: (bf && bf.results) || null };
+  }
+  // OWED UNTIL IT IS ACTUALLY SIGNED IN (F6, 2026-11-22). The marker used to clear on any answer that was not
+  // `unknown` — including an enrolment whose publish reached no relay, or one where the box failed its proof at that
+  // moment — and the retry then stopped with the box landed and never signed. So the box is marked owed from the
+  // moment its documents land, and the marker goes only when the signing step says the box is IN the church's list.
+  // (An address that never proves is not here at all: it returned above, un-owed. This cannot retry for ever on a
+  // box that will never prove — only on one that proved and took the documents.)
+  _setOwedBackfill(cp, u, true);
+  const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
+  if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
+  return r;
+}
+// IS THIS BOX NOW IN THE CHURCH'S SIGNED LIST, by what enrolRelayNet answered? The box proved at THIS address, and
+// either it is a shared relay (admitted on its own pin — there is nothing to sign), or the list names its key AND
+// that list is real: a publish that landed (`published`), or an unchanged list read in full (`full === true`). A
+// list that was only INTENDED — the publish reached no relay — carries neither, and is not signed in.
+function _signedIn(r, u) {
+  if (!r || r.unknown || r.skipped || r.pending) return false;
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const p = (r.proven || []).find(x => x && _k(x.url) === _k(u));
+  if (!p) return false;
+  if (p.shared) return true;
+  const key = String(p.pubkey || '').toLowerCase();
+  const named = (r.entries || []).some(e => String((e && e.pubkey) || '').toLowerCase() === key);
+  return named && (r.published === true || r.full === true);
+}
+// THE RETRY. Called by the console on the signals it already follows (mount/unlock, a relay returning, window
+// focus, a relay-list change) — events, never a timer. No owed rows for this church → returns at once. One pass at
+// a time. Through window.Steward.signRelay, so a row that lands gets everything a first-time Connect gets.
+//
+// THE DAMPER (F2, 2026-11-22 — small pipes). Every pass costs an identity proof per listed relay, five reads and up
+// to five sends per owed row, and the console's signals fire on every window focus. So: at most one pass per ten
+// minutes, the same valve autoSyncHeal has. Only a pass that has rows to try starts the clock. `{ force: true }`
+// bypasses it. A STEWARD'S OWN Add/Connect does not come through here at all — it calls Steward.signRelay
+// directly — so a click always acts at once.
+const BACKFILL_RETRY_MS = 600000;
+let _owedRetrying = false;
+let _owedRetryLastAt = 0;
+async function retryOwedBackfills(opts) {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+  if (_owedRetrying) return { ran: false, busy: true };
+  const cp = pub;
+  const mine = _owedBackfills().filter(e => e.churchPub === cp);
+  if (!mine.length) return { ran: false, none: true };
+  const _now = Date.now();
+  if (!(opts && opts.force) && _now - _owedRetryLastAt < BACKFILL_RETRY_MS) return { ran: false, debounced: true };
+  _owedRetryLastAt = _now;
+  _owedRetrying = true;
+  const rows = [];
+  try {
+    // A REMOVE OUTRANKS AN OWED MARKER (FF1, 2026-11-22). This pass calls signRelay, and signRelay's success path
+    // CLEARS the tombstone of the address it signs — that is right for a steward's deliberate Add, and exactly
+    // wrong here: an owed box that a steward (on this console or another) has since Removed would be proved,
+    // signed back in, un-tombstoned and re-advertised to members with nobody pressing anything. So before any
+    // row is tried, the church's removed keys are read — the same read syncEnable and the auto-join make, plus
+    // this console's pending set — and it FAILS CLOSED: if that read is not whole, nothing is done this pass and
+    // every marker stays. Then, per row, the key the box proves (now, or by the gate's still-valid proof) is
+    // looked up: removed → the marker is DROPPED and the box is left alone; no key at all → cannot tell which
+    // box this is, so nothing is done for it this pass.
+    // (Rows the steward has taken off this console's list are dropped FIRST — that needs no read.)
+    let _listed0 = []; try { _listed0 = extraRelays(); } catch (x) { _listed0 = []; }
+    const todo = [];
+    for (const e of mine) { if (_listed0.includes(e.url)) todo.push(e); else { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, withdrawn: true }); } }
+    if (!todo.length) return { ran: true, rows };
+    const _kR = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+    let _droppR = new Set();
+    try { _droppR = new Set(extraRelays().map(_kR)); } catch (x) { _droppR = new Set(); }
+    let gone = null;
+    try { gone = await _removedKeysRead(_droppR); } catch (x) { gone = null; }
+    if (!gone || !gone.complete) return { ran: true, removedUnknown: true, rows };
+    for (const e of todo) {
+      if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+      let listed = []; try { listed = extraRelays(); } catch (x) { listed = []; }
+      if (!listed.includes(e.url)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, withdrawn: true }); continue; }
+      let key = '';
+      try { const pr = await verifyRelayIdentity(e.url); key = String((pr && pr.relayPub) || '').toLowerCase(); } catch (x) { key = ''; }
+      if (!/^[0-9a-f]{64}$/.test(key)) { try { key = String(_gate.provedKey(e.url, cp) || '').toLowerCase(); } catch (x) { key = ''; } }
+      if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+      if (!/^[0-9a-f]{64}$/.test(key)) { rows.push({ url: e.url, unproven: true }); continue; }
+      if (gone.keys.has(key)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, removed: true }); continue; }
+      let r = null; try { r = await window.Steward.signRelay(e.url); } catch (x) { r = null; }
+      rows.push({ url: e.url, pending: !!(r && r.pending), signed: _signedIn(r, e.url) });
+    }
+  } finally { _owedRetrying = false; }
+  return { ran: true, rows };
 }
 async function relayNetEntries(cp) {
   if (!pub || (cp && cp !== pub)) return [];   // this console speaks for one church: its own
@@ -6402,6 +6620,15 @@ async function enrolRelayNet(opts) {
       if (hint && cur.url !== hint) cur.url = hint;
       if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
     } else {
+      // THE OWN BOX IS ADDED BY THE AUTOMATIC PASS ONLY (FF4, 2026-11-22). The census above always starts with the
+      // box serving this console, so EVERY call — a steward's Connect, the community auto-join, an owed retry —
+      // used to add the own box to the list as a side effect when the list did not yet name it. That bypassed
+      // the own-box gate (_ownBoxBackfill, plan F8): a restored church's empty box could be signed in by an
+      // unrelated Add even while autoEnrolRelayNet was HOLDING it for want of the child list. An entry that
+      // already exists is still refreshed above (address, name); a NEW own-box entry is autoEnrolRelayNet's to add.
+      // Scoped to a call that NAMES another relay (`extra`): that is every one of those paths. A bare call with no
+      // `extra` — the automatic pass, and the devtools-only Steward.enrolRelayNet() — still adds it, as before.
+      if (isOwn && !o.auto && Array.isArray(o.extra) && o.extra.length > 0) continue;
       const e = { pubkey: p, alwaysOn: true, url: hint };
       if (_RELAY_NAME_RE.test(nm)) e.name = nm;
       entries.push(e);
@@ -6538,6 +6765,10 @@ async function unenrolRelayNet(url) {
   // DEAD box, whose key it learns from the rows it dropped rather than from a probe it cannot answer.
   let pk = '';
   let _droppedNet = [];
+  // B0 (2026-11-22): what the tombstone step must know about the console's OWN box (never tombstoned), and which
+  // pending keys THIS press persisted (withdrawn again if the press turns out to be an own-box refusal).
+  let _own = '', _ownKey = '', _ownResolved = false, _opPending = [];
+  const keyAt0 = async (x) => { try { const proof = await verifyRelayIdentity(x); return String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { return ''; } };
   const netResult = await (async () => {
     const read = await relayNetDoc();
     const { ev: existing } = read;
@@ -6561,6 +6792,19 @@ async function unenrolRelayNet(url) {
     // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
     const keep = entries.filter(e => !drop.includes(e));
     if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+    // B0 — REMEMBER WHAT THIS REMOVE MUST TOMBSTONE, BEFORE ANYTHING IS PUBLISHED. Every return in the prune loop
+    // below (publish refused, read-back incomplete, repairs exhausted, church switched) leaves before
+    // _closeSyncTrust runs, and on the retry a DEAD box is already out of relay-net and proves no key — so there
+    // would be nothing left to tombstone (audit 2026-11-22, F2). The keys are persisted per church here, past the
+    // own-box and alias refusals above, and flushed by the next Remove or the next heal pass (_flushPendingTomb).
+    // Never a shared relay key, never the own box's key (_tombable).
+    _own = own; _ownKey = ownKey; _ownResolved = true;
+    {
+      const mark = _tombable([pk, ...drop.map(e => e && e.pubkey)], [ownKey]);
+      const before = _pendingTomb();
+      _opPending = mark.filter(p => !before.includes(p));
+      if (_opPending.length) _setPendingTomb([...before, ...mark]);
+    }
     // READ BACK, AND REPAIR A LOST REMOVE (audit M-5): a console that signed an addition from the old list at the same
     // moment can replace this Remove with a newer document that still names the relay. `removed` is true only when a
     // COMPLETE read-back no longer names it; an incomplete one is unknown and re-signs nothing. At most two repairs.
@@ -6578,7 +6822,11 @@ async function unenrolRelayNet(url) {
       if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
       if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
       // the own-box refusal still applies to whatever the newer list names under that address
-      if (still.some(e => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+      if (still.some(e => ownKey && e.pubkey === ownKey)) {
+        // B0: the press is REFUSED as the own box, so nothing it persisted may be tombstoned later.
+        if (_opPending.length) _setPendingTomb(_pendingTomb().filter(p => !_opPending.includes(p)));
+        return { removed: false, ownBox: true };
+      }
       repairs++;
       list = found.filter(e => !isDropped(e));
       floorAt = newest ? (newest.created_at || 0) + 1 : 0;
@@ -6593,21 +6841,97 @@ async function unenrolRelayNet(url) {
     const removedKeys = new Set();
     if (/^[0-9a-f]{64}$/.test(pk)) removedKeys.add(pk);
     for (const e of _droppedNet) { const p = String((e && e.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p); }
-    const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0 });
+    // B0 — THE OWN BOX IS NEVER TOMBSTONED. A relay the list never named (`notListed`) left the admission step
+    // before the own-box check ran, so it is made here. Three outcomes: the address IS the own box → no tombstone
+    // at all; the own box proves its key → that key is excluded; the own box exists but cannot say which key is
+    // its own → the tombstone is HELD (the keys stay pending, the removal reads partial) rather than risk
+    // tombstoning the own box under an alias — the same fail-closed rule as the alias refusal above.
+    if (!_ownResolved) {
+      _own = relayNetCandidates()[0] || '';
+      _ownKey = !_own ? '' : (_k0(_own) === _k0(u)) ? pk : await keyAt0(_own);
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+    }
+    // BF1 (2026-11-22) — A BOX KNOWN ONLY THROUGH `chosen`. The community auto-join records each box it adopts in
+    // the church's relayprefs `chosen` as { pubkey, url, name }, and a `chosen` key is refused by every console's
+    // auto-join. A DEAD box that is in `chosen` but no longer in relay-net proves no key and drops no row, so this
+    // Remove had no key to tombstone — and N2 then dropped the `chosen` entry by address, deleting the last
+    // church-wide guard. So the key `chosen` recorded for THIS address is tombstoned with the rest (through the
+    // same shared/own exclusions), and _dropChosen only ever drops an entry whose key this Remove tombstoned.
+    // A plain read, never the queue (this is already inside a slot). An inconclusive prefs read adds nothing —
+    // and then nothing is dropped from `chosen` either, so the guard stays where it was.
+    {
+      const pr = await _readRelayPrefs();
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      const ch = (pr && pr.complete && pr.prefs && Array.isArray(pr.prefs.chosen)) ? pr.prefs.chosen : [];
+      for (const c of ch) {
+        if (!c || !c.url || _k0(c.url) !== _k0(u)) continue;
+        const p = String(c.pubkey || '').toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
+      }
+    }
+    const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0,
+      never: _ownKey ? [_ownKey] : [], skipTomb: !!_own && _k0(_own) === _k0(u), holdTomb: !!_own && !_ownKey });
     if (close && close.partial) {
       // The box is still TRUSTED to pull the whole corpus on every peer holding the sync doc — the removal is
       // only PARTIAL. Reported with unenrol's EXISTING honesty shape (dropOutcome's "could not be updated right
       // now … remove it again once your relays are answering"), so the steward retries and nothing claims the
       // trust was closed when it was not. The next press finds the box already out of admission (notListed) and
       // runs the sync-close again — it converges once the relays answer.
-      return { removed: false, unknown: true, syncPartial: true };
+      // `pruned` (BF3, 2026-11-22): whether THIS press's relay-net prune landed (a complete read-back no longer
+      // names the box). The steward-facing answer stays "partial", but member phones route from the kind-10002
+      // built from relay-net, so Steward.unsignRelay republishes it on `pruned` without waiting for the tombstone.
+      return { removed: false, unknown: true, syncPartial: true, pruned: netResult.removed === true };
     }
-    return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned) };
+    return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned), removedKeys: (close && close.keys) || [] };
   }
   return netResult;
 }
 
+// THE CHURCH'S OWN BOX GETS THE SAME BACKFILL (plan Part A, F8 — owner ruling 2026-11-22). A church restored onto
+// a new Suite box makes an EMPTY box the primary one: autoEnrolRelayNet signs it into the church's list with no
+// steward action, and until now nothing sent it the church's safeguarding documents — the same child-reads-as-
+// adult gap as an adopted relay, on the main box. So before every automatic enrolment the own box is sent the
+// documents (proved, targeted, answers read — _backfillSafeguardTo), and:
+//   · ENTERING — a WHOLE read of the church's relay-net document that does not name the own box's proved key (a
+//     new or restored box): the documents must LAND before it is signed. Not landed → not signed this pass, and
+//     the pass is not remembered as done, so the console's existing triggers try again.
+//   · ALREADY IN THE LIST — same key, so no new routing: best-effort only. (It still heals a box that kept its
+//     key and lost its data.)
+//   · CANNOT TELL — the relay-net read was not whole, or the own box proved no key: best-effort only, and the
+//     enrolment's own guards decide as before. That deliberately leaves the third-audit exception in place (a
+//     Suite whose shared relays are unreachable may still start its first list on its own box's answer); in THAT
+//     case this gate does not hold, because nothing that could be read says whether documents exist elsewhere.
+// Returns { proceed, entering, results }.
+async function _ownBoxBackfill(own) {
+  let ownKey = '';
+  try { const pr = await verifyRelayIdentity(own); ownKey = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { ownKey = ''; }
+  let entering = null;
+  if (/^[0-9a-f]{64}$/.test(ownKey)) {
+    try {
+      const read = await relayNetDoc();
+      if (_readCovers(read)) {
+        const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
+        const entries = mine ? parseRelayNet(mine.content) : [];
+        entering = !entries.some(e => String((e && e.pubkey) || '').toLowerCase() === ownKey);
+      }
+    } catch (e) { entering = null; }
+  }
+  let bf = null;
+  try { bf = await _backfillSafeguardTo(own); } catch (e) { bf = null; }
+  return { proceed: entering !== true || !!(bf && bf.landed), entering, landed: !!(bf && bf.landed), results: (bf && bf.results) || null, why: (bf && bf.why) || '' };
+}
 const _autoEnrolled = new Set();
+// The own-box gate's last answer, and when (F2): a pass that is tried again inside the damper window — because the
+// enrolment did not work, or the box was held — reuses that answer instead of proving, reading and sending again.
+let _ownGateLast = { key: '', at: 0, proceed: false, known: false };
+// THE OWN BOX CAN BE SIGNED WITHOUT ITS DOCUMENTS HAVING LANDED (F1, 2026-11-22) — it is already in the list, or
+// the list could not be read whole, so the gate lets the enrolment through on a best-effort send; that is the
+// restore-with-the-shared-relays-down case. Once the enrolment has WORKED the pass is remembered as done and never
+// runs again on this page, so the documents were only retried on the next page load. This set remembers
+// "church|box: signed or about to be, documents NOT landed", and the pass below re-runs just the backfill for it
+// on the console's signals (under the same ten-minute damper) until it lands. In memory only: a page load runs
+// the whole pass afresh anyway.
+const _ownOwed = new Set();
 async function autoEnrolRelayNet() {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
   const own = relayNetCandidates()[0] || '';
@@ -6622,8 +6946,43 @@ async function autoEnrolRelayNet() {
   // do. Keyed on the box alone, a pass that worked once never ran again on this page, and the church's list kept
   // the dead tunnel address until the console was reloaded (PR #7 audit, M-2).
   const key = pub + '|' + own + '|' + selfPublicRelay() + '|' + selfRelayName();
-  if (_autoEnrolled.has(key)) return null;
+  if (_autoEnrolled.has(key)) {
+    const _ok1 = pub + '|' + own;
+    if (_ownOwed.has(_ok1) && Date.now() - _ownGateLast.at >= BACKFILL_RETRY_MS) {
+      _ownGateLast = { key, at: Date.now(), proceed: true };
+      const _sk1 = sk, _pub1 = pub;
+      let _bf1 = null;
+      try { _bf1 = await _backfillSafeguardTo(own); } catch (e) { _bf1 = null; }
+      if (_bf1 && _bf1.landed && sk === _sk1 && pub === _pub1) _ownOwed.delete(_ok1);
+    }
+    return null;
+  }
   _autoEnrolled.add(key);
+  // F8: the own box is backfilled first, OUTSIDE the signing queue; a box that is ENTERING the list and did not
+  // take the child list is not signed this pass (see _ownBoxBackfill).
+  const _sk0 = sk, _pub0 = pub;
+  // FAIL-CLOSED SHAPE: only an explicit `proceed: true` lets the enrolment go on. A throw, or no answer at all, holds
+  // it (and the pass is not remembered as done). _ownBoxBackfill catches everything it calls, so this is not reachable
+  // today — it is the shape that stays safe if that ever stops being true.
+  // …AND DAMPED (F2): inside ten minutes of the last gate pass for this same (church, box, address, name) the
+  // answer is reused — a hold stays a hold, a go-ahead stays a go-ahead — and nothing is proved, read or sent.
+  // …BUT ONLY A GO-AHEAD THAT KNEW WHAT IT WAS SAYING IS REUSED (FF3, 2026-11-22). A go-ahead given because the
+  // relay-net read was not whole ("cannot tell whether this box is entering") is a best-effort answer about ONE
+  // moment. Reused, it let the next signal sign the box ungated after the read had become whole and the box WAS
+  // entering — with no child list landed. So a go-ahead is reused only when the documents landed or the box was
+  // known to be in the list already; a "cannot tell" go-ahead is spent by the one enrolment it allowed, and
+  // inside the window every further pass for that key is HELD, like a hold.
+  let _gate8 = null;
+  const _t8 = Date.now();
+  if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true && _ownGateLast.known === true, results: null, damped: true };
+  else {
+    try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
+    _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true), known: !!(_gate8 && (_gate8.landed === true || _gate8.entering === false)) };
+    // F1: what this pass learned about the own box's documents — owed until they land.
+    if (_gate8 && typeof _gate8.landed === 'boolean' && pub === _pub0) { if (_gate8.landed) _ownOwed.delete(pub + '|' + own); else _ownOwed.add(pub + '|' + own); }
+  }
+  if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) { _autoEnrolled.delete(key); return null; }
+  if (!_gate8 || _gate8.proceed !== true) { _autoEnrolled.delete(key); return { pending: true, ownBox: true, backfill: (_gate8 && _gate8.results) || null }; }
   let res = null;
   // `auto`: only this pass may start a first list on the own box's own answer (third audit, finding 1).
   try { res = await enrolSerial(() => enrolRelayNet({ auto: true })); } catch (e) { res = null; }
@@ -6779,6 +7138,11 @@ async function syncHeal() {
     // The merge. `wanted` is what THIS call means to change (the M-5 contract: the read-back asks whether
     // these are in the newest document, not whether a relay accepted the write).
     const keyOf = (e) => String((e && e.pubkey) || '').toLowerCase();
+    // BF2 (2026-11-22): a key this console still holds PENDING — a Remove whose tombstone has not landed, e.g.
+    // held because the own box could not prove its key — is refused on the ADD path exactly like a tombstoned
+    // one. Without this the console's own heal re-added the box it had just removed as soon as the box proved
+    // again. Add path only: a pending key already IN the doc is left to the Remove's own prune.
+    const pendingGone = new Set(_tombable(_pendingTomb()));
     const basesByKey = new Map();
     for (const r of probed) { const a = basesByKey.get(r.provedKey) || []; a.push(r.base); basesByKey.set(r.provedKey, a); }
     const entries = arr.map(e => ({ ...e }));
@@ -6794,7 +7158,7 @@ async function syncHeal() {
           cur.url = pubBase;
           wanted.push({ pubkey: p, url: pubBase });
         }
-      } else if (!tombAt.has(p) && pubBase) {
+      } else if (!tombAt.has(p) && !pendingGone.has(p) && pubBase) {
         entries.push({ pubkey: p, url: pubBase });
         wanted.push({ pubkey: p, url: pubBase });
       }
@@ -6866,6 +7230,8 @@ async function autoSyncHeal(opts) {
   const t = Date.now();
   if (!force && t - _syncHealLastAt < 600000) return { ran: false, debounced: true };
   _syncHealLastAt = t;
+  // B0: a Remove whose tombstone has not landed yet is retried here, BEFORE the heal reads the tombstones.
+  try { await _flushPendingTomb(); } catch (e) {}
   try { return await syncHeal(); } catch (e) { return { ran: false, unknown: true }; }
 }
 
@@ -6890,7 +7256,10 @@ function _clampPublicTarget(n) {
 // THE PER-CHURCH COMMUNITY CAP. The shipped canonical relay (a8) counts as ONE toward publicTarget (owner Q3), so the
 // COMMUNITY slice is the target minus the canonical pins. This is what makes the cap "LISTED, not answering": it is a
 // function of publicTarget and a ship-time constant only — no relay's online/answering state can change it, so an
-// outage can never open a slot. Only a steward Remove (which drops a box from `chosen`) frees one.
+// outage can never open a slot. Only a steward Remove frees one — and only since N2 (2026-11-22): before it,
+// Remove never touched `chosen`, and this line said it did. The drop is _dropChosen, called by
+// Steward.unsignRelay once the Remove has finished; a Remove that read partial, or whose prefs read was
+// inconclusive, leaves the entry (and the slot) in place.
 function _communityCap(publicTarget) {
   return Math.max(0, _clampPublicTarget(publicTarget) - CANONICAL_RELAYS.length);
 }
@@ -6975,6 +7344,30 @@ async function _writeRelayPrefs(mutate) {
   });
 }
 
+// A REMOVED BOX LEAVES `chosen` (N2, 2026-11-22). `chosen` is the per-church record of the community boxes the
+// auto-join adopted, and the cap counts it — so a Removed community box kept its cap slot for ever. Matched ONLY
+// by a key the Remove TOMBSTONED (BF1, 2026-11-22): a `chosen` key is itself a church-wide "do not auto-adopt",
+// so an entry leaves only when a tombstone has taken that job over. The address is not a match on its own — the
+// Remove looks the address up in `chosen` and tombstones the key it finds (unenrolRelayNet), which is how a dead
+// box recorded here by address still gets dropped. READ FIRST, and write ONLY when the
+// box is really there: the common Remove (a box the auto-join never chose, a church with no prefs doc) must not
+// start writing a prefs doc. An inconclusive read writes nothing — a stale `chosen` entry only costs a cap slot.
+// NEVER CALL THIS FROM INSIDE AN enrolSerial SLOT: _writeRelayPrefs enters the queue itself, and nesting it
+// deadlocks. Its one caller is Steward.unsignRelay's `.then`, after the Remove's slot has resolved.
+async function _dropChosen(url, keys) {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
+  const ks = new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)));
+  if (!ks.size) return { written: false, absent: true, nothingTombstoned: true };
+  const hit = (c) => !!c && ks.has(String(c.pubkey || '').toLowerCase());
+  const { prefs, complete } = await _readRelayPrefs();
+  if (!complete) return { written: false, unknown: true };
+  if (!prefs || !Array.isArray(prefs.chosen) || !prefs.chosen.some(hit)) return { written: false, absent: true };
+  const w = await _writeRelayPrefs(prev => ({ ...prev, chosen: (Array.isArray(prev && prev.chosen) ? prev.chosen : []).filter(c => !hit(c)) }));
+  // _writeRelayPrefs's own read-back asks whether what it WROTE is in the newest doc; a removal has to ask the
+  // opposite question, so it is asked here: `dropped` only when the newest doc no longer names the box.
+  return { ...w, dropped: !!(w && w.written && !((w.prefs && w.prefs.chosen) || []).some(hit)) };
+}
+
 // ── B2: THE AUTO-JOIN PASS (console, background, after syncHeal on the same triggers) ─────────────────────────
 async function autoJoinPublicRelays() {
   if (!sk || !pub) return { ran: false };
@@ -7025,14 +7418,24 @@ async function autoJoinPublicRelays() {
   if (moved()) return { ran: false, unknown: true };
   const have = new Set(relays());
   // Tombstoned keys: a box a steward Removed must not be auto-re-added (plan A2). Absent is normal.
-  let tombKeys = new Set();
-  try {
-    const t = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true);
-    const tev = (t && t.ev && t.ev.pubkey === pub) ? t.ev : null;
-    if (tev) { let ts = []; try { ts = JSON.parse(tev.content || '[]'); } catch (e) { ts = []; }
-      for (const x of (Array.isArray(ts) ? ts : [])) { const p = String((x && x.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) tombKeys.add(p); } }
-  } catch (e) {}
+  //
+  // …AND AN UNFINISHED READ IS NOT "NO TOMBSTONES" (B3, 2026-11-22; audit F4). This was a bare read in a
+  // swallowed try/catch with no completeness test: a relay still logging in, a timeout or a thrown read all
+  // came back as an empty set, the Removed box was re-adopted, and signRelay then cleared its tombstone — on a
+  // pass that is ON by default and that nobody pressed. Now the one removed-keys read (_removedKeysRead:
+  // authenticated, completeness-checked, plus this console's own pending set) — and when it is not complete
+  // every candidate MAY be tombstoned, so the pass adopts NOTHING and the next trigger tries again. The
+  // droppable set is the Remove path's own (the church-added extras, excused only when themselves unreachable):
+  // a tombstone is WRITTEN under that rule, so it can always be READ under it, and one dead old-tunnel row
+  // cannot switch auto-join off for ever.
+  const _kJ = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  let _droppJ = new Set();
+  try { _droppJ = new Set(extraRelays().map(_kJ)); } catch (e) { _droppJ = new Set(); }
+  let gone = null;
+  try { gone = await _removedKeysRead(_droppJ); } catch (e) { gone = null; }
   if (moved()) return { ran: false, unknown: true };
+  if (!gone || !gone.complete) return { ran: false, incomplete: true, removedUnknown: true };
+  const tombKeys = gone.keys;
   const name = _ownChurchName();
   const added = [], skipped = [];
   // (The loop's address is `addr`, not `url`, deliberately: the token `signRelay(url)` must not appear in the bundle
@@ -7061,8 +7464,19 @@ async function autoJoinPublicRelays() {
     //    any tombstone, fires the forced heal and republishes the authoritative 10002) + record in `chosen`.
     try { window.Steward.addRelay(addr); } catch (e) {}
     try { window.Steward.rememberRelayName((o && o.name) || '', addr, p); } catch (e) {}
-    try { await window.Steward.signRelay(addr); } catch (e) {}
+    let _sr = null;
+    try { _sr = await window.Steward.signRelay(addr); } catch (e) { _sr = null; }
     if (moved()) return { ran: false, unknown: true };
+    // ONLY A BOX THAT IS ACTUALLY SIGNED IN TAKES A SLOT (F5, 2026-11-22). signRelay can now answer `pending` (the
+    // box proved but has not accepted the church's safeguarding documents) or come back unsigned; this recorded the
+    // pick in the church-wide `chosen` set regardless, so a box that never landed held one of the church's cap
+    // slots on every console. It is left as it is on THIS console (an unsigned row; owed, if pending, and retried),
+    // counted by nobody, and the pass goes on to the next candidate.
+    // …BUT IT STILL USES UP ONE OF THIS PASS'S ATTEMPTS (FF2, 2026-11-22). Skipping it for free meant a pass with one
+    // slot to fill and a directory of boxes that all came back pending would register with, add and try to sign
+    // EVERY one of them. The deficit is the bound on how much one pass may do: an attempt that did not end signed
+    // in spends it for this pass (not in `chosen`, so not for the next one).
+    if (!_signedIn(_sr, addr)) { skipped.push([addr, (_sr && _sr.pending) ? 'pending' : 'unsigned']); have.add(addr); deficit--; continue; }
     chosen.push({ pubkey: p, url: addr, name: (o && o.name) || '' });
     chosenKeys.add(p); listedKeys.add(p); have.add(addr);
     added.push({ url: addr, pubkey: p });
@@ -7100,6 +7514,8 @@ async function autoJoinPublicRelaysAuto(opts) {
 // then — on the steward's retry — be gone from BOTH relay-net and the sync doc, so there is no key left to
 // tombstone and a peer console still listing it re-adds it for ever. The pruned keys are therefore persisted per
 // church (survives a reload) until their tombstone is confirmed present; the next Remove / retry flushes them.
+// B0 (2026-11-22): the set now also holds every key a Remove MEANS to tombstone, written before its first prune
+// publish (unenrolRelayNet), and the heal pass flushes it too (_flushPendingTomb) — see both.
 const TOMB_PENDING_LS = 'trinityone.steward.tomb-pending.';   // + pub: [hex pubkey, …] pruned from sync, not yet tombstoned
 function _pendingTomb() {
   if (!pub) return [];
@@ -7108,6 +7524,89 @@ function _pendingTomb() {
 function _setPendingTomb(keys) {
   if (!pub) return;
   try { const u = [...new Set((keys || []).map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)))]; lsSet(TOMB_PENDING_LS + pub, JSON.stringify(u)); } catch (e) {}
+}
+// WHICH KEYS MAY BE TOMBSTONED (B0, 2026-11-22). Never a SHARED relay key: the shared relays are where every
+// console finds the church's documents, a shared box can sit in the list under several addresses, and a
+// tombstone on its key would have every console refuse it at all of them. Never a key in `never` — the
+// console's own box. Returns the valid, de-duplicated remainder.
+function _tombable(keys, never) {
+  const shared = new Set(sharedRelayKeys());
+  const no = new Set([...(never || [])].map(p => String(p || '').toLowerCase()));
+  return [...new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
+}
+// WHICH KEYS HAS THIS CHURCH REMOVED — the read syncEnable (B1) and the community auto-join (B3) make before
+// they could put a box back (2026-11-22; audit F1/F4). syncHeal does NOT call this: it reads the tombstone doc
+// itself, in its own queue slot beside the sync doc (it needs each tombstone's `at`, which this discards), and
+// consults the pending set separately on its add path (BF2). The keys in the church's trinityone/relays-removed document, plus this console's own
+// pending set (a Remove whose tombstone has not landed yet is still a Remove). THREE-STATE, FAIL CLOSED:
+// `complete` is false unless every relay asked answered — bar the `droppable` addresses that are themselves
+// unreachable (_readCovers) — and a caller must treat "not complete" as "this box may have been removed".
+// Authenticated (privateDoc) like every other read of this document, so a relay still mid-login that may be
+// WITHHOLDING it is never counted as "answered: no tombstones". Absent + complete = no tombstones, which is normal.
+async function _removedKeysRead(droppable) {
+  const keys = new Set(_tombable(_pendingTomb()));
+  if (!pub) return { complete: false, keys };
+  let r = null;
+  try { r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true); } catch (e) { return { complete: false, keys }; }
+  if (!_readCovers(r, '', droppable || new Set())) return { complete: false, keys };
+  const ev = (r && r.ev && r.ev.pubkey === pub) ? r.ev : null;   // re-check the author: a relay need not honour the filter
+  if (ev) {
+    let ts = []; try { ts = JSON.parse(ev.content || '[]'); } catch (e) { ts = []; }
+    for (const t of (Array.isArray(ts) ? ts : [])) { const p = String((t && t.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) keys.add(p); }
+  }
+  return { complete: true, keys };
+}
+// syncHeal's droppable rule, for a caller that is not syncHeal: of the addresses a read will ask (relaysRaw()),
+// the ones that did NOT prove a key this pass may be excused from the full-answer rule — never a canonical
+// spelling, never the own box. `provedUrls`: the addresses that proved, in any spelling (normalised here).
+function _unprovedDroppable(provedUrls) {
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const provedAddrs = new Set([...(provedUrls || [])].map(_k));
+  const own = relayNetCandidates()[0] || '';
+  const out = new Set();
+  let asked = []; try { asked = relaysRaw(); } catch (e) { asked = []; }
+  for (const url of asked) {
+    const addr = _k(url);
+    if (provedAddrs.has(addr)) continue;
+    let canonical = false;
+    try { canonical = Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some(h => _k(h) === addr); } catch (e) { canonical = false; }
+    if (canonical) continue;
+    if (own && _k(own) === addr) continue;
+    out.add(addr);
+  }
+  return out;
+}
+// THE FLUSH ON THE HEAL PASS (B0, 2026-11-22). A Remove whose tombstone could not be written leaves its keys in
+// the pending set; before this only the NEXT REMOVE flushed them, and a steward who has removed the box has no
+// reason to press Remove again. autoSyncHeal calls this first, on the console's existing triggers. No pending
+// keys → returns at once: no probe, no read, no write. Otherwise: prove the own box's key OUTSIDE the queue
+// (never tombstoned; if the own box cannot say which key is its own, nothing is written this pass), then one
+// queue slot for _writeTombstone, with the same droppable set the Remove path uses (the church-added extras).
+// The keys leave the pending set only once the tombstone is confirmed present.
+async function _flushPendingTomb() {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { flushed: false };
+  if (!_pendingTomb().length) return { flushed: false, none: true };
+  const sk0 = sk, pub0 = pub;
+  const moved = () => (sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork());
+  const own = relayNetCandidates()[0] || '';
+  let ownKey = '';
+  if (own) { try { const proof = await verifyRelayIdentity(own); ownKey = String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { ownKey = ''; } }
+  if (moved()) return { flushed: false };
+  if (own && !/^[0-9a-f]{64}$/.test(ownKey)) return { flushed: false, held: true };
+  const _k0 = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  let droppable = new Set();
+  try { droppable = new Set(extraRelays().map(_k0)); } catch (e) { droppable = new Set(); }
+  return enrolSerial(async () => {
+    if (moved()) return { flushed: false };
+    const never = ownKey ? [ownKey] : [];
+    const add = _tombable(_pendingTomb(), never);   // read INSIDE the slot: a re-Add queued ahead may have withdrawn a key
+    const tomb = add.length ? await _writeTombstone({ add, droppable, sk0, pub0 }) : { wrote: false };
+    if (moved()) return { flushed: false };
+    if (tomb && (tomb.partial || tomb.skipped)) return { flushed: false, partial: true };
+    const done = new Set([...add, ..._pendingTomb().filter(p => !_tombable([p], never).length)]);
+    _setPendingTomb(_pendingTomb().filter(p => !done.has(p)));
+    return { flushed: true, keys: add };
+  });
 }
 
 // ── THE TOMBSTONE WRITER (plan A2) ──────────────────────────────────────────────────────────────────────
@@ -7184,7 +7683,11 @@ async function _writeTombstone(opts) {
 // Called from unenrolRelayNet's EXISTING queue slot (NEVER a nested enrolSerial — that deadlocks). After the
 // box is out of the admission list (relay-net), this re-signs trinityone/relays WITHOUT its key — the actual
 // security fix: the key's full-corpus pull rights on every peer holding the doc are pruned — and writes the
-// tombstone so no other console's additive heal can put it back. Same completeness discipline as the relay-net
+// tombstone (for EVERY church, sync doc or none — B0, 2026-11-22). WHAT THE TOMBSTONE DOES, exactly: once it has
+// landed, a console running this build will not put the key back by syncHeal, by syncEnable (the toggle and the
+// boot-time default-on) or by the community auto-join. WHAT IT DOES NOT DO: stop a deliberate Add/Connect of that
+// address (which clears it, by design); bind a console on an older build; or bind any console before it has
+// landed — until then the keys are only in THIS console's pending set. Same completeness discipline as the relay-net
 // removal (the `leaving` box + the `droppable` unreachable extras, so a DEAD or SEIZED box can still be
 // removed — audit finding 4), the same M-5 read-back / ≤2-repair loop, and the same aborts as syncHeal: an
 // ABSENT or `[]` read-back is a racing Turn-off (or delete) and the key holds no trust either way, so it
@@ -7205,10 +7708,11 @@ async function _closeSyncTrust(opts) {
   if (moved()) return { partial: true };
   if (!_readCovers(read, u, droppable)) return { partial: true };
   const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
-  // No sync doc at all → the church never granted sync trust: nothing to close, and nothing to tombstone (a
-  // church that does not self-host must stay exactly as it was — an ordinary Remove adds no new writes).
-  if (!mine) return { closed: false, tombstoned: false };
-  let arr = null; try { arr = JSON.parse(mine.content || '[]'); } catch (e) { arr = null; }
+  // No sync doc at all → the church never granted sync trust, so there is nothing to CLOSE and no sync doc is
+  // ever written for it. The TOMBSTONE below is still written (B0, 2026-11-22): sync-off is the DEFAULT church,
+  // and a later syncEnable, another console's heal or the community auto-join can only refuse a Removed box if
+  // its removal was recorded.
+  let arr = []; if (mine) { try { arr = JSON.parse(mine.content || '[]'); } catch (e) { arr = null; } }
   if (!Array.isArray(arr)) return { partial: true };
   // Every sync entry naming the removed box — by key, or by the address it is listed under — carries a key we
   // must also tombstone, so even a box listed only by url (identity unprovable because it is dead) is pruned.
@@ -7245,8 +7749,8 @@ async function _closeSyncTrust(opts) {
       floorAt = (Number(newest.created_at) || 0) + 1;
     }
   }
-  // The tombstone: written whenever the church has a sync doc, so a later re-enable or another console's heal
-  // cannot re-admit the box, even if THIS console's own sync copy did not happen to name it.
+  // The tombstone: written for every church (B0), even if THIS console's own sync copy did not happen to name
+  // the box. What it stops, and what it does not, is stated once in the header above.
   //
   // FIX 2 — the invariant: a key PRUNED from the sync doc is ALWAYS tombstoned, even across a partial op + a
   // retry. Once the prune has landed (`closed`), the box may be gone from BOTH relay-net and the sync doc on
@@ -7254,14 +7758,24 @@ async function _closeSyncTrust(opts) {
   // the pruned keys BEFORE the write so a retry (or the next Remove) still flushes them; carry forward any
   // earlier op's un-landed keys; clear them only once the tombstone is confirmed present. (_writeTombstone drops
   // a key from this pending set whenever it is un-tombstoned, so a box the steward re-Adds is never re-tombstoned.)
-  const pending = new Set(_pendingTomb());
-  if (closed) for (const k of removedKeys) pending.add(k);
-  const addKeys = [...new Set([...removedKeys, ...pending])];
-  if (closed) _setPendingTomb([...pending]);
+  //
+  // B0 (2026-11-22): UNCONDITIONAL — written whether or not the church has a sync doc, and for every key this
+  // Remove names, not only one it just pruned. Never a shared relay key, never the own box's key (`never`);
+  // `skipTomb` (the address IS the own box) writes nothing, and `holdTomb` (the own box could not say which key
+  // is its own) persists the keys and reports partial instead of writing.
+  if (o.skipTomb) return { closed, tombstoned: false, keys: [] };
+  const never = [...(o.never || [])];
+  const mineKeys = _tombable(removedKeys, never);
+  const pendingNow = _pendingTomb();
+  if (mineKeys.some(k => !pendingNow.includes(k))) _setPendingTomb([...pendingNow, ...mineKeys]);   // BEFORE the write
+  if (o.holdTomb) return { partial: true, closed };
+  const addKeys = _tombable([...mineKeys, ...pendingNow], never);
   const tomb = await _writeTombstone({ add: addKeys, leaving: u, droppable, sk0, pub0 });
-  if (tomb && tomb.partial) return { partial: true, closed };   // pruned keys stay persisted → a retry writes the tombstone
-  _setPendingTomb(_pendingTomb().filter(p => !addKeys.includes(p)));   // tombstone confirmed present → safe to clear
-  return { closed, tombstoned: !!(tomb && tomb.wrote) };
+  if (tomb && (tomb.partial || tomb.skipped)) return { partial: true, closed };   // keys stay persisted → a retry or the next heal pass writes the tombstone
+  // tombstone confirmed present → safe to clear (and a key that may never be tombstoned leaves the set with it)
+  const done = new Set([...addKeys, ..._pendingTomb().filter(p => !_tombable([p], never).length)]);
+  _setPendingTomb(_pendingTomb().filter(p => !done.has(p)));
+  return { closed, tombstoned: !!(tomb && tomb.wrote), keys: mineKeys };
 }
 
 // ── STEP 1: USE THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ──────────────────────────────────────────────
@@ -7797,12 +8311,9 @@ async function adoptNetDocAddresses() {
       let now = []; try { now = extraRelays(); } catch (err) { now = []; }
       if (!now.includes(stale) || now.includes(u)) continue;
       _writeExtraRelays(now.map(r => (r === stale ? u : r)));
-      // SAFEGUARDING BACKFILL (mirrors addRelay): this swap writes `extraRelays()` directly, bypassing addRelay, so
-      // the box swapped in holds none of the church's minors:/approved:/guardians:/blocked: docs and fails OPEN.
-      // `u` is a genuinely NEW address here (the guard above `continue`d if it was already in the store, and `stale`
-      // is), so re-send the four owner-signed docs, verbatim and targeted, to it. The non-stale branch below adopts
-      // through addRelay, which backfills itself.
-      try { _backfillSafeguardTo([u]); } catch (e) {}
+      // SAFEGUARDING BACKFILL, BEST-EFFORT AND AWAITED (A6): the same box (its key was just proved against the
+      // church's signed entry) at a new address — see refreshNamedRelays. The outcome does not block the swap.
+      try { await _backfillSafeguardTo(u); } catch (err) {}
       setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
       _rememberAdoptedName(e, u, proved);
       added.push(u);
@@ -7810,7 +8321,13 @@ async function adoptNetDocAddresses() {
     }
     if (_alreadyACandidate(u)) continue;     // something else added it while we waited
     let ok = false; try { ok = !!window.Steward.addRelay(u); } catch (err) { ok = false; }
-    if (ok) { _tagAdopted(u); _rememberAdoptedName(e, u, proved); added.push(u); }
+    if (ok) {
+      _tagAdopted(u); _rememberAdoptedName(e, u, proved); added.push(u);
+      // …AND THE SAME FOR AN ADDRESS THIS CONSOLE IS ONLY NOW LEARNING (A6). The box is already in the church's
+      // signed list — another console signed it, after its own backfill — so this creates no new routing either;
+      // addRelay no longer sends anything (A1), so the best-effort send is made here.
+      try { await _backfillSafeguardTo(u); } catch (err) {}
+    }
   }
   return added;
 }
@@ -9943,10 +10460,16 @@ window.Steward = {
   // proved box into the sync-trust doc. Fired AFTER the enrol queue slot resolves (never from inside it —
   // the no-nesting rule), forced past the 10-minute damper because a steward just acted, and swallowed on
   // failure: the next trigger retries, and signRelay's own result is unchanged either way.
+  //
+  // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
+  // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
+  // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
+  // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
+  // retryOwedBackfills.
   signRelay(url) {
     const u = normRelay(url);
     if (!u) return Promise.resolve(null);
-    const p = enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    const p = _adoptRelay(u);
     p.then((r) => {
       try {
         if (r && !r.unknown && (r.published || ((r.proven || []).length > 0))) {
@@ -9956,7 +10479,16 @@ window.Steward = {
           // runs AFTER the enrol slot resolved, never nested), and the forced heal is chained after it so the
           // heal reads a tombstone that no longer names the box. Swallowed on failure like the heal itself: the
           // next deliberate Add retries, and signRelay's own result is unchanged.
-          const keys = (r.proven || []).map(x => String((x && x.pubkey) || '').toLowerCase()).filter(k => /^[0-9a-f]{64}$/.test(k));
+          //
+          // ONLY THE ADDRESS BEING ADDED (B2, 2026-11-22; audit F3). `r.proven` is EVERYTHING the enrol proved —
+          // the box serving this console as well as the relay just added — and this used to clear all of it. So
+          // when another console had Removed THIS console's box, any later Add here (and B2 auto-join calls
+          // signRelay with no click at all) silently cleared that tombstone and the chained heal re-trusted the
+          // box. Now: only a key proved AT the address the steward added, and never a shared relay's key.
+          const _kAdd = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+          const _sharedAdd = new Set(sharedRelayKeys());
+          const keys = [...new Set((r.proven || []).filter(x => x && _kAdd(x.url) === _kAdd(u))
+            .map(x => String((x && x.pubkey) || '').toLowerCase()).filter(k => /^[0-9a-f]{64}$/.test(k) && !_sharedAdd.has(k)))];
           // FIX 1 (plan A2): give the un-tombstone the SAME droppable set unenrolRelayNet / _closeSyncTrust use —
           // the normalised church-added extras — so one UNREACHABLE extra relay cannot make _writeTombstone's read
           // incomplete and leave the box the steward just PROVED still tombstoned (the forced heal below would then
@@ -9987,6 +10519,10 @@ window.Steward = {
   // 10-minute damper, `{ force: true }` to bypass it once.
   syncHeal: () => syncHeal(),
   autoSyncHeal,
+  // The boxes a steward consented to whose safeguarding documents have not landed yet (A2) — tried again on the
+  // console's churn signals. `owedRelays` is the list for this church, for a screen that wants to say "waiting".
+  retryOwedRelays: (opts) => retryOwedBackfills(opts),
+  owedRelays: () => (pub ? _owedBackfills().filter(e => e.churchPub === pub).map(e => e.url) : []),
   // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
   //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
   //    through the same Auto-find mechanics. SAFEGUARDING NOTE (plan finding 18): a community operator sees only
@@ -10020,8 +10556,20 @@ window.Steward = {
   // / unknown / own-box refusal changed nothing to advertise. Built church-wide from the relay-net doc this
   // removal just re-signed; fire-and-forget, swallowed on failure like the heal.
   unsignRelay(url) {
+    // FF1 (2026-11-22): a Remove ends any OWED state for that address, whatever the Remove itself then answers —
+    // an owed marker is consent to connect, and pressing Remove is that consent withdrawn.
+    try { const _uo = normRelay(url); if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false); } catch (e) {}
     const p = enrolSerial(() => unenrolRelayNet(url));
-    p.then((r) => { try { if (r && r.removed === true) { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } } catch (e) {} }, () => {});
+    // BF3 (2026-11-22): …or `pruned` — the relay-net prune landed but the sync-tombstone step was partial, so the
+    // result says removed:false. The 10002 is what member phones route by; it must not wait on the tombstone.
+    p.then((r) => { try { if (r && (r.removed === true || r.pruned === true)) { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } } catch (e) {} }, () => {});
+    // N2 (2026-11-22): …and a Removed box leaves the community `chosen` set, freeing its cap slot. Here, in the
+    // `.then` — AFTER the Remove's queue slot has resolved — because _dropChosen's write enters enrolSerial itself
+    // and would deadlock if it ran inside unenrolRelayNet. Only when the Remove FINISHED: the box is out of the
+    // list (`removed`) or was never in it (`notListed`), and its tombstone step was not partial — `chosen` is one
+    // of the things that stops the auto-join re-adopting a box, so it is not dropped while the tombstone that
+    // replaces it has not landed. Fire-and-forget, swallowed on failure like the publish above.
+    p.then((r) => { try { if (r && (r.removed === true || r.notListed === true) && !r.syncPartial) { const dc = _dropChosen(url, r.removedKeys || []); if (dc && dc.catch) dc.catch(() => {}); } } catch (e) {} }, () => {});
     return p;
   },
 
@@ -10402,10 +10950,23 @@ window.Steward = {
     // half above (relayIdentities — one identity proof per relay, seconds each) deliberately runs BEFORE
     // entering the queue, so a slow probe never starves every other signing (the enrol no-nesting rule:
     // nothing already inside the queue may await enrolSerial again — that deadlocks it).
+    //
+    // A REMOVED BOX IS NOT SIGNED BACK IN (B1, 2026-11-22; audit F1). This signed the snapshot above and never
+    // read trinityone/relays-removed, so a second owner console still listing a Removed box re-trusted it — and
+    // because the new doc is stamped after the tombstone, no later heal pruned it again. The tombstones are read
+    // INSIDE the queue slot (as syncHeal reads them), so no Remove can land between the check and the signing;
+    // every tombstoned key and every key this console still holds pending is dropped before signing. An
+    // incomplete read REFUSES to enable (fail closed): the same droppable rule as syncHeal, computed from the
+    // proofs relayIdentities just took, so one dead church-added row cannot block the switch for ever.
+    const _droppE = _unprovedDroppable(ids.filter(r => /^[0-9a-f]{64}$/.test(String(r.pubkey || '').toLowerCase())).map(r => r.url));
     return enrolSerial(async () => {
-      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }), sk));
+      const gone = await _removedKeysRead(_droppE);
+      if (!gone.complete) throw new Error('Sync could not be switched on — not all of your relays answered, so the list of relays you have removed could not be checked. Nothing is mirroring yet; try again.');
+      const signing = trusted.filter(t => !gone.keys.has(String(t.pubkey || '').toLowerCase()));
+      if (signing.length < 2) throw new Error('Sync needs at least two separate TrinityOne relays — a relay you have removed does not count. Add another the church runs.');
+      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(signing) }), sk));
       if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
-      return { relays: trusted.length };
+      return { relays: signing.length };
     });
   },
   // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
@@ -11284,8 +11845,9 @@ window.Steward = {
   //  · url-less relay-net entries are excluded (`url` is optional in that doc; a pubkey with no dialable wss
   //    address is nothing a member could put in an `r` tag).
   // CALLERS (rule 2): refreshNamedRelays (tunnel move), connectFoundRelays + autoPickRelays (Auto-find), and
-  // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). B2 adoption will
-  // add its own call when Work Item B is built; the source list stays the signed doc so B only widens it.
+  // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). The community
+  // auto-join (autoJoinPublicRelays, plan B2 — BUILT; this said "will add its own call when built") calls it once
+  // more after a pass that adopted something, on top of the call each pick's signRelay makes.
   async publishRelayList() {
     if (!sk || actingChurch || _viewingNetwork()) return null;
     const read = await relayNetDoc();
@@ -18597,14 +19159,11 @@ window.Steward = {
     // only place it can clear. Without it an address removed once could never be adopted again, and a
     // steward who re-added it by hand would be the only thing holding it in the list.
     undeclineRelay(url);
-    // SAFEGUARDING BACKFILL: this box is now in the publish set (relaysRaw() -> extraRelays()), so send it the
-    // church's current safeguarding/authority documents — minors:/approved:/guardians:/blocked: — before church
-    // traffic routes to it, or it fails OPEN where the church's own box refuses. addRelay is the one writer every
-    // adopt path (manual Add/Connect, Auto-find, B2 auto-join) passes through, so the backstop can never be skipped
-    // by one of them; reached only when the box is genuinely NEW (the own/shared/duplicate guards returned above).
-    // Fire-and-forget and targeted; see _backfillSafeguardTo. The reads are async, so a small ordering window
-    // remains (the app-side audience choice is still primary — this is the relay-side backstop).
-    try { _backfillSafeguardTo([url]); } catch (e) {}
+    // NOTHING IS PUBLISHED FROM HERE (A1, 2026-11-22). This used to fire the safeguarding backfill the moment an
+    // address was WRITTEN DOWN — on the two typed-address paths that is before anything has proved the address is
+    // a relay of ours, so a typo or a pasted hostile address was sent the church's child list (audit H1). Recording
+    // an address and sending a box the church's documents are two different acts: this is the first only. The
+    // second belongs to the step that proves the box and makes it a routing target (Steward.signRelay).
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },
@@ -18724,11 +19283,20 @@ window.Steward = {
     if ((picks || []).length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks || [];
   },
+  // A5 (plan Part A, 2026-11-22). NO SCREEN CALLS THIS — the Auto-find card uses findRelays + connectFoundRelays and
+  // signs each pick itself; this one-step form is reachable from scripts and devtools only (and ci/ui-smoke-eval.js
+  // checks it exists). It added the picks and republished the relay list WITHOUT ever going through signRelay, so it
+  // was an adopt path with no identity-proof-then-backfill step at all. It now goes through the same choke point as
+  // every other adopt path: each pick is handed to Steward.signRelay, which proves it, sends it the church's
+  // safeguarding documents, and signs it only if they landed (otherwise the pick is left owed, not signed).
   async autoPickRelays(n) {
     const offers = await discoverRelayOffers(null, null);
     const have = new Set(relays());
     const picks = pickRelays(offers.filter(o => !have.has(o.url)), n || 2);
-    for (const p of picks) { try { window.Steward.addRelay(p.url); } catch (e) {} }
+    for (const p of picks) {
+      try { window.Steward.addRelay(p.url); } catch (e) {}
+      try { await window.Steward.signRelay(p.url); } catch (e) {}
+    }
     if (picks.length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks;
   },

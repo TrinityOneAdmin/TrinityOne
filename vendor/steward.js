@@ -17105,9 +17105,11 @@ zoo`.split("\n");
     if (changed) {
       _writeExtraRelays(extra);
       setNamedRelays(named);
-      try {
-        _backfillSafeguardTo(swappedIn);
-      } catch (e) {
+      for (const _sw of swappedIn) {
+        try {
+          await _backfillSafeguardTo(_sw);
+        } catch (e) {
+        }
       }
       try {
         if (window.Steward && window.Steward.publishRelayList) window.Steward.publishRelayList();
@@ -20301,29 +20303,260 @@ zoo`.split("\n");
   function relayNetDoc() {
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
-  async function _backfillSafeguardTo(urls) {
+  var BACKFILL_SEND_MS = 8e3;
+  async function _backfillSafeguardTo(target) {
+    const u = String(target || "");
+    if (!/^wss?:\/\//i.test(u)) return { landed: false, why: "no-target" };
+    if (!sk || !pub) return { landed: false, why: "locked" };
+    if (actingChurch || _viewingNetwork()) return { landed: false, why: "not-own-console" };
+    const cp = pub, sk0 = sk;
+    const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
+    let admitted = false;
     try {
-      if (!sk || !pub || actingChurch || _viewingNetwork()) return;
-      const targets = [...new Set((urls || []).map((u) => String(u || "")).filter((u) => /^wss?:\/\//i.test(u)))];
-      if (!targets.length) return;
-      const cp = pub;
-      const ds = [MINORS_D + cp, APPROVED_D + cp, GUARDIANS_D + cp, BLOCKED_D + cp];
-      await Promise.all(ds.map(async (d) => {
-        let ev = null;
-        try {
-          const r = await _oneComplete([{ kinds: [30078], authors: [cp], "#d": [d] }]);
-          ev = r && r.ev && r.ev.pubkey === cp ? r.ev : null;
-        } catch (e) {
-          ev = null;
+      admitted = !!await admitRemoteRelay(u);
+    } catch (e) {
+      admitted = false;
+    }
+    if (moved()) return { landed: false, why: "changed" };
+    if (!admitted) return { landed: false, why: "unproven" };
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const proved = [];
+    let asked = [];
+    try {
+      asked = relaysRaw();
+    } catch (e) {
+      asked = [];
+    }
+    await Promise.all(asked.filter((x) => _k(x) !== _k(u)).map(async (x) => {
+      try {
+        const pr = await verifyRelayIdentity(x);
+        if (/^[0-9a-f]{64}$/.test(String(pr && pr.relayPub || "").toLowerCase())) proved.push(x);
+      } catch (e) {
+      }
+    }));
+    if (moved()) return { landed: false, why: "changed" };
+    const droppable = _unprovedDroppable(proved);
+    const readDoc = async (d) => {
+      let r = null;
+      try {
+        r = await _oneComplete([{ kinds: [30078], authors: [cp], "#d": [d] }], 6e3, true);
+      } catch (e) {
+        return { ev: null, whole: false };
+      }
+      if (r && r.ev && r.ev.pubkey !== cp) return { ev: null, whole: false };
+      return { ev: r && r.ev ? r.ev : null, whole: _readCovers(r, u, droppable) };
+    };
+    const sendDoc = async (ev) => {
+      let _t = null;
+      try {
+        const v = await Promise.race([pool.publish([u], ev)[0], new Promise((_, rej) => {
+          _t = setTimeout(() => rej(new Error("timeout: no answer from the relay")), BACKFILL_SEND_MS);
+        })]);
+        if (_t) {
+          clearTimeout(_t);
+          _t = null;
         }
-        if (!ev || pub !== cp) return;
-        try {
-          pool.publish(targets, ev);
-        } catch (e) {
+        if (typeof v === "string" && v.startsWith("connection failure")) return "failed";
+        return "landed";
+      } catch (e) {
+        if (_t) {
+          clearTimeout(_t);
+          _t = null;
         }
-      }));
+        const m = String(e && e.message || e || "");
+        return /newer version/i.test(m) ? "landed" : "refused: " + m;
+      }
+    };
+    const carry = async (got2) => {
+      if (!got2.whole) {
+        if (got2.ev) {
+          try {
+            await sendDoc(got2.ev);
+          } catch (e) {
+          }
+        }
+        return "unread";
+      }
+      if (!got2.ev) return "absent";
+      return sendDoc(got2.ev);
+    };
+    const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+    const got = {};
+    await Promise.all(Object.keys(ds).map(async (k) => {
+      got[k] = await readDoc(ds[k]);
+    }));
+    if (moved()) return { landed: false, why: "changed" };
+    const results = {};
+    results.minors = await carry(got.minors);
+    if (moved()) return { landed: false, why: "changed", results };
+    results.blocked = await carry(got.blocked);
+    for (const k of ["approved", "guardians", "nophoto"]) {
+      if (moved()) return { landed: false, why: "changed", results };
+      try {
+        results[k] = await carry(got[k]);
+      } catch (e) {
+        results[k] = "failed";
+      }
+    }
+    const ok = (x) => x === "landed" || x === "absent";
+    const landed = ok(results.minors) && ok(results.blocked);
+    return { landed, why: landed ? "" : "not-landed", results };
+  }
+  var BACKFILL_OWED_LS = "trinityone.steward.backfill-owed";
+  function _owedBackfills() {
+    try {
+      const a = JSON.parse(lsGet(BACKFILL_OWED_LS) || "[]");
+      return Array.isArray(a) ? a.filter((e) => e && /^[0-9a-f]{64}$/.test(String(e.churchPub || "")) && typeof e.url === "string" && /^wss?:\/\//i.test(e.url)).map((e) => ({ churchPub: e.churchPub, url: e.url })) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function _setOwedBackfill(cp, url, on) {
+    try {
+      const rest = _owedBackfills().filter((e) => !(e.churchPub === cp && e.url === url));
+      if (on) rest.push({ churchPub: cp, url });
+      lsSet(BACKFILL_OWED_LS, JSON.stringify(rest));
     } catch (e) {
     }
+  }
+  async function _adoptRelay(u) {
+    if (!sk || !pub) throw new Error("No church key on this device");
+    if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    const cp = pub, sk0 = sk;
+    const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
+    const bf = await _backfillSafeguardTo(u);
+    if (moved() || bf && bf.why === "changed") return { published: false, unknown: true, changed: true };
+    if (bf && bf.why === "unproven") return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
+    if (!bf || !bf.landed) {
+      _setOwedBackfill(cp, u, true);
+      return { pending: true, url: u, backfill: bf && bf.results || null };
+    }
+    _setOwedBackfill(cp, u, true);
+    const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
+    return r;
+  }
+  function _signedIn(r, u) {
+    if (!r || r.unknown || r.skipped || r.pending) return false;
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const p = (r.proven || []).find((x) => x && _k(x.url) === _k(u));
+    if (!p) return false;
+    if (p.shared) return true;
+    const key = String(p.pubkey || "").toLowerCase();
+    const named = (r.entries || []).some((e) => String(e && e.pubkey || "").toLowerCase() === key);
+    return named && (r.published === true || r.full === true);
+  }
+  var BACKFILL_RETRY_MS = 6e5;
+  var _owedRetrying = false;
+  var _owedRetryLastAt = 0;
+  async function retryOwedBackfills(opts) {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+    if (_owedRetrying) return { ran: false, busy: true };
+    const cp = pub;
+    const mine = _owedBackfills().filter((e) => e.churchPub === cp);
+    if (!mine.length) return { ran: false, none: true };
+    const _now = Date.now();
+    if (!(opts && opts.force) && _now - _owedRetryLastAt < BACKFILL_RETRY_MS) return { ran: false, debounced: true };
+    _owedRetryLastAt = _now;
+    _owedRetrying = true;
+    const rows = [];
+    try {
+      let _listed0 = [];
+      try {
+        _listed0 = extraRelays();
+      } catch (x) {
+        _listed0 = [];
+      }
+      const todo = [];
+      for (const e of mine) {
+        if (_listed0.includes(e.url)) todo.push(e);
+        else {
+          _setOwedBackfill(cp, e.url, false);
+          rows.push({ url: e.url, withdrawn: true });
+        }
+      }
+      if (!todo.length) return { ran: true, rows };
+      const _kR = (x) => {
+        try {
+          return normalizeURL2(x);
+        } catch (e) {
+          return String(x || "");
+        }
+      };
+      let _droppR = /* @__PURE__ */ new Set();
+      try {
+        _droppR = new Set(extraRelays().map(_kR));
+      } catch (x) {
+        _droppR = /* @__PURE__ */ new Set();
+      }
+      let gone = null;
+      try {
+        gone = await _removedKeysRead(_droppR);
+      } catch (x) {
+        gone = null;
+      }
+      if (!gone || !gone.complete) return { ran: true, removedUnknown: true, rows };
+      for (const e of todo) {
+        if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+        let listed = [];
+        try {
+          listed = extraRelays();
+        } catch (x) {
+          listed = [];
+        }
+        if (!listed.includes(e.url)) {
+          _setOwedBackfill(cp, e.url, false);
+          rows.push({ url: e.url, withdrawn: true });
+          continue;
+        }
+        let key = "";
+        try {
+          const pr = await verifyRelayIdentity(e.url);
+          key = String(pr && pr.relayPub || "").toLowerCase();
+        } catch (x) {
+          key = "";
+        }
+        if (!/^[0-9a-f]{64}$/.test(key)) {
+          try {
+            key = String(_gate.provedKey(e.url, cp) || "").toLowerCase();
+          } catch (x) {
+            key = "";
+          }
+        }
+        if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+        if (!/^[0-9a-f]{64}$/.test(key)) {
+          rows.push({ url: e.url, unproven: true });
+          continue;
+        }
+        if (gone.keys.has(key)) {
+          _setOwedBackfill(cp, e.url, false);
+          rows.push({ url: e.url, removed: true });
+          continue;
+        }
+        let r = null;
+        try {
+          r = await window.Steward.signRelay(e.url);
+        } catch (x) {
+          r = null;
+        }
+        rows.push({ url: e.url, pending: !!(r && r.pending), signed: _signedIn(r, e.url) });
+      }
+    } finally {
+      _owedRetrying = false;
+    }
+    return { ran: true, rows };
   }
   async function relayNetEntries(cp) {
     if (!pub || cp && cp !== pub) return [];
@@ -20429,6 +20662,7 @@ zoo`.split("\n");
         if (hint && cur.url !== hint) cur.url = hint;
         if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
       } else {
+        if (isOwn && !o.auto && Array.isArray(o.extra) && o.extra.length > 0) continue;
         const e = { pubkey: p, alwaysOn: true, url: hint };
         if (_RELAY_NAME_RE.test(nm)) e.name = nm;
         entries.push(e);
@@ -20526,6 +20760,15 @@ zoo`.split("\n");
     }
     let pk = "";
     let _droppedNet = [];
+    let _own = "", _ownKey = "", _ownResolved = false, _opPending = [];
+    const keyAt0 = async (x) => {
+      try {
+        const proof = await verifyRelayIdentity(x);
+        return String(proof && proof.relayPub || "").toLowerCase();
+      } catch (e) {
+        return "";
+      }
+    };
     const netResult = await (async () => {
       const read = await relayNetDoc();
       const { ev: existing } = read;
@@ -20558,6 +20801,15 @@ zoo`.split("\n");
       if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
       const keep = entries.filter((e) => !drop.includes(e));
       if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      _own = own;
+      _ownKey = ownKey;
+      _ownResolved = true;
+      {
+        const mark = _tombable([pk, ...drop.map((e) => e && e.pubkey)], [ownKey]);
+        const before = _pendingTomb();
+        _opPending = mark.filter((p) => !before.includes(p));
+        if (_opPending.length) _setPendingTomb([...before, ...mark]);
+      }
       const isDropped = (e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u);
       let list = keep, floorAt = 0, repairs = 0;
       for (; ; ) {
@@ -20571,7 +20823,10 @@ zoo`.split("\n");
         if (!still.length) return { removed: true, entries: found, repaired: repairs };
         if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
         if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-        if (still.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+        if (still.some((e) => ownKey && e.pubkey === ownKey)) {
+          if (_opPending.length) _setPendingTomb(_pendingTomb().filter((p) => !_opPending.includes(p)));
+          return { removed: false, ownBox: true };
+        }
         repairs++;
         list = found.filter((e) => !isDropped(e));
         floorAt = newest ? (newest.created_at || 0) + 1 : 0;
@@ -20584,23 +20839,116 @@ zoo`.split("\n");
         const p = String(e && e.pubkey || "").toLowerCase();
         if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
       }
-      const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0 });
-      if (close && close.partial) {
-        return { removed: false, unknown: true, syncPartial: true };
+      if (!_ownResolved) {
+        _own = relayNetCandidates()[0] || "";
+        _ownKey = !_own ? "" : _k0(_own) === _k0(u) ? pk : await keyAt0(_own);
+        if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
       }
-      return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned) };
+      {
+        const pr = await _readRelayPrefs();
+        if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+        const ch = pr && pr.complete && pr.prefs && Array.isArray(pr.prefs.chosen) ? pr.prefs.chosen : [];
+        for (const c of ch) {
+          if (!c || !c.url || _k0(c.url) !== _k0(u)) continue;
+          const p = String(c.pubkey || "").toLowerCase();
+          if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
+        }
+      }
+      const close = await _closeSyncTrust({
+        removedKeys,
+        u,
+        droppable: _droppable,
+        sk0,
+        pub0,
+        never: _ownKey ? [_ownKey] : [],
+        skipTomb: !!_own && _k0(_own) === _k0(u),
+        holdTomb: !!_own && !_ownKey
+      });
+      if (close && close.partial) {
+        return { removed: false, unknown: true, syncPartial: true, pruned: netResult.removed === true };
+      }
+      return { ...netResult, syncClosed: !!(close && close.closed), tombstoned: !!(close && close.tombstoned), removedKeys: close && close.keys || [] };
     }
     return netResult;
   }
+  async function _ownBoxBackfill(own) {
+    let ownKey = "";
+    try {
+      const pr = await verifyRelayIdentity(own);
+      ownKey = String(pr && pr.relayPub || "").toLowerCase();
+    } catch (e) {
+      ownKey = "";
+    }
+    let entering = null;
+    if (/^[0-9a-f]{64}$/.test(ownKey)) {
+      try {
+        const read = await relayNetDoc();
+        if (_readCovers(read)) {
+          const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
+          const entries = mine ? parseRelayNet(mine.content) : [];
+          entering = !entries.some((e) => String(e && e.pubkey || "").toLowerCase() === ownKey);
+        }
+      } catch (e) {
+        entering = null;
+      }
+    }
+    let bf = null;
+    try {
+      bf = await _backfillSafeguardTo(own);
+    } catch (e) {
+      bf = null;
+    }
+    return { proceed: entering !== true || !!(bf && bf.landed), entering, landed: !!(bf && bf.landed), results: bf && bf.results || null, why: bf && bf.why || "" };
+  }
   var _autoEnrolled = /* @__PURE__ */ new Set();
+  var _ownGateLast = { key: "", at: 0, proceed: false, known: false };
+  var _ownOwed = /* @__PURE__ */ new Set();
   async function autoEnrolRelayNet() {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
     const own = relayNetCandidates()[0] || "";
     if (!own) return null;
     if (_boxHostsUs !== true) return null;
     const key = pub + "|" + own + "|" + selfPublicRelay() + "|" + selfRelayName();
-    if (_autoEnrolled.has(key)) return null;
+    if (_autoEnrolled.has(key)) {
+      const _ok1 = pub + "|" + own;
+      if (_ownOwed.has(_ok1) && Date.now() - _ownGateLast.at >= BACKFILL_RETRY_MS) {
+        _ownGateLast = { key, at: Date.now(), proceed: true };
+        const _sk1 = sk, _pub1 = pub;
+        let _bf1 = null;
+        try {
+          _bf1 = await _backfillSafeguardTo(own);
+        } catch (e) {
+          _bf1 = null;
+        }
+        if (_bf1 && _bf1.landed && sk === _sk1 && pub === _pub1) _ownOwed.delete(_ok1);
+      }
+      return null;
+    }
     _autoEnrolled.add(key);
+    const _sk0 = sk, _pub0 = pub;
+    let _gate8 = null;
+    const _t8 = Date.now();
+    if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true && _ownGateLast.known === true, results: null, damped: true };
+    else {
+      try {
+        _gate8 = await _ownBoxBackfill(own);
+      } catch (e) {
+        _gate8 = null;
+      }
+      _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true), known: !!(_gate8 && (_gate8.landed === true || _gate8.entering === false)) };
+      if (_gate8 && typeof _gate8.landed === "boolean" && pub === _pub0) {
+        if (_gate8.landed) _ownOwed.delete(pub + "|" + own);
+        else _ownOwed.add(pub + "|" + own);
+      }
+    }
+    if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) {
+      _autoEnrolled.delete(key);
+      return null;
+    }
+    if (!_gate8 || _gate8.proceed !== true) {
+      _autoEnrolled.delete(key);
+      return { pending: true, ownBox: true, backfill: _gate8 && _gate8.results || null };
+    }
     let res = null;
     try {
       res = await enrolSerial(() => enrolRelayNet({ auto: true }));
@@ -20728,6 +21076,7 @@ zoo`.split("\n");
         }
       }
       const keyOf = (e) => String(e && e.pubkey || "").toLowerCase();
+      const pendingGone = new Set(_tombable(_pendingTomb()));
       const basesByKey = /* @__PURE__ */ new Map();
       for (const r of probed) {
         const a = basesByKey.get(r.provedKey) || [];
@@ -20745,7 +21094,7 @@ zoo`.split("\n");
             cur.url = pubBase;
             wanted.push({ pubkey: p, url: pubBase });
           }
-        } else if (!tombAt.has(p) && pubBase) {
+        } else if (!tombAt.has(p) && !pendingGone.has(p) && pubBase) {
           entries.push({ pubkey: p, url: pubBase });
           wanted.push({ pubkey: p, url: pubBase });
         }
@@ -20814,6 +21163,10 @@ zoo`.split("\n");
     const t = Date.now();
     if (!force && t - _syncHealLastAt < 6e5) return { ran: false, debounced: true };
     _syncHealLastAt = t;
+    try {
+      await _flushPendingTomb();
+    } catch (e) {
+    }
     try {
       return await syncHeal();
     } catch (e) {
@@ -20923,6 +21276,17 @@ zoo`.split("\n");
       }
     });
   }
+  async function _dropChosen(url, keys) {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
+    const ks = new Set([...keys || []].map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p)));
+    if (!ks.size) return { written: false, absent: true, nothingTombstoned: true };
+    const hit = (c) => !!c && ks.has(String(c.pubkey || "").toLowerCase());
+    const { prefs, complete } = await _readRelayPrefs();
+    if (!complete) return { written: false, unknown: true };
+    if (!prefs || !Array.isArray(prefs.chosen) || !prefs.chosen.some(hit)) return { written: false, absent: true };
+    const w = await _writeRelayPrefs((prev) => ({ ...prev, chosen: (Array.isArray(prev && prev.chosen) ? prev.chosen : []).filter((c) => !hit(c)) }));
+    return { ...w, dropped: !!(w && w.written && !(w.prefs && w.prefs.chosen || []).some(hit)) };
+  }
   async function autoJoinPublicRelays() {
     if (!sk || !pub) return { ran: false };
     if (actingChurch || _viewingNetwork()) return { ran: false, skipped: "not this church\u2019s own console" };
@@ -20976,25 +21340,28 @@ zoo`.split("\n");
     }
     if (moved()) return { ran: false, unknown: true };
     const have = new Set(relays());
-    let tombKeys = /* @__PURE__ */ new Set();
-    try {
-      const t = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
-      const tev = t && t.ev && t.ev.pubkey === pub ? t.ev : null;
-      if (tev) {
-        let ts = [];
-        try {
-          ts = JSON.parse(tev.content || "[]");
-        } catch (e) {
-          ts = [];
-        }
-        for (const x of Array.isArray(ts) ? ts : []) {
-          const p = String(x && x.pubkey || "").toLowerCase();
-          if (/^[0-9a-f]{64}$/.test(p)) tombKeys.add(p);
-        }
+    const _kJ = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
       }
+    };
+    let _droppJ = /* @__PURE__ */ new Set();
+    try {
+      _droppJ = new Set(extraRelays().map(_kJ));
     } catch (e) {
+      _droppJ = /* @__PURE__ */ new Set();
+    }
+    let gone = null;
+    try {
+      gone = await _removedKeysRead(_droppJ);
+    } catch (e) {
+      gone = null;
     }
     if (moved()) return { ran: false, unknown: true };
+    if (!gone || !gone.complete) return { ran: false, incomplete: true, removedUnknown: true };
+    const tombKeys = gone.keys;
     const name = _ownChurchName();
     const added = [], skipped = [];
     for (const o of offers) {
@@ -21052,11 +21419,19 @@ zoo`.split("\n");
         window.Steward.rememberRelayName(o && o.name || "", addr, p);
       } catch (e) {
       }
+      let _sr = null;
       try {
-        await window.Steward.signRelay(addr);
+        _sr = await window.Steward.signRelay(addr);
       } catch (e) {
+        _sr = null;
       }
       if (moved()) return { ran: false, unknown: true };
+      if (!_signedIn(_sr, addr)) {
+        skipped.push([addr, _sr && _sr.pending ? "pending" : "unsigned"]);
+        have.add(addr);
+        deficit--;
+        continue;
+      }
       chosen.push({ pubkey: p, url: addr, name: o && o.name || "" });
       chosenKeys.add(p);
       listedKeys.add(p);
@@ -21110,6 +21485,110 @@ zoo`.split("\n");
       lsSet(TOMB_PENDING_LS + pub, JSON.stringify(u));
     } catch (e) {
     }
+  }
+  function _tombable(keys, never) {
+    const shared = new Set(sharedRelayKeys());
+    const no = new Set([...never || []].map((p) => String(p || "").toLowerCase()));
+    return [...new Set([...keys || []].map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
+  }
+  async function _removedKeysRead(droppable) {
+    const keys = new Set(_tombable(_pendingTomb()));
+    if (!pub) return { complete: false, keys };
+    let r = null;
+    try {
+      r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
+    } catch (e) {
+      return { complete: false, keys };
+    }
+    if (!_readCovers(r, "", droppable || /* @__PURE__ */ new Set())) return { complete: false, keys };
+    const ev = r && r.ev && r.ev.pubkey === pub ? r.ev : null;
+    if (ev) {
+      let ts = [];
+      try {
+        ts = JSON.parse(ev.content || "[]");
+      } catch (e) {
+        ts = [];
+      }
+      for (const t of Array.isArray(ts) ? ts : []) {
+        const p = String(t && t.pubkey || "").toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(p)) keys.add(p);
+      }
+    }
+    return { complete: true, keys };
+  }
+  function _unprovedDroppable(provedUrls) {
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const provedAddrs = new Set([...provedUrls || []].map(_k));
+    const own = relayNetCandidates()[0] || "";
+    const out = /* @__PURE__ */ new Set();
+    let asked = [];
+    try {
+      asked = relaysRaw();
+    } catch (e) {
+      asked = [];
+    }
+    for (const url of asked) {
+      const addr = _k(url);
+      if (provedAddrs.has(addr)) continue;
+      let canonical = false;
+      try {
+        canonical = Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some((h) => _k(h) === addr);
+      } catch (e) {
+        canonical = false;
+      }
+      if (canonical) continue;
+      if (own && _k(own) === addr) continue;
+      out.add(addr);
+    }
+    return out;
+  }
+  async function _flushPendingTomb() {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { flushed: false };
+    if (!_pendingTomb().length) return { flushed: false, none: true };
+    const sk0 = sk, pub0 = pub;
+    const moved = () => sk !== sk0 || pub !== pub0 || !!actingChurch || _viewingNetwork();
+    const own = relayNetCandidates()[0] || "";
+    let ownKey = "";
+    if (own) {
+      try {
+        const proof = await verifyRelayIdentity(own);
+        ownKey = String(proof && proof.relayPub || "").toLowerCase();
+      } catch (e) {
+        ownKey = "";
+      }
+    }
+    if (moved()) return { flushed: false };
+    if (own && !/^[0-9a-f]{64}$/.test(ownKey)) return { flushed: false, held: true };
+    const _k0 = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    let droppable = /* @__PURE__ */ new Set();
+    try {
+      droppable = new Set(extraRelays().map(_k0));
+    } catch (e) {
+      droppable = /* @__PURE__ */ new Set();
+    }
+    return enrolSerial(async () => {
+      if (moved()) return { flushed: false };
+      const never = ownKey ? [ownKey] : [];
+      const add2 = _tombable(_pendingTomb(), never);
+      const tomb = add2.length ? await _writeTombstone({ add: add2, droppable, sk0, pub0 }) : { wrote: false };
+      if (moved()) return { flushed: false };
+      if (tomb && (tomb.partial || tomb.skipped)) return { flushed: false, partial: true };
+      const done = /* @__PURE__ */ new Set([...add2, ..._pendingTomb().filter((p) => !_tombable([p], never).length)]);
+      _setPendingTomb(_pendingTomb().filter((p) => !done.has(p)));
+      return { flushed: true, keys: add2 };
+    });
   }
   async function _writeTombstone(opts) {
     const o = opts || {};
@@ -21198,12 +21677,13 @@ zoo`.split("\n");
     if (moved()) return { partial: true };
     if (!_readCovers(read, u, droppable)) return { partial: true };
     const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
-    if (!mine) return { closed: false, tombstoned: false };
-    let arr = null;
-    try {
-      arr = JSON.parse(mine.content || "[]");
-    } catch (e) {
-      arr = null;
+    let arr = [];
+    if (mine) {
+      try {
+        arr = JSON.parse(mine.content || "[]");
+      } catch (e) {
+        arr = null;
+      }
     }
     if (!Array.isArray(arr)) return { partial: true };
     for (const e of arr) {
@@ -21246,14 +21726,18 @@ zoo`.split("\n");
         floorAt = (Number(newest.created_at) || 0) + 1;
       }
     }
-    const pending = new Set(_pendingTomb());
-    if (closed) for (const k of removedKeys) pending.add(k);
-    const addKeys = [.../* @__PURE__ */ new Set([...removedKeys, ...pending])];
-    if (closed) _setPendingTomb([...pending]);
+    if (o.skipTomb) return { closed, tombstoned: false, keys: [] };
+    const never = [...o.never || []];
+    const mineKeys = _tombable(removedKeys, never);
+    const pendingNow = _pendingTomb();
+    if (mineKeys.some((k) => !pendingNow.includes(k))) _setPendingTomb([...pendingNow, ...mineKeys]);
+    if (o.holdTomb) return { partial: true, closed };
+    const addKeys = _tombable([...mineKeys, ...pendingNow], never);
     const tomb = await _writeTombstone({ add: addKeys, leaving: u, droppable, sk0, pub0 });
-    if (tomb && tomb.partial) return { partial: true, closed };
-    _setPendingTomb(_pendingTomb().filter((p) => !addKeys.includes(p)));
-    return { closed, tombstoned: !!(tomb && tomb.wrote) };
+    if (tomb && (tomb.partial || tomb.skipped)) return { partial: true, closed };
+    const done = /* @__PURE__ */ new Set([...addKeys, ..._pendingTomb().filter((p) => !_tombable([p], never).length)]);
+    _setPendingTomb(_pendingTomb().filter((p) => !done.has(p)));
+    return { closed, tombstoned: !!(tomb && tomb.wrote), keys: mineKeys };
   }
   function _netDocDialUrl(raw) {
     let s = String(raw || "").trim();
@@ -21545,8 +22029,8 @@ zoo`.split("\n");
         if (!now2.includes(stale) || now2.includes(u)) continue;
         _writeExtraRelays(now2.map((r) => r === stale ? u : r));
         try {
-          _backfillSafeguardTo([u]);
-        } catch (e2) {
+          await _backfillSafeguardTo(u);
+        } catch (err2) {
         }
         setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
         _rememberAdoptedName(e, u, proved);
@@ -21564,6 +22048,10 @@ zoo`.split("\n");
         _tagAdopted(u);
         _rememberAdoptedName(e, u, proved);
         added.push(u);
+        try {
+          await _backfillSafeguardTo(u);
+        } catch (err2) {
+        }
       }
     }
     return added;
@@ -23530,14 +24018,28 @@ zoo`.split("\n");
     // proved box into the sync-trust doc. Fired AFTER the enrol queue slot resolves (never from inside it —
     // the no-nesting rule), forced past the 10-minute damper because a steward just acted, and swallowed on
     // failure: the next trigger retries, and signRelay's own result is unchanged either way.
+    //
+    // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
+    // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
+    // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
+    // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
+    // retryOwedBackfills.
     signRelay(url) {
       const u = normRelay(url);
       if (!u) return Promise.resolve(null);
-      const p = enrolSerial(() => enrolRelayNet({ extra: [u] }));
+      const p = _adoptRelay(u);
       p.then((r) => {
         try {
           if (r && !r.unknown && (r.published || (r.proven || []).length > 0)) {
-            const keys = (r.proven || []).map((x) => String(x && x.pubkey || "").toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k));
+            const _kAdd = (x) => {
+              try {
+                return normalizeURL2(x);
+              } catch (e) {
+                return String(x || "");
+              }
+            };
+            const _sharedAdd = new Set(sharedRelayKeys());
+            const keys = [...new Set((r.proven || []).filter((x) => x && _kAdd(x.url) === _kAdd(u)).map((x) => String(x && x.pubkey || "").toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k) && !_sharedAdd.has(k)))];
             const _k0 = (x) => {
               try {
                 return normalizeURL2(x);
@@ -23576,6 +24078,10 @@ zoo`.split("\n");
     // 10-minute damper, `{ force: true }` to bypass it once.
     syncHeal: () => syncHeal(),
     autoSyncHeal,
+    // The boxes a steward consented to whose safeguarding documents have not landed yet (A2) — tried again on the
+    // console's churn signals. `owedRelays` is the list for this church, for a screen that wants to say "waiting".
+    retryOwedRelays: (opts) => retryOwedBackfills(opts),
+    owedRelays: () => pub ? _owedBackfills().filter((e) => e.churchPub === pub).map((e) => e.url) : [],
     // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
     //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
     //    through the same Auto-find mechanics. SAFEGUARDING NOTE (plan finding 18): a community operator sees only
@@ -23614,12 +24120,28 @@ zoo`.split("\n");
     // / unknown / own-box refusal changed nothing to advertise. Built church-wide from the relay-net doc this
     // removal just re-signed; fire-and-forget, swallowed on failure like the heal.
     unsignRelay(url) {
+      try {
+        const _uo = normRelay(url);
+        if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false);
+      } catch (e) {
+      }
       const p = enrolSerial(() => unenrolRelayNet(url));
       p.then((r) => {
         try {
-          if (r && r.removed === true) {
+          if (r && (r.removed === true || r.pruned === true)) {
             const pl = window.Steward.publishRelayList();
             if (pl && pl.catch) pl.catch(() => {
+            });
+          }
+        } catch (e) {
+        }
+      }, () => {
+      });
+      p.then((r) => {
+        try {
+          if (r && (r.removed === true || r.notListed === true) && !r.syncPartial) {
+            const dc = _dropChosen(url, r.removedKeys || []);
+            if (dc && dc.catch) dc.catch(() => {
             });
           }
         } catch (e) {
@@ -24010,10 +24532,15 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
+      const _droppE = _unprovedDroppable(ids.filter((r) => /^[0-9a-f]{64}$/.test(String(r.pubkey || "").toLowerCase())).map((r) => r.url));
       return enrolSerial(async () => {
-        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }), sk));
+        const gone = await _removedKeysRead(_droppE);
+        if (!gone.complete) throw new Error("Sync could not be switched on \u2014 not all of your relays answered, so the list of relays you have removed could not be checked. Nothing is mirroring yet; try again.");
+        const signing = trusted.filter((t) => !gone.keys.has(String(t.pubkey || "").toLowerCase()));
+        if (signing.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 a relay you have removed does not count. Add another the church runs.");
+        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(signing) }), sk));
         if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
-        return { relays: trusted.length };
+        return { relays: signing.length };
       });
     },
     // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,
@@ -24942,8 +25469,9 @@ zoo`.split("\n");
     //  · url-less relay-net entries are excluded (`url` is optional in that doc; a pubkey with no dialable wss
     //    address is nothing a member could put in an `r` tag).
     // CALLERS (rule 2): refreshNamedRelays (tunnel move), connectFoundRelays + autoPickRelays (Auto-find), and
-    // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). B2 adoption will
-    // add its own call when Work Item B is built; the source list stays the signed doc so B only widens it.
+    // — new in C1 — signRelay (a successful Add/Connect) and unsignRelay (a successful Remove). The community
+    // auto-join (autoJoinPublicRelays, plan B2 — BUILT; this said "will add its own call when built") calls it once
+    // more after a pass that adopted something, on top of the call each pick's signRelay makes.
     async publishRelayList() {
       if (!sk || actingChurch || _viewingNetwork()) return null;
       const read = await relayNetDoc();
@@ -32454,10 +32982,6 @@ zoo`.split("\n");
       if (cur.includes(url)) return false;
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
       undeclineRelay(url);
-      try {
-        _backfillSafeguardTo([url]);
-      } catch (e) {
-      }
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return url;
     },
@@ -32585,6 +33109,12 @@ zoo`.split("\n");
       }
       return picks || [];
     },
+    // A5 (plan Part A, 2026-11-22). NO SCREEN CALLS THIS — the Auto-find card uses findRelays + connectFoundRelays and
+    // signs each pick itself; this one-step form is reachable from scripts and devtools only (and ci/ui-smoke-eval.js
+    // checks it exists). It added the picks and republished the relay list WITHOUT ever going through signRelay, so it
+    // was an adopt path with no identity-proof-then-backfill step at all. It now goes through the same choke point as
+    // every other adopt path: each pick is handed to Steward.signRelay, which proves it, sends it the church's
+    // safeguarding documents, and signs it only if they landed (otherwise the pick is left owed, not signed).
     async autoPickRelays(n) {
       const offers = await discoverRelayOffers(null, null);
       const have = new Set(relays());
@@ -32592,6 +33122,10 @@ zoo`.split("\n");
       for (const p of picks) {
         try {
           window.Steward.addRelay(p.url);
+        } catch (e) {
+        }
+        try {
+          await window.Steward.signRelay(p.url);
         } catch (e) {
         }
       }
