@@ -6420,13 +6420,24 @@ function _signedIn(r, u) {
 // THE RETRY. Called by the console on the signals it already follows (mount/unlock, a relay returning, window
 // focus, a relay-list change) — events, never a timer. No owed rows for this church → returns at once. One pass at
 // a time. Through window.Steward.signRelay, so a row that lands gets everything a first-time Connect gets.
+//
+// THE DAMPER (F2, 2026-11-22 — small pipes). Every pass costs an identity proof per listed relay, five reads and up
+// to five sends per owed row, and the console's signals fire on every window focus. So: at most one pass per ten
+// minutes, the same valve autoSyncHeal has. Only a pass that has rows to try starts the clock. `{ force: true }`
+// bypasses it. A STEWARD'S OWN Add/Connect does not come through here at all — it calls Steward.signRelay
+// directly — so a click always acts at once.
+const BACKFILL_RETRY_MS = 600000;
 let _owedRetrying = false;
-async function retryOwedBackfills() {
+let _owedRetryLastAt = 0;
+async function retryOwedBackfills(opts) {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
   if (_owedRetrying) return { ran: false, busy: true };
   const cp = pub;
   const mine = _owedBackfills().filter(e => e.churchPub === cp);
   if (!mine.length) return { ran: false, none: true };
+  const _now = Date.now();
+  if (!(opts && opts.force) && _now - _owedRetryLastAt < BACKFILL_RETRY_MS) return { ran: false, debounced: true };
+  _owedRetryLastAt = _now;
   _owedRetrying = true;
   const rows = [];
   try {
@@ -6875,6 +6886,9 @@ async function _ownBoxBackfill(own) {
   return { proceed: entering !== true || !!(bf && bf.landed), entering, results: (bf && bf.results) || null, why: (bf && bf.why) || '' };
 }
 const _autoEnrolled = new Set();
+// The own-box gate's last answer, and when (F2): a pass that is tried again inside the damper window — because the
+// enrolment did not work, or the box was held — reuses that answer instead of proving, reading and sending again.
+let _ownGateLast = { key: '', at: 0, proceed: false };
 async function autoEnrolRelayNet() {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
   const own = relayNetCandidates()[0] || '';
@@ -6897,8 +6911,15 @@ async function autoEnrolRelayNet() {
   // FAIL-CLOSED SHAPE: only an explicit `proceed: true` lets the enrolment go on. A throw, or no answer at all, holds
   // it (and the pass is not remembered as done). _ownBoxBackfill catches everything it calls, so this is not reachable
   // today — it is the shape that stays safe if that ever stops being true.
+  // …AND DAMPED (F2): inside ten minutes of the last gate pass for this same (church, box, address, name) the
+  // answer is reused — a hold stays a hold, a go-ahead stays a go-ahead — and nothing is proved, read or sent.
   let _gate8 = null;
-  try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
+  const _t8 = Date.now();
+  if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true, results: null, damped: true };
+  else {
+    try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
+    _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true) };
+  }
   if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) { _autoEnrolled.delete(key); return null; }
   if (!_gate8 || _gate8.proceed !== true) { _autoEnrolled.delete(key); return { pending: true, ownBox: true, backfill: (_gate8 && _gate8.results) || null }; }
   let res = null;
@@ -10435,7 +10456,7 @@ window.Steward = {
   autoSyncHeal,
   // The boxes a steward consented to whose safeguarding documents have not landed yet (A2) — tried again on the
   // console's churn signals. `owedRelays` is the list for this church, for a screen that wants to say "waiting".
-  retryOwedRelays: () => retryOwedBackfills(),
+  retryOwedRelays: (opts) => retryOwedBackfills(opts),
   owedRelays: () => (pub ? _owedBackfills().filter(e => e.churchPub === pub).map(e => e.url) : []),
   // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
   //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,

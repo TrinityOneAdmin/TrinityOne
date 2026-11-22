@@ -45,7 +45,7 @@ const PIECES = [
   ['fn', 'function _syncRelayBase(u) {'], ['st', 'var _syncRelayKey = '],
   ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '],
   ['st', 'var RELAYNET_SEEN = '], ['st', 'var _isLoopbackRelay = '], ['st', 'var _RELAY_NAME_RE = '],
-  ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['st', 'var _autoEnrolled = '],
+  ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _autoEnrolled = '], ['st', 'var _ownGateLast = '],
   ['fn', 'async function autoEnrolRelayNet'],
   // B0 (2026-11-22): a Remove now writes trinityone/relays-removed and reads it back, and a real relay serves that
   // document only to the church's own login. The console's pool logs in through this shipped signer glue (it records

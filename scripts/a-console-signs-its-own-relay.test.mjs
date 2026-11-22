@@ -357,16 +357,20 @@ const VENDOR = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const OK = { proven: [{ url: 'ws://127.0.0.1:9/relay', pubkey: 'c'.repeat(64) }], published: true, entries: [{}], delivered: [] };
 function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null, self = { url: '', name: '' }, ownBox = null }) {
   const body = fnBody(VENDOR, 'async function autoEnrolRelayNet()', 'autoEnrolRelayNet');
-  let n = 0; const args = [];
+  let n = 0; const args = []; let clock = 1800000000000;
   const fn = new Function('sk', 'pub', 'actingChurch', '_viewingNetwork', 'relayNetCandidates', 'enrolRelayNet', '_autoEnrolled',
-    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName', '_ownBoxBackfill',
+    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName', '_ownBoxBackfill', '_ownGateLast', 'BACKFILL_RETRY_MS', 'Date',
     body + '\nreturn autoEnrolRelayNet;')(
     'sk', 'a'.repeat(64), acting, () => network, () => cands.slice(),
     async (o) => { args.push(o); const r = results[Math.min(n, results.length - 1)]; n++; if (r instanceof Error) throw r; return r; }, new Set(),
     hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name,
     // F8 (2026-11-22): the own box is backfilled before it is signed. "Nothing to hold it back" here — the gate itself
     // is run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
-    ownBox || (async () => ({ proceed: true, entering: false, results: null })));
+    ownBox || (async () => ({ proceed: true, entering: false, results: null })),
+    // F2 (2026-11-22): the own-box gate is damped for ten minutes. Every pass in THIS file is its own window (the clock
+    // jumps eleven minutes per reading), so each row measures what it measured before; the damper itself is run in
+    // an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    { key: '', at: 0, proceed: false }, 600000, { now: () => (clock += 11 * 60 * 1000) });
   return { fn, calls: () => n, args };
 }
 

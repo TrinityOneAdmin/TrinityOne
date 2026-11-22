@@ -77,10 +77,12 @@ function world(opts = {}) {
   const published = [];      // every (urls, ev) handed to pool.publish, in order
   const proofs = [];         // every address asked to prove itself
   const mem = new Map();
-  const state = { sk, pub, actingChurch, keys, relays, answers, silent };
+  // `t`: this world's clock (ms). The dampers read Date.now(); a test moves time by moving `w.state.t`.
+  const state = { sk, pub, actingChurch, keys, relays, answers, silent, t: 1800000000000 };
   const scope = {
     get sk() { return state.sk; }, get pub() { return state.pub; }, get actingChurch() { return state.actingChurch; },
     _viewingNetwork: () => network,
+    Date: { now: () => state.t },
     normalizeURL: (u) => String(u), normalizeURL2: (u) => String(u),
     localStorage: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, String(v)); }, removeItem: (k) => { mem.delete(k); } },
     window: { dispatchEvent: () => true }, CustomEvent: function (n) { this.type = n; },
@@ -268,7 +270,7 @@ const ADOPT_LIFT = [
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'],
   ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
-  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var _owedRetrying = '], ['fn', 'async function retryOwedBackfills() {'],
+  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
 ];
 function adoptWorld(opts = {}) {
   const log = [];            // 'send:<doc>' and 'enrol', in the order they happened
@@ -335,8 +337,9 @@ test('A2: REFUSED, THEN REGISTERED — not signed and marked owed while the box 
   await w.api.retryOwedBackfills();
   assert.equal(w.enrols.length, 0, 'the retry signed a box that still refuses');
   assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }]);
-  // the church is registered on the box: it accepts now
+  // the church is registered on the box: it accepts now (and the retry's ten-minute damper has passed — F2)
   w.state.answers = {};
+  w.state.t += 11 * 60 * 1000;
   const out = await w.api.retryOwedBackfills();
   assert.equal(w.enrols.length, 1, 'the retry did not sign the box once its documents landed: ' + JSON.stringify(out));
   assert.deepEqual(w.owed(), [], 'the owed marker was not cleared once the box was signed');
@@ -508,10 +511,11 @@ function ownBoxWorld(opts = {}) {
   const net = opts.net || [];
   const w = world({ ...opts, relays: [OWN, POOL],
     read: (name) => ({ ev: fullDocs()[name] || null, complete: true, askedUrls: [OWN, POOL], answeredUrls: [POOL] }),   // the documents live on the shared relay; the own box is the empty one
-    lifts: [['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['fn', 'function parseRelayNet'], ['fn', 'async function _ownBoxBackfill(own) {'], ['st', 'var _autoEnrolled = '], ['fn', 'async function autoEnrolRelayNet() {']],
+    lifts: [['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['fn', 'function parseRelayNet'], ['fn', 'async function _ownBoxBackfill(own) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _autoEnrolled = '], ['st', 'var _ownGateLast = '], ['fn', 'async function autoEnrolRelayNet() {']],
     scope: { _boxHostsUs: true, selfPublicRelay: () => '', selfRelayName: () => '',
       relayNetDoc: async () => ({ ev: { pubkey: CP, content: JSON.stringify(net) }, askedUrls: [OWN, POOL], answeredUrls: opts.netWhole === false ? [OWN] : [OWN, POOL] }),
-      enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o); return { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; } },
+      enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o); return { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; },
+      ...(opts.scope || {}) },
     expose: ', autoEnrolRelayNet' });
   const realPublish = w.scope.pool.publish;
   w.scope.pool.publish = (urls, ev) => { log.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
@@ -531,6 +535,7 @@ test('F8: an entering own box that does NOT take the child list is not signed �
   assert.equal(w.enrols.length, 0, 'THE OWN BOX WAS SIGNED INTO THE CHURCH\'S LIST WHILE IT HELD NO CHILD LIST');
   assert.equal(r && r.pending, true, JSON.stringify(r));
   w.state.answers = {};
+  w.state.t += 11 * 60 * 1000;   // past the own-box gate's damper (F2)
   await w.api.autoEnrolRelayNet();
   assert.equal(w.enrols.length, 1, 'a held pass was remembered as done, so the own box is never signed this session');
 });
@@ -608,4 +613,52 @@ test('F6: a box whose documents landed stays OWED when the signing step did not 
     await w.api.retryOwedBackfills();
     assert.deepEqual(w.owed(), [], why + ': the marker was kept for a box that IS signed in — it would be retried for ever');
   }
+});
+
+// ── 16. F2 (Part A audit): the damper — signals are cheap, a steward's click is immediate ─────────────────
+test('F2: two retry signals inside ten minutes run ONE pass; a forced retry and a steward\'s own Connect are not damped; a damped pass runs again after the window', async () => {
+  const refuse = { minors: 'refuse', blocked: 'refuse' };
+  const w = adoptWorld({ answers: refuse });
+  w.mem.set(OWED_KEY, JSON.stringify([{ churchPub: CP, url: NEW }]));
+  const sendsOf = () => w.log.filter((x) => x === 'send:minors').length;
+  const first = await w.api.retryOwedBackfills();
+  assert.equal(first.ran, true); assert.equal(sendsOf(), 1);
+  const second = await w.api.retryOwedBackfills();   // another focus, a moment later
+  assert.equal(second.debounced, true, 'a second signal inside the window was not damped: ' + JSON.stringify(second));
+  assert.equal(sendsOf(), 1,
+    'EVERY SIGNAL RE-RAN THE WHOLE PASS — a proof per relay, five reads and five sends on each window focus, for as long as a box is owed (F2)');
+  await w.api.retryOwedBackfills({ force: true });
+  assert.equal(sendsOf(), 2, 'a forced retry was damped');
+  await w.api.signRelay(NEW);                           // the steward presses Connect again
+  assert.equal(sendsOf(), 3, 'A STEWARD\'S OWN CONNECT WAS DAMPED — a click must act at once');
+  w.state.t += 9 * 60 * 1000;
+  assert.equal((await w.api.retryOwedBackfills()).debounced, true, 'nine minutes on, the pass ran again');
+  w.state.t += 2 * 60 * 1000;
+  assert.equal((await w.api.retryOwedBackfills()).ran, true, 'past the window the retry never runs again');
+  assert.equal(sendsOf(), 4);
+  // a console with nothing owed does not start the clock
+  const idle = adoptWorld({ answers: refuse });
+  assert.equal((await idle.api.retryOwedBackfills()).none, true);
+  idle.mem.set(OWED_KEY, JSON.stringify([{ churchPub: CP, url: NEW }]));
+  assert.equal((await idle.api.retryOwedBackfills()).ran, true, 'a pass with nothing to do used up the damper window');
+});
+test('F2: an own-box enrolment that is tried again inside ten minutes does not prove, read or send again — it reuses the gate\'s last answer', async () => {
+  // HELD: an entering box that refuses. Signals keep arriving; nothing more is sent until the window has passed.
+  const held = ownBoxWorld({ net: [], answers: { minors: 'refuse', blocked: 'refuse' } });
+  await held.api.autoEnrolRelayNet();
+  const n = held.published.length, p = held.proofs.length;
+  assert.ok(n > 0, 're-anchor: the first pass sent nothing');
+  const again = await held.api.autoEnrolRelayNet();
+  assert.equal(held.published.length, n, 'a held own box was sent everything again on the next signal (F2)');
+  assert.equal(held.proofs.length, p, 'a held own box was re-proved on the next signal (F2)');
+  assert.equal(held.enrols.length, 0, 'the damped pass let a HELD box through');
+  assert.equal(again && again.pending, true);
+  // GO-AHEAD, but the enrolment itself did not work (unknown): it is retried on the next signal WITHOUT a second backfill.
+  let n2 = 0;
+  const flaky = ownBoxWorld({ net: [], scope: { enrolRelayNet: async () => { n2++; return n2 === 1 ? { unknown: true, proven: [] } : { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; } } });
+  await flaky.api.autoEnrolRelayNet();
+  const sent = flaky.published.length;
+  await flaky.api.autoEnrolRelayNet();
+  assert.equal(n2, 2, 're-anchor: the enrolment was not retried');
+  assert.equal(flaky.published.length, sent, 'the retried enrolment ran the whole backfill again inside the window');
 });

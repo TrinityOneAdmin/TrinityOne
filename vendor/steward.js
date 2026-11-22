@@ -20458,13 +20458,18 @@ zoo`.split("\n");
     const named = (r.entries || []).some((e) => String(e && e.pubkey || "").toLowerCase() === key);
     return named && (r.published === true || r.full === true);
   }
+  var BACKFILL_RETRY_MS = 6e5;
   var _owedRetrying = false;
-  async function retryOwedBackfills() {
+  var _owedRetryLastAt = 0;
+  async function retryOwedBackfills(opts) {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
     if (_owedRetrying) return { ran: false, busy: true };
     const cp = pub;
     const mine = _owedBackfills().filter((e) => e.churchPub === cp);
     if (!mine.length) return { ran: false, none: true };
+    const _now = Date.now();
+    if (!(opts && opts.force) && _now - _owedRetryLastAt < BACKFILL_RETRY_MS) return { ran: false, debounced: true };
+    _owedRetryLastAt = _now;
     _owedRetrying = true;
     const rows = [];
     try {
@@ -20836,6 +20841,7 @@ zoo`.split("\n");
     return { proceed: entering !== true || !!(bf && bf.landed), entering, results: bf && bf.results || null, why: bf && bf.why || "" };
   }
   var _autoEnrolled = /* @__PURE__ */ new Set();
+  var _ownGateLast = { key: "", at: 0, proceed: false };
   async function autoEnrolRelayNet() {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
     const own = relayNetCandidates()[0] || "";
@@ -20846,10 +20852,15 @@ zoo`.split("\n");
     _autoEnrolled.add(key);
     const _sk0 = sk, _pub0 = pub;
     let _gate8 = null;
-    try {
-      _gate8 = await _ownBoxBackfill(own);
-    } catch (e) {
-      _gate8 = null;
+    const _t8 = Date.now();
+    if (_ownGateLast.key === key && _t8 - _ownGateLast.at < BACKFILL_RETRY_MS) _gate8 = { proceed: _ownGateLast.proceed === true, results: null, damped: true };
+    else {
+      try {
+        _gate8 = await _ownBoxBackfill(own);
+      } catch (e) {
+        _gate8 = null;
+      }
+      _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true) };
     }
     if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) {
       _autoEnrolled.delete(key);
@@ -23989,7 +24000,7 @@ zoo`.split("\n");
     autoSyncHeal,
     // The boxes a steward consented to whose safeguarding documents have not landed yet (A2) — tried again on the
     // console's churn signals. `owedRelays` is the list for this church, for a screen that wants to say "waiting".
-    retryOwedRelays: () => retryOwedBackfills(),
+    retryOwedRelays: (opts) => retryOwedBackfills(opts),
     owedRelays: () => pub ? _owedBackfills().filter((e) => e.churchPub === pub).map((e) => e.url) : [],
     // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
     //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
