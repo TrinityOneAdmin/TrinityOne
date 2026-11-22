@@ -498,3 +498,47 @@ test('A5: autoPickRelays hands each pick to signRelay — documents first, then 
   assert.equal(refused.enrols.length, 0, 'an auto-picked box that refused the child list was signed');
   assert.deepEqual(refused.owed(), [{ churchPub: CP, url: NEW }]);
 });
+
+// ── 11. F8: the church's OWN box, entering the list through the automatic enrolment, is backfilled first ───
+// The REAL autoEnrolRelayNet and _ownBoxBackfill over the real gate and engine. `net` is what the church's relay-net
+// document holds; `netWhole` whether that read was whole. The target of the backfill is OWN.
+function ownBoxWorld(opts = {}) {
+  const log = [], enrols = [];
+  const net = opts.net || [];
+  const w = world({ ...opts, relays: [OWN, POOL],
+    read: (name) => ({ ev: fullDocs()[name] || null, complete: true, askedUrls: [OWN, POOL], answeredUrls: [POOL] }),   // the documents live on the shared relay; the own box is the empty one
+    lifts: [['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['fn', 'function parseRelayNet'], ['fn', 'async function _ownBoxBackfill(own) {'], ['st', 'var _autoEnrolled = '], ['fn', 'async function autoEnrolRelayNet() {']],
+    scope: { _boxHostsUs: true, selfPublicRelay: () => '', selfRelayName: () => '',
+      relayNetDoc: async () => ({ ev: { pubkey: CP, content: JSON.stringify(net) }, askedUrls: [OWN, POOL], answeredUrls: opts.netWhole === false ? [OWN] : [OWN, POOL] }),
+      enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o); return { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; } },
+    expose: ', autoEnrolRelayNet' });
+  const realPublish = w.scope.pool.publish;
+  w.scope.pool.publish = (urls, ev) => { log.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
+  return { ...w, log, enrols };
+}
+test('F8: an own box ENTERING the list (a restored church on a new box) is sent the child list, and signed only after it landed', async () => {
+  const w = ownBoxWorld({ net: [{ pubkey: '8'.repeat(64), url: 'wss://the-old-box.example/relay' }] });
+  await w.api.autoEnrolRelayNet();
+  assert.deepEqual(w.sentTo(OWN).slice().sort(), DOCS.slice().sort(),
+    'A RESTORED CHURCH\'S NEW BOX WAS SIGNED AS ITS PRIMARY RELAY WITHOUT THE SAFEGUARDING DOCUMENTS (audit F8): ' + JSON.stringify(w.log));
+  assert.deepEqual(w.enrols, [{ auto: true }], 'the own box was not enrolled after its documents landed');
+  assert.ok(w.log.indexOf('enrol') > w.log.indexOf('send:minors') && w.log.indexOf('enrol') > w.log.indexOf('send:blocked'), 'signed before the child list landed: ' + JSON.stringify(w.log));
+});
+test('F8: an entering own box that does NOT take the child list is not signed — and the next pass tries again and signs it once it does', async () => {
+  const w = ownBoxWorld({ net: [], answers: { minors: 'refuse', blocked: 'refuse' } });
+  const r = await w.api.autoEnrolRelayNet();
+  assert.equal(w.enrols.length, 0, 'THE OWN BOX WAS SIGNED INTO THE CHURCH\'S LIST WHILE IT HELD NO CHILD LIST');
+  assert.equal(r && r.pending, true, JSON.stringify(r));
+  w.state.answers = {};
+  await w.api.autoEnrolRelayNet();
+  assert.equal(w.enrols.length, 1, 'a held pass was remembered as done, so the own box is never signed this session');
+});
+test('F8: an own box ALREADY in the list is not held back (best-effort send), and neither is one whose list could not be read whole', async () => {
+  const known = ownBoxWorld({ net: [{ pubkey: KEY_OWN, url: OWN }], answers: { minors: 'refuse', blocked: 'refuse' } });
+  await known.api.autoEnrolRelayNet();
+  assert.ok(known.sentTo(OWN).includes('minors'), 'the documents were not even offered to an own box already in the list');
+  assert.equal(known.enrols.length, 1, 'A BOX ALREADY IN THE CHURCH\'S LIST WAS HELD BACK — a tunnel address change would stop being re-signed whenever a send failed');
+  const unread = ownBoxWorld({ net: [], netWhole: false, answers: { minors: 'refuse', blocked: 'refuse' } });
+  await unread.api.autoEnrolRelayNet();
+  assert.equal(unread.enrols.length, 1, 'the enrolment was held on a relay-net read that was not whole — the own-box first-list exception (third audit) is gone');
+});

@@ -359,11 +359,14 @@ function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = 
   const body = fnBody(VENDOR, 'async function autoEnrolRelayNet()', 'autoEnrolRelayNet');
   let n = 0; const args = [];
   const fn = new Function('sk', 'pub', 'actingChurch', '_viewingNetwork', 'relayNetCandidates', 'enrolRelayNet', '_autoEnrolled',
-    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName',
+    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName', '_ownBoxBackfill',
     body + '\nreturn autoEnrolRelayNet;')(
     'sk', 'a'.repeat(64), acting, () => network, () => cands.slice(),
     async (o) => { args.push(o); const r = results[Math.min(n, results.length - 1)]; n++; if (r instanceof Error) throw r; return r; }, new Set(),
-    hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name);
+    hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name,
+    // F8 (2026-11-22): the own box is backfilled before it is signed. "Nothing to hold it back" here — the gate itself
+    // is run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    async () => ({ proceed: true, entering: false, results: null }));
   return { fn, calls: () => n, args };
 }
 

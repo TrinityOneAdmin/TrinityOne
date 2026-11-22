@@ -67,6 +67,7 @@ function makeConsole(d) {
     finalizeEvent, finalizeEvent2: finalizeEvent, fetch: globalThis.fetch, AbortController, URL, JSON, Promise,
     setTimeout, clearTimeout, Math, Object, String, Number, Array, Set, Map, Error, encodeURIComponent, console,
     globalThis, Uint8Array, location: undefined, window: undefined,
+    _ownBoxBackfill: async () => ({ proceed: true, entering: false, results: null }),   // F8 (2026-11-22): run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs
     _readRelayPrefs: async () => ({ prefs: null, complete: true }),   // BF1 (2026-11-22): the Remove looks its address up in relayprefs `chosen`; this church has no prefs doc
     relaysRaw: () => d.raw(), _authAccepted: new Map(), _authedRelays: new Map(), _authFailed: new Map(), _runKeyReadAuthWaiters: () => {},
     CANONICAL_RELAY_PUBS: Object.freeze({ 'wss://test-shared.invalid/relay': d.shared || [] }),

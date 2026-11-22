@@ -6801,6 +6801,39 @@ async function unenrolRelayNet(url) {
   return netResult;
 }
 
+// THE CHURCH'S OWN BOX GETS THE SAME BACKFILL (plan Part A, F8 — owner ruling 2026-11-22). A church restored onto
+// a new Suite box makes an EMPTY box the primary one: autoEnrolRelayNet signs it into the church's list with no
+// steward action, and until now nothing sent it the church's safeguarding documents — the same child-reads-as-
+// adult gap as an adopted relay, on the main box. So before every automatic enrolment the own box is sent the
+// documents (proved, targeted, answers read — _backfillSafeguardTo), and:
+//   · ENTERING — a WHOLE read of the church's relay-net document that does not name the own box's proved key (a
+//     new or restored box): the documents must LAND before it is signed. Not landed → not signed this pass, and
+//     the pass is not remembered as done, so the console's existing triggers try again.
+//   · ALREADY IN THE LIST — same key, so no new routing: best-effort only. (It still heals a box that kept its
+//     key and lost its data.)
+//   · CANNOT TELL — the relay-net read was not whole, or the own box proved no key: best-effort only, and the
+//     enrolment's own guards decide as before. That deliberately leaves the third-audit exception in place (a
+//     Suite whose shared relays are unreachable may still start its first list on its own box's answer); in THAT
+//     case this gate does not hold, because nothing that could be read says whether documents exist elsewhere.
+// Returns { proceed, entering, results }.
+async function _ownBoxBackfill(own) {
+  let ownKey = '';
+  try { const pr = await verifyRelayIdentity(own); ownKey = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { ownKey = ''; }
+  let entering = null;
+  if (/^[0-9a-f]{64}$/.test(ownKey)) {
+    try {
+      const read = await relayNetDoc();
+      if (_readCovers(read)) {
+        const mine = (read.ev && read.ev.pubkey === pub) ? read.ev : null;
+        const entries = mine ? parseRelayNet(mine.content) : [];
+        entering = !entries.some(e => String((e && e.pubkey) || '').toLowerCase() === ownKey);
+      }
+    } catch (e) { entering = null; }
+  }
+  let bf = null;
+  try { bf = await _backfillSafeguardTo(own); } catch (e) { bf = null; }
+  return { proceed: entering !== true || !!(bf && bf.landed), entering, results: (bf && bf.results) || null, why: (bf && bf.why) || '' };
+}
 const _autoEnrolled = new Set();
 async function autoEnrolRelayNet() {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
@@ -6818,6 +6851,13 @@ async function autoEnrolRelayNet() {
   const key = pub + '|' + own + '|' + selfPublicRelay() + '|' + selfRelayName();
   if (_autoEnrolled.has(key)) return null;
   _autoEnrolled.add(key);
+  // F8: the own box is backfilled first, OUTSIDE the signing queue; a box that is ENTERING the list and did not
+  // take the child list is not signed this pass (see _ownBoxBackfill).
+  const _sk0 = sk, _pub0 = pub;
+  let _gate8 = null;
+  try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
+  if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) { _autoEnrolled.delete(key); return null; }
+  if (_gate8 && _gate8.proceed === false) { _autoEnrolled.delete(key); return { pending: true, ownBox: true, backfill: _gate8.results }; }
   let res = null;
   // `auto`: only this pass may start a first list on the own box's own answer (third audit, finding 1).
   try { res = await enrolSerial(() => enrolRelayNet({ auto: true })); } catch (e) { res = null; }

@@ -20776,6 +20776,35 @@ zoo`.split("\n");
     }
     return netResult;
   }
+  async function _ownBoxBackfill(own) {
+    let ownKey = "";
+    try {
+      const pr = await verifyRelayIdentity(own);
+      ownKey = String(pr && pr.relayPub || "").toLowerCase();
+    } catch (e) {
+      ownKey = "";
+    }
+    let entering = null;
+    if (/^[0-9a-f]{64}$/.test(ownKey)) {
+      try {
+        const read = await relayNetDoc();
+        if (_readCovers(read)) {
+          const mine = read.ev && read.ev.pubkey === pub ? read.ev : null;
+          const entries = mine ? parseRelayNet(mine.content) : [];
+          entering = !entries.some((e) => String(e && e.pubkey || "").toLowerCase() === ownKey);
+        }
+      } catch (e) {
+        entering = null;
+      }
+    }
+    let bf = null;
+    try {
+      bf = await _backfillSafeguardTo(own);
+    } catch (e) {
+      bf = null;
+    }
+    return { proceed: entering !== true || !!(bf && bf.landed), entering, results: bf && bf.results || null, why: bf && bf.why || "" };
+  }
   var _autoEnrolled = /* @__PURE__ */ new Set();
   async function autoEnrolRelayNet() {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
@@ -20785,6 +20814,21 @@ zoo`.split("\n");
     const key = pub + "|" + own + "|" + selfPublicRelay() + "|" + selfRelayName();
     if (_autoEnrolled.has(key)) return null;
     _autoEnrolled.add(key);
+    const _sk0 = sk, _pub0 = pub;
+    let _gate8 = null;
+    try {
+      _gate8 = await _ownBoxBackfill(own);
+    } catch (e) {
+      _gate8 = null;
+    }
+    if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) {
+      _autoEnrolled.delete(key);
+      return null;
+    }
+    if (_gate8 && _gate8.proceed === false) {
+      _autoEnrolled.delete(key);
+      return { pending: true, ownBox: true, backfill: _gate8.results };
+    }
     let res = null;
     try {
       res = await enrolSerial(() => enrolRelayNet({ auto: true }));
