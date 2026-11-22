@@ -21329,11 +21329,18 @@ zoo`.split("\n");
         window.Steward.rememberRelayName(o && o.name || "", addr, p);
       } catch (e) {
       }
+      let _sr = null;
       try {
-        await window.Steward.signRelay(addr);
+        _sr = await window.Steward.signRelay(addr);
       } catch (e) {
+        _sr = null;
       }
       if (moved()) return { ran: false, unknown: true };
+      if (!_signedIn(_sr, addr)) {
+        skipped.push([addr, _sr && _sr.pending ? "pending" : "unsigned"]);
+        have.add(addr);
+        continue;
+      }
       chosen.push({ pubkey: p, url: addr, name: o && o.name || "" });
       chosenKeys.add(p);
       listedKeys.add(p);

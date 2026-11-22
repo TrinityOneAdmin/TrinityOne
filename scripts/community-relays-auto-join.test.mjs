@@ -77,7 +77,10 @@ function runJoin(opts = {}) {
       registerAtRelay: async (u) => { log.push('reg:' + u); return reg(u); },
       addRelay: (u) => { log.push('add:' + u); return u; },
       rememberRelayName: (n, u, p) => { log.push('remember:' + u + ':' + (p || '').slice(0, 2)); },
-      signRelay: async (u) => { log.push('sign:' + u); return { published: true, proven: [{ url: u, pubkey: 'x' }] }; },
+      // What Steward.signRelay answers. Default: SIGNED IN — the shape the real one returns when the box proved, its
+      // documents landed and the church's list now names it (F5: the pass reads this through the shipped _signedIn).
+      // `signResult(url)` lets a test answer something else for one address.
+      signRelay: async (u) => { log.push('sign:' + u); const alt = opts.signResult && opts.signResult(u); return alt || { published: true, proven: [{ url: u, pubkey: keyOf(u) }], entries: [{ pubkey: keyOf(u), url: u }] }; },
       publishRelayList: () => { log.push('publishRelayList'); return Promise.resolve(null); },
       removeRelay: () => { throw new Error('autoJoin must NEVER auto-remove'); },
       unsignRelay: () => { throw new Error('autoJoin must NEVER auto-unsign'); },
@@ -94,6 +97,7 @@ function runJoin(opts = {}) {
     fnBody(STEWARD, 'function _pendingTomb() {', '_pendingTomb'),
     fnBody(STEWARD, 'function _tombable(keys, never) {', '_tombable'),
     fnBody(STEWARD, 'async function _removedKeysRead(droppable) {', '_removedKeysRead'),
+    fnBody(STEWARD, 'function _signedIn(r, u) {', '_signedIn'),
     fnBody(STEWARD, 'async function autoJoinPublicRelays() {', 'autoJoinPublicRelays'),
   ].join('\n');
   const fn = new Function(...names, src + '\nreturn autoJoinPublicRelays;')(...names.map((k) => scope[k]));
@@ -271,4 +275,22 @@ test('B3: a box whose Remove is still PENDING on this console is skipped as tomb
   const r = await j.run();
   assert.deepEqual(j.adopted(), ['wss://box-2.example/relay'], 'a box this console is still in the middle of removing was auto-adopted');
   assert.equal(Object.fromEntries(r.skipped)['wss://box-1.example/relay'], 'tombstoned');
+});
+
+// ── F5 (Part A audit): a pick that did not actually get signed in takes NO cap slot ──────────────────────
+test('F5: a PENDING (or otherwise unsigned) pick is not recorded in chosen and does not use up the deficit — the next candidate is adopted instead', async () => {
+  const prefs = { publicAuto: true, publicTarget: 2, chosen: [] };   // target 2 − the canonical pin = ONE community slot
+  const offers = [offer(1, 10), offer(2, 20), offer(3, 30)];
+  const control = runJoin({ offers, prefs });
+  await control.run();
+  assert.deepEqual(control.writtenChosen[0].map((c) => c.url), ['wss://box-1.example/relay'], 'CONTROL: with every pick signing in, the one slot goes to the fastest box');
+  const j = runJoin({ offers, prefs, signResult: (u) => (u === 'wss://box-1.example/relay' ? { pending: true, url: u }
+    : u === 'wss://box-2.example/relay' ? { published: false, proven: [], unproven: [u], entries: [], unadmitted: true } : null) });
+  const r = await j.run();
+  assert.deepEqual(j.writtenChosen[0].map((c) => c.url), ['wss://box-3.example/relay'],
+    'A PICK THAT NEVER LANDED WAS RECORDED IN THE CHURCH-WIDE chosen SET — it holds a cap slot on every console for a box that is not in the church\'s list (F5): ' + JSON.stringify(j.writtenChosen));
+  assert.deepEqual(r.added.map((a) => a.url), ['wss://box-3.example/relay'], 'the pass reported an unsigned pick as added');
+  const why = Object.fromEntries(r.skipped);
+  assert.equal(why['wss://box-1.example/relay'], 'pending');
+  assert.equal(why['wss://box-2.example/relay'], 'unsigned');
 });

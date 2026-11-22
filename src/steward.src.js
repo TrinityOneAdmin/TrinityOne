@@ -7382,8 +7382,15 @@ async function autoJoinPublicRelays() {
     //    any tombstone, fires the forced heal and republishes the authoritative 10002) + record in `chosen`.
     try { window.Steward.addRelay(addr); } catch (e) {}
     try { window.Steward.rememberRelayName((o && o.name) || '', addr, p); } catch (e) {}
-    try { await window.Steward.signRelay(addr); } catch (e) {}
+    let _sr = null;
+    try { _sr = await window.Steward.signRelay(addr); } catch (e) { _sr = null; }
     if (moved()) return { ran: false, unknown: true };
+    // ONLY A BOX THAT IS ACTUALLY SIGNED IN TAKES A SLOT (F5, 2026-11-22). signRelay can now answer `pending` (the
+    // box proved but has not accepted the church's safeguarding documents) or come back unsigned; this recorded the
+    // pick in the church-wide `chosen` set regardless, so a box that never landed held one of the church's cap
+    // slots on every console. It is left as it is on THIS console (an unsigned row; owed, if pending, and retried),
+    // counted by nobody, and the pass goes on to the next candidate.
+    if (!_signedIn(_sr, addr)) { skipped.push([addr, (_sr && _sr.pending) ? 'pending' : 'unsigned']); have.add(addr); continue; }
     chosen.push({ pubkey: p, url: addr, name: (o && o.name) || '' });
     chosenKeys.add(p); listedKeys.add(p); have.add(addr);
     added.push({ url: addr, pubkey: p });
