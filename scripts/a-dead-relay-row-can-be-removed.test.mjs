@@ -126,6 +126,7 @@ function runUnenrol({ removingUnreachable = true } = {}) {
     },
     lsGet: (key) => (ls.has(key) ? ls.get(key) : null),
     lsSet: (key, v) => { ls.set(key, String(v)); },
+    _readRelayPrefs: async () => ({ prefs: null, complete: true }),   // BF1 (2026-11-22): the Remove looks its address up in relayprefs `chosen`; this church has no prefs doc
     sharedRelayKeys: () => [],   // this fixture ships no shared pin: KEY_OWN is the console's own box, excluded as such
   };
   const names = Object.keys(scope);

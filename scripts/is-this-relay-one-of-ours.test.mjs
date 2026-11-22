@@ -152,7 +152,7 @@ function consoleWith(deps) {
   const f = new Function('verifyEvent', 'verifyEvent2', 'normalizeURL', 'normalizeURL2', 'fetch',
     'location', 'window', 'extraRelays', '_oneComplete', 'publish', 'sk', 'pub', 'now',
     'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs', '_monotonic',
-    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool', 'lsGet', 'lsSet', '__shared',
+    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool', 'lsGet', 'lsSet', '__shared', '_readRelayPrefs',
     body + '\n' + more +
     // Third audit (2026-10-21, finding 1): a row can make a test box's key count as a SHARED relay's, which is
     // the only way to stand up "the box that served this page is the shared relay" against real relays.
@@ -175,7 +175,9 @@ function consoleWith(deps) {
     // The console's own localStorage (finding 2's "has this console seen a list?"), fresh per console unless shared.
     (k) => { const m = deps.store || (deps.store = new Map()); return m.has(k) ? m.get(k) : null; },
     (k, v) => { const m = deps.store || (deps.store = new Map()); m.set(k, String(v)); },
-    deps.shared || []);
+    deps.shared || [],
+    // BF1 (2026-11-22): the Remove looks its address up in relayprefs `chosen`; these churches have no prefs doc.
+    async () => ({ prefs: null, complete: true }));
 }
 
 // ── reading the relay, not the client ───────────────────────────────────────────────────────────────────

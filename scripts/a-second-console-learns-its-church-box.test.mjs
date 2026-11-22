@@ -370,6 +370,7 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     _lastStamp: new Map(),
     _skewShift: () => 0,
     _authAccepted: new Map(), _authedRelays: new Map(), _authFailed: new Map(), _runKeyReadAuthWaiters: () => {},
+    _readRelayPrefs: async () => ({ prefs: null, complete: true }),   // BF1 (2026-11-22): the Remove looks its address up in relayprefs `chosen`; this church has no prefs doc
     ...CAPS,
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));

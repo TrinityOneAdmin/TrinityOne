@@ -185,17 +185,19 @@ test('5c. a delegated console cannot flip the switch — the press reaches the o
 
 // ── N2 (2026-11-22): a Removed box leaves `chosen` — the REAL _dropChosen over the real reader and writer ───
 const CK = (n) => String(n).padStart(2, '0').repeat(32);
-test('N2. _dropChosen takes the Removed box out of chosen — by its key, or by its address — and leaves everything else as it was', async () => {
+test('N2. _dropChosen takes the Removed box out of chosen by a key the Remove TOMBSTONED — never by address alone — and leaves everything else as it was', async () => {
   const { api } = prefsApi({});
   const seed = [{ pubkey: CK(1), url: 'wss://box-1.example/relay', name: 'one' }, { pubkey: CK(2), url: 'wss://box-2.example/relay', name: 'two' }, { pubkey: CK(3), url: 'wss://box-3.example/relay', name: 'three' }];
   await api._writeRelayPrefs((prev) => ({ ...prev, publicAuto: false, publicTarget: 7, chosen: seed }));
   assert.equal((await api.relayPrefs()).chosen.length, 3, 'precondition: three chosen boxes');
   const byKey = await api._dropChosen('wss://some-other-spelling.example/relay', [CK(2)]);
   assert.equal(byKey.dropped, true, 'the box was not dropped by its key: ' + JSON.stringify(byKey));
-  const byUrl = await api._dropChosen('wss://BOX-3.example/relay', []);   // a dead box: no key known, only the address
-  assert.equal(byUrl.dropped, true, 'the box was not dropped by its address: ' + JSON.stringify(byUrl));
+  // BF1 (2026-11-22): the ADDRESS alone is not a match. A `chosen` key is a church-wide "do not auto-adopt"; with no
+  // key tombstoned, dropping the entry would delete that guard and put nothing in its place.
+  const byUrl = await api._dropChosen('wss://box-3.example/relay', []);
+  assert.notEqual(byUrl.written, true, 'A chosen ENTRY WAS DROPPED BY ADDRESS WITH NOTHING TOMBSTONED — the box lost its last church-wide guard (BF1): ' + JSON.stringify(byUrl));
   const after = await api.relayPrefs();
-  assert.deepEqual(after.chosen.map((c) => c.pubkey), [CK(1)], 'A REMOVED BOX IS STILL IN `chosen` (it keeps its cap slot), or a box nobody removed was dropped: ' + JSON.stringify(after.chosen));
+  assert.deepEqual(after.chosen.map((c) => c.pubkey), [CK(1), CK(3)], 'the wrong boxes are in `chosen`: ' + JSON.stringify(after.chosen));
   assert.equal(after.publicAuto, false, 'dropping a box from chosen changed the opt-out');
   assert.equal(after.publicTarget, 7, 'dropping a box from chosen changed the target');
 });

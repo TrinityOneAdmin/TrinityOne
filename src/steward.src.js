@@ -6636,6 +6636,24 @@ async function unenrolRelayNet(url) {
       _ownKey = !_own ? '' : (_k0(_own) === _k0(u)) ? pk : await keyAt0(_own);
       if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
     }
+    // BF1 (2026-11-22) — A BOX KNOWN ONLY THROUGH `chosen`. The community auto-join records each box it adopts in
+    // the church's relayprefs `chosen` as { pubkey, url, name }, and a `chosen` key is refused by every console's
+    // auto-join. A DEAD box that is in `chosen` but no longer in relay-net proves no key and drops no row, so this
+    // Remove had no key to tombstone — and N2 then dropped the `chosen` entry by address, deleting the last
+    // church-wide guard. So the key `chosen` recorded for THIS address is tombstoned with the rest (through the
+    // same shared/own exclusions), and _dropChosen only ever drops an entry whose key this Remove tombstoned.
+    // A plain read, never the queue (this is already inside a slot). An inconclusive prefs read adds nothing —
+    // and then nothing is dropped from `chosen` either, so the guard stays where it was.
+    {
+      const pr = await _readRelayPrefs();
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      const ch = (pr && pr.complete && pr.prefs && Array.isArray(pr.prefs.chosen)) ? pr.prefs.chosen : [];
+      for (const c of ch) {
+        if (!c || !c.url || _k0(c.url) !== _k0(u)) continue;
+        const p = String(c.pubkey || '').toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(p)) removedKeys.add(p);
+      }
+    }
     const close = await _closeSyncTrust({ removedKeys, u, droppable: _droppable, sk0, pub0,
       never: _ownKey ? [_ownKey] : [], skipTomb: !!_own && _k0(_own) === _k0(u), holdTomb: !!_own && !_ownKey });
     if (close && close.partial) {
@@ -7033,18 +7051,20 @@ async function _writeRelayPrefs(mutate) {
 }
 
 // A REMOVED BOX LEAVES `chosen` (N2, 2026-11-22). `chosen` is the per-church record of the community boxes the
-// auto-join adopted, and the cap counts it — so a Removed community box kept its cap slot for ever. Matched by
-// the key(s) the Remove tombstoned or by the address it was recorded under. READ FIRST, and write ONLY when the
+// auto-join adopted, and the cap counts it — so a Removed community box kept its cap slot for ever. Matched ONLY
+// by a key the Remove TOMBSTONED (BF1, 2026-11-22): a `chosen` key is itself a church-wide "do not auto-adopt",
+// so an entry leaves only when a tombstone has taken that job over. The address is not a match on its own — the
+// Remove looks the address up in `chosen` and tombstones the key it finds (unenrolRelayNet), which is how a dead
+// box recorded here by address still gets dropped. READ FIRST, and write ONLY when the
 // box is really there: the common Remove (a box the auto-join never chose, a church with no prefs doc) must not
 // start writing a prefs doc. An inconclusive read writes nothing — a stale `chosen` entry only costs a cap slot.
 // NEVER CALL THIS FROM INSIDE AN enrolSerial SLOT: _writeRelayPrefs enters the queue itself, and nesting it
 // deadlocks. Its one caller is Steward.unsignRelay's `.then`, after the Remove's slot has resolved.
 async function _dropChosen(url, keys) {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
-  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
-  const u = _k(normRelay(url) || '');
   const ks = new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)));
-  const hit = (c) => !!c && (ks.has(String(c.pubkey || '').toLowerCase()) || (!!u && !!c.url && _k(c.url) === u));
+  if (!ks.size) return { written: false, absent: true, nothingTombstoned: true };
+  const hit = (c) => !!c && ks.has(String(c.pubkey || '').toLowerCase());
   const { prefs, complete } = await _readRelayPrefs();
   if (!complete) return { written: false, unknown: true };
   if (!prefs || !Array.isArray(prefs.chosen) || !prefs.chosen.some(hit)) return { written: false, absent: true };
