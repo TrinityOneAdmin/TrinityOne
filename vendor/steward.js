@@ -17107,9 +17107,7 @@ zoo`.split("\n");
       setNamedRelays(named);
       for (const _sw of swappedIn) {
         try {
-          const _bf = _backfillSafeguardTo(_sw);
-          if (_bf && _bf.catch) _bf.catch(() => {
-          });
+          await _backfillSafeguardTo(_sw);
         } catch (e) {
         }
       }
@@ -21859,10 +21857,8 @@ zoo`.split("\n");
         if (!now2.includes(stale) || now2.includes(u)) continue;
         _writeExtraRelays(now2.map((r) => r === stale ? u : r));
         try {
-          const _bf = _backfillSafeguardTo(u);
-          if (_bf && _bf.catch) _bf.catch(() => {
-          });
-        } catch (e2) {
+          await _backfillSafeguardTo(u);
+        } catch (err2) {
         }
         setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
         _rememberAdoptedName(e, u, proved);
@@ -21880,6 +21876,10 @@ zoo`.split("\n");
         _tagAdopted(u);
         _rememberAdoptedName(e, u, proved);
         added.push(u);
+        try {
+          await _backfillSafeguardTo(u);
+        } catch (err2) {
+        }
       }
     }
     return added;

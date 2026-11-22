@@ -413,3 +413,61 @@ test('A2: the owed marker does not leave in a backup and cannot be written by an
   assert.equal(victim.getItem('trinityone.steward.church-name'), 'X', 'staging fault: the import wrote nothing');
   assert.equal(victim.getItem(OWED_KEY), null, 'AN IMPORTED FILE WROTE AN OWED MARKER — the next focus would prove, send to and sign an address the steward never chose');
 });
+
+// ── 9. A6: the swap paths — the SAME box at a new address — send best-effort, awaited, and never block ──────
+// The REAL refreshNamedRelays / adoptNetDocAddresses with the real _writeExtraRelays, over the real gate and engine.
+const MOVED = 'wss://moved.example/relay', STALE = 'wss://stale.example/relay';
+function swapWorld(opts = {}) {
+  let store = opts.startStore || [STALE];
+  const order = [];
+  const w = world({ ...opts,
+    relays: [OWN, POOL, MOVED], keys: { [MOVED]: KEY_NEW, ...(opts.keys || {}) },
+    read: (name) => (opts.read ? opts.read(name) : null),
+    lifts: [['fn', 'function _writeExtraRelays(list) {'], ['st', 'var _refreshingNames = '], ['fn', 'async function refreshNamedRelays() {'], ['fn', 'async function adoptNetDocAddresses() {']],
+    scope: {
+      RELAYS_LS: 'trinityone.steward.extra-relays', lsSet: (k, v) => { if (k === 'trinityone.steward.extra-relays') store = JSON.parse(v); },
+      extraRelays: () => store.slice(), normRelay: (u) => String(u || '').trim(), isSharedRelaySpelling: () => false, isOwnRelaySpelling: () => false,
+      getNamedRelays: () => (opts.named || []).map((e) => ({ ...e })), setNamedRelays: () => {}, resolveRelayName: async () => ({ url: opts.resolvesTo || MOVED }),
+      // adoptNetDocAddresses' collaborators: one signed entry for the box, at its new address
+      churchPub: CP, relayNetDoc: async () => ({ ev: { pubkey: CP, content: '{}' } }), parseRelayNet: () => [{ url: MOVED, pubkey: KEY_NEW }],
+      retireDeadAdoptedRows: async () => {}, _netDocDialUrl: (u) => String(u || ''), _isDeclined: () => false,
+      _staleBoxSpelling: (u) => ((opts.staleSwap && u === MOVED) ? STALE : ''), _alreadyACandidate: () => false,
+      setAdoptedRelays: () => {}, adoptedRelays: () => [], _rememberAdoptedName: () => {}, _tagAdopted: () => {}, NETDOC_ADOPT_MAX: 8,
+    },
+    more: '\nwindow.Steward = { publishRelayList: () => { __order.push("relay-list"); return Promise.resolve(null); }, addRelay: (u) => { __add(u); return u; } };',
+    expose: ', refreshNamedRelays, adoptNetDocAddresses' });
+  w.scope.__order = order; w.scope.__add = (u) => { store = [...store, u]; };
+  const realPublish = w.scope.pool.publish;
+  w.scope.pool.publish = (urls, ev) => { order.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
+  return { ...w, order, store: () => store };
+}
+// in a swap world the box being read FROM is everything but the moved address
+const swapRead = (silent) => (name) => ({ ev: fullDocs()[name] || null, complete: true, askedUrls: [OWN, POOL, MOVED], answeredUrls: [OWN, POOL].filter((u) => !(silent || []).includes(u)) });
+
+test('A6 refreshNamedRelays: a swap to a NEW address sends the documents to it and WAITS for them before the member relay list is republished', async () => {
+  const w = swapWorld({ named: [{ name: 'box', url: STALE }], read: swapRead() });
+  await w.api.refreshNamedRelays();
+  assert.ok(w.store().includes(MOVED) && !w.store().includes(STALE), 'the swap did not land in the relay list');
+  assert.deepEqual(w.sentTo(MOVED).slice().sort(), DOCS.slice().sort(), 'the swapped-in address was not sent the church\'s documents: ' + JSON.stringify(w.sentTo(MOVED)));
+  assert.ok(w.order.includes('relay-list'), 're-anchor: the swap no longer republishes the member relay list');
+  assert.ok(w.order.indexOf('relay-list') > w.order.lastIndexOf('send:blocked') && w.order.indexOf('relay-list') > w.order.lastIndexOf('send:minors'),
+    'THE NEW ADDRESS WAS ADVERTISED TO MEMBERS BEFORE ITS CHILD LIST WAS SENT — the backfill is not awaited: ' + JSON.stringify(w.order));
+});
+test('A6 refreshNamedRelays: a same-address refresh sends nothing; a box that REFUSES is still swapped in (best-effort, no owed marker)', async () => {
+  const same = swapWorld({ startStore: [MOVED], named: [{ name: 'box', url: MOVED }], read: swapRead() });
+  await same.api.refreshNamedRelays();
+  assert.deepEqual(same.published, [], 'a same-address refresh re-sent the safeguarding documents');
+  const refused = swapWorld({ named: [{ name: 'box', url: STALE }], read: swapRead(), answers: { minors: 'refuse', blocked: 'refuse' } });
+  await refused.api.refreshNamedRelays();
+  assert.ok(refused.store().includes(MOVED), 'a refused backfill blocked the address swap — the console would keep a dead address');
+  assert.equal(refused.mem.get(OWED_KEY) || null, null, 'a swap wrote an owed marker');
+});
+test('A6 adoptNetDocAddresses: both branches — the stale-spelling swap and a newly learned address — send the documents to the address', async () => {
+  const swap = swapWorld({ staleSwap: true, read: swapRead() });
+  assert.deepEqual(await swap.api.adoptNetDocAddresses(), [MOVED], 'the stale-spelling swap did not adopt the moved address');
+  assert.ok(swap.sentTo(MOVED).includes('minors') && swap.sentTo(MOVED).includes('blocked'), 'the stale-swapped address was not sent the child list: ' + JSON.stringify(swap.sentTo(MOVED)));
+  const fresh = swapWorld({ startStore: [], read: swapRead() });
+  assert.deepEqual(await fresh.api.adoptNetDocAddresses(), [MOVED], 'the newly learned address was not adopted');
+  assert.ok(fresh.sentTo(MOVED).includes('minors') && fresh.sentTo(MOVED).includes('blocked'),
+    'AN ADDRESS LEARNED FROM THE CHURCH\'S SIGNED LIST GOT NOTHING — addRelay no longer sends (A1), and nothing else did: ' + JSON.stringify(fresh.sentTo(MOVED)));
+});

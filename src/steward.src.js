@@ -2282,11 +2282,13 @@ async function refreshNamedRelays() {
   }
   if (changed) {
     _writeExtraRelays(extra); setNamedRelays(named);
-    // SAFEGUARDING BACKFILL (mirrors addRelay): a swap writes `extraRelays()` straight through _writeExtraRelays,
-    // bypassing addRelay, so a box swapped in here would hold none of the church's minors:/approved:/guardians:/
-    // blocked: docs and fail OPEN. Every url in `swappedIn` is a genuinely new address (a same-url refresh never
-    // reaches the push), so re-send the four owner-signed docs, verbatim and targeted, to the addresses just added.
-    for (const _sw of swappedIn) { try { const _bf = _backfillSafeguardTo(_sw); if (_bf && _bf.catch) _bf.catch(() => {}); } catch (e) {} }
+    // SAFEGUARDING BACKFILL, BEST-EFFORT AND AWAITED (plan Part A, A6, 2026-11-22). A swap here is the SAME BOX at
+    // a new address — the pinned-key check above, or for an unpinned name the gate — so it creates no new place
+    // members are routed to, and it does not need the owed/pending machinery signRelay has. But a box that came
+    // back at a new address may have come back EMPTY, so the church's safeguarding documents are sent to each new
+    // address (proved, targeted, answers read — _backfillSafeguardTo) and waited for BEFORE the member relay list
+    // below advertises that address. The outcome does not block the swap: a box that refuses stays swapped in.
+    for (const _sw of swappedIn) { try { await _backfillSafeguardTo(_sw); } catch (e) {} }
     // M-7a: republish the kind-10002 relay list so member phones learn the new tunnel address. Without
     // this, the console follows the move (refreshNamedRelays runs every 90s) but members keep trying the
     // dead address and fall back to the shared relays until someone hands out a new slip.
@@ -6257,8 +6259,8 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // Own console only: a delegated / network view returns { landed:false } and sends nothing.
 // NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types.
 //
-// CALLERS (rule 2) are listed where each is wired; at this commit: refreshNamedRelays' tunnel swap and
-// adoptNetDocAddresses' stale-spelling swap. NOT addRelay (A1).
+// CALLERS (rule 2): _adoptRelay (Steward.signRelay — the only one whose result DECIDES anything: sign or owe);
+// refreshNamedRelays' tunnel swap and adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
 async function _backfillSafeguardTo(target) {
   const u = String(target || '');
   if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
@@ -8133,12 +8135,9 @@ async function adoptNetDocAddresses() {
       let now = []; try { now = extraRelays(); } catch (err) { now = []; }
       if (!now.includes(stale) || now.includes(u)) continue;
       _writeExtraRelays(now.map(r => (r === stale ? u : r)));
-      // SAFEGUARDING BACKFILL (mirrors addRelay): this swap writes `extraRelays()` directly, bypassing addRelay, so
-      // the box swapped in holds none of the church's minors:/approved:/guardians:/blocked: docs and fails OPEN.
-      // `u` is a genuinely NEW address here (the guard above `continue`d if it was already in the store, and `stale`
-      // is), so re-send the four owner-signed docs, verbatim and targeted, to it. The non-stale branch below adopts
-      // through addRelay, which backfills itself.
-      try { const _bf = _backfillSafeguardTo(u); if (_bf && _bf.catch) _bf.catch(() => {}); } catch (e) {}
+      // SAFEGUARDING BACKFILL, BEST-EFFORT AND AWAITED (A6): the same box (its key was just proved against the
+      // church's signed entry) at a new address — see refreshNamedRelays. The outcome does not block the swap.
+      try { await _backfillSafeguardTo(u); } catch (err) {}
       setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
       _rememberAdoptedName(e, u, proved);
       added.push(u);
@@ -8146,7 +8145,13 @@ async function adoptNetDocAddresses() {
     }
     if (_alreadyACandidate(u)) continue;     // something else added it while we waited
     let ok = false; try { ok = !!window.Steward.addRelay(u); } catch (err) { ok = false; }
-    if (ok) { _tagAdopted(u); _rememberAdoptedName(e, u, proved); added.push(u); }
+    if (ok) {
+      _tagAdopted(u); _rememberAdoptedName(e, u, proved); added.push(u);
+      // …AND THE SAME FOR AN ADDRESS THIS CONSOLE IS ONLY NOW LEARNING (A6). The box is already in the church's
+      // signed list — another console signed it, after its own backfill — so this creates no new routing either;
+      // addRelay no longer sends anything (A1), so the best-effort send is made here.
+      try { await _backfillSafeguardTo(u); } catch (err) {}
+    }
   }
   return added;
 }
