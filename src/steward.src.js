@@ -6259,8 +6259,9 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // Own console only: a delegated / network view returns { landed:false } and sends nothing.
 // NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types.
 //
-// CALLERS (rule 2): _adoptRelay (Steward.signRelay — the only one whose result DECIDES anything: sign or owe);
-// refreshNamedRelays' tunnel swap and adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
+// CALLERS (rule 2): _adoptRelay (Steward.signRelay: sign, or owe) and _ownBoxBackfill (autoEnrolRelayNet: sign the
+// own box, or hold it) — the two whose result DECIDES something; refreshNamedRelays' tunnel swap and
+// adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
 async function _backfillSafeguardTo(target) {
   const u = String(target || '');
   if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
