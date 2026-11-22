@@ -6233,8 +6233,14 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // away so a refusal looked like success (H2), and read "the read did not finish" as "the church never made
 // one" (F6)). ONE target, AWAITED, and it answers one question: DID THE DOCUMENTS LAND ON THAT BOX?
 //
-//   1. PROVED FIRST. Nothing is sent to an address the relay gate has not admitted — admitRemoteRelay, awaited,
-//      a fresh proof rather than the cache-only relays(). An unproved target gets ZERO documents.
+//   1. PROVED FIRST. Nothing is sent to an address the relay gate does not admit. admitRemoteRelay is awaited:
+//      it STARTS a proof now and waits for it, so a brand-new address is decided before anything is sent, and an
+//      address that has never proved gets ZERO documents. (CORRECTED 2026-11-22 — this said "a fresh proof rather
+//      than the cache". It is not that: after the attempt the gate answers from its cache, so a box that proved
+//      EARLIER and does not answer right now is still admitted until that cached proof expires — up to 30 days.
+//      That is the same exposure as an ordinary setMinors publish, which goes to relays() on the same cache, not
+//      a wider one; and insisting on a fresh proof here would stall every owed retry behind a box that is
+//      briefly down.)
 //   2. READ, AND KNOW WHETHER THE READ WAS WHOLE. Every relay asked must answer, bar the target itself (it is the
 //      empty one) and the addresses that did not prove this pass and are neither canonical nor the own box
 //      (_unprovedDroppable — syncHeal's rule), so one dead church-added row cannot block every adoption. A read
@@ -6269,7 +6275,7 @@ async function _backfillSafeguardTo(target) {
   if (actingChurch || _viewingNetwork()) return { landed: false, why: 'not-own-console' };
   const cp = pub, sk0 = sk;
   const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
-  // 1. proved first
+  // 1. the gate admits it (a proof is attempted now; a still-valid cached proof also admits — see the header)
   let admitted = false;
   try { admitted = !!(await admitRemoteRelay(u)); } catch (e) { admitted = false; }
   if (moved()) return { landed: false, why: 'changed' };

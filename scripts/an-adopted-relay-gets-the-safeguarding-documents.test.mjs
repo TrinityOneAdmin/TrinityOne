@@ -556,3 +556,14 @@ test('F4: when the newest minors: a relay serves is signed by SOMEBODY ELSE, the
   const c = world({ read: (name) => (name === 'minors' ? whole(null) : whole(fullDocs()[name] || null)) });
   assert.equal((await c.api._backfillSafeguardTo(NEW)).results.minors, 'absent', 'CONTROL: a whole read with no answer should still be "absent"');
 });
+
+// ── 13. F3 (Part A audit, rule 4): what "proved" means, as the engine's comment now states it ──────────────
+test('F3: a box that proved EARLIER and does not answer the proof now is still admitted (the gate\'s cache) — a never-proved one is not', async () => {
+  const w = world();
+  assert.equal(await w.api.admitRemoteRelay(NEW), true, 'precondition: the box proves');
+  w.state.keys[NEW] = '';                       // it stops answering the identity proof
+  const r = await w.api._backfillSafeguardTo(NEW);
+  assert.ok(w.proofs.filter((u) => u === NEW).length >= 2, 're-anchor: no new proof was attempted on the second pass');
+  assert.notEqual(r.why, 'unproven', 'the engine now demands a FRESH proof — the comment and the owed-retry both assume it does not: ' + JSON.stringify(r));
+  assert.ok(w.sentTo(NEW).includes('minors'), 'a box with a valid cached proof was sent nothing');
+});
