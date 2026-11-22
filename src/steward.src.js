@@ -6392,9 +6392,30 @@ async function _adoptRelay(u) {
     _setOwedBackfill(cp, u, true);
     return { pending: true, url: u, backfill: (bf && bf.results) || null };
   }
+  // OWED UNTIL IT IS ACTUALLY SIGNED IN (F6, 2026-11-22). The marker used to clear on any answer that was not
+  // `unknown` — including an enrolment whose publish reached no relay, or one where the box failed its proof at that
+  // moment — and the retry then stopped with the box landed and never signed. So the box is marked owed from the
+  // moment its documents land, and the marker goes only when the signing step says the box is IN the church's list.
+  // (An address that never proves is not here at all: it returned above, un-owed. This cannot retry for ever on a
+  // box that will never prove — only on one that proved and took the documents.)
+  _setOwedBackfill(cp, u, true);
   const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
-  if (r && !r.unknown && !moved()) _setOwedBackfill(cp, u, false);
+  if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
   return r;
+}
+// IS THIS BOX NOW IN THE CHURCH'S SIGNED LIST, by what enrolRelayNet answered? The box proved at THIS address, and
+// either it is a shared relay (admitted on its own pin — there is nothing to sign), or the list names its key AND
+// that list is real: a publish that landed (`published`), or an unchanged list read in full (`full === true`). A
+// list that was only INTENDED — the publish reached no relay — carries neither, and is not signed in.
+function _signedIn(r, u) {
+  if (!r || r.unknown || r.skipped || r.pending) return false;
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const p = (r.proven || []).find(x => x && _k(x.url) === _k(u));
+  if (!p) return false;
+  if (p.shared) return true;
+  const key = String(p.pubkey || '').toLowerCase();
+  const named = (r.entries || []).some(e => String((e && e.pubkey) || '').toLowerCase() === key);
+  return named && (r.published === true || r.full === true);
 }
 // THE RETRY. Called by the console on the signals it already follows (mount/unlock, a relay returning, window
 // focus, a relay-list change) — events, never a timer. No owed rows for this church → returns at once. One pass at
@@ -6414,7 +6435,7 @@ async function retryOwedBackfills() {
       let listed = []; try { listed = extraRelays(); } catch (x) { listed = []; }
       if (!listed.includes(e.url)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, withdrawn: true }); continue; }
       let r = null; try { r = await window.Steward.signRelay(e.url); } catch (x) { r = null; }
-      rows.push({ url: e.url, pending: !!(r && r.pending), signed: !!(r && !r.pending && !r.unknown && !r.unadmitted) });
+      rows.push({ url: e.url, pending: !!(r && r.pending), signed: _signedIn(r, e.url) });
     }
   } finally { _owedRetrying = false; }
   return { ran: true, rows };

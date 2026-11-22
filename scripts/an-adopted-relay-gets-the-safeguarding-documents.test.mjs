@@ -268,7 +268,7 @@ const ADOPT_LIFT = [
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'],
   ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
-  ['fn', 'async function _adoptRelay(u) {'], ['st', 'var _owedRetrying = '], ['fn', 'async function retryOwedBackfills() {'],
+  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var _owedRetrying = '], ['fn', 'async function retryOwedBackfills() {'],
 ];
 function adoptWorld(opts = {}) {
   const log = [];            // 'send:<doc>' and 'enrol', in the order they happened
@@ -580,4 +580,32 @@ test('a publish that NEVER settles is given up on (not landed, the pass returns)
   assert.equal(r.landed, false, JSON.stringify(r));
   assert.match(r.results.minors, /^refused: timeout/);
   assert.ok(waits.includes(8000), 're-anchor: the bound is no longer 8 s: ' + JSON.stringify(waits));
+});
+
+// ── 15. F6 (Part A audit): the owed marker goes only when the box is actually signed in ───────────────────
+// The documents LAND in every case below; what varies is what the signing step answers.
+const PROVEN = [{ url: NEW, pubkey: KEY_NEW }], NAMED = [{ pubkey: KEY_NEW, url: NEW }];
+test('F6: a box whose documents landed stays OWED when the signing step did not put it in the list — and is cleared when it did', async () => {
+  for (const [why, enrolResult] of [
+    ['the list could not be read (unknown)', { published: false, unknown: true, proven: PROVEN, entries: [] }],
+    ['the publish reached no relay', { published: false, proven: PROVEN, entries: NAMED, delivered: [] }],
+    ['the box failed its proof at signing', { published: false, proven: [], unproven: [NEW], entries: [] }],
+    ['an unchanged list that was not read in full', { published: false, full: false, proven: PROVEN, entries: NAMED }],
+  ]) {
+    const w = adoptWorld({ enrolResult });
+    await w.api.signRelay(NEW);
+    assert.equal(w.enrols.length, 1, why + ': re-anchor — the documents did not land, so the signing step was never reached');
+    assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }],
+      why + ': THE OWED MARKER WAS CLEARED ALTHOUGH THE BOX IS NOT IN THE CHURCH\'S LIST — the retry stops and the box is never signed (F6)');
+  }
+  for (const [why, enrolResult] of [
+    ['a publish that landed', { published: true, proven: PROVEN, entries: NAMED }],
+    ['already in the list, read in full', { published: false, full: true, proven: PROVEN, entries: NAMED }],
+    ['a shared relay (nothing to sign)', { published: false, proven: [{ url: NEW, pubkey: KEY_NEW, shared: true }], entries: [] }],
+  ]) {
+    const w = adoptWorld({ enrolResult });
+    w.mem.set(OWED_KEY, JSON.stringify([{ churchPub: CP, url: NEW }]));
+    await w.api.retryOwedBackfills();
+    assert.deepEqual(w.owed(), [], why + ': the marker was kept for a box that IS signed in — it would be retried for ever');
+  }
 });

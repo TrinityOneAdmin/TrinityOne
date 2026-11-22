@@ -20437,9 +20437,26 @@ zoo`.split("\n");
       _setOwedBackfill(cp, u, true);
       return { pending: true, url: u, backfill: bf && bf.results || null };
     }
+    _setOwedBackfill(cp, u, true);
     const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
-    if (r && !r.unknown && !moved()) _setOwedBackfill(cp, u, false);
+    if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
     return r;
+  }
+  function _signedIn(r, u) {
+    if (!r || r.unknown || r.skipped || r.pending) return false;
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const p = (r.proven || []).find((x) => x && _k(x.url) === _k(u));
+    if (!p) return false;
+    if (p.shared) return true;
+    const key = String(p.pubkey || "").toLowerCase();
+    const named = (r.entries || []).some((e) => String(e && e.pubkey || "").toLowerCase() === key);
+    return named && (r.published === true || r.full === true);
   }
   var _owedRetrying = false;
   async function retryOwedBackfills() {
@@ -20470,7 +20487,7 @@ zoo`.split("\n");
         } catch (x) {
           r = null;
         }
-        rows.push({ url: e.url, pending: !!(r && r.pending), signed: !!(r && !r.pending && !r.unknown && !r.unadmitted) });
+        rows.push({ url: e.url, pending: !!(r && r.pending), signed: _signedIn(r, e.url) });
       }
     } finally {
       _owedRetrying = false;

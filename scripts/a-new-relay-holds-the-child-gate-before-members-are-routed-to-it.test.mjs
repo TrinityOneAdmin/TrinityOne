@@ -50,7 +50,7 @@ const LIFT = [
   ['fn', 'function _readCovers'], ['fn', 'function _unprovedDroppable(provedUrls) {'], ['fn', 'async function _backfillSafeguardTo(target) {'],
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'], ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
-  ['fn', 'async function _adoptRelay(u) {'], ['st', 'var _owedRetrying = '], ['fn', 'async function retryOwedBackfills() {'],
+  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var _owedRetrying = '], ['fn', 'async function retryOwedBackfills() {'],
 ].map(([k, a]) => (k === 'fn' ? fnBody(STEWARD, a, a) : stmt(STEWARD, a, a))).join('\n');
 
 let church, other, child, adult, OLD, NEW;

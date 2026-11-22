@@ -575,7 +575,7 @@ test('every signing path goes through the one queue (the automatic pass, Connect
   const sign = fnBody(VENDOR, '  signRelay(url) {', 'signRelay');
   const unsign = fnBody(VENDOR, '  unsignRelay(url) {', 'unsignRelay');
   const norm = fnBody(VENDOR, 'function normRelay(input) {', 'normRelay');
-  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay');
+  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay') + '\n' + fnBody(VENDOR, 'function _signedIn(r, u) {', '_signedIn');
   const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', ...ADOPT_NAMES, norm + '\n' + adopt + '\nreturn ({ ' + sign + ', ' + unsign + ' });')(
     enrolSerial, async () => 'signed', async () => 'unsigned', ...ADOPT_VALUES());
   await api.signRelay('wss://x.example/relay'); api.unsignRelay('wss://x.example/relay');
@@ -596,7 +596,7 @@ test('only the automatic pass asks for the own-box exception; Connect and the ex
   const line = VENDOR.split('\n').find(l => /^\s*enrolRelayNet: \(opts\) => /.test(l));
   assert.ok(line, 're-anchor: Steward.enrolRelayNet is no longer the queued arrow');
   const queued = [];
-  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay');   // A2: the real choke; its backfill answered "landed"
+  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay') + '\n' + fnBody(VENDOR, 'function _signedIn(r, u) {', '_signedIn');   // A2: the real choke; its backfill answered "landed"
   const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', ...ADOPT_NAMES, norm + '\n' + adopt + '\nreturn ({ ' + sign + ', ' + line.trim().replace(/,$/, '') + ' });')(
     (fn) => { queued.push(1); return fn(); }, async (o) => { asked.push(o); return {}; }, async () => ({}), ...ADOPT_VALUES());
   await api.signRelay('wss://typed.example/relay');

@@ -45,7 +45,7 @@ const LIFT = [
   ['fn', 'function _tombable(keys, never) {'],
   ['fn', 'async function _flushPendingTomb() {'],
   // A2 (2026-11-22): signRelay goes through the real _adoptRelay; its backfill is a scope stub answering "landed".
-  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'], ['fn', 'async function _adoptRelay(u) {'],
+  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'], ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'],
   ['fn', 'async function _removedKeysRead(droppable) {'],
   ['fn', 'function _unprovedDroppable(provedUrls) {'],
   // BF3/BF1: the relay-prefs reader/writer and the chosen drop, real, so unsignRelay's two follow-ups run for real.
