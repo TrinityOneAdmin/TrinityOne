@@ -287,6 +287,8 @@ const REAL_TOMB = (() => {
 // row off this console's list by emptying it. Hooks, all optional:
 //   onSend(doc, n)   called as the n-th backfill document is handed to the box (n === 5 is the last)
 //   onEnrol()        called inside the signing step, before it answers
+//   onRemovedRead(n) called AFTER the n-th read of the church's removed-keys document has been answered (the read
+//                    itself is served untouched; what the hook changes is what the console finds when it returns)
 // `w.spy` records what the adopt path asked its collaborators for: every _writeTombstone argument (`tomb`), every
 // autoSyncHeal argument (`heals`), publishRelayList calls (`lists`) and every call made THROUGH window.Steward.signRelay
 // (`stewardSign`). `w.log` also carries 'read:removed' each time the church's removed-keys document is read.
@@ -321,7 +323,13 @@ function adoptWorld(opts = {}) {
     return realPublish(urls, ev);
   };
   const realRead = w.scope._oneComplete;
-  w.scope._oneComplete = (filters, ms, priv) => { if (/relays-removed/.test(String((filters[0]['#d'] || [])[0] || ''))) log.push('read:removed'); return realRead(filters, ms, priv); };
+  w.scope._oneComplete = async (filters, ms, priv) => {
+    if (!/relays-removed/.test(String((filters[0]['#d'] || [])[0] || ''))) return realRead(filters, ms, priv);
+    log.push('read:removed');
+    const r = await realRead(filters, ms, priv);
+    if (opts.onRemovedRead) opts.onRemovedRead(log.filter((x) => x === 'read:removed').length);
+    return r;
+  };
   // The keys the church's removed-keys document names RIGHT NOW (what every console's heal and auto-join will read).
   const tombKeys = () => { const ev = w.docs['relays-removed']; if (!ev) return []; return JSON.parse(ev.content || '[]').map((t) => t.pubkey).sort(); };
   return { ...w, log, enrols, listed, spy, tombKeys, owed: () => JSON.parse(w.mem.get(OWED_KEY) || '[]') };
@@ -992,4 +1000,29 @@ test('FF1 in-flight POINT OF USE (community auto-join): a Remove lands while the
   assert.deepEqual(w.chosenWrites, [], 'a removed box was recorded in the church-wide chosen set (it would hold a cap slot on every console)');
   assert.deepEqual(out.skipped, [[NEW, 'unsigned']], JSON.stringify(out));
   assert.deepEqual(w.owed(), [], 'a removed box was left owed by the auto-join — the retry would try it on every pass');
+});
+
+// ── 21. FF1 in-flight, post-build audit: the church SWITCHES while the signing slot is reading ────────────
+// The automatic slot awaits two things before it signs (a proof, when the gate holds none, and the removed-keys
+// read). enrolRelayNet signs for whichever church is active WHEN IT RUNS, so a console that changed church during
+// those awaits would sign church A's owed box into church B's list. The switch is made as the in-slot read (the
+// second removed-keys read of the pass) comes back — a whole read, no tombstone: every other check says go.
+test('FF1 in-flight POINT OF USE (owed retry): the console switches church while the signing slot is reading the removed keys — the box is NOT signed, and the first church still owes it', async () => {
+  const OTHER_CHURCH = '7'.repeat(64);
+  for (const [why, switchTo] of [
+    ['another church is unlocked', (x) => { x.state.pub = OTHER_CHURCH; x.state.sk = 'sk-of-the-other-church'; }],
+    ['the console starts acting for a helped church', (x) => { x.state.actingChurch = OTHER_CHURCH; }],
+  ]) {
+    let switched = 0;
+    const w = owedWorld({ realTomb: true, onRemovedRead: (n) => { if (n === 2) { switched++; switchTo(w); } } });
+    const out = await w.api.retryOwedBackfills();
+    await settle();
+    assert.equal(switched, 1, why + ': re-anchor — the pass made no second removed-keys read, so the church never switched: ' + JSON.stringify(w.log));
+    assert.ok(w.log.indexOf('send:minors') < w.log.lastIndexOf('read:removed'), why + ': re-anchor — the switch was not made after the backfill (inside the slot): ' + JSON.stringify(w.log));
+    assert.equal(w.enrols.length, 0,
+      why + ': AN AUTOMATIC PASS SIGNED A RELAY FOR THE WRONG CHURCH — the console changed church while the slot was reading, and the signing step signs for whoever is active when it runs: ' + JSON.stringify(w.log));
+    assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }], why + ': the first church\'s owed marker was dropped — its box is never tried again: ' + JSON.stringify(out));
+    assert.deepEqual(w.spy.heals, [], why + ': a sync heal was forced for a pass that signed nothing');
+    assert.equal(w.spy.lists, 0, why + ': the member relay list was republished for a pass that signed nothing');
+  }
 });
