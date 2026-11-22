@@ -6286,7 +6286,12 @@ async function _backfillSafeguardTo(target) {
   const readDoc = async (d) => {
     let r = null;
     try { r = await _oneComplete([{ kinds: [30078], authors: [cp], '#d': [d] }], 6000, true); } catch (e) { return { ev: null, whole: false }; }
-    return { ev: (r && r.ev && r.ev.pubkey === cp) ? r.ev : null, whole: _readCovers(r, u, droppable) };
+    // A WRONG-AUTHOR ANSWER IS UNREAD, NOT ABSENT (F4, 2026-11-22). _oneComplete keeps the NEWEST event it was
+    // served with no author check, and a relay need not honour the `authors` filter. If the newest thing served
+    // under this d-tag is somebody else's, the church's own copy may be sitting behind it — so this is "we could
+    // not read the church's document", never "the church has none" (which would count as landed with nothing sent).
+    if (r && r.ev && r.ev.pubkey !== cp) return { ev: null, whole: false };
+    return { ev: (r && r.ev) ? r.ev : null, whole: _readCovers(r, u, droppable) };
   };
   // 3. one document, to the target only, and what the target said
   const sendDoc = async (ev) => {

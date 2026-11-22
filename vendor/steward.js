@@ -20348,7 +20348,8 @@ zoo`.split("\n");
       } catch (e) {
         return { ev: null, whole: false };
       }
-      return { ev: r && r.ev && r.ev.pubkey === cp ? r.ev : null, whole: _readCovers(r, u, droppable) };
+      if (r && r.ev && r.ev.pubkey !== cp) return { ev: null, whole: false };
+      return { ev: r && r.ev ? r.ev : null, whole: _readCovers(r, u, droppable) };
     };
     const sendDoc = async (ev) => {
       try {

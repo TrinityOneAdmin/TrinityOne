@@ -542,3 +542,17 @@ test('F8: an own box ALREADY in the list is not held back (best-effort send), an
   await unread.api.autoEnrolRelayNet();
   assert.equal(unread.enrols.length, 1, 'the enrolment was held on a relay-net read that was not whole — the own-box first-list exception (third audit) is gone');
 });
+
+// ── 12. F4 (Part A audit): a wrong-author answer is UNREAD, never "the church has no such document" ────────
+test('F4: when the newest minors: a relay serves is signed by SOMEBODY ELSE, the box is NOT landed and nothing is sent in its place (control: no answer at all on a whole read IS absent)', async () => {
+  const stranger = doc('minors', { pubkeys: [] }, STEWARD_KEY);
+  const whole = (ev) => ({ ev, complete: true, askedUrls: [OWN, POOL, NEW], answeredUrls: [OWN, POOL] });
+  const w = world({ read: (name) => (name === 'minors' ? whole(stranger) : whole(fullDocs()[name] || null)) });
+  const r = await w.api._backfillSafeguardTo(NEW);
+  assert.equal(r.results.minors, 'unread', 'a wrong-author hit was read as: ' + r.results.minors);
+  assert.equal(r.landed, false,
+    'A STRANGER\'S DOCUMENT HID THE CHURCH\'S CHILD LIST AND THE BOX WAS COUNTED AS LANDED WITH NO minors: SENT (F4): ' + JSON.stringify(r));
+  assert.ok(!w.sentTo(NEW).includes('minors'), 'somebody else\'s document was forwarded as the church\'s');
+  const c = world({ read: (name) => (name === 'minors' ? whole(null) : whole(fullDocs()[name] || null)) });
+  assert.equal((await c.api._backfillSafeguardTo(NEW)).results.minors, 'absent', 'CONTROL: a whole read with no answer should still be "absent"');
+});
