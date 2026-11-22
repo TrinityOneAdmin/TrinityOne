@@ -20425,16 +20425,20 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  var _removePressed = /* @__PURE__ */ new Map();
   async function _adoptRelay(u, opts) {
     if (!sk || !pub) throw new Error("No church key on this device");
     const automatic = !!(opts && opts.automatic);
     if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
     const cp = pub, sk0 = sk;
     const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
+    const pressed0 = automatic ? _removePressed.get(u) || 0 : 0;
+    const pressed = () => automatic && (_removePressed.get(u) || 0) !== pressed0;
     const bf = await _backfillSafeguardTo(u);
     if (moved() || bf && bf.why === "changed") return { published: false, unknown: true, changed: true };
     if (bf && bf.why === "unproven") return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
     if (!bf || !bf.landed) {
+      if (pressed()) return { removedMidFlight: true, withdrawn: true };
       _setOwedBackfill(cp, u, true);
       return { pending: true, url: u, backfill: bf && bf.results || null };
     }
@@ -20448,6 +20452,7 @@ zoo`.split("\n");
         }
       };
       const ra = await enrolSerial(async () => {
+        if (pressed()) return { removedMidFlight: true, withdrawn: true };
         let listed = [];
         try {
           listed = extraRelays();
@@ -24205,6 +24210,11 @@ zoo`.split("\n");
       try {
         const _uo = normRelay(url);
         if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false);
+      } catch (e) {
+      }
+      try {
+        const _ur = normRelay(url);
+        if (_ur) _removePressed.set(_ur, (_removePressed.get(_ur) || 0) + 1);
       } catch (e) {
       }
       const p = enrolSerial(() => unenrolRelayNet(url));

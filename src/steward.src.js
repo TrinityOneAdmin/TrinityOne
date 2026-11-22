@@ -6380,16 +6380,32 @@ function _setOwedBackfill(cp, url, on) {
     lsSet(BACKFILL_OWED_LS, JSON.stringify(rest));
   } catch (e) {}
 }
+// REMOVE WAS PRESSED FOR THIS ADDRESS (FF1 audit, 2026-11-22) — a count per normalised address, for this page's
+// lifetime, bumped by Steward.unsignRelay the moment it is called. An automatic adopt notes the count when it starts
+// and stops if it has moved. WHY A COUNT AND NOT THE TOMBSTONE: a Remove does not always write one. One that cannot
+// read the church's relay-net list whole answers `unknown` BEFORE it has marked any key (and so does one cut short
+// by a church switch, or one that throws); the steward is told "remove it again", the row STAYS on this console's
+// list, and nothing in the removed-keys document or the pending set says a Remove was ever pressed. Every question
+// the signing slot asks then answers "go", and the pass finishes the adoption the steward had just tried to cancel.
+// In memory only, on purpose: an adopt in flight does not survive a reload either, and unsignRelay has already
+// dropped the owed marker, so nothing restarts it. Read by _adoptRelay's automatic path ONLY — a steward's own
+// Connect racing their own Remove is last-write-wins, as before.
+const _removePressed = new Map();
 async function _adoptRelay(u, opts) {
   if (!sk || !pub) throw new Error('No church key on this device');
   const automatic = !!(opts && opts.automatic);   // set ONLY by _adoptRelayAuto (the owed retry, the community auto-join)
   if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
   const cp = pub, sk0 = sk;
   const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
+  const pressed0 = automatic ? (_removePressed.get(u) || 0) : 0;
+  const pressed = () => automatic && (_removePressed.get(u) || 0) !== pressed0;   // Remove pressed for this address since this adopt began
   const bf = await _backfillSafeguardTo(u);
   if (moved() || (bf && bf.why === 'changed')) return { published: false, unknown: true, changed: true };
   if (bf && bf.why === 'unproven') return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
   if (!bf || !bf.landed) {
+    // …and a Remove pressed while the documents were being sent has already dropped the owed marker: an automatic
+    // pass does not write it back (it would be retried, and signed, on the next pass).
+    if (pressed()) return { removedMidFlight: true, withdrawn: true };
     _setOwedBackfill(cp, u, true);
     return { pending: true, url: u, backfill: (bf && bf.results) || null };
   }
@@ -6407,6 +6423,8 @@ async function _adoptRelay(u, opts) {
     // landed in those seconds — on this console or another — was signed straight over, with nobody pressing
     // anything. So the question is asked again here, in the same queue slot that signs (the precedent is
     // syncEnable, which reads the tombstones inside its slot for the same reason), and it FAILS CLOSED:
+    //   · Remove was pressed on this console since this adopt
+    //     began (_removePressed — whatever that Remove answered)  → consent withdrawn: nothing signed, marker dropped;
     //   · the row is no longer on this console's list            → consent withdrawn: nothing signed, marker dropped;
     //   · the box's key cannot be resolved (the gate's still-valid
     //     proof, else a fresh one)                                → nothing signed, marker KEPT (the next pass retries);
@@ -6422,6 +6440,7 @@ async function _adoptRelay(u, opts) {
     // A STEWARD'S OWN Add/Connect does not come through this branch at all: the lines below it are unchanged.
     const _kA = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
     const ra = await enrolSerial(async () => {
+      if (pressed()) return { removedMidFlight: true, withdrawn: true };
       let listed = []; try { listed = extraRelays(); } catch (e) { listed = []; }
       if (!listed.includes(u)) return { removedMidFlight: true, withdrawn: true };
       let key = ''; try { key = String(_gate.provedKey(u, cp) || '').toLowerCase(); } catch (e) { key = ''; }
@@ -10643,6 +10662,9 @@ window.Steward = {
     // FF1 (2026-11-22): a Remove ends any OWED state for that address, whatever the Remove itself then answers —
     // an owed marker is consent to connect, and pressing Remove is that consent withdrawn.
     try { const _uo = normRelay(url); if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false); } catch (e) {}
+    // …and an AUTOMATIC adopt of that address already in flight stops, whatever this Remove goes on to answer
+    // (FF1 audit, 2026-11-22 — see _removePressed): it would otherwise write the marker straight back and sign.
+    try { const _ur = normRelay(url); if (_ur) _removePressed.set(_ur, (_removePressed.get(_ur) || 0) + 1); } catch (e) {}
     const p = enrolSerial(() => unenrolRelayNet(url));
     // BF3 (2026-11-22): …or `pruned` — the relay-net prune landed but the sync-tombstone step was partial, so the
     // result says removed:false. The 10002 is what member phones route by; it must not wait on the tombstone.
