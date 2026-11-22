@@ -1,0 +1,5 @@
+# THROWAWAY spike — do not commit build output or machine-local config.
+local.properties
+.gradle/
+build/
+app/build/

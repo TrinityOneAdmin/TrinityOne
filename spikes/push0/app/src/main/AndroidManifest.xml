@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- THROWAWAY Phase-0 spike manifest. applicationId comes from build.gradle (com.trinityone.push0spike). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- API 33+ runtime notification permission; device under test is API 31 (not required there). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:label="push0 spike"
+        android:usesCleartextTraffic="false"
+        android:theme="@android:style/Theme.Material.Light">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- No custom Service/Receiver is declared. WorkManager's own components are provided by the
+             androidx.work library (androidx.exported=false by default). If Phase 1 adds a
+             RECEIVE_BOOT_COMPLETED receiver, it MUST be android:exported="false". -->
+    </application>
+</manifest>

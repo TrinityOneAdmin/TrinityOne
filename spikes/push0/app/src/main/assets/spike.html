@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>push0 spike</title></head>
+<body>
+<!-- THROWAWAY Phase-0 spike page. Loaded by a headless WebView inside a WorkManager worker. -->
+<script src="spike-bundle.js"></script>
+<script>
+  // Native calls window.__spikeStart(relayUrl) after it has (optionally) injected the key.
+  window.__spikeStart = function (relayUrl) {
+    if (typeof window.runSpike !== 'function') {
+      if (window.SpikeNative) window.SpikeNative.result(JSON.stringify({ stage: 'fatal', why: 'bundle did not define runSpike' }));
+      return;
+    }
+    window.runSpike(relayUrl);
+  };
+  if (window.SpikeNative) window.SpikeNative.result(JSON.stringify({ stage: 'html-loaded' }));
+</script>
+</body>
+</html>
