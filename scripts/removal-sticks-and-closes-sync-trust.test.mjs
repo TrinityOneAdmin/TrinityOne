@@ -132,7 +132,7 @@ function makeWorld(cfg) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   const api = new Function('scope', 'with (scope) {' + LIFT + (cfg.realHeal ? '\n' + LIFT_HEAL : '') +
-    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, _removedKeysRead, autoSyncHeal, ' +
+    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, _removedKeysRead, _owedBackfills, _setOwedBackfill, autoSyncHeal, ' +
     fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ', ' +
     fnBody(BUNDLE, 'async syncEnable() {', 'syncEnable in the shipped bundle') + ', ' +
     fnBody(BUNDLE, '  unsignRelay(url) {', 'unsignRelay in the shipped bundle') + ', ' +
@@ -696,4 +696,23 @@ test('BF4: syncEnable does not excuse the OWN box from the tombstone read when i
   await assert.rejects(() => w.api.syncEnable(), /could not be checked/,
     'THE OWN BOX WAS TREATED AS DROPPABLE — sync was switched on without hearing from the box most likely to hold the church\'s tombstones');
   assert.equal(w.writesTo('trinityone/relays').length, 0);
+});
+
+// ── FF1 (final combined audit): pressing Remove ends any OWED state for that address ──────────────────────
+// The REAL unsignRelay and owed-marker store. An owed marker is "the steward consented to connect this box and its
+// documents have not landed"; the owed retry acts on it with no further click.
+test('FF1: Remove clears the owed marker for that address — also when the Remove itself could not finish — and leaves another address\'s marker alone', async () => {
+  const A = 'wss://a.example/relay', B = 'wss://b.example/relay', C = 'wss://c.example/relay';
+  const mk = (extra) => { const w = makeWorld({ relays: [{ url: A, key: KEY_A, up: true }, { url: B, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_A, url: A }, { pubkey: KEY_B, url: B }], sync: null, ...(extra || {}) });
+    w.api._setOwedBackfill(PUB, B, true); w.api._setOwedBackfill(PUB, C, true); return w; };
+  const done = mk();
+  const r = await done.api.unsignRelay(B);
+  assert.equal(r.removed, true, 'precondition: the Remove did not land: ' + JSON.stringify(r));
+  assert.deepEqual(done.api._owedBackfills().map(e => e.url), [C],
+    'A REMOVED RELAY IS STILL MARKED OWED — the retry would prove it, sign it back in and clear its tombstone with nobody pressing anything (FF1)');
+  const stuck = mk({ relays: [{ url: A, key: KEY_A, up: false }, { url: B, key: KEY_B, up: true }] });   // A silent → the Remove cannot read the list
+  const r2 = await stuck.api.unsignRelay(B);
+  assert.equal(r2.unknown, true, 'precondition: this Remove should not have been able to finish: ' + JSON.stringify(r2));
+  assert.deepEqual(stuck.api._owedBackfills().map(e => e.url), [C], 'a Remove that could not finish left the box owed');
 });

@@ -6441,10 +6441,36 @@ async function retryOwedBackfills(opts) {
   _owedRetrying = true;
   const rows = [];
   try {
-    for (const e of mine) {
+    // A REMOVE OUTRANKS AN OWED MARKER (FF1, 2026-11-22). This pass calls signRelay, and signRelay's success path
+    // CLEARS the tombstone of the address it signs — that is right for a steward's deliberate Add, and exactly
+    // wrong here: an owed box that a steward (on this console or another) has since Removed would be proved,
+    // signed back in, un-tombstoned and re-advertised to members with nobody pressing anything. So before any
+    // row is tried, the church's removed keys are read — the same read syncEnable and the auto-join make, plus
+    // this console's pending set — and it FAILS CLOSED: if that read is not whole, nothing is done this pass and
+    // every marker stays. Then, per row, the key the box proves (now, or by the gate's still-valid proof) is
+    // looked up: removed → the marker is DROPPED and the box is left alone; no key at all → cannot tell which
+    // box this is, so nothing is done for it this pass.
+    // (Rows the steward has taken off this console's list are dropped FIRST — that needs no read.)
+    let _listed0 = []; try { _listed0 = extraRelays(); } catch (x) { _listed0 = []; }
+    const todo = [];
+    for (const e of mine) { if (_listed0.includes(e.url)) todo.push(e); else { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, withdrawn: true }); } }
+    if (!todo.length) return { ran: true, rows };
+    const _kR = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+    let _droppR = new Set();
+    try { _droppR = new Set(extraRelays().map(_kR)); } catch (x) { _droppR = new Set(); }
+    let gone = null;
+    try { gone = await _removedKeysRead(_droppR); } catch (x) { gone = null; }
+    if (!gone || !gone.complete) return { ran: true, removedUnknown: true, rows };
+    for (const e of todo) {
       if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
       let listed = []; try { listed = extraRelays(); } catch (x) { listed = []; }
       if (!listed.includes(e.url)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, withdrawn: true }); continue; }
+      let key = '';
+      try { const pr = await verifyRelayIdentity(e.url); key = String((pr && pr.relayPub) || '').toLowerCase(); } catch (x) { key = ''; }
+      if (!/^[0-9a-f]{64}$/.test(key)) { try { key = String(_gate.provedKey(e.url, cp) || '').toLowerCase(); } catch (x) { key = ''; } }
+      if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+      if (!/^[0-9a-f]{64}$/.test(key)) { rows.push({ url: e.url, unproven: true }); continue; }
+      if (gone.keys.has(key)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, removed: true }); continue; }
       let r = null; try { r = await window.Steward.signRelay(e.url); } catch (x) { r = null; }
       rows.push({ url: e.url, pending: !!(r && r.pending), signed: _signedIn(r, e.url) });
     }
@@ -10530,6 +10556,9 @@ window.Steward = {
   // / unknown / own-box refusal changed nothing to advertise. Built church-wide from the relay-net doc this
   // removal just re-signed; fire-and-forget, swallowed on failure like the heal.
   unsignRelay(url) {
+    // FF1 (2026-11-22): a Remove ends any OWED state for that address, whatever the Remove itself then answers —
+    // an owed marker is consent to connect, and pressing Remove is that consent withdrawn.
+    try { const _uo = normRelay(url); if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false); } catch (e) {}
     const p = enrolSerial(() => unenrolRelayNet(url));
     // BF3 (2026-11-22): …or `pruned` — the relay-net prune landed but the sync-tombstone step was partial, so the
     // result says removed:false. The 10002 is what member phones route by; it must not wait on the tombstone.

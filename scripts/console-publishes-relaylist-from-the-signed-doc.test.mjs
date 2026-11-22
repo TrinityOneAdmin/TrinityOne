@@ -143,6 +143,8 @@ function runUnsign({ removeResult, trace }) {
     enrolSerial: (fn) => { t.order.push('slot'); return Promise.resolve(fn()).then((v) => { t.order.push('slot-end'); return v; }); },
     unenrolRelayNet: async () => removeResult,
     _dropChosen: (url, keys) => { t.order.push('drop'); t.drops.push([url, keys]); return Promise.resolve({ written: true }); },
+    // FF1 (2026-11-22): unsignRelay clears any owed marker for the address first (run for real in removal-sticks-and-closes-sync-trust.test.mjs).
+    normRelay: (u) => u, pub: 'c'.repeat(64), actingChurch: '', _viewingNetwork: () => false, _setOwedBackfill: () => {},
     window: { Steward: { publishRelayList: () => { calls++; return Promise.resolve(null); } } },
     Promise,
   });

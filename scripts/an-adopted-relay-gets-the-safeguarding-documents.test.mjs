@@ -270,6 +270,7 @@ const ADOPT_LIFT = [
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'],
   ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
+  ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '], ['fn', 'function _pendingTomb() {'], ['fn', 'function _tombable(keys, never) {'], ['fn', 'async function _removedKeysRead(droppable) {'],
   ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
 ];
 function adoptWorld(opts = {}) {
@@ -719,4 +720,47 @@ test('FF3: a go-ahead given on an UNREADABLE list is not reused — the next sig
   w.state.answers = {}; w.state.t += 11 * 60 * 1000;
   await w.api.autoEnrolRelayNet();
   assert.equal(n, 2, 'once the documents land the own box is never enrolled');
+});
+
+// ── 19. FF1 (final combined audit): the owed retry honours a Remove ───────────────────────────────────────
+// An owed box would land and be signed on this pass (it proves, it accepts). The only thing that differs between the
+// worlds below is what the church's removed-keys document — or this console's pending set — says about its key.
+const tombDoc = (keys) => ({ id: 'tomb', pubkey: CP, kind: 30078, created_at: 2000, tags: [['d', 'trinityone/relays-removed']], content: JSON.stringify(keys.map((pubkey) => ({ pubkey, at: 1900 }))) });
+const owedWorld = (opts = {}) => { const w = adoptWorld(opts); w.mem.set(OWED_KEY, JSON.stringify([{ churchPub: CP, url: NEW }])); return w; };
+test('FF1: an owed box that has since been REMOVED is not re-signed by the retry — its marker is dropped and nothing is sent (control: with no tombstone it is signed)', async () => {
+  const control = owedWorld();
+  await control.api.retryOwedBackfills();
+  assert.equal(control.enrols.length, 1, 'CONTROL: with nothing removed, the owed box should land and be signed');
+  const w = owedWorld({ docs: { ...fullDocs(), 'relays-removed': tombDoc([KEY_NEW]) } });
+  const out = await w.api.retryOwedBackfills();
+  assert.equal(w.enrols.length, 0,
+    'A REMOVED RELAY WAS SIGNED BACK INTO THE CHURCH\'S LIST BY THE OWED RETRY — nobody pressed anything, and signRelay then clears its tombstone (FF1): ' + JSON.stringify(out));
+  assert.deepEqual(w.published, [], 'the church\'s documents were sent to a relay it had removed');
+  assert.deepEqual(w.owed(), [], 'the owed marker of a removed relay was kept — it would be retried for ever');
+  // …and the same for a Remove on THIS console whose tombstone has not landed yet (the pending set).
+  const pend = owedWorld();
+  pend.mem.set('trinityone.steward.tomb-pending.' + CP, JSON.stringify([KEY_NEW]));
+  await pend.api.retryOwedBackfills();
+  assert.equal(pend.enrols.length, 0, 'a relay whose Remove is still pending on this console was re-signed by the owed retry');
+  assert.deepEqual(pend.owed(), []);
+  // …and for a removed box that is NOT answering its proof right now but still holds a valid cached one (the gate
+  // would admit it, so the retry would go on to sign it): its key is taken from that cached proof.
+  const cached = owedWorld({ docs: { ...fullDocs(), 'relays-removed': tombDoc([KEY_NEW]) } });
+  assert.equal(await cached.api.admitRemoteRelay(NEW), true, 'precondition: the box proved once');
+  cached.state.keys[NEW] = '';
+  await cached.api.retryOwedBackfills();
+  assert.equal(cached.enrols.length, 0); assert.deepEqual(cached.published, []);
+  assert.deepEqual(cached.owed(), [], 'a removed box with only a CACHED proof kept its owed marker — it is signed back in the moment it answers again');
+});
+test('FF1: when the removed-keys read is NOT whole the retry does nothing at all this pass (fail closed) and keeps the marker; the same when the box proves no key', async () => {
+  const w = owedWorld({ silent: [POOL] });   // the shared relay — which may hold the tombstone — is not answering
+  const out = await w.api.retryOwedBackfills();
+  assert.equal(out.removedUnknown, true, JSON.stringify(out));
+  assert.equal(w.enrols.length, 0, 'A BOX WAS SIGNED WITHOUT KNOWING WHETHER IT HAD BEEN REMOVED');
+  assert.deepEqual(w.published, []);
+  assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }], 'an unreadable removed-keys document dropped the owed marker');
+  const mute = owedWorld({ keys: { [NEW]: '' } });   // no proof now, and none cached: there is no key to look up
+  await mute.api.retryOwedBackfills();
+  assert.equal(mute.enrols.length, 0); assert.deepEqual(mute.published, []);
+  assert.deepEqual(mute.owed(), [{ churchPub: CP, url: NEW }], 'a box that proved nothing lost its owed marker');
 });

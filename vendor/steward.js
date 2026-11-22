@@ -20473,7 +20473,42 @@ zoo`.split("\n");
     _owedRetrying = true;
     const rows = [];
     try {
+      let _listed0 = [];
+      try {
+        _listed0 = extraRelays();
+      } catch (x) {
+        _listed0 = [];
+      }
+      const todo = [];
       for (const e of mine) {
+        if (_listed0.includes(e.url)) todo.push(e);
+        else {
+          _setOwedBackfill(cp, e.url, false);
+          rows.push({ url: e.url, withdrawn: true });
+        }
+      }
+      if (!todo.length) return { ran: true, rows };
+      const _kR = (x) => {
+        try {
+          return normalizeURL2(x);
+        } catch (e) {
+          return String(x || "");
+        }
+      };
+      let _droppR = /* @__PURE__ */ new Set();
+      try {
+        _droppR = new Set(extraRelays().map(_kR));
+      } catch (x) {
+        _droppR = /* @__PURE__ */ new Set();
+      }
+      let gone = null;
+      try {
+        gone = await _removedKeysRead(_droppR);
+      } catch (x) {
+        gone = null;
+      }
+      if (!gone || !gone.complete) return { ran: true, removedUnknown: true, rows };
+      for (const e of todo) {
         if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
         let listed = [];
         try {
@@ -20484,6 +20519,30 @@ zoo`.split("\n");
         if (!listed.includes(e.url)) {
           _setOwedBackfill(cp, e.url, false);
           rows.push({ url: e.url, withdrawn: true });
+          continue;
+        }
+        let key = "";
+        try {
+          const pr = await verifyRelayIdentity(e.url);
+          key = String(pr && pr.relayPub || "").toLowerCase();
+        } catch (x) {
+          key = "";
+        }
+        if (!/^[0-9a-f]{64}$/.test(key)) {
+          try {
+            key = String(_gate.provedKey(e.url, cp) || "").toLowerCase();
+          } catch (x) {
+            key = "";
+          }
+        }
+        if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+        if (!/^[0-9a-f]{64}$/.test(key)) {
+          rows.push({ url: e.url, unproven: true });
+          continue;
+        }
+        if (gone.keys.has(key)) {
+          _setOwedBackfill(cp, e.url, false);
+          rows.push({ url: e.url, removed: true });
           continue;
         }
         let r = null;
@@ -24061,6 +24120,11 @@ zoo`.split("\n");
     // / unknown / own-box refusal changed nothing to advertise. Built church-wide from the relay-net doc this
     // removal just re-signed; fire-and-forget, swallowed on failure like the heal.
     unsignRelay(url) {
+      try {
+        const _uo = normRelay(url);
+        if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false);
+      } catch (e) {
+      }
       const p = enrolSerial(() => unenrolRelayNet(url));
       p.then((r) => {
         try {
