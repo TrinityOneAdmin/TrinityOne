@@ -44,6 +44,8 @@ const LIFT = [
   ['fn', 'function sharedRelayKeys'],
   ['fn', 'function _tombable(keys, never) {'],
   ['fn', 'async function _flushPendingTomb() {'],
+  // A2 (2026-11-22): signRelay goes through the real _adoptRelay; its backfill is a scope stub answering "landed".
+  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'], ['fn', 'async function _adoptRelay(u) {'],
   ['fn', 'async function _removedKeysRead(droppable) {'],
   ['fn', 'function _unprovedDroppable(provedUrls) {'],
   // BF3/BF1: the relay-prefs reader/writer and the chosen drop, real, so unsignRelay's two follow-ups run for real.
@@ -93,6 +95,7 @@ function makeWorld(cfg) {
     // same world — exactly the reload-durable retry the fix depends on.
     localStorage: { getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null), setItem: (k, v) => { lsMap.set(k, String(v)); }, removeItem: (k) => { lsMap.delete(k); } },
     enrolRelayNet: cfg.enrol || (async () => ({ published: false, proven: [] })),
+    _backfillSafeguardTo: async () => ({ landed: true, results: {} }),   // A2: run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs
     autoSyncHeal: async () => ({}),   // signRelay chains a forced heal; the heal itself is point-of-use tested in sync-list-heals-itself
     now: () => NOW, _monotonic: (t) => t,
     _isHex64: (p) => /^[0-9a-f]{64}$/.test(String(p || '')),

@@ -115,6 +115,10 @@ function runSign({ enrolResult }) {
     normRelay: (u) => u,
     enrolSerial: (fn) => Promise.resolve(fn()),
     enrolRelayNet: async () => enrolResult,
+    // A2 (2026-11-22): signRelay goes through the REAL _adoptRelay (lifted below); its backfill is answered "landed"
+    // here — that step is run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    sk: new Uint8Array(32).fill(7), pub: 'c'.repeat(64), actingChurch: '', _viewingNetwork: () => false,
+    _backfillSafeguardTo: async () => ({ landed: true, results: {} }), _setOwedBackfill: () => {},
     normalizeURL: (u) => u,
     extraRelays: () => [],
     sharedRelayKeys: () => [],   // B2 (2026-11-22): signRelay never clears a shared relay key's tombstone
@@ -123,7 +127,7 @@ function runSign({ enrolResult }) {
     window: { Steward: { publishRelayList: () => { calls++; return Promise.resolve(null); } } },
     Promise, Set,
   });
-  const api = new Function('scope', `with (scope) { const _o = { ${body} }; return _o; }`)(scope);
+  const api = new Function('scope', `with (scope) { ${fnBody(STEWARD, 'async function _adoptRelay(u) {', '_adoptRelay')}\nconst _o = { ${body} }; return _o; }`)(scope);
   return api.signRelay('wss://new.example/relay').then(async () => { await new Promise(r => setTimeout(r, 0)); return calls; });
 }
 

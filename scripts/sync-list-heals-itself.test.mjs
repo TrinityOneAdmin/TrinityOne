@@ -535,6 +535,11 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       _writeTombstone: async (o) => { order.push('untomb:' + JSON.stringify((o && o.remove) || null)); return { wrote: true }; },
       autoSyncHeal: async (opts) => { order.push('heal:' + JSON.stringify(opts)); return {}; },
       sharedRelayKeys: () => [],   // B2 (2026-11-22): signRelay never clears a shared relay key's tombstone; none shipped in this fixture
+      // A2 (2026-11-22): signRelay goes through the REAL _adoptRelay (lifted below). Its backfill is answered "landed"
+      // (run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs) and takes no queue slot, so the
+      // slot order asserted below is unchanged.
+      sk: new Uint8Array(32).fill(7), pub: PUB, actingChurch: '', _viewingNetwork: () => false,
+      _backfillSafeguardTo: async () => ({ landed: true, results: {} }), _setOwedBackfill: () => {},
       Promise, JSON, String,
     };
     const proxy = new Proxy(scope, {
@@ -543,7 +548,7 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       set: (t, k, v) => { t[k] = v; return true; },
     });
     const api = new Function('scope', 'with (scope) { ' +
-      fnBody(BUNDLE, 'function normRelay(input) {', 'normRelay') + '\nreturn { ' +
+      fnBody(BUNDLE, 'function normRelay(input) {', 'normRelay') + '\n' + fnBody(BUNDLE, 'async function _adoptRelay(u) {', '_adoptRelay') + '\nreturn { ' +
       fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
     return { api, order };
   };

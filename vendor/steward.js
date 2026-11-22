@@ -20397,6 +20397,75 @@ zoo`.split("\n");
     const landed = ok(results.minors) && ok(results.blocked);
     return { landed, why: landed ? "" : "not-landed", results };
   }
+  var BACKFILL_OWED_LS = "trinityone.steward.backfill-owed";
+  function _owedBackfills() {
+    try {
+      const a = JSON.parse(lsGet(BACKFILL_OWED_LS) || "[]");
+      return Array.isArray(a) ? a.filter((e) => e && /^[0-9a-f]{64}$/.test(String(e.churchPub || "")) && typeof e.url === "string" && /^wss?:\/\//i.test(e.url)).map((e) => ({ churchPub: e.churchPub, url: e.url })) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function _setOwedBackfill(cp, url, on) {
+    try {
+      const rest = _owedBackfills().filter((e) => !(e.churchPub === cp && e.url === url));
+      if (on) rest.push({ churchPub: cp, url });
+      lsSet(BACKFILL_OWED_LS, JSON.stringify(rest));
+    } catch (e) {
+    }
+  }
+  async function _adoptRelay(u) {
+    if (!sk || !pub) throw new Error("No church key on this device");
+    if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    const cp = pub, sk0 = sk;
+    const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
+    const bf = await _backfillSafeguardTo(u);
+    if (moved() || bf && bf.why === "changed") return { published: false, unknown: true, changed: true };
+    if (bf && bf.why === "unproven") return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
+    if (!bf || !bf.landed) {
+      _setOwedBackfill(cp, u, true);
+      return { pending: true, url: u, backfill: bf && bf.results || null };
+    }
+    const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    if (r && !r.unknown && !moved()) _setOwedBackfill(cp, u, false);
+    return r;
+  }
+  var _owedRetrying = false;
+  async function retryOwedBackfills() {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+    if (_owedRetrying) return { ran: false, busy: true };
+    const cp = pub;
+    const mine = _owedBackfills().filter((e) => e.churchPub === cp);
+    if (!mine.length) return { ran: false, none: true };
+    _owedRetrying = true;
+    const rows = [];
+    try {
+      for (const e of mine) {
+        if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+        let listed = [];
+        try {
+          listed = extraRelays();
+        } catch (x) {
+          listed = [];
+        }
+        if (!listed.includes(e.url)) {
+          _setOwedBackfill(cp, e.url, false);
+          rows.push({ url: e.url, withdrawn: true });
+          continue;
+        }
+        let r = null;
+        try {
+          r = await window.Steward.signRelay(e.url);
+        } catch (x) {
+          r = null;
+        }
+        rows.push({ url: e.url, pending: !!(r && r.pending), signed: !!(r && !r.pending && !r.unknown && !r.unadmitted) });
+      }
+    } finally {
+      _owedRetrying = false;
+    }
+    return { ran: true, rows };
+  }
   async function relayNetEntries(cp) {
     if (!pub || cp && cp !== pub) return [];
     const { ev } = await relayNetDoc();
@@ -23777,10 +23846,16 @@ zoo`.split("\n");
     // proved box into the sync-trust doc. Fired AFTER the enrol queue slot resolves (never from inside it —
     // the no-nesting rule), forced past the 10-minute damper because a steward just acted, and swallowed on
     // failure: the next trigger retries, and signRelay's own result is unchanged either way.
+    //
+    // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
+    // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
+    // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
+    // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
+    // retryOwedBackfills.
     signRelay(url) {
       const u = normRelay(url);
       if (!u) return Promise.resolve(null);
-      const p = enrolSerial(() => enrolRelayNet({ extra: [u] }));
+      const p = _adoptRelay(u);
       p.then((r) => {
         try {
           if (r && !r.unknown && (r.published || (r.proven || []).length > 0)) {
@@ -23831,6 +23906,10 @@ zoo`.split("\n");
     // 10-minute damper, `{ force: true }` to bypass it once.
     syncHeal: () => syncHeal(),
     autoSyncHeal,
+    // The boxes a steward consented to whose safeguarding documents have not landed yet (A2) — tried again on the
+    // console's churn signals. `owedRelays` is the list for this church, for a screen that wants to say "waiting".
+    retryOwedRelays: () => retryOwedBackfills(),
+    owedRelays: () => pub ? _owedBackfills().filter((e) => e.churchPub === pub).map((e) => e.url) : [],
     // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
     //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
     //    through the same Auto-find mechanics. SAFEGUARDING NOTE (plan finding 18): a community operator sees only

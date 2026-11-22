@@ -139,7 +139,10 @@
   // src/steward.src.js:declineRelay and src/steward.src.js:DEAD_STRIKES_LS.
   const ROUTING_KEYS = new Set(['trinityone.steward.extra-relays', 'trinityone.steward.relay-names',
                                 'trinityone.steward.adopted-relays', 'trinityone.steward.declined-relays',
-                                'trinityone.steward.dead-relay-strikes']);
+                                'trinityone.steward.dead-relay-strikes',
+                                // 2026-11-22: "this relay is OWED the church's safeguarding documents" — an instruction to
+                                // prove, send to and then SIGN an address. A forged or stale entry must not ride in on a file.
+                                'trinityone.steward.backfill-owed']);
 
   // THE PRELOAD SEED CACHES ARE REBUILT FROM THE RELAY ON EVERY OPEN, so a backup has no reason to carry them —
   // and three reasons not to, which is why they are excluded on BOTH sides exactly like ROUTING_KEYS. (1) SIZE:

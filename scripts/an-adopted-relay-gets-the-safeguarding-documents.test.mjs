@@ -255,3 +255,161 @@ test('A1: addRelay records the address and publishes NOTHING — no document, no
   assert.deepEqual(w.published, [],
     'addRelay STILL SENDS THE SAFEGUARDING DOCUMENTS — on the typed-address paths it runs before the identity proof (audit H1): ' + JSON.stringify(w.sentTo(NEW)));
 });
+
+// ── 8. A2: Steward.signRelay is the choke point — prove, backfill, see it LAND, and only then sign ─────────
+// The REAL signRelay, _adoptRelay, owed-marker store and retry, over the real gate and the real engine. The one
+// collaborator that is a spy is enrolRelayNet — the step that signs the box into the church's relay-net document
+// and so makes it a place members are routed to. What these tests ask is WHETHER and WHEN it is reached.
+const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
+const BACKUP = readFileSync(join(ROOT, 'app/backup.jsx'), 'utf8');
+const OWED_KEY = 'trinityone.steward.backfill-owed';
+const ADOPT_LIFT = [
+  ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'],
+  ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
+  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
+  ['fn', 'async function _adoptRelay(u) {'], ['st', 'var _owedRetrying = '], ['fn', 'async function retryOwedBackfills() {'],
+];
+function adoptWorld(opts = {}) {
+  const log = [];            // 'send:<doc>' and 'enrol', in the order they happened
+  const enrols = [];
+  const listed = opts.listed || [NEW];
+  const w = world({ ...opts,
+    lifts: ADOPT_LIFT,
+    scope: {
+      normRelay: (u) => String(u || '').trim(), extraRelays: () => listed.slice(),
+      enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o);
+        return opts.enrolResult || { published: true, full: true, proven: [{ url: NEW, pubkey: KEY_NEW }], entries: [{ pubkey: KEY_NEW, url: NEW }] }; },
+      _writeTombstone: async () => ({ wrote: false }), autoSyncHeal: async () => ({}),
+      ...(opts.scope || {}) },
+    more: '\nconst _st = { ' + fnBody(STEWARD, '  signRelay(url) {', 'signRelay') + ' };\nwindow.Steward = { signRelay: (u) => _st.signRelay(u), publishRelayList: () => Promise.resolve(null) };',
+    expose: ', signRelay: (u) => _st.signRelay(u), retryOwedBackfills, _owedBackfills' });
+  const realPublish = w.scope.pool.publish;
+  w.scope.pool.publish = (urls, ev) => { log.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
+  return { ...w, log, enrols, listed, owed: () => JSON.parse(w.mem.get(OWED_KEY) || '[]') };
+}
+// signOutcome is a top-level function in app/stew-dashboard.jsx (shipped unbundled), sliced out and RUN (rule 3).
+// test-slice's brace matcher cannot walk the regex literals inside it, so the slice is "from its first line to the
+// first line that is a lone closing brace", re-anchored on both ends.
+const signOutcome = (() => {
+  const a = DASH.indexOf('function signOutcome(r, url) {'), b = DASH.indexOf('\n}\n', a);
+  assert.ok(a > 0 && b > a, 're-anchor: signOutcome moved or was renamed in app/stew-dashboard.jsx');
+  const body = DASH.slice(a, b + 2);
+  assert.ok(/return '';\n}$/.test(body), 're-anchor: the slice does not end at signOutcome\'s own "added" return');
+  return new Function(body + '\nreturn signOutcome;')();
+})();
+
+test('A2 POINT OF USE: signRelay sends the documents, sees minors: and blocked: LAND, and only then signs the box', async () => {
+  const w = adoptWorld();
+  const r = await w.api.signRelay(NEW);
+  assert.ok(w.log.includes('send:minors') && w.log.includes('send:blocked'),
+    'signRelay SIGNED A BOX WITHOUT SENDING IT THE SAFEGUARDING DOCUMENTS — every adopt path goes through here, so no adopted box gets them: ' + JSON.stringify(w.log));
+  assert.equal(w.enrols.length, 1, 'the box was not signed after its documents landed');
+  assert.deepEqual(w.enrols[0], { extra: [NEW] });
+  assert.ok(w.log.indexOf('enrol') > w.log.indexOf('send:minors') && w.log.indexOf('enrol') > w.log.indexOf('send:blocked'),
+    'THE BOX WAS SIGNED INTO THE CHURCH\'S LIST BEFORE ITS CHILD LIST LANDED — members are routed to a box that reads a child as an adult: ' + JSON.stringify(w.log));
+  assert.equal(signOutcome(r, NEW), '', 'a box that landed and was signed did not read as added: ' + signOutcome(r, NEW));
+  assert.deepEqual(w.owed(), [], 'a box that landed was left marked as owed');
+});
+
+test('A2: an UNPROVEN address is sent nothing, signed nowhere and owed nothing — and the steward is told it could not prove itself', async () => {
+  const w = adoptWorld({ keys: { [NEW]: '' } });
+  const r = await w.api.signRelay(NEW);
+  assert.deepEqual(w.published, [], 'documents were sent to an address that proved nothing (audit H1)');
+  assert.equal(w.enrols.length, 0, 'an address the gate refused was handed to the signing step');
+  assert.deepEqual(w.owed(), [], 'an unproved address was written down as owed — it would be retried and signed with no further consent');
+  assert.match(signOutcome(r, NEW), /could not prove it runs TrinityOne/);
+});
+
+test('A2: REFUSED, THEN REGISTERED — not signed and marked owed while the box refuses; the retry lands it, signs it and clears the marker', async () => {
+  const w = adoptWorld({ answers: { minors: 'refuse', blocked: 'refuse', approved: 'refuse', guardians: 'refuse', nophoto: 'refuse' } });
+  const r = await w.api.signRelay(NEW);
+  assert.equal(r.pending, true, 'a box that refused the church\'s documents did not come back pending: ' + JSON.stringify(r));
+  assert.equal(w.enrols.length, 0,
+    'A BOX THAT REFUSED THE CHILD LIST WAS SIGNED INTO THE CHURCH\'S RELAY LIST — members are routed to it and a child there reads as an adult (audit H2)');
+  assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }], 'the box was not marked as owed, so nothing will ever try again');
+  const said = signOutcome(r, NEW);
+  assert.match(said, /waiting for the relay to accept your church/, 'the steward was not told the truth: ' + said);
+  assert.notEqual(said, '', 'a pending box read as "✓ Added"');
+  // a retry while it still refuses changes nothing
+  await w.api.retryOwedBackfills();
+  assert.equal(w.enrols.length, 0, 'the retry signed a box that still refuses');
+  assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }]);
+  // the church is registered on the box: it accepts now
+  w.state.answers = {};
+  const out = await w.api.retryOwedBackfills();
+  assert.equal(w.enrols.length, 1, 'the retry did not sign the box once its documents landed: ' + JSON.stringify(out));
+  assert.deepEqual(w.owed(), [], 'the owed marker was not cleared once the box was signed');
+});
+
+test('A2: the retry does nothing for a row the steward has since REMOVED (consent withdrawn), for another church\'s rows, or on a delegated console', async () => {
+  const gone = adoptWorld({ listed: [] });
+  gone.mem.set(OWED_KEY, JSON.stringify([{ churchPub: CP, url: NEW }]));
+  await gone.api.retryOwedBackfills();
+  assert.deepEqual(gone.published, [], 'documents were sent to a relay the steward had removed');
+  assert.equal(gone.enrols.length, 0, 'a relay the steward had removed was signed by the retry');
+  assert.deepEqual(gone.owed(), [], 'the marker for a removed row was kept');
+  const other = adoptWorld();
+  other.mem.set(OWED_KEY, JSON.stringify([{ churchPub: '7'.repeat(64), url: NEW }]));
+  await other.api.retryOwedBackfills();
+  assert.equal(other.enrols.length, 0, 'ANOTHER CHURCH\'S owed relay was signed into this church\'s list');
+  assert.deepEqual(other.published, []);
+  assert.deepEqual(other.owed(), [{ churchPub: '7'.repeat(64), url: NEW }], 'another church\'s marker was touched');
+  const deleg = adoptWorld({ actingChurch: 'f'.repeat(64) });
+  deleg.mem.set(OWED_KEY, JSON.stringify([{ churchPub: CP, url: NEW }]));
+  await deleg.api.retryOwedBackfills();
+  assert.equal(deleg.enrols.length, 0); assert.deepEqual(deleg.published, []);
+});
+
+test('A2: a delegated console sends nothing and owes nothing (it goes to the signing step, which refuses it); a locked console throws and owes nothing', async () => {
+  const deleg = adoptWorld({ actingChurch: 'f'.repeat(64), enrolResult: { removed: false, skipped: 'not this church’s own console' } });
+  const r = await deleg.api.signRelay(NEW);
+  assert.deepEqual(deleg.published, [], 'a delegated console sent the device church\'s documents');
+  assert.deepEqual(deleg.owed(), []);
+  assert.match(signOutcome(r, NEW), /Only your church’s own console/);
+  const locked = adoptWorld({ sk: null });
+  await assert.rejects(() => locked.api.signRelay(NEW), /No church key/);
+  assert.deepEqual(locked.published, []); assert.deepEqual(locked.owed(), []); assert.equal(locked.enrols.length, 0);
+});
+
+test('A2: signOutcome never reads a pending result as added, whatever else the result carries', () => {
+  for (const r of [{ pending: true }, { pending: true, published: true, full: true, proven: [{ url: NEW, pubkey: KEY_NEW }], entries: [{ pubkey: KEY_NEW }] }]) {
+    assert.match(signOutcome(r, NEW), /waiting for the relay to accept your church/, JSON.stringify(r));
+  }
+});
+
+// The real KeyDistributor effect, sliced out of app/stew-dashboard.jsx and RUN (the same anchors
+// sync-list-heals-itself.test.mjs and a-console-signs-its-own-relay.test.mjs use).
+test('A2 POINT OF USE: the console retries owed relays on boot and on every churn signal — cut the wire and this goes red', async () => {
+  const START = "  // ── SIGN THIS CONSOLE'S OWN RELAY INTO THE CHURCH'S LIST", END = '  // ── end of the own-relay enrolment effect';
+  const a = DASH.indexOf(START), b = DASH.indexOf(END, a);
+  assert.ok(a > 0 && b > a, 're-anchor: the own-relay enrolment effect moved or was removed from KeyDistributor');
+  const timers = [], listeners = new Map();
+  let retries = 0;
+  const win = { Steward: { retryOwedRelays: async () => { retries++; return {}; } },
+    addEventListener(t, f) { (listeners.get(t) || listeners.set(t, []).get(t)).push(f); }, removeEventListener() {} };
+  new Function('React', 'window', 'setTimeout', 'clearTimeout', 'unlockTick', DASH.slice(a, b))(
+    { useEffect(fn) { fn(); } }, win, (fn) => { timers.push(fn); return timers.length; }, () => {}, 7);
+  assert.equal(retries, 0, 'the retry ran before the deferred timer');
+  for (const fn of timers) fn();
+  assert.equal(retries, 1, 'THE CONSOLE NEVER RETRIES AN OWED RELAY — a box that refused once is never backfilled and never signed (rule 1)');
+  for (const t of ['steward-relay-returned', 'focus', 'steward-relays']) (listeners.get(t) || []).slice().forEach((f) => f());
+  assert.equal(retries, 4, 'a churn signal does not retry owed relays');
+});
+
+// app/backup.jsx ships unbundled, so the two functions are sliced out and RUN (rule 3).
+test('A2: the owed marker does not leave in a backup and cannot be written by an imported file', () => {
+  const body = [stmt(BACKUP, '  const ROUTING_KEYS = new Set(', 'ROUTING_KEYS'), stmt(BACKUP, '  const SEED_CACHE_RX = ', 'SEED_CACHE_RX'),
+    fnBody(BACKUP, '  function snapshot(prefixes, exact) {', 'snapshot'), fnBody(BACKUP, '  function restoreLocal(map, allow, exact) {', 'restoreLocal'),
+    stmt(BACKUP, '  const STEWARD_PREFIXES = ', 'STEWARD_PREFIXES')].join('\n');
+  const store = (seed) => { const m = new Map(Object.entries(seed)); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); }, key: (i) => [...m.keys()][i] || null, get length() { return m.size; } }; };
+  const forged = JSON.stringify([{ churchPub: CP, url: 'wss://attacker.example/relay' }]);
+  const src = store({ 'trinityone.steward.church-name': 'St Aidan', [OWED_KEY]: forged });
+  const m = new Function('localStorage', body + '\nreturn { snapshot, restoreLocal, STEWARD_PREFIXES };')(src);
+  const out = m.snapshot(m.STEWARD_PREFIXES);
+  assert.ok('trinityone.steward.church-name' in out, 'staging fault: the export carries no steward state at all');
+  assert.equal(OWED_KEY in out, false, 'the owed marker travels in a backup — an instruction to send a church\'s child list to an address and then sign it');
+  const victim = store({});
+  new Function('localStorage', body + '\nreturn { restoreLocal };')(victim).restoreLocal({ 'trinityone.steward.church-name': 'X', [OWED_KEY]: forged }, m.STEWARD_PREFIXES);
+  assert.equal(victim.getItem('trinityone.steward.church-name'), 'X', 'staging fault: the import wrote nothing');
+  assert.equal(victim.getItem(OWED_KEY), null, 'AN IMPORTED FILE WROTE AN OWED MARKER — the next focus would prove, send to and sign an address the steward never chose');
+});

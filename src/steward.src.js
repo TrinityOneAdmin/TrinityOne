@@ -6317,6 +6317,87 @@ async function _backfillSafeguardTo(target) {
   const landed = ok(results.minors) && ok(results.blocked);
   return { landed, why: landed ? '' : 'not-landed', results };
 }
+// ── ADOPT ONE RELAY: PROVE → BACKFILL → ONLY THEN SIGN (plan Part A, A2, 2026-11-22) ─────────────────────────
+//
+// THE ONE CHOKE POINT. Steward.signRelay is what every path that turns a box into a place MEMBERS are routed to
+// goes through — the typed address field, the Add card, Auto-find's Connect, the community auto-join — because it
+// is what signs the box into the church's relay-net document and republishes the member relay list. So the
+// safeguarding backfill is decided HERE, before that signing, and not at the moment an address is written down:
+//
+//   1. the box is proved and the church's safeguarding documents are sent to it and its ANSWERS read
+//      (_backfillSafeguardTo — outside the signing queue; nothing in the queue may wait on it);
+//   2. LANDED → the box is signed into relay-net (enrolRelayNet, in the queue, exactly as before);
+//   3. NOT LANDED → nothing is signed. The box stays an unsigned row on this console: members are not routed to
+//      it. An OWED marker { churchPub, url } is written and the result is { pending: true } — never a signing
+//      result, so no caller can read it as "added".
+//   4. NOT PROVED → nothing is sent, nothing is signed, nothing is owed: the same "could not prove it" answer as
+//      before, and the steward connects it again.
+//
+// THE OWED MARKER MEANS "the steward consented to this box for this church; the documents have not landed yet".
+// Its ABSENCE means do nothing. (The other way round — a "landed" marker — would fail OPEN on cleared storage:
+// no marker would read as "not yet done", and a restore that carried one would read as "done" for a box that
+// never got anything.) retryOwedBackfills re-runs this whole function for each owed row on the console's churn
+// signals until it lands; a row the steward has since removed from the list is consent withdrawn, and its marker
+// is dropped.
+//
+// A box that never accepts the church is not a deadlock: it stays unsigned, Remove works on it, and the steward
+// is told it is waiting.
+//
+// A DELEGATED / NETWORK VIEW is unchanged: enrolRelayNet answers `skipped` there, nothing is sent and nothing is
+// owed — the consent on that screen is about the church being helped, which this console cannot sign for.
+const BACKFILL_OWED_LS = 'trinityone.steward.backfill-owed';   // [{ churchPub, url }] — consent given, documents not landed
+function _owedBackfills() {
+  try {
+    const a = JSON.parse(lsGet(BACKFILL_OWED_LS) || '[]');
+    return Array.isArray(a) ? a.filter(e => e && /^[0-9a-f]{64}$/.test(String(e.churchPub || '')) && typeof e.url === 'string' && /^wss?:\/\//i.test(e.url)).map(e => ({ churchPub: e.churchPub, url: e.url })) : [];
+  } catch (e) { return []; }
+}
+function _setOwedBackfill(cp, url, on) {
+  try {
+    const rest = _owedBackfills().filter(e => !(e.churchPub === cp && e.url === url));
+    if (on) rest.push({ churchPub: cp, url });
+    lsSet(BACKFILL_OWED_LS, JSON.stringify(rest));
+  } catch (e) {}
+}
+async function _adoptRelay(u) {
+  if (!sk || !pub) throw new Error('No church key on this device');
+  if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
+  const cp = pub, sk0 = sk;
+  const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
+  const bf = await _backfillSafeguardTo(u);
+  if (moved() || (bf && bf.why === 'changed')) return { published: false, unknown: true, changed: true };
+  if (bf && bf.why === 'unproven') return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
+  if (!bf || !bf.landed) {
+    _setOwedBackfill(cp, u, true);
+    return { pending: true, url: u, backfill: (bf && bf.results) || null };
+  }
+  const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
+  if (r && !r.unknown && !moved()) _setOwedBackfill(cp, u, false);
+  return r;
+}
+// THE RETRY. Called by the console on the signals it already follows (mount/unlock, a relay returning, window
+// focus, a relay-list change) — events, never a timer. No owed rows for this church → returns at once. One pass at
+// a time. Through window.Steward.signRelay, so a row that lands gets everything a first-time Connect gets.
+let _owedRetrying = false;
+async function retryOwedBackfills() {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { ran: false };
+  if (_owedRetrying) return { ran: false, busy: true };
+  const cp = pub;
+  const mine = _owedBackfills().filter(e => e.churchPub === cp);
+  if (!mine.length) return { ran: false, none: true };
+  _owedRetrying = true;
+  const rows = [];
+  try {
+    for (const e of mine) {
+      if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
+      let listed = []; try { listed = extraRelays(); } catch (x) { listed = []; }
+      if (!listed.includes(e.url)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, withdrawn: true }); continue; }
+      let r = null; try { r = await window.Steward.signRelay(e.url); } catch (x) { r = null; }
+      rows.push({ url: e.url, pending: !!(r && r.pending), signed: !!(r && !r.pending && !r.unknown && !r.unadmitted) });
+    }
+  } finally { _owedRetrying = false; }
+  return { ran: true, rows };
+}
 async function relayNetEntries(cp) {
   if (!pub || (cp && cp !== pub)) return [];   // this console speaks for one church: its own
   const { ev } = await relayNetDoc();
@@ -10198,10 +10279,16 @@ window.Steward = {
   // proved box into the sync-trust doc. Fired AFTER the enrol queue slot resolves (never from inside it —
   // the no-nesting rule), forced past the 10-minute damper because a steward just acted, and swallowed on
   // failure: the next trigger retries, and signRelay's own result is unchanged either way.
+  //
+  // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
+  // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
+  // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
+  // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
+  // retryOwedBackfills.
   signRelay(url) {
     const u = normRelay(url);
     if (!u) return Promise.resolve(null);
-    const p = enrolSerial(() => enrolRelayNet({ extra: [u] }));
+    const p = _adoptRelay(u);
     p.then((r) => {
       try {
         if (r && !r.unknown && (r.published || ((r.proven || []).length > 0))) {
@@ -10251,6 +10338,10 @@ window.Steward = {
   // 10-minute damper, `{ force: true }` to bypass it once.
   syncHeal: () => syncHeal(),
   autoSyncHeal,
+  // The boxes a steward consented to whose safeguarding documents have not landed yet (A2) — tried again on the
+  // console's churn signals. `owedRelays` is the list for this church, for a screen that wants to say "waiting".
+  retryOwedRelays: () => retryOwedBackfills(),
+  owedRelays: () => (pub ? _owedBackfills().filter(e => e.churchPub === pub).map(e => e.url) : []),
   // ── COMMUNITY RELAYS ON BY DEFAULT (plan B1 + B2). The opt-out + chosen set are a church-signed, OWNER-ONLY
   //    document (trinityone/relayprefs); B2 adopts open community relays up to a per-church cap, fastest-first,
   //    through the same Auto-find mechanics. SAFEGUARDING NOTE (plan finding 18): a community operator sees only

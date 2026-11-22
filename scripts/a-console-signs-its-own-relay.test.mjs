@@ -557,16 +557,25 @@ test('one signing at a time: a steward\'s Connect waits for an automatic pass, s
   assert.equal(await enrolSerial(async () => 'next'), 'next', 'one failed signing stopped every later one');
 });
 
-test('every signing path goes through the one queue (the automatic pass, Connect, and Remove)', () => {
+// What the lifted _adoptRelay reads besides the queue and the signing step: an unlocked owner console, a backfill
+// that LANDED, and the owed-marker writer.
+const ADOPT_NAMES = ['sk', 'pub', 'actingChurch', '_viewingNetwork', '_backfillSafeguardTo', '_setOwedBackfill'];
+const ADOPT_VALUES = () => [new Uint8Array(32).fill(7), 'c'.repeat(64), '', () => false, async () => ({ landed: true, results: {} }), () => {}];
+test('every signing path goes through the one queue (the automatic pass, Connect, and Remove)', async () => {
   // Executed, not text-matched: each caller is lifted out of the shipped bundle and run with a queue that records.
+  // A2 (2026-11-22): signRelay now goes through _adoptRelay — prove, backfill, and only then the signing step this
+  // test is about. The REAL _adoptRelay is lifted with it; its backfill is answered "landed" (that step is run for
+  // real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs), and because the backfill is awaited BEFORE
+  // the queue, Connect is awaited here before the queue is inspected.
   const seen = [];
   const enrolSerial = (fn) => { seen.push('queued'); return fn(); };
   const sign = fnBody(VENDOR, '  signRelay(url) {', 'signRelay');
   const unsign = fnBody(VENDOR, '  unsignRelay(url) {', 'unsignRelay');
   const norm = fnBody(VENDOR, 'function normRelay(input) {', 'normRelay');
-  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', norm + '\nreturn ({ ' + sign + ', ' + unsign + ' });')(
-    enrolSerial, async () => 'signed', async () => 'unsigned');
-  api.signRelay('wss://x.example/relay'); api.unsignRelay('wss://x.example/relay');
+  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay');
+  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', ...ADOPT_NAMES, norm + '\n' + adopt + '\nreturn ({ ' + sign + ', ' + unsign + ' });')(
+    enrolSerial, async () => 'signed', async () => 'unsigned', ...ADOPT_VALUES());
+  await api.signRelay('wss://x.example/relay'); api.unsignRelay('wss://x.example/relay');
   assert.deepEqual(seen, ['queued', 'queued'], 'Connect or Remove signs outside the queue — it can overlap an automatic pass');
   const auto = autoEnrol({ results: [OK], queue: (fn) => { seen.push('auto-queued'); return fn(); } });
   return auto.fn().then(() => assert.ok(seen.includes('auto-queued'), 'the automatic pass signs outside the queue'));
@@ -584,8 +593,9 @@ test('only the automatic pass asks for the own-box exception; Connect and the ex
   const line = VENDOR.split('\n').find(l => /^\s*enrolRelayNet: \(opts\) => /.test(l));
   assert.ok(line, 're-anchor: Steward.enrolRelayNet is no longer the queued arrow');
   const queued = [];
-  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', norm + '\nreturn ({ ' + sign + ', ' + line.trim().replace(/,$/, '') + ' });')(
-    (fn) => { queued.push(1); return fn(); }, async (o) => { asked.push(o); return {}; }, async () => ({}));
+  const adopt = fnBody(VENDOR, 'async function _adoptRelay(u) {', '_adoptRelay');   // A2: the real choke; its backfill answered "landed"
+  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', ...ADOPT_NAMES, norm + '\n' + adopt + '\nreturn ({ ' + sign + ', ' + line.trim().replace(/,$/, '') + ' });')(
+    (fn) => { queued.push(1); return fn(); }, async (o) => { asked.push(o); return {}; }, async () => ({}), ...ADOPT_VALUES());
   await api.signRelay('wss://typed.example/relay');
   await api.enrolRelayNet({ auto: true, extra: ['wss://x.example/relay'] });
   await api.enrolRelayNet();
