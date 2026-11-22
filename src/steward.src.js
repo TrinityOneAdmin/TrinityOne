@@ -7154,6 +7154,46 @@ function _tombable(keys, never) {
   const no = new Set([...(never || [])].map(p => String(p || '').toLowerCase()));
   return [...new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
 }
+// WHICH KEYS HAS THIS CHURCH REMOVED — THE ONE READ every path that could put a box BACK must make (B1/B3,
+// 2026-11-22; audit F1/F4). The keys in the church's trinityone/relays-removed document, plus this console's own
+// pending set (a Remove whose tombstone has not landed yet is still a Remove). THREE-STATE, FAIL CLOSED:
+// `complete` is false unless every relay asked answered — bar the `droppable` addresses that are themselves
+// unreachable (_readCovers) — and a caller must treat "not complete" as "this box may have been removed".
+// Authenticated (privateDoc) like every other read of this document, so a relay still mid-login that may be
+// WITHHOLDING it is never counted as "answered: no tombstones". Absent + complete = no tombstones, which is normal.
+async function _removedKeysRead(droppable) {
+  const keys = new Set(_tombable(_pendingTomb()));
+  if (!pub) return { complete: false, keys };
+  let r = null;
+  try { r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true); } catch (e) { return { complete: false, keys }; }
+  if (!_readCovers(r, '', droppable || new Set())) return { complete: false, keys };
+  const ev = (r && r.ev && r.ev.pubkey === pub) ? r.ev : null;   // re-check the author: a relay need not honour the filter
+  if (ev) {
+    let ts = []; try { ts = JSON.parse(ev.content || '[]'); } catch (e) { ts = []; }
+    for (const t of (Array.isArray(ts) ? ts : [])) { const p = String((t && t.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) keys.add(p); }
+  }
+  return { complete: true, keys };
+}
+// syncHeal's droppable rule, for a caller that is not syncHeal: of the addresses a read will ask (relaysRaw()),
+// the ones that did NOT prove a key this pass may be excused from the full-answer rule — never a canonical
+// spelling, never the own box. `provedUrls`: the addresses that proved, in any spelling (normalised here).
+function _unprovedDroppable(provedUrls) {
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const provedAddrs = new Set([...(provedUrls || [])].map(_k));
+  const own = relayNetCandidates()[0] || '';
+  const out = new Set();
+  let asked = []; try { asked = relaysRaw(); } catch (e) { asked = []; }
+  for (const url of asked) {
+    const addr = _k(url);
+    if (provedAddrs.has(addr)) continue;
+    let canonical = false;
+    try { canonical = Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some(h => _k(h) === addr); } catch (e) { canonical = false; }
+    if (canonical) continue;
+    if (own && _k(own) === addr) continue;
+    out.add(addr);
+  }
+  return out;
+}
 // THE FLUSH ON THE HEAL PASS (B0, 2026-11-22). A Remove whose tombstone could not be written leaves its keys in
 // the pending set; before this only the NEXT REMOVE flushed them, and a steward who has removed the box has no
 // reason to press Remove again. autoSyncHeal calls this first, on the console's existing triggers. No pending
@@ -10490,10 +10530,23 @@ window.Steward = {
     // half above (relayIdentities — one identity proof per relay, seconds each) deliberately runs BEFORE
     // entering the queue, so a slow probe never starves every other signing (the enrol no-nesting rule:
     // nothing already inside the queue may await enrolSerial again — that deadlocks it).
+    //
+    // A REMOVED BOX IS NOT SIGNED BACK IN (B1, 2026-11-22; audit F1). This signed the snapshot above and never
+    // read trinityone/relays-removed, so a second owner console still listing a Removed box re-trusted it — and
+    // because the new doc is stamped after the tombstone, no later heal pruned it again. The tombstones are read
+    // INSIDE the queue slot (as syncHeal reads them), so no Remove can land between the check and the signing;
+    // every tombstoned key and every key this console still holds pending is dropped before signing. An
+    // incomplete read REFUSES to enable (fail closed): the same droppable rule as syncHeal, computed from the
+    // proofs relayIdentities just took, so one dead church-added row cannot block the switch for ever.
+    const _droppE = _unprovedDroppable(ids.filter(r => /^[0-9a-f]{64}$/.test(String(r.pubkey || '').toLowerCase())).map(r => r.url));
     return enrolSerial(async () => {
-      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }), sk));
+      const gone = await _removedKeysRead(_droppE);
+      if (!gone.complete) throw new Error('Sync could not be switched on — not all of your relays answered, so the list of relays you have removed could not be checked. Nothing is mirroring yet; try again.');
+      const signing = trusted.filter(t => !gone.keys.has(String(t.pubkey || '').toLowerCase()));
+      if (signing.length < 2) throw new Error('Sync needs at least two separate TrinityOne relays — a relay you have removed does not count. Add another the church runs.');
+      const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(signing) }), sk));
       if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
-      return { relays: trusted.length };
+      return { relays: signing.length };
     });
   },
   // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,

@@ -21155,6 +21155,63 @@ zoo`.split("\n");
     const no = new Set([...never || []].map((p) => String(p || "").toLowerCase()));
     return [...new Set([...keys || []].map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p) && !shared.has(p) && !no.has(p)))];
   }
+  async function _removedKeysRead(droppable) {
+    const keys = new Set(_tombable(_pendingTomb()));
+    if (!pub) return { complete: false, keys };
+    let r = null;
+    try {
+      r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
+    } catch (e) {
+      return { complete: false, keys };
+    }
+    if (!_readCovers(r, "", droppable || /* @__PURE__ */ new Set())) return { complete: false, keys };
+    const ev = r && r.ev && r.ev.pubkey === pub ? r.ev : null;
+    if (ev) {
+      let ts = [];
+      try {
+        ts = JSON.parse(ev.content || "[]");
+      } catch (e) {
+        ts = [];
+      }
+      for (const t of Array.isArray(ts) ? ts : []) {
+        const p = String(t && t.pubkey || "").toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(p)) keys.add(p);
+      }
+    }
+    return { complete: true, keys };
+  }
+  function _unprovedDroppable(provedUrls) {
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const provedAddrs = new Set([...provedUrls || []].map(_k));
+    const own = relayNetCandidates()[0] || "";
+    const out = /* @__PURE__ */ new Set();
+    let asked = [];
+    try {
+      asked = relaysRaw();
+    } catch (e) {
+      asked = [];
+    }
+    for (const url of asked) {
+      const addr = _k(url);
+      if (provedAddrs.has(addr)) continue;
+      let canonical = false;
+      try {
+        canonical = Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some((h) => _k(h) === addr);
+      } catch (e) {
+        canonical = false;
+      }
+      if (canonical) continue;
+      if (own && _k(own) === addr) continue;
+      out.add(addr);
+    }
+    return out;
+  }
   async function _flushPendingTomb() {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return { flushed: false };
     if (!_pendingTomb().length) return { flushed: false, none: true };
@@ -24101,10 +24158,15 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
+      const _droppE = _unprovedDroppable(ids.filter((r) => /^[0-9a-f]{64}$/.test(String(r.pubkey || "").toLowerCase())).map((r) => r.url));
       return enrolSerial(async () => {
-        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }), sk));
+        const gone = await _removedKeysRead(_droppE);
+        if (!gone.complete) throw new Error("Sync could not be switched on \u2014 not all of your relays answered, so the list of relays you have removed could not be checked. Nothing is mirroring yet; try again.");
+        const signing = trusted.filter((t) => !gone.keys.has(String(t.pubkey || "").toLowerCase()));
+        if (signing.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 a relay you have removed does not count. Add another the church runs.");
+        const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(signing) }), sk));
         if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
-        return { relays: trusted.length };
+        return { relays: signing.length };
       });
     },
     // D2: this church's resilience at a glance — distinct relay BOXES (by identity, not URL), how many are online,

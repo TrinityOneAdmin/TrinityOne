@@ -120,6 +120,11 @@ function liftToggle(order) {
     now: () => 1763000000, _monotonic: (t) => t, finalizeEvent2: (t) => ({ ...t, pubkey: PUB }),
     enrolSerial: (fn) => { order.push('queued'); return fn(); },
     publish: async () => { order.push('publish'); return { id: 'e' }; },
+    // B1 (2026-11-22): syncEnable reads the church's removed-relay keys inside its queue slot. "Nothing removed,
+    // read complete" here — this file's subject is the queue ORDER; the read itself (tombstoned and pending keys
+    // dropped, an incomplete read refusing) is run for real in removal-sticks-and-closes-sync-trust.test.mjs.
+    _unprovedDroppable: () => new Set(),
+    _removedKeysRead: async () => { order.push('removed-read'); return { complete: true, keys: new Set() }; },
   };
   const proxy = new Proxy(scope, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
@@ -142,7 +147,7 @@ test('syncEnable: the per-relay probe runs BEFORE the queue; sign+publish hold t
   const order = [];
   const r = await liftToggle(order).syncEnable();
   assert.equal(r.relays, 2, 'CONTROL: the happy path no longer reports how many relays sync');
-  assert.deepEqual(order, ['probe', 'queued', 'publish'],
+  assert.deepEqual(order, ['probe', 'queued', 'removed-read', 'publish'],
     'order was ' + JSON.stringify(order) + ' — the probe inside the queue slot starves every other signing ' +
     '(enrol, Connect, Remove, heal) for its duration, and a publish outside the slot is the A4 race reopened');
 });
@@ -162,6 +167,7 @@ test('…and their refusals still throw through the queue (the 2026-09-02 honest
       sk: new Uint8Array(32).fill(7), pub: PUB, JSON,
       now: () => 1763000000, _monotonic: (t) => t, finalizeEvent2: (t) => t,
       enrolSerial: (fn) => fn(), publish: async () => null,
+      _unprovedDroppable: () => new Set(), _removedKeysRead: async () => ({ complete: true, keys: new Set() }),   // B1: nothing removed, read complete
     };
     const proxy = new Proxy(scope, { has: (t, k) => (k in t) || !(String(k) in globalThis),
       get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k]; throw new ReferenceError('lift needs ' + String(k)); },

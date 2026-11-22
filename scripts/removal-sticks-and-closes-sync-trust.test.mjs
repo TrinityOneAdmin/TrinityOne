@@ -44,6 +44,8 @@ const LIFT = [
   ['fn', 'function sharedRelayKeys'],
   ['fn', 'function _tombable(keys, never) {'],
   ['fn', 'async function _flushPendingTomb() {'],
+  ['fn', 'async function _removedKeysRead(droppable) {'],
+  ['fn', 'function _unprovedDroppable(provedUrls) {'],
   ['fn', 'function relayNetDoc() {'],
   ['st', 'var _enrolQueue = '],
   ['fn', 'function enrolSerial'],
@@ -121,7 +123,11 @@ function makeWorld(cfg) {
   });
   const api = new Function('scope', 'with (scope) {' + LIFT + (cfg.realHeal ? '\n' + LIFT_HEAL : '') +
     '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, autoSyncHeal, ' +
-    fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
+    fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ', ' +
+    fnBody(BUNDLE, 'async syncEnable() {', 'syncEnable in the shipped bundle') + ' }; }')(proxy);
+  // B1: the console's own probe pass, as relayIdentities reports it — every relay this console LISTS, with the key it
+  // proves right now ('' when it proves none). syncEnable signs from this snapshot.
+  scope.window = { Steward: { relayIdentities: async () => relays.map(r => ({ url: r.url, base: String(r.url).replace(/^wss:/, 'https:').replace(/\/relay$/, ''), pubkey: (r.up && r.key) || '', name: '', online: !!r.up })) } };
   // Read the NEWEST copy exactly as _oneComplete / the engine does: created_at desc, and on a tie the
   // LAST-written wins (insertion index) — a constant now() + identity _monotonic make every write in a test tie,
   // and breaking the tie any other way would let a later re-sign hide behind an earlier one (it masked a real
@@ -424,4 +430,57 @@ test('B0: a Remove refused as the OWN box in the repair loop leaves nothing pend
   assert.deepEqual(pendingAtPublish, [KEY_B], 'precondition: the key was not persisted before the prune publish');
   assert.deepEqual(w.api._pendingTomb(), [], 'a REFUSED Remove left its key pending — the next heal pass would tombstone a box the steward was told stays');
   assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'a refused Remove wrote a tombstone');
+});
+
+// ── B1 (audit 2026-11-22, F1): syncEnable does not sign a Removed box back in ────────────────────────────
+// The REAL syncEnable, the REAL _removedKeysRead and _unprovedDroppable. The console still LISTS the removed box
+// (a second owner console, or a browser that never saw the Remove) and the box still proves its key.
+const THREE = () => [{ url: 'wss://a.example/relay', key: KEY_A, up: true }, { url: 'wss://b.example/relay', key: KEY_B, up: true }, { url: 'wss://c.example/relay', key: KEY_C, up: true }];
+test('B1: syncEnable on a console still listing a TOMBSTONED box signs the list WITHOUT it (and with it when nothing is tombstoned)', async () => {
+  const control = makeWorld({ relays: THREE(), sync: null });
+  const rc = await control.api.syncEnable();
+  assert.deepEqual(keysOf(control.sync()), [KEY_A, KEY_B, KEY_C].sort(), 'CONTROL: with no tombstone all three proved boxes should be signed');
+  assert.equal(rc.relays, 3);
+  const w = makeWorld({ relays: THREE(), sync: null, tombs: [{ pubkey: KEY_B, at: NOW - 500 }] });
+  const r = await w.api.syncEnable();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(),
+    'A REMOVED BOX WAS SIGNED BACK INTO trinityone/relays by turning sync on — it holds full-corpus pull rights again, and the new doc out-stamps its tombstone so no heal prunes it (F1): ' + JSON.stringify(w.sync()));
+  assert.equal(r.relays, 2, 'the result counted the removed box');
+});
+
+test('B1: the whole door, default church — Remove a box (sync off), then turn sync on from a console that still lists it', async () => {
+  const w = makeWorld({ relays: THREE(), net: [{ pubkey: KEY_A, url: 'https://a.example' }, { pubkey: KEY_B, url: 'https://b.example' }, { pubkey: KEY_C, url: 'https://c.example' }], sync: null });
+  const rm = await w.api.unenrolRelayNet('wss://b.example/relay');
+  assert.equal(rm.removed, true, 'precondition: the Remove did not land: ' + JSON.stringify(rm));
+  await w.api.syncEnable();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(), 'the box Removed while sync was off came back when sync was switched on: ' + JSON.stringify(w.sync()));
+});
+
+test('B1: a key still PENDING (its tombstone has not landed) is excluded too', async () => {
+  const w = makeWorld({ relays: THREE(), sync: null });
+  w.api._setPendingTomb([KEY_B]);
+  await w.api.syncEnable();
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort(), 'a box whose Remove is still pending on this console was signed into the sync list: ' + JSON.stringify(w.sync()));
+});
+
+test('B1: when the removed box was one of only two, syncEnable refuses rather than sign it', async () => {
+  const w = makeWorld({ relays: THREE().slice(0, 2), sync: null, tombs: [{ pubkey: KEY_B, at: NOW - 500 }] });
+  await assert.rejects(() => w.api.syncEnable(), /removed does not count/, 'a two-box church whose second box was Removed still switched sync on');
+  assert.equal(w.writesTo('trinityone/relays').length, 0, 'a sync doc was signed although fewer than two boxes remain');
+});
+
+test('B1: an INCOMPLETE tombstone read refuses to enable (fail closed) and signs nothing', async () => {
+  const deadCanon = 'wss://shared-pool.example/relay';
+  const w = makeWorld({ relays: [...THREE(), { url: deadCanon, key: '', up: false }], sync: null, canonical: [deadCanon] });
+  await assert.rejects(() => w.api.syncEnable(), /could not be checked/,
+    'SYNC WAS SWITCHED ON WITHOUT KNOWING WHICH RELAYS WERE REMOVED — a relay that may hold the tombstones never answered');
+  assert.equal(w.writesTo('trinityone/relays').length, 0, 'a sync doc was signed over an incomplete tombstone read');
+});
+
+test('B1: one DEAD church-added row does not block the switch (the droppable rule) — and the tombstone is still honoured', async () => {
+  const dead = 'wss://old-tunnel.example/relay';
+  const w = makeWorld({ relays: [...THREE(), { url: dead, key: '', up: false }], sync: null, extra: [dead], tombs: [{ pubkey: KEY_B, at: NOW - 500 }] });
+  const r = await w.api.syncEnable();
+  assert.equal(r.relays, 2, 'a dead old-tunnel row blocked turning sync on: ' + JSON.stringify(r));
+  assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort());
 });
