@@ -73,7 +73,7 @@ test('switching sync ON over a document nobody accepted throws', async () => {
   // A4 (2026-11-20): syncEnable's sign+publish half now holds the enrolSerial queue slot — pass-through
   // here (queue ordering is sync-default-on-cannot-undo-a-turn-off.test.mjs's subject).
   const mk = (accepted) => new Function('sk', 'pub', 'window', 'publish', 'finalizeEvent2', 'now', 'JSON',
-    '_monotonic', 'enrolSerial',
+    '_monotonic', 'enrolSerial', '_unprovedDroppable', '_removedKeysRead',
     'return ({ ' + body + ' })')(
     'sk', 'pub',
     { Steward: { relayIdentities: async () => ([
@@ -82,6 +82,9 @@ test('switching sync ON over a document nobody accepted throws', async () => {
       ]) } },
     async () => (accepted ? { id: 'evt' } : null),
     (e) => e, () => 1, JSON, (t) => t, (fn) => fn(),
+    // B1 (2026-11-22): syncEnable reads the church's removed-relay keys before signing. "Nothing removed, read
+    // complete" here; the read itself is run for real in removal-sticks-and-closes-sync-trust.test.mjs.
+    () => new Set(), async () => ({ complete: true, keys: new Set() }),
   ).syncEnable;
   await assert.rejects(() => mk(false)(),
     /no relay accepted/i,
