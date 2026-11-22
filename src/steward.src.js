@@ -7446,7 +7446,11 @@ async function autoJoinPublicRelays() {
     // pick in the church-wide `chosen` set regardless, so a box that never landed held one of the church's cap
     // slots on every console. It is left as it is on THIS console (an unsigned row; owed, if pending, and retried),
     // counted by nobody, and the pass goes on to the next candidate.
-    if (!_signedIn(_sr, addr)) { skipped.push([addr, (_sr && _sr.pending) ? 'pending' : 'unsigned']); have.add(addr); continue; }
+    // …BUT IT STILL USES UP ONE OF THIS PASS'S ATTEMPTS (FF2, 2026-11-22). Skipping it for free meant a pass with one
+    // slot to fill and a directory of boxes that all came back pending would register with, add and try to sign
+    // EVERY one of them. The deficit is the bound on how much one pass may do: an attempt that did not end signed
+    // in spends it for this pass (not in `chosen`, so not for the next one).
+    if (!_signedIn(_sr, addr)) { skipped.push([addr, (_sr && _sr.pending) ? 'pending' : 'unsigned']); have.add(addr); deficit--; continue; }
     chosen.push({ pubkey: p, url: addr, name: (o && o.name) || '' });
     chosenKeys.add(p); listedKeys.add(p); have.add(addr);
     added.push({ url: addr, pubkey: p });

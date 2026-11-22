@@ -21370,6 +21370,7 @@ zoo`.split("\n");
       if (!_signedIn(_sr, addr)) {
         skipped.push([addr, _sr && _sr.pending ? "pending" : "unsigned"]);
         have.add(addr);
+        deficit--;
         continue;
       }
       chosen.push({ pubkey: p, url: addr, name: o && o.name || "" });

@@ -277,13 +277,13 @@ test('B3: a box whose Remove is still PENDING on this console is skipped as tomb
   assert.equal(Object.fromEntries(r.skipped)['wss://box-1.example/relay'], 'tombstoned');
 });
 
-// ── F5 (Part A audit): a pick that did not actually get signed in takes NO cap slot ──────────────────────
-test('F5: a PENDING (or otherwise unsigned) pick is not recorded in chosen and does not use up the deficit — the next candidate is adopted instead', async () => {
-  const prefs = { publicAuto: true, publicTarget: 2, chosen: [] };   // target 2 − the canonical pin = ONE community slot
-  const offers = [offer(1, 10), offer(2, 20), offer(3, 30)];
+// ── F5 (Part A audit) + FF2 (final audit): a pick that did not get signed in is NOT recorded — and still counts as an attempt ──
+test('F5: a PENDING (or otherwise unsigned) pick is not recorded in chosen or reported as added; a pick that does sign in, in the same pass, is', async () => {
+  const prefs = { publicAuto: true, publicTarget: 4, chosen: [] };   // target 4 − the canonical pin = THREE community slots
+  const offers = [offer(1, 10), offer(2, 20), offer(3, 30), offer(4, 40)];
   const control = runJoin({ offers, prefs });
   await control.run();
-  assert.deepEqual(control.writtenChosen[0].map((c) => c.url), ['wss://box-1.example/relay'], 'CONTROL: with every pick signing in, the one slot goes to the fastest box');
+  assert.deepEqual(control.writtenChosen[0].map((c) => c.url), ['wss://box-1.example/relay', 'wss://box-2.example/relay', 'wss://box-3.example/relay'], 'CONTROL: with every pick signing in, the three slots go to the three fastest');
   const j = runJoin({ offers, prefs, signResult: (u) => (u === 'wss://box-1.example/relay' ? { pending: true, url: u }
     : u === 'wss://box-2.example/relay' ? { published: false, proven: [], unproven: [u], entries: [], unadmitted: true } : null) });
   const r = await j.run();
@@ -293,4 +293,17 @@ test('F5: a PENDING (or otherwise unsigned) pick is not recorded in chosen and d
   const why = Object.fromEntries(r.skipped);
   assert.equal(why['wss://box-1.example/relay'], 'pending');
   assert.equal(why['wss://box-2.example/relay'], 'unsigned');
+  assert.ok(!j.log.includes('sign:wss://box-4.example/relay'), 'the pass went past its three attempts (FF2)');
+});
+
+test('FF2: one pass is BOUNDED by the slots it has to fill — one slot and eight offers that all come back pending is ONE register/add/sign, not eight', async () => {
+  const offers = Array.from({ length: 8 }, (_, i) => offer(i + 1, 10 * (i + 1)));
+  const j = runJoin({ offers, prefs: { publicAuto: true, publicTarget: 2, chosen: [] }, signResult: (u) => ({ pending: true, url: u }) });
+  const r = await j.run();
+  const count = (p) => j.log.filter((x) => x.startsWith(p)).length;
+  assert.equal(count('sign:'), 1,
+    'ONE DEFAULT-ON PASS WALKED THE WHOLE OFFERS DIRECTORY — it registered this church with, added and tried to sign ' + count('sign:') + ' boxes for a single slot (FF2): ' + JSON.stringify(j.log));
+  assert.equal(count('reg:'), 1); assert.equal(count('add:'), 1);
+  assert.deepEqual(j.writtenChosen, [], 'a pending pick was recorded in chosen');
+  assert.deepEqual(r.added, []);
 });
