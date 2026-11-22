@@ -23685,7 +23685,15 @@ zoo`.split("\n");
       p.then((r) => {
         try {
           if (r && !r.unknown && (r.published || (r.proven || []).length > 0)) {
-            const keys = (r.proven || []).map((x) => String(x && x.pubkey || "").toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k));
+            const _kAdd = (x) => {
+              try {
+                return normalizeURL2(x);
+              } catch (e) {
+                return String(x || "");
+              }
+            };
+            const _sharedAdd = new Set(sharedRelayKeys());
+            const keys = [...new Set((r.proven || []).filter((x) => x && _kAdd(x.url) === _kAdd(u)).map((x) => String(x && x.pubkey || "").toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k) && !_sharedAdd.has(k)))];
             const _k0 = (x) => {
               try {
                 return normalizeURL2(x);

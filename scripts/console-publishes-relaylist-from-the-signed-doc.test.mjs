@@ -117,6 +117,7 @@ function runSign({ enrolResult }) {
     enrolRelayNet: async () => enrolResult,
     normalizeURL: (u) => u,
     extraRelays: () => [],
+    sharedRelayKeys: () => [],   // B2 (2026-11-22): signRelay never clears a shared relay key's tombstone
     _writeTombstone: async () => null,
     autoSyncHeal: () => Promise.resolve(null),
     window: { Steward: { publishRelayList: () => { calls++; return Promise.resolve(null); } } },

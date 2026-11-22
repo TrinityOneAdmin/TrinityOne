@@ -530,6 +530,7 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       // forced heal that follows does not refuse the box the steward just chose to re-add.
       _writeTombstone: async (o) => { order.push('untomb:' + JSON.stringify((o && o.remove) || null)); return { wrote: true }; },
       autoSyncHeal: async (opts) => { order.push('heal:' + JSON.stringify(opts)); return {}; },
+      sharedRelayKeys: () => [],   // B2 (2026-11-22): signRelay never clears a shared relay key's tombstone; none shipped in this fixture
       Promise, JSON, String,
     };
     const proxy = new Proxy(scope, {
@@ -542,7 +543,9 @@ test("POINT OF USE: signRelay's success path un-tombstones the proved box then q
       fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ' }; }')(proxy);
     return { api, order };
   };
-  const ok = mk({ published: true, proven: [{ url: 'wss://x.example/relay', pubkey: KEY_A }], entries: [{ pubkey: KEY_A }] });
+  // B2 (2026-11-22, audit F3): the enrol proves the box SERVING this console too (KEY_B here), and signRelay used to
+  // clear every proved key. Only the key proved at the address being added may be un-tombstoned.
+  const ok = mk({ published: true, proven: [{ url: 'wss://own.example/relay', pubkey: KEY_B }, { url: 'wss://x.example/relay', pubkey: KEY_A }], entries: [{ pubkey: KEY_A }] });
   await ok.api.signRelay('wss://x.example/relay');
   await settle(); await settle(); await settle();
   assert.deepEqual(ok.order, ['slot', 'slot-end', 'slot', 'untomb:["' + KEY_A + '"]', 'slot-end', 'heal:{"force":true}'],

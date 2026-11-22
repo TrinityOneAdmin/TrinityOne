@@ -10084,7 +10084,16 @@ window.Steward = {
           // runs AFTER the enrol slot resolved, never nested), and the forced heal is chained after it so the
           // heal reads a tombstone that no longer names the box. Swallowed on failure like the heal itself: the
           // next deliberate Add retries, and signRelay's own result is unchanged.
-          const keys = (r.proven || []).map(x => String((x && x.pubkey) || '').toLowerCase()).filter(k => /^[0-9a-f]{64}$/.test(k));
+          //
+          // ONLY THE ADDRESS BEING ADDED (B2, 2026-11-22; audit F3). `r.proven` is EVERYTHING the enrol proved —
+          // the box serving this console as well as the relay just added — and this used to clear all of it. So
+          // when another console had Removed THIS console's box, any later Add here (and B2 auto-join calls
+          // signRelay with no click at all) silently cleared that tombstone and the chained heal re-trusted the
+          // box. Now: only a key proved AT the address the steward added, and never a shared relay's key.
+          const _kAdd = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+          const _sharedAdd = new Set(sharedRelayKeys());
+          const keys = [...new Set((r.proven || []).filter(x => x && _kAdd(x.url) === _kAdd(u))
+            .map(x => String((x && x.pubkey) || '').toLowerCase()).filter(k => /^[0-9a-f]{64}$/.test(k) && !_sharedAdd.has(k)))];
           // FIX 1 (plan A2): give the un-tombstone the SAME droppable set unenrolRelayNet / _closeSyncTrust use —
           // the normalised church-added extras — so one UNREACHABLE extra relay cannot make _writeTombstone's read
           // incomplete and leave the box the steward just PROVED still tombstoned (the forced heal below would then

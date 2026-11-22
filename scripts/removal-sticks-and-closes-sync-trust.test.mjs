@@ -484,3 +484,34 @@ test('B1: one DEAD church-added row does not block the switch (the droppable rul
   assert.equal(r.relays, 2, 'a dead old-tunnel row blocked turning sync on: ' + JSON.stringify(r));
   assert.deepEqual(keysOf(w.sync()), [KEY_A, KEY_C].sort());
 });
+
+// ── B2 (audit 2026-11-22, F3): a deliberate Add un-tombstones ONLY the address being added ───────────────
+// The REAL signRelay over the REAL _writeTombstone. The enrol it runs proves every box this console can — the
+// box SERVING the console as well as the relay being added — and it used to clear the tombstone of all of them.
+test('B2: signRelay(another relay) clears THAT relay\'s tombstone and leaves the own box\'s tombstone intact', async () => {
+  const OWN = 'wss://own.example/relay', X = 'wss://x.example/relay';
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: X, key: KEY_B, up: true }],
+    sync: null, own: OWN,
+    tombs: [{ pubkey: KEY_A, at: NOW }, { pubkey: KEY_B, at: NOW }],   // another console Removed this console's box (KEY_A); X was Removed too
+    enrol: async () => ({ published: true, proven: [{ url: OWN, pubkey: KEY_A }, { url: X, pubkey: KEY_B }] }),
+  });
+  await w.api.signRelay(X);
+  await settle(); await settle(); await settle(); await settle();
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_A],
+    'ADDING ONE RELAY CLEARED ANOTHER BOX\'S TOMBSTONE — the box another console Removed is free to be re-trusted by the next heal (F3): ' + JSON.stringify(w.tombs()));
+});
+
+test('B2: signRelay never clears a SHARED relay key\'s tombstone, even when the added address proves it', async () => {
+  const SHARED = 'wss://shared-pool.example/relay', ALIAS = 'wss://alias.example/relay';
+  const w = makeWorld({
+    relays: [{ url: SHARED, key: KEY_SHARED, up: true }, { url: ALIAS, key: KEY_SHARED, up: true }],
+    sync: null, canonical: [SHARED],
+    tombs: [{ pubkey: KEY_SHARED, at: NOW }, { pubkey: KEY_C, at: NOW }],
+    enrol: async () => ({ published: true, proven: [{ url: ALIAS, pubkey: KEY_SHARED, shared: true }] }),
+  });
+  await w.api.signRelay(ALIAS);
+  await settle(); await settle(); await settle(); await settle();
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 0, 'the tombstone doc was re-signed for a shared relay key: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_C, KEY_SHARED].sort());
+});
