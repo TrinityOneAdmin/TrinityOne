@@ -20603,6 +20603,7 @@ zoo`.split("\n");
         if (hint && cur.url !== hint) cur.url = hint;
         if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
       } else {
+        if (isOwn && !o.auto && Array.isArray(o.extra) && o.extra.length > 0) continue;
         const e = { pubkey: p, alwaysOn: true, url: hint };
         if (_RELAY_NAME_RE.test(nm)) e.name = nm;
         entries.push(e);

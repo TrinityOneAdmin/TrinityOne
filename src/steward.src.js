@@ -6594,6 +6594,15 @@ async function enrolRelayNet(opts) {
       if (hint && cur.url !== hint) cur.url = hint;
       if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
     } else {
+      // THE OWN BOX IS ADDED BY THE AUTOMATIC PASS ONLY (FF4, 2026-11-22). The census above always starts with the
+      // box serving this console, so EVERY call — a steward's Connect, the community auto-join, an owed retry —
+      // used to add the own box to the list as a side effect when the list did not yet name it. That bypassed
+      // the own-box gate (_ownBoxBackfill, plan F8): a restored church's empty box could be signed in by an
+      // unrelated Add even while autoEnrolRelayNet was HOLDING it for want of the child list. An entry that
+      // already exists is still refreshed above (address, name); a NEW own-box entry is autoEnrolRelayNet's to add.
+      // Scoped to a call that NAMES another relay (`extra`): that is every one of those paths. A bare call with no
+      // `extra` — the automatic pass, and the devtools-only Steward.enrolRelayNet() — still adds it, as before.
+      if (isOwn && !o.auto && Array.isArray(o.extra) && o.extra.length > 0) continue;
       const e = { pubkey: p, alwaysOn: true, url: hint };
       if (_RELAY_NAME_RE.test(nm)) e.name = nm;
       entries.push(e);

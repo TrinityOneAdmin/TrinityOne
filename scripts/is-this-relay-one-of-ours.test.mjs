@@ -657,6 +657,33 @@ test('B4: the automatic enrolment signs the box that served the console, and nev
   assert.ok(signed2.includes(TYPED.relayPub), 'signRelay\'s path did not add the consented relay');
 });
 
+// FF4 (2026-11-22, final combined audit). The census starts with the box serving the console, so a Connect for
+// ANOTHER relay used to add the own box to the church's list as a side effect — past the own-box safeguarding gate,
+// which belongs to the automatic pass. Real relays; the real enrolRelayNet.
+test('FF4: signing ANOTHER relay does not add the own box to the list — only the automatic pass adds it, and an existing own-box entry is kept', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('FF4');
+  const con = consoleWith({ location, extraRelays: () => [TYPED.wsUrl], one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+  const newest = async () => cores[1][1].parseRelayNet((await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at)[0].content).map(e => e.pubkey);
+  // The church's list does not name the own box yet (a restored church, or the automatic pass is being held).
+  const res = await con.enrolRelayNet({ extra: [TYPED.wsUrl] });      // what Steward.signRelay runs
+  assert.equal(res.published, true, 're-anchor: the consented relay was not signed: ' + JSON.stringify(res));
+  assert.ok(res.proven.some(x => x.pubkey === BOX.relayPub), 're-anchor: the own box did not even prove, so its absence below would prove nothing');
+  const first = await newest();
+  assert.ok(first.includes(TYPED.relayPub), 'the consented relay is not in the list');
+  assert.ok(!first.includes(BOX.relayPub),
+    'THE OWN BOX WAS SIGNED INTO THE CHURCH\'S LIST BY A CONNECT FOR ANOTHER RELAY — past the own-box gate, with no child list sent to it (FF4): ' + JSON.stringify(first));
+  // The automatic pass (gated by _ownBoxBackfill before it gets here) is what adds it.
+  await new Promise(r => setTimeout(r, 1100));
+  const auto = await con.enrolRelayNet({ auto: true });
+  assert.equal(auto.published, true, 'the automatic pass did not sign the own box: ' + JSON.stringify(auto));
+  const second = await newest();
+  assert.ok(second.includes(BOX.relayPub) && second.includes(TYPED.relayPub), 'the automatic pass did not add the own box, or dropped the other: ' + JSON.stringify(second));
+  // …and once it is there, a later Connect leaves it there.
+  await new Promise(r => setTimeout(r, 1100));
+  await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.ok((await newest()).includes(BOX.relayPub), 'a later Connect dropped the own box\'s existing entry');
+});
+
 test('the serving box is recorded by its NAME and PUBLIC address — never localhost — and a name is never blanked', async () => {
   const { flock, BOX, location } = await selfHostedChurch('NAME');
   const PUBLIC = 'wss://quiet-dove-45.example/relay';
