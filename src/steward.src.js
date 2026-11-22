@@ -2286,7 +2286,7 @@ async function refreshNamedRelays() {
     // bypassing addRelay, so a box swapped in here would hold none of the church's minors:/approved:/guardians:/
     // blocked: docs and fail OPEN. Every url in `swappedIn` is a genuinely new address (a same-url refresh never
     // reaches the push), so re-send the four owner-signed docs, verbatim and targeted, to the addresses just added.
-    try { _backfillSafeguardTo(swappedIn); } catch (e) {}
+    for (const _sw of swappedIn) { try { const _bf = _backfillSafeguardTo(_sw); if (_bf && _bf.catch) _bf.catch(() => {}); } catch (e) {} }
     // M-7a: republish the kind-10002 relay list so member phones learn the new tunnel address. Without
     // this, the console follows the move (refreshNamedRelays runs every 90s) but members keep trying the
     // dead address and fall back to the shared relays until someone hands out a new slip.
@@ -6214,62 +6214,108 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 
 // ── SAFEGUARDING BACKFILL ON ADOPT (reference/SAFEGUARDING-BOUNDARY.md) ──────────────────────────────────
 //
-// The relay ENFORCES a church's safeguarding from its OWN copy of four OWNER-SIGNED documents — minors:,
-// approved:, guardians:, blocked: — read into gateway.mjs's MINORS_BY / APPROVED_BY / GUARDIANS_BY / BLOCKED_BY
-// (each `d=<prefix><churchpub>`, author === the church key). Those are the ONLY safeguarding/authority documents
-// the gate consults: a child's DM refusal, the care-request reader test, the no-public-need / no-helper-listing
-// rules and the child-photo default all rest on minors:; approved: is who a minor MAY message; guardians: is the
-// parent↔child DM exemption; blocked: is the ban. The sealed per-member clearance: is NOT in this set — the relay
-// does not enforce with it (SAFEGUARDING-BOUNDARY.md appendix), so it is deliberately not backfilled.
+// The relay ENFORCES a church's safeguarding from its OWN copy of OWNER-SIGNED documents (each
+// `d=<prefix><churchpub>`, author === the church key), read into gateway.mjs's MINORS_BY / APPROVED_BY /
+// GUARDIANS_BY / BLOCKED_BY / NOPHOTO_BY. A child's DM refusal, the care-request reader test, the no-public-need
+// / no-helper-listing rules and the child-photo default all rest on minors:; approved: is who a minor MAY
+// message; guardians: is the parent↔child DM exemption; blocked: is the ban. The sealed per-member clearance: is
+// NOT in this set — the relay does not enforce with it — so it is deliberately not carried.
 //
-// THE GAP THIS CLOSES. setMinors/setApproved/setGuardians/setBlocked publish ONLY at edit time, to the relays
-// listed THEN. A box the church has JUST adopted — manual Add/Connect, Auto-find, or the B2 auto-join — holds none
-// of them, and a sync-off church (the default; cross-relay sync needs ≥2 own boxes) never mirrors them either. A
-// box in the publish set WITHOUT these lists cannot make the refusal the church's own box makes, so it fails OPEN.
-// So the instant a box enters the publish set, send it the church's CURRENT copy of each of the four.
+// THE GAP. setMinors/setApproved/setGuardians/setBlocked publish ONLY at edit time, to the relays listed THEN. A
+// box the church has just adopted holds none of them, and a sync-off church (the default) never mirrors them.
+// A box that members are routed to WITHOUT these lists cannot make the refusal the church's own box makes: a
+// child there reads as an adult.
 //
-// VERBATIM, NEVER RE-SIGNED. We re-send the existing owner-signed event as-is (the enrolRelayNet `resend`/`deliver`
-// pattern): the owner's signature and authority are unchanged, and a verbatim copy can never replace anything newer
-// (newest-wins keeps the relay's own copy if it somehow already holds a fresher one). TARGETED to the new box only
-// — small pipes (reference/churches-run-on-small-pipes), and the other relays already hold the docs.
+// WHAT THIS FUNCTION IS (rewritten 2026-11-22, plan PLAN-FIX-BACKFILL-AND-REMOVE-DOORS Part A, A3/A4 — the first
+// version fired and forgot: it published to an address nobody had proved (audit H1), threw the relay's answer
+// away so a refusal looked like success (H2), and read "the read did not finish" as "the church never made
+// one" (F6)). ONE target, AWAITED, and it answers one question: DID THE DOCUMENTS LAND ON THAT BOX?
+//
+//   1. PROVED FIRST. Nothing is sent to an address the relay gate has not admitted — admitRemoteRelay, awaited,
+//      a fresh proof rather than the cache-only relays(). An unproved target gets ZERO documents.
+//   2. READ, AND KNOW WHETHER THE READ WAS WHOLE. Every relay asked must answer, bar the target itself (it is the
+//      empty one) and the addresses that did not prove this pass and are neither canonical nor the own box
+//      (_unprovedDroppable — syncHeal's rule), so one dead church-added row cannot block every adoption. A read
+//      that was not whole is `unread`, never "the church has no such document".
+//   3. SEND VERBATIM, TO THE TARGET ONLY, AND READ ITS ANSWER. The owner's own signed event, never re-signed.
+//      OK true (or "duplicate") = landed. OK false "…a newer version…" = landed too: the box already holds a
+//      NEWER copy. Any other refusal, a timeout or a dead socket = not landed.
+//   4. `landed` = minors: AND blocked: each landed or are known not to exist. Those are the two whose ABSENCE is
+//      the dangerous direction. approved:, guardians: and nophoto: are carried BEST-EFFORT and never decide
+//      `landed`: their absence is the safe direction (nobody is cleared, no exemption, no suppression lifted) —
+//      and a stale approved: naming a current minor is refused by the relay for ever, which would otherwise
+//      strand the box. minors: is sent before approved: for the same reason.
 //
 // EMPTY == ABSENT, SO NOTHING IS FABRICATED. The gate consults every list as `(MAP.get(cp) || EMPTY_SET).has(x)`,
-// so a church that created no document and an explicit empty list enforce identically. A document that never
-// existed has nothing to send; publishing a fabricated empty one would buy no enforcement. The residual — a child
-// in a church that marked NOBODY, for whom no minors: doc was ever published — is the pre-existing gap named in
-// SAFEGUARDING-BOUNDARY.md, not this fix's job.
+// so a document that never existed has nothing to send — but only a WHOLE read may say it never existed.
 //
-// NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types; this only re-sends
-// documents it already accepts. Own-console only, matching every other church-doc writer (publishRelayList etc.):
-// a delegated/network view cannot author these owner-only docs, so it does not backfill them.
+// nophoto: (A4) — the OWNER-AUTHORED copy only (authors:[cp], author re-checked), like the other four. The relay
+// also honours a nophoto: signed by a safeguarding steward, which needs the church's stewards: document on the
+// new box first; that pair is NOT carried here and is deferred, so a steward-authored photo-suppression list is
+// cold on a newly adopted box until its next edit.
 //
-// CALLERS (rule 2; corrected 2026-11-22 — this said addRelay was "the ONE writer every adopt path passes
-// through", and it is not). THREE call sites at this tip:
-//   · addRelay — reached by the manual Add/Connect paths (app/stew-dashboard.jsx:6377 field, :6512 card, :6549),
-//     Auto-find's connectFoundRelays + autoPickRelays, the community auto-join (autoJoinPublicRelays) and the
-//     non-stale branch of adoptNetDocAddresses;
-//   · refreshNamedRelays' tunnel swap and adoptNetDocAddresses' stale-spelling swap, which write the relay store
-//     directly and so call this themselves.
-// NOT COVERED: the console's own box entering the set (audit 2026-11-22, F8). And on the two manual typed paths
-// addRelay runs BEFORE the identity proof (audit H1) — "no path can skip the backstop" was never the whole truth.
-// Both are Part A of PLAN-FIX-BACKFILL-AND-REMOVE-DOORS-2026-11-22; nothing here fixes them.
-async function _backfillSafeguardTo(urls) {
-  try {
-    if (!sk || !pub || actingChurch || _viewingNetwork()) return;
-    const targets = [...new Set((urls || []).map(u => String(u || '')).filter(u => /^wss?:\/\//i.test(u)))];
-    if (!targets.length) return;
-    const cp = pub;
-    const ds = [MINORS_D + cp, APPROVED_D + cp, GUARDIANS_D + cp, BLOCKED_D + cp];
-    // Read all four current owner-signed docs IN PARALLEL (the smallest ordering window), from the relays that
-    // already hold them. _oneComplete returns the NEWEST event it saw across relaysRaw(), so the freshly-adopted
-    // empty box now in that set cannot blank the answer. Re-send each one, verbatim, to the new box.
-    await Promise.all(ds.map(async (d) => {
-      let ev = null;
-      try { const r = await _oneComplete([{ kinds: [30078], authors: [cp], '#d': [d] }]); ev = (r && r.ev && r.ev.pubkey === cp) ? r.ev : null; } catch (e) { ev = null; }
-      if (!ev || pub !== cp) return;   // never created -> nothing to enforce; or the console switched church mid-read
-      try { pool.publish(targets, ev); } catch (e) {}
-    }));
-  } catch (e) {}
+// Own console only: a delegated / network view returns { landed:false } and sends nothing.
+// NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types.
+//
+// CALLERS (rule 2) are listed where each is wired; at this commit: addRelay, refreshNamedRelays' tunnel swap and
+// adoptNetDocAddresses' stale-spelling swap.
+async function _backfillSafeguardTo(target) {
+  const u = String(target || '');
+  if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
+  if (!sk || !pub) return { landed: false, why: 'locked' };
+  if (actingChurch || _viewingNetwork()) return { landed: false, why: 'not-own-console' };
+  const cp = pub, sk0 = sk;
+  const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
+  // 1. proved first
+  let admitted = false;
+  try { admitted = !!(await admitRemoteRelay(u)); } catch (e) { admitted = false; }
+  if (moved()) return { landed: false, why: 'changed' };
+  if (!admitted) return { landed: false, why: 'unproven' };
+  // 2. which other relays may be excused from the read: the ones that do not prove right now (never canonical, never own)
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const proved = [];
+  let asked = []; try { asked = relaysRaw(); } catch (e) { asked = []; }
+  await Promise.all(asked.filter(x => _k(x) !== _k(u)).map(async (x) => {
+    try { const pr = await verifyRelayIdentity(x); if (/^[0-9a-f]{64}$/.test(String((pr && pr.relayPub) || '').toLowerCase())) proved.push(x); } catch (e) {}
+  }));
+  if (moved()) return { landed: false, why: 'changed' };
+  const droppable = _unprovedDroppable(proved);
+  const readDoc = async (d) => {
+    let r = null;
+    try { r = await _oneComplete([{ kinds: [30078], authors: [cp], '#d': [d] }], 6000, true); } catch (e) { return { ev: null, whole: false }; }
+    return { ev: (r && r.ev && r.ev.pubkey === cp) ? r.ev : null, whole: _readCovers(r, u, droppable) };
+  };
+  // 3. one document, to the target only, and what the target said
+  const sendDoc = async (ev) => {
+    try {
+      const v = await pool.publish([u], ev)[0];
+      if (typeof v === 'string' && v.startsWith('connection failure')) return 'failed';
+      return 'landed';
+    } catch (e) {
+      const m = String((e && e.message) || e || '');
+      return /newer version/i.test(m) ? 'landed' : ('refused: ' + m);
+    }
+  };
+  const carry = async (got) => {
+    if (!got.whole) { if (got.ev) { try { await sendDoc(got.ev); } catch (e) {} } return 'unread'; }   // a partial view is sent for what it is worth, and never counted
+    if (!got.ev) return 'absent';
+    return sendDoc(got.ev);
+  };
+  const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+  const got = {};
+  await Promise.all(Object.keys(ds).map(async (k) => { got[k] = await readDoc(ds[k]); }));
+  if (moved()) return { landed: false, why: 'changed' };
+  const results = {};
+  results.minors = await carry(got.minors);          // FIRST: the relay refuses an approved: that names a minor it knows
+  if (moved()) return { landed: false, why: 'changed', results };
+  results.blocked = await carry(got.blocked);
+  for (const k of ['approved', 'guardians', 'nophoto']) {
+    if (moved()) return { landed: false, why: 'changed', results };
+    try { results[k] = await carry(got[k]); } catch (e) { results[k] = 'failed'; }
+  }
+  const ok = (x) => x === 'landed' || x === 'absent';
+  const landed = ok(results.minors) && ok(results.blocked);
+  return { landed, why: landed ? '' : 'not-landed', results };
 }
 async function relayNetEntries(cp) {
   if (!pub || (cp && cp !== pub)) return [];   // this console speaks for one church: its own
@@ -8011,7 +8057,7 @@ async function adoptNetDocAddresses() {
       // `u` is a genuinely NEW address here (the guard above `continue`d if it was already in the store, and `stale`
       // is), so re-send the four owner-signed docs, verbatim and targeted, to it. The non-stale branch below adopts
       // through addRelay, which backfills itself.
-      try { _backfillSafeguardTo([u]); } catch (e) {}
+      try { const _bf = _backfillSafeguardTo(u); if (_bf && _bf.catch) _bf.catch(() => {}); } catch (e) {}
       setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
       _rememberAdoptedName(e, u, proved);
       added.push(u);
@@ -18845,7 +18891,7 @@ window.Steward = {
     // by one of them; reached only when the box is genuinely NEW (the own/shared/duplicate guards returned above).
     // Fire-and-forget and targeted; see _backfillSafeguardTo. The reads are async, so a small ordering window
     // remains (the app-side audience choice is still primary — this is the relay-side backstop).
-    try { _backfillSafeguardTo([url]); } catch (e) {}
+    try { const _bf = _backfillSafeguardTo(url); if (_bf && _bf.catch) _bf.catch(() => {}); } catch (e) {}
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },

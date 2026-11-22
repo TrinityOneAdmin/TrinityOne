@@ -17105,9 +17105,13 @@ zoo`.split("\n");
     if (changed) {
       _writeExtraRelays(extra);
       setNamedRelays(named);
-      try {
-        _backfillSafeguardTo(swappedIn);
-      } catch (e) {
+      for (const _sw of swappedIn) {
+        try {
+          const _bf = _backfillSafeguardTo(_sw);
+          if (_bf && _bf.catch) _bf.catch(() => {
+          });
+        } catch (e) {
+        }
       }
       try {
         if (window.Steward && window.Steward.publishRelayList) window.Steward.publishRelayList();
@@ -20301,29 +20305,97 @@ zoo`.split("\n");
   function relayNetDoc() {
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
-  async function _backfillSafeguardTo(urls) {
+  async function _backfillSafeguardTo(target) {
+    const u = String(target || "");
+    if (!/^wss?:\/\//i.test(u)) return { landed: false, why: "no-target" };
+    if (!sk || !pub) return { landed: false, why: "locked" };
+    if (actingChurch || _viewingNetwork()) return { landed: false, why: "not-own-console" };
+    const cp = pub, sk0 = sk;
+    const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
+    let admitted = false;
     try {
-      if (!sk || !pub || actingChurch || _viewingNetwork()) return;
-      const targets = [...new Set((urls || []).map((u) => String(u || "")).filter((u) => /^wss?:\/\//i.test(u)))];
-      if (!targets.length) return;
-      const cp = pub;
-      const ds = [MINORS_D + cp, APPROVED_D + cp, GUARDIANS_D + cp, BLOCKED_D + cp];
-      await Promise.all(ds.map(async (d) => {
-        let ev = null;
-        try {
-          const r = await _oneComplete([{ kinds: [30078], authors: [cp], "#d": [d] }]);
-          ev = r && r.ev && r.ev.pubkey === cp ? r.ev : null;
-        } catch (e) {
-          ev = null;
-        }
-        if (!ev || pub !== cp) return;
-        try {
-          pool.publish(targets, ev);
-        } catch (e) {
-        }
-      }));
+      admitted = !!await admitRemoteRelay(u);
     } catch (e) {
+      admitted = false;
     }
+    if (moved()) return { landed: false, why: "changed" };
+    if (!admitted) return { landed: false, why: "unproven" };
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const proved = [];
+    let asked = [];
+    try {
+      asked = relaysRaw();
+    } catch (e) {
+      asked = [];
+    }
+    await Promise.all(asked.filter((x) => _k(x) !== _k(u)).map(async (x) => {
+      try {
+        const pr = await verifyRelayIdentity(x);
+        if (/^[0-9a-f]{64}$/.test(String(pr && pr.relayPub || "").toLowerCase())) proved.push(x);
+      } catch (e) {
+      }
+    }));
+    if (moved()) return { landed: false, why: "changed" };
+    const droppable = _unprovedDroppable(proved);
+    const readDoc = async (d) => {
+      let r = null;
+      try {
+        r = await _oneComplete([{ kinds: [30078], authors: [cp], "#d": [d] }], 6e3, true);
+      } catch (e) {
+        return { ev: null, whole: false };
+      }
+      return { ev: r && r.ev && r.ev.pubkey === cp ? r.ev : null, whole: _readCovers(r, u, droppable) };
+    };
+    const sendDoc = async (ev) => {
+      try {
+        const v = await pool.publish([u], ev)[0];
+        if (typeof v === "string" && v.startsWith("connection failure")) return "failed";
+        return "landed";
+      } catch (e) {
+        const m = String(e && e.message || e || "");
+        return /newer version/i.test(m) ? "landed" : "refused: " + m;
+      }
+    };
+    const carry = async (got2) => {
+      if (!got2.whole) {
+        if (got2.ev) {
+          try {
+            await sendDoc(got2.ev);
+          } catch (e) {
+          }
+        }
+        return "unread";
+      }
+      if (!got2.ev) return "absent";
+      return sendDoc(got2.ev);
+    };
+    const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+    const got = {};
+    await Promise.all(Object.keys(ds).map(async (k) => {
+      got[k] = await readDoc(ds[k]);
+    }));
+    if (moved()) return { landed: false, why: "changed" };
+    const results = {};
+    results.minors = await carry(got.minors);
+    if (moved()) return { landed: false, why: "changed", results };
+    results.blocked = await carry(got.blocked);
+    for (const k of ["approved", "guardians", "nophoto"]) {
+      if (moved()) return { landed: false, why: "changed", results };
+      try {
+        results[k] = await carry(got[k]);
+      } catch (e) {
+        results[k] = "failed";
+      }
+    }
+    const ok = (x) => x === "landed" || x === "absent";
+    const landed = ok(results.minors) && ok(results.blocked);
+    return { landed, why: landed ? "" : "not-landed", results };
   }
   async function relayNetEntries(cp) {
     if (!pub || cp && cp !== pub) return [];
@@ -21718,7 +21790,9 @@ zoo`.split("\n");
         if (!now2.includes(stale) || now2.includes(u)) continue;
         _writeExtraRelays(now2.map((r) => r === stale ? u : r));
         try {
-          _backfillSafeguardTo([u]);
+          const _bf = _backfillSafeguardTo(u);
+          if (_bf && _bf.catch) _bf.catch(() => {
+          });
         } catch (e2) {
         }
         setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
@@ -32653,7 +32727,9 @@ zoo`.split("\n");
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
       undeclineRelay(url);
       try {
-        _backfillSafeguardTo([url]);
+        const _bf = _backfillSafeguardTo(url);
+        if (_bf && _bf.catch) _bf.catch(() => {
+        });
       } catch (e) {
       }
       window.dispatchEvent(new CustomEvent("steward-relays"));
