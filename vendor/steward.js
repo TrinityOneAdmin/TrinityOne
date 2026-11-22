@@ -32726,12 +32726,6 @@ zoo`.split("\n");
       if (cur.includes(url)) return false;
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
       undeclineRelay(url);
-      try {
-        const _bf = _backfillSafeguardTo(url);
-        if (_bf && _bf.catch) _bf.catch(() => {
-        });
-      } catch (e) {
-      }
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return url;
     },

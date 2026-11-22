@@ -6257,8 +6257,8 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // Own console only: a delegated / network view returns { landed:false } and sends nothing.
 // NO ADMISSION / GATEWAY / REGISTRY CHANGE (rule 10): the relay already ingests these doc types.
 //
-// CALLERS (rule 2) are listed where each is wired; at this commit: addRelay, refreshNamedRelays' tunnel swap and
-// adoptNetDocAddresses' stale-spelling swap.
+// CALLERS (rule 2) are listed where each is wired; at this commit: refreshNamedRelays' tunnel swap and
+// adoptNetDocAddresses' stale-spelling swap. NOT addRelay (A1).
 async function _backfillSafeguardTo(target) {
   const u = String(target || '');
   if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
@@ -18884,14 +18884,11 @@ window.Steward = {
     // only place it can clear. Without it an address removed once could never be adopted again, and a
     // steward who re-added it by hand would be the only thing holding it in the list.
     undeclineRelay(url);
-    // SAFEGUARDING BACKFILL: this box is now in the publish set (relaysRaw() -> extraRelays()), so send it the
-    // church's current safeguarding/authority documents — minors:/approved:/guardians:/blocked: — before church
-    // traffic routes to it, or it fails OPEN where the church's own box refuses. addRelay is the one writer every
-    // adopt path (manual Add/Connect, Auto-find, B2 auto-join) passes through, so the backstop can never be skipped
-    // by one of them; reached only when the box is genuinely NEW (the own/shared/duplicate guards returned above).
-    // Fire-and-forget and targeted; see _backfillSafeguardTo. The reads are async, so a small ordering window
-    // remains (the app-side audience choice is still primary — this is the relay-side backstop).
-    try { const _bf = _backfillSafeguardTo(url); if (_bf && _bf.catch) _bf.catch(() => {}); } catch (e) {}
+    // NOTHING IS PUBLISHED FROM HERE (A1, 2026-11-22). This used to fire the safeguarding backfill the moment an
+    // address was WRITTEN DOWN — on the two typed-address paths that is before anything has proved the address is
+    // a relay of ours, so a typo or a pasted hostile address was sent the church's child list (audit H1). Recording
+    // an address and sending a box the church's documents are two different acts: this is the first only. The
+    // second belongs to the step that proves the box and makes it a routing target (Steward.signRelay).
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },

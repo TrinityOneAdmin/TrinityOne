@@ -232,3 +232,26 @@ test('a delegated view, a network view and a locked console send nothing and nev
     assert.equal(r.landed, false, why + ': read as landed');
   }
 });
+
+// ── 7. A1: writing an address down sends nothing ───────────────────────────────────────────────────────────
+// The REAL Steward.addRelay over the same world: the real gate, the real engine in scope, a box that would prove
+// and would accept. If addRelay still reached the engine, documents would be published here.
+const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
+function addRelayWorld(opts = {}) {
+  let store = [];
+  const w = world({ ...opts,
+    scope: { RELAYS_LS: 'trinityone.steward.extra-relays', normRelay: (u) => String(u || '').trim(), ownRelay: () => OWN,
+      isOwnRelaySpelling: () => false, isSharedRelaySpelling: () => false, extraRelays: () => store.slice(),
+      lsSet: (k, v) => { if (k === 'trinityone.steward.extra-relays') store = JSON.parse(v); }, undeclineRelay: () => {}, ...(opts.scope || {}) },
+    more: '\nconst _add = { ' + fnBody(STEWARD, 'addRelay(input) {', 'addRelay') + ' };' + (opts.more || ''),
+    expose: ', addRelay: (u) => _add.addRelay(u)' + (opts.expose || '') });
+  return { ...w, store: () => store };
+}
+test('A1: addRelay records the address and publishes NOTHING — no document, no proof, to a box that would have accepted', async () => {
+  const w = addRelayWorld();
+  assert.equal(w.api.addRelay(NEW), NEW, 'addRelay should still record a new address');
+  await settle();
+  assert.deepEqual(w.store(), [NEW], 'the address was not written to the relay list');
+  assert.deepEqual(w.published, [],
+    'addRelay STILL SENDS THE SAFEGUARDING DOCUMENTS — on the typed-address paths it runs before the identity proof (audit H1): ' + JSON.stringify(w.sentTo(NEW)));
+});
