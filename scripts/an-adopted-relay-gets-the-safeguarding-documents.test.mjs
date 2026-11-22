@@ -53,7 +53,7 @@ const GATE_LIFT = [
   ['st', 'var _gate = createRelayGate('], ['fn', 'async function admitRemoteRelay'],
 ];
 const ENGINE_LIFT = [
-  ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '],
+  ['st', 'var BACKFILL_SEND_MS = '], ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '],
   ['fn', 'function _readCovers'], ['fn', 'function _unprovedDroppable(provedUrls) {'],
   ['fn', 'async function _backfillSafeguardTo(target) {'],
 ];
@@ -104,6 +104,7 @@ function world(opts = {}) {
       if (a === 'duplicate') return [Promise.resolve('duplicate')];
       if (a === 'dead') return [Promise.resolve('connection failure: could not connect')];
       if (a === 'timeout') return [Promise.reject(new Error('publish timed out'))];
+      if (a === 'hang') return [new Promise(() => {})];   // the library call never settles
       if (a === 'newer') return [Promise.reject(new Error('invalid: a newer version of this is already stored — reload and edit again'))];
       return [Promise.reject(new Error('blocked: not a member or not permitted'))];
     } },
@@ -566,4 +567,17 @@ test('F3: a box that proved EARLIER and does not answer the proof now is still a
   assert.ok(w.proofs.filter((u) => u === NEW).length >= 2, 're-anchor: no new proof was attempted on the second pass');
   assert.notEqual(r.why, 'unproven', 'the engine now demands a FRESH proof — the comment and the owed-retry both assume it does not: ' + JSON.stringify(r));
   assert.ok(w.sentTo(NEW).includes('minors'), 'a box with a valid cached proof was sent nothing');
+});
+
+// ── 14. Part A audit, nit: a send that never answers cannot stall the pass ─────────────────────────────────
+// The engine's own bound (BACKFILL_SEND_MS, lifted) decides; only the CLOCK is this world's, so the test does not
+// sit for eight real seconds: any timer of a second or more fires in a few milliseconds.
+test('a publish that NEVER settles is given up on (not landed, the pass returns) instead of hanging the adoption for ever', async () => {
+  const waits = [];
+  const w = world({ answers: { minors: 'hang' }, scope: { setTimeout: (fn, ms) => { waits.push(ms); return setTimeout(fn, ms >= 1000 ? 5 : ms); }, clearTimeout } });
+  const r = await Promise.race([w.api._backfillSafeguardTo(NEW), new Promise((res) => setTimeout(() => res('STALLED'), 3000))]);
+  assert.notEqual(r, 'STALLED', 'A HUNG PUBLISH STALLED THE WHOLE BACKFILL — and with it the signing step it gates');
+  assert.equal(r.landed, false, JSON.stringify(r));
+  assert.match(r.results.minors, /^refused: timeout/);
+  assert.ok(waits.includes(8000), 're-anchor: the bound is no longer 8 s: ' + JSON.stringify(waits));
 });

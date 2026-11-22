@@ -46,7 +46,7 @@ const LIFT = [
   ['st', 'pool.automaticallyAuth = (url) => async (authEvent) => {'],
   ['fn', 'function _oneComplete(filters, ms = 6e3, privateDoc = false) {'],
   // the engine and the choke
-  ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '],
+  ['st', 'var BACKFILL_SEND_MS = '], ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '],
   ['fn', 'function _readCovers'], ['fn', 'function _unprovedDroppable(provedUrls) {'], ['fn', 'async function _backfillSafeguardTo(target) {'],
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'], ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],

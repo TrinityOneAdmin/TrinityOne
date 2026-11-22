@@ -6268,6 +6268,7 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // CALLERS (rule 2): _adoptRelay (Steward.signRelay: sign, or owe) and _ownBoxBackfill (autoEnrolRelayNet: sign the
 // own box, or hold it) — the two whose result DECIDES something; refreshNamedRelays' tunnel swap and
 // adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
+const BACKFILL_SEND_MS = 8000;
 async function _backfillSafeguardTo(target) {
   const u = String(target || '');
   if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
@@ -6300,12 +6301,18 @@ async function _backfillSafeguardTo(target) {
     return { ev: (r && r.ev) ? r.ev : null, whole: _readCovers(r, u, droppable) };
   };
   // 3. one document, to the target only, and what the target said
+  // …BOUNDED: a publish call that never settles (a hung socket inside the library) must not stall the whole pass —
+  // and with it the signing it gates — for ever. Eight seconds, the bound enrolRelayNet's own delivery uses; no
+  // answer in that time is "not landed", and the retry asks again.
   const sendDoc = async (ev) => {
+    let _t = null;
     try {
-      const v = await pool.publish([u], ev)[0];
+      const v = await Promise.race([pool.publish([u], ev)[0], new Promise((_, rej) => { _t = setTimeout(() => rej(new Error('timeout: no answer from the relay')), BACKFILL_SEND_MS); })]);
+      if (_t) { clearTimeout(_t); _t = null; }
       if (typeof v === 'string' && v.startsWith('connection failure')) return 'failed';
       return 'landed';
     } catch (e) {
+      if (_t) { clearTimeout(_t); _t = null; }
       const m = String((e && e.message) || e || '');
       return /newer version/i.test(m) ? 'landed' : ('refused: ' + m);
     }
@@ -6866,10 +6873,13 @@ async function autoEnrolRelayNet() {
   // F8: the own box is backfilled first, OUTSIDE the signing queue; a box that is ENTERING the list and did not
   // take the child list is not signed this pass (see _ownBoxBackfill).
   const _sk0 = sk, _pub0 = pub;
+  // FAIL-CLOSED SHAPE: only an explicit `proceed: true` lets the enrolment go on. A throw, or no answer at all, holds
+  // it (and the pass is not remembered as done). _ownBoxBackfill catches everything it calls, so this is not reachable
+  // today — it is the shape that stays safe if that ever stops being true.
   let _gate8 = null;
   try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
   if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) { _autoEnrolled.delete(key); return null; }
-  if (_gate8 && _gate8.proceed === false) { _autoEnrolled.delete(key); return { pending: true, ownBox: true, backfill: _gate8.results }; }
+  if (!_gate8 || _gate8.proceed !== true) { _autoEnrolled.delete(key); return { pending: true, ownBox: true, backfill: (_gate8 && _gate8.results) || null }; }
   let res = null;
   // `auto`: only this pass may start a first list on the own box's own answer (third audit, finding 1).
   try { res = await enrolSerial(() => enrolRelayNet({ auto: true })); } catch (e) { res = null; }

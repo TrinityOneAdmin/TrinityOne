@@ -355,7 +355,7 @@ test('connecting a relay that is ALREADY listed signs it, instead of refusing it
 // tries again; nothing at all without an own box, or for a console that is not this church's own.
 const VENDOR = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const OK = { proven: [{ url: 'ws://127.0.0.1:9/relay', pubkey: 'c'.repeat(64) }], published: true, entries: [{}], delivered: [] };
-function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null, self = { url: '', name: '' } }) {
+function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null, self = { url: '', name: '' }, ownBox = null }) {
   const body = fnBody(VENDOR, 'async function autoEnrolRelayNet()', 'autoEnrolRelayNet');
   let n = 0; const args = [];
   const fn = new Function('sk', 'pub', 'actingChurch', '_viewingNetwork', 'relayNetCandidates', 'enrolRelayNet', '_autoEnrolled',
@@ -366,7 +366,7 @@ function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = 
     hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name,
     // F8 (2026-11-22): the own box is backfilled before it is signed. "Nothing to hold it back" here — the gate itself
     // is run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
-    async () => ({ proceed: true, entering: false, results: null }));
+    ownBox || (async () => ({ proceed: true, entering: false, results: null })));
   return { fn, calls: () => n, args };
 }
 
@@ -1077,4 +1077,26 @@ test('Steward.connectFoundRelays adds every relay it is handed and republishes o
   log.length = 0;
   assert.deepEqual(await api.connectFoundRelays([]), []);
   assert.deepEqual(log, [], 'nothing found, and the relay list was republished anyway');
+});
+
+// ── the own-box backfill gate is FAIL-CLOSED in shape (Part A audit, nit) ─────────────────────────────────
+test('the automatic pass enrols ONLY on an explicit go-ahead from the own-box backfill: a throw, no answer, or a hold all stop it and are tried again', async () => {
+  for (const [why, ownBox] of [
+    ['a throw', async () => { throw new Error('boom'); }],
+    ['no answer', async () => undefined],
+    ['an answer without proceed:true', async () => ({ entering: null })],
+    ['a hold', async () => ({ proceed: false, entering: true, results: { minors: 'refused: x' } })],
+  ]) {
+    const a = autoEnrol({ results: [OK], ownBox });
+    const r = await a.fn();
+    assert.equal(a.calls(), 0, why + ': THE OWN BOX WAS ENROLLED WITHOUT A GO-AHEAD FROM ITS BACKFILL');
+    assert.equal(r && r.pending, true, why + ': the pass did not say it was held: ' + JSON.stringify(r));
+    await a.fn();
+    assert.equal(a.calls(), 0, why + ': re-anchor');   // still held — and it DID run again (not remembered as done), or this would be 0 for the wrong reason:
+  }
+  let asked = 0;
+  const again = autoEnrol({ results: [OK], ownBox: async () => { asked++; return asked < 2 ? { proceed: false } : { proceed: true }; } });
+  await again.fn(); await again.fn();
+  assert.equal(asked, 2, 'a held pass was remembered as done — the own box is never signed this session');
+  assert.equal(again.calls(), 1, 'the pass did not enrol once the backfill gave the go-ahead');
 });

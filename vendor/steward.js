@@ -20303,6 +20303,7 @@ zoo`.split("\n");
   function relayNetDoc() {
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
+  var BACKFILL_SEND_MS = 8e3;
   async function _backfillSafeguardTo(target) {
     const u = String(target || "");
     if (!/^wss?:\/\//i.test(u)) return { landed: false, why: "no-target" };
@@ -20352,11 +20353,22 @@ zoo`.split("\n");
       return { ev: r && r.ev ? r.ev : null, whole: _readCovers(r, u, droppable) };
     };
     const sendDoc = async (ev) => {
+      let _t = null;
       try {
-        const v = await pool.publish([u], ev)[0];
+        const v = await Promise.race([pool.publish([u], ev)[0], new Promise((_, rej) => {
+          _t = setTimeout(() => rej(new Error("timeout: no answer from the relay")), BACKFILL_SEND_MS);
+        })]);
+        if (_t) {
+          clearTimeout(_t);
+          _t = null;
+        }
         if (typeof v === "string" && v.startsWith("connection failure")) return "failed";
         return "landed";
       } catch (e) {
+        if (_t) {
+          clearTimeout(_t);
+          _t = null;
+        }
         const m = String(e && e.message || e || "");
         return /newer version/i.test(m) ? "landed" : "refused: " + m;
       }
@@ -20826,9 +20838,9 @@ zoo`.split("\n");
       _autoEnrolled.delete(key);
       return null;
     }
-    if (_gate8 && _gate8.proceed === false) {
+    if (!_gate8 || _gate8.proceed !== true) {
       _autoEnrolled.delete(key);
-      return { pending: true, ownBox: true, backfill: _gate8.results };
+      return { pending: true, ownBox: true, backfill: _gate8 && _gate8.results || null };
     }
     let res = null;
     try {
