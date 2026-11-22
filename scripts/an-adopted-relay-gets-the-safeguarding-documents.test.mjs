@@ -970,7 +970,7 @@ function joinWorld(opts = {}) {
       _writeRelayPrefs: async (mutate) => { chosenWrites.push(mutate({}).chosen); return { written: true }; },
       discoverRelayOffers: async () => [{ url: NEW, name: 'newbox', ms: 10 }],
       relays: () => [OWN, POOL], selfPublicRelay: () => '', ownRelay: () => OWN,
-      _ownChurchName: () => 'St Aidan', _isDeclined: () => false, isSharedRelaySpelling: () => false,
+      _ownChurchName: () => 'St Aidan', _isDeclined: () => false, isSharedRelaySpelling: () => false, isOwnRelaySpelling: () => false,
       __addRow: (u) => { if (!w.listed.includes(u)) { w.listed.push(u); w.state.relays.push(u); } return u; },
     },
     more: '\nwindow.Steward.registerAtRelay = async () => ({ ok: true, status: 200 }); window.Steward.addRelay = (u) => __addRow(u); window.Steward.rememberRelayName = () => {};',

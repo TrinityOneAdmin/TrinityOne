@@ -7518,6 +7518,15 @@ async function autoJoinPublicRelays() {
     if (have.has(addr)) { skipped.push([addr, 'listed']); continue; }                         // already in the publish set
     if (_isDeclined(addr)) { skipped.push([addr, 'declined']); continue; }                     // a steward dropped it before
     if (isSharedRelaySpelling(addr)) { skipped.push([addr, 'shared']); continue; }             // never a 2nd spelling of the pool
+    // NOR A SPELLING OF THE BOX THIS CONSOLE IS SERVED FROM (FF1 audit, 2026-11-22). Steward.addRelay refuses one,
+    // so the row never reaches this console's list, and the automatic adopt signs nothing that is not listed: the
+    // pick was proved, registered, sent the whole backfill and then dropped — and it still spent one of this pass's
+    // attempts, so with one slot to fill and the own box ranked fastest the pass adopted nobody. The own box is
+    // enrolled by autoEnrolRelayNet, never from here. WHEN THIS IS REACHED: the console is served from the box's
+    // public origin, the box advertises itself open under a spelling `have` does not hold as an exact string (host
+    // case, an explicit default port — the directory keeps the address as the box claimed it), and the church's
+    // list did not show the box's key this pass (it is not signed in yet, or that read came back empty).
+    if (isOwnRelaySpelling(addr)) { skipped.push([addr, 'own']); continue; }
     // 4a. IDENTITY PROOF AT THE ADDRESS — the key is not carried by the offers directory, so prove it here.
     let proof = null; try { proof = await verifyRelayIdentity(addr); } catch (e) { proof = null; }
     if (moved()) return { ran: false, unknown: true };

@@ -63,6 +63,9 @@ function runJoin(opts = {}) {
     _ownChurchName: () => 'St Aidan',
     _isDeclined: (u) => declined.includes(u),
     isSharedRelaySpelling: (u) => shared.includes(u),
+    // `ownSpellings`: addresses that are a spelling of the box this console is served from (the shipped
+    // isOwnRelaySpelling compares them to ownRelay(); here the test says which are).
+    isOwnRelaySpelling: (u) => (opts.ownSpellings || []).includes(u),
     verifyRelayIdentity: async (u) => ({ relayPub: keyOf(u) }),
     // FIX 1 collaborators: the live-count deficit excludes canonical/shared pins (sharedRelayKeys) and this
     // church's OWN box(es) (the gate's ALREADY-PROVED key — a synchronous cache read, never a probe). The default
@@ -310,4 +313,20 @@ test('FF2: one pass is BOUNDED by the slots it has to fill — one slot and eigh
   assert.equal(count('reg:'), 1); assert.equal(count('add:'), 1);
   assert.deepEqual(j.writtenChosen, [], 'a pending pick was recorded in chosen');
   assert.deepEqual(r.added, []);
+});
+
+// ── FF1 audit (2026-11-22): the console's OWN box, offered under another spelling, is not a candidate ─────
+// Steward.addRelay refuses an own-box spelling, so such a pick can never be listed and the automatic adopt signs
+// nothing unlisted. Before this skip the pass still proved it, registered the church with it, ran the adopt and
+// spent an attempt on it. One slot (target 2 = the canonical relay + 1), the own box ranked FASTEST.
+test('FF1 audit: an offer that is a spelling of this console\'s own box is skipped before anything is asked of it — and does not use up the pass\'s one slot', async () => {
+  const OWN_SPELT = 'wss://box-1.example/relay', COMMUNITY = 'wss://box-2.example/relay';
+  const j = runJoin({ offers: [offer(1, 5), offer(2, 50)], prefs: { publicAuto: true, publicTarget: 2, chosen: [] }, ownSpellings: [OWN_SPELT] });
+  const r = await j.run();
+  assert.deepEqual(j.log.filter((x) => x.includes(OWN_SPELT)), [],
+    'THE CONSOLE\'S OWN BOX WAS TREATED AS A COMMUNITY CANDIDATE — registered with, added or handed to the adopt step: ' + JSON.stringify(j.log));
+  assert.deepEqual(r.skipped, [[OWN_SPELT, 'own']], JSON.stringify(r));
+  assert.deepEqual(j.adopted(), [COMMUNITY],
+    'THE OWN BOX USED UP THE PASS\'S ONLY SLOT — the community relay behind it was never adopted: ' + JSON.stringify(j.log));
+  assert.deepEqual(r.added.map((a) => a.url), [COMMUNITY], JSON.stringify(r));
 });

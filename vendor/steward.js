@@ -21456,6 +21456,10 @@ zoo`.split("\n");
         skipped.push([addr, "shared"]);
         continue;
       }
+      if (isOwnRelaySpelling(addr)) {
+        skipped.push([addr, "own"]);
+        continue;
+      }
       let proof = null;
       try {
         proof = await verifyRelayIdentity(addr);
