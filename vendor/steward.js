@@ -20838,17 +20838,32 @@ zoo`.split("\n");
     } catch (e) {
       bf = null;
     }
-    return { proceed: entering !== true || !!(bf && bf.landed), entering, results: bf && bf.results || null, why: bf && bf.why || "" };
+    return { proceed: entering !== true || !!(bf && bf.landed), entering, landed: !!(bf && bf.landed), results: bf && bf.results || null, why: bf && bf.why || "" };
   }
   var _autoEnrolled = /* @__PURE__ */ new Set();
   var _ownGateLast = { key: "", at: 0, proceed: false };
+  var _ownOwed = /* @__PURE__ */ new Set();
   async function autoEnrolRelayNet() {
     if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
     const own = relayNetCandidates()[0] || "";
     if (!own) return null;
     if (_boxHostsUs !== true) return null;
     const key = pub + "|" + own + "|" + selfPublicRelay() + "|" + selfRelayName();
-    if (_autoEnrolled.has(key)) return null;
+    if (_autoEnrolled.has(key)) {
+      const _ok1 = pub + "|" + own;
+      if (_ownOwed.has(_ok1) && Date.now() - _ownGateLast.at >= BACKFILL_RETRY_MS) {
+        _ownGateLast = { key, at: Date.now(), proceed: true };
+        const _sk1 = sk, _pub1 = pub;
+        let _bf1 = null;
+        try {
+          _bf1 = await _backfillSafeguardTo(own);
+        } catch (e) {
+          _bf1 = null;
+        }
+        if (_bf1 && _bf1.landed && sk === _sk1 && pub === _pub1) _ownOwed.delete(_ok1);
+      }
+      return null;
+    }
     _autoEnrolled.add(key);
     const _sk0 = sk, _pub0 = pub;
     let _gate8 = null;
@@ -20861,6 +20876,10 @@ zoo`.split("\n");
         _gate8 = null;
       }
       _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true) };
+      if (_gate8 && typeof _gate8.landed === "boolean" && pub === _pub0) {
+        if (_gate8.landed) _ownOwed.delete(pub + "|" + own);
+        else _ownOwed.add(pub + "|" + own);
+      }
     }
     if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) {
       _autoEnrolled.delete(key);

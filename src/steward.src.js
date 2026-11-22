@@ -6883,12 +6883,20 @@ async function _ownBoxBackfill(own) {
   }
   let bf = null;
   try { bf = await _backfillSafeguardTo(own); } catch (e) { bf = null; }
-  return { proceed: entering !== true || !!(bf && bf.landed), entering, results: (bf && bf.results) || null, why: (bf && bf.why) || '' };
+  return { proceed: entering !== true || !!(bf && bf.landed), entering, landed: !!(bf && bf.landed), results: (bf && bf.results) || null, why: (bf && bf.why) || '' };
 }
 const _autoEnrolled = new Set();
 // The own-box gate's last answer, and when (F2): a pass that is tried again inside the damper window — because the
 // enrolment did not work, or the box was held — reuses that answer instead of proving, reading and sending again.
 let _ownGateLast = { key: '', at: 0, proceed: false };
+// THE OWN BOX CAN BE SIGNED WITHOUT ITS DOCUMENTS HAVING LANDED (F1, 2026-11-22) — it is already in the list, or
+// the list could not be read whole, so the gate lets the enrolment through on a best-effort send; that is the
+// restore-with-the-shared-relays-down case. Once the enrolment has WORKED the pass is remembered as done and never
+// runs again on this page, so the documents were only retried on the next page load. This set remembers
+// "church|box: signed or about to be, documents NOT landed", and the pass below re-runs just the backfill for it
+// on the console's signals (under the same ten-minute damper) until it lands. In memory only: a page load runs
+// the whole pass afresh anyway.
+const _ownOwed = new Set();
 async function autoEnrolRelayNet() {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
   const own = relayNetCandidates()[0] || '';
@@ -6903,7 +6911,17 @@ async function autoEnrolRelayNet() {
   // do. Keyed on the box alone, a pass that worked once never ran again on this page, and the church's list kept
   // the dead tunnel address until the console was reloaded (PR #7 audit, M-2).
   const key = pub + '|' + own + '|' + selfPublicRelay() + '|' + selfRelayName();
-  if (_autoEnrolled.has(key)) return null;
+  if (_autoEnrolled.has(key)) {
+    const _ok1 = pub + '|' + own;
+    if (_ownOwed.has(_ok1) && Date.now() - _ownGateLast.at >= BACKFILL_RETRY_MS) {
+      _ownGateLast = { key, at: Date.now(), proceed: true };
+      const _sk1 = sk, _pub1 = pub;
+      let _bf1 = null;
+      try { _bf1 = await _backfillSafeguardTo(own); } catch (e) { _bf1 = null; }
+      if (_bf1 && _bf1.landed && sk === _sk1 && pub === _pub1) _ownOwed.delete(_ok1);
+    }
+    return null;
+  }
   _autoEnrolled.add(key);
   // F8: the own box is backfilled first, OUTSIDE the signing queue; a box that is ENTERING the list and did not
   // take the child list is not signed this pass (see _ownBoxBackfill).
@@ -6919,6 +6937,8 @@ async function autoEnrolRelayNet() {
   else {
     try { _gate8 = await _ownBoxBackfill(own); } catch (e) { _gate8 = null; }
     _ownGateLast = { key, at: _t8, proceed: !!(_gate8 && _gate8.proceed === true) };
+    // F1: what this pass learned about the own box's documents — owed until they land.
+    if (_gate8 && typeof _gate8.landed === 'boolean' && pub === _pub0) { if (_gate8.landed) _ownOwed.delete(pub + '|' + own); else _ownOwed.add(pub + '|' + own); }
   }
   if (sk !== _sk0 || pub !== _pub0 || actingChurch || _viewingNetwork()) { _autoEnrolled.delete(key); return null; }
   if (!_gate8 || _gate8.proceed !== true) { _autoEnrolled.delete(key); return { pending: true, ownBox: true, backfill: (_gate8 && _gate8.results) || null }; }

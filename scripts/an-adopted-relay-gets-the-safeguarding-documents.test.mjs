@@ -509,9 +509,11 @@ test('A5: autoPickRelays hands each pick to signRelay — documents first, then 
 function ownBoxWorld(opts = {}) {
   const log = [], enrols = [];
   const net = opts.net || [];
+  const flags = { sharedDown: !!opts.sharedDown };   // the shared relay — the only holder of the documents — is not answering
   const w = world({ ...opts, relays: [OWN, POOL],
-    read: (name) => ({ ev: fullDocs()[name] || null, complete: true, askedUrls: [OWN, POOL], answeredUrls: [POOL] }),   // the documents live on the shared relay; the own box is the empty one
-    lifts: [['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['fn', 'function parseRelayNet'], ['fn', 'async function _ownBoxBackfill(own) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _autoEnrolled = '], ['st', 'var _ownGateLast = '], ['fn', 'async function autoEnrolRelayNet() {']],
+    read: (name) => (flags.sharedDown ? { ev: null, complete: false, askedUrls: [OWN, POOL], answeredUrls: [] }
+      : { ev: fullDocs()[name] || null, complete: true, askedUrls: [OWN, POOL], answeredUrls: [POOL] }),   // the documents live on the shared relay; the own box is the empty one
+    lifts: [['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'], ['fn', 'function parseRelayNet'], ['fn', 'async function _ownBoxBackfill(own) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _autoEnrolled = '], ['st', 'var _ownGateLast = '], ['st', 'var _ownOwed = '], ['fn', 'async function autoEnrolRelayNet() {']],
     scope: { _boxHostsUs: true, selfPublicRelay: () => '', selfRelayName: () => '',
       relayNetDoc: async () => ({ ev: { pubkey: CP, content: JSON.stringify(net) }, askedUrls: [OWN, POOL], answeredUrls: opts.netWhole === false ? [OWN] : [OWN, POOL] }),
       enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o); return { published: true, proven: [{ url: OWN, pubkey: KEY_OWN }], entries: [{ pubkey: KEY_OWN }], delivered: [OWN] }; },
@@ -519,7 +521,7 @@ function ownBoxWorld(opts = {}) {
     expose: ', autoEnrolRelayNet' });
   const realPublish = w.scope.pool.publish;
   w.scope.pool.publish = (urls, ev) => { log.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
-  return { ...w, log, enrols };
+  return { ...w, log, enrols, flags };
 }
 test('F8: an own box ENTERING the list (a restored church on a new box) is sent the child list, and signed only after it landed', async () => {
   const w = ownBoxWorld({ net: [{ pubkey: '8'.repeat(64), url: 'wss://the-old-box.example/relay' }] });
@@ -661,4 +663,37 @@ test('F2: an own-box enrolment that is tried again inside ten minutes does not p
   await flaky.api.autoEnrolRelayNet();
   assert.equal(n2, 2, 're-anchor: the enrolment was not retried');
   assert.equal(flaky.published.length, sent, 'the retried enrolment ran the whole backfill again inside the window');
+});
+
+// ── 17. F1 (Part A audit, the restore case): an own box signed WITHOUT its documents is owed them ─────────
+// The own box is already in the church's list (so the gate does not hold it) and the shared relay that holds the
+// documents is not answering. The enrolment goes through; the documents have not landed; the pass is "done".
+test('F1: an own box signed without its documents landing is remembered as owed — a later signal re-runs the backfill, it lands, and then it stops', async () => {
+  const w = ownBoxWorld({ net: [{ pubkey: KEY_OWN, url: OWN }], sharedDown: true });
+  await w.api.autoEnrolRelayNet();
+  assert.equal(w.enrols.length, 1, 'precondition: the own box was not enrolled');
+  assert.deepEqual(w.sentTo(OWN), [], 'precondition: documents were sent although none could be read');
+  // The shared relay is back. A signal inside the damper window does nothing…
+  w.flags.sharedDown = false;
+  await w.api.autoEnrolRelayNet();
+  assert.deepEqual(w.sentTo(OWN), [], 'the own-box backfill ran again inside the damper window');
+  // …and one after it re-runs the backfill, which lands. The enrolment itself is NOT run again.
+  w.state.t += 11 * 60 * 1000;
+  await w.api.autoEnrolRelayNet();
+  assert.ok(w.sentTo(OWN).includes('minors') && w.sentTo(OWN).includes('blocked'),
+    'THE OWN BOX WAS SIGNED WITHOUT THE CHILD LIST AND NOTHING EVER SENT IT — until the next page load, a restored church\'s primary box reads a child as an adult (F1): ' + JSON.stringify(w.log));
+  assert.equal(w.enrols.length, 1, 'the enrolment was run a second time');
+  const sent = w.published.length;
+  w.state.t += 11 * 60 * 1000;
+  await w.api.autoEnrolRelayNet();
+  assert.equal(w.published.length, sent, 'the own box was backfilled again after its documents had landed — it is not cleared from owed');
+});
+test('F1: an own box whose documents landed on the first pass is NOT owed: later signals send nothing', async () => {
+  const w = ownBoxWorld({ net: [{ pubkey: KEY_OWN, url: OWN }] });
+  await w.api.autoEnrolRelayNet();
+  const sent = w.published.length;
+  assert.ok(sent > 0, 're-anchor: the first pass sent nothing');
+  w.state.t += 11 * 60 * 1000;
+  await w.api.autoEnrolRelayNet();
+  assert.equal(w.published.length, sent, 'a landed own box is re-sent its documents on every signal');
 });
