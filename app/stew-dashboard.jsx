@@ -3859,10 +3859,12 @@ function StatCard({ label, value, sub, ic, tint, onClick, snug = false, pending 
   );
 }
 
-function Panel({ title, action, children, style = {}, scroll = false, collapsible = false, open = true, onToggle }) {
+// `tour`: an optional data-tour anchor for the console tour (app/stew-tour.jsx) to point at this card. A card
+// that passes none draws no attribute.
+function Panel({ title, action, children, style = {}, scroll = false, collapsible = false, open = true, onToggle, tour }) {
   const narrow = useStewNarrow();
   return (
-    <div className="sk-panel" style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
+    <div className="sk-panel" data-tour={tour} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
       <div className="sk-panel-head" style={{ display: 'flex', flexDirection: (narrow && action) ? 'column' : 'row', alignItems: (narrow && action) ? 'stretch' : 'center', gap: (narrow && action) ? 11 : 0, marginBottom: 16, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
           <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, margin: 0 }}>{title}</h2>
@@ -4007,7 +4009,7 @@ function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
   const pendingCount = (joinApproval && rosterReady) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
   const realCount = useRealMemberCount({ holdLast: true });   // blocked + still-pending excluded — see useRealMemberCount
   const pendingBanner = pendingCount ? (
-    <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
+    <button data-tour="needs" onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={22} color="var(--on-clay)" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{pendingCount} {pendingCount === 1 ? 'person is' : 'people are'} waiting to join</div>
@@ -4153,7 +4155,7 @@ function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
   var _ovHasSchedule = _ovVp && Array.isArray(_ovVp.schedule) && _ovVp.schedule.length > 0;
   var _ovAllFuture = _ovHasSchedule && _ovVp.schedule.every(function(s) { return s.at > Math.floor(Date.now() / 1000); });
   var verseBanner = (_ovVp && _ovVp.ref) ? (
-    <button onClick={function() { onResources('verse'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+    <button data-tour="verse" onClick={function() { onResources('verse'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: _ovAllFuture ? 'var(--clay)' : 'var(--sage)', color: _ovAllFuture ? 'var(--on-clay)' : 'var(--on-sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={_ovAllFuture ? 'clock' : 'book'} size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: _ovAllFuture ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{_ovAllFuture ? 'Verse prompt scheduled' : 'Verse prompt is live'}</div>
@@ -4220,7 +4222,7 @@ function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
     </Panel>
   );
   const activityPanel = (
-    <Panel title="Recent activity" style={fillStyle} collapsible open={activityOpen} onToggle={() => setActivityOpen(o => !o)}>
+    <Panel title="Recent activity" tour="activity" style={fillStyle} collapsible open={activityOpen} onToggle={() => setActivityOpen(o => !o)}>
       {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
       <div className="no-scrollbar" style={stacked ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {activity.map((a) => {

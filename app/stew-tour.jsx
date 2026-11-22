@@ -1,8 +1,9 @@
 // stew-tour.jsx — the first-run walkthrough for the STEWARD CONSOLE (steward.html).
 //
 // Three things, all in one host component (StewTourHost) that StewDashboard mounts once, in both layouts:
-//   1. A seven-step tour. Each step is a small bubble pointing at one real element, with Next / Back /
-//      Skip tour, a step counter, and a cutout round the target. Step 1 is centred with no pointer.
+//   1. A tour in two parts (2026-11-22). Part 1 walks the Overview page card by card; Part 2 steps down every
+//      section in the side menu, one step each. Each step is a small bubble pointing at one real element, with
+//      Next / Back / Skip tour, a step counter, and a cutout round the target. Step 1 is centred with no pointer.
 //   2. A section tip: the FIRST time each section opens, one bubble with "Got it". No Manna tip.
 //   3. A locked-section tip, shown once, the first time a helper opens a section stewNav() marked `locked`.
 //
@@ -17,9 +18,10 @@
 // helper cannot use (locked). It never shows while another console dialog, the error banner or a join toast is
 // up — it waits. It writes nothing to a relay: "seen" is per device, in localStorage, per church.
 //
-// The anchors are `data-tour="…"` attributes in app/stew-dashboard.jsx (identity, nav-<key>, menu, joincode,
-// main) and app/stew-help.jsx (help). On the phone the nav lives behind ☰, so a step that points at a nav item
-// points at the menu button instead and its title says "(in the menu)".
+// The anchors are `data-tour="…"` attributes in app/stew-dashboard.jsx (identity, nav-<key>, menu, main, and on
+// the Overview needs, verse, joincode, activity) and app/stew-help.jsx (help). On the phone the nav lives behind
+// ☰, so a step that points at a nav item points at the menu button instead and its title says "· in the menu".
+// The tour does not open the menu (owner, 2026-11-22: the lighter phone path).
 //
 // The file MUST be named stew-*.jsx: scripts/sync-web.sh strips app/stew-*.js out of the member web build, and
 // scripts/build-steward-apk.sh derives the steward APK's file list from steward.html.
@@ -32,34 +34,52 @@
 // (stew-modal.jsx), window.stewModalOpen and window.stewModalCount (stew-modal.jsx), window.Steward, and from tour-kit.jsx tourKitFind,
 // tourKitWalk, tourKitReducedMotion, tourKitFlag, tourKitFlagSet, TourKitBubble (which uses tourKitPlace).
 // Top-level names DECLARED here — unique across the console's single global scope on purpose (a duplicate
-// top-level name in classic scripts blanks the whole app): STEW_TOUR_STEPS, STEW_TOUR_TIPS, STEW_TOUR_LOCKED,
-// stewTourStore, stewTourChurch, stewTourKey, stewTourSeen, stewTourSeenSet, stewTourStart, stewTourPlan,
+// top-level name in classic scripts blanks the whole app): STEW_TOUR_STEPS, STEW_TOUR_NAV, STEW_TOUR_TIPS, STEW_TOUR_LOCKED,
+// stewTourStore, stewTourChurch, stewTourKey, stewTourSeen, stewTourSeenSet, stewTourMarkTipsSeen, stewTourStart, stewTourPlan,
 // stewTourSectionTip, stewTourBlocked, stewTourMainTop, stewTourLater, STEW_TOUR_TIP_ROOM, StewTourBubble, StewTourTip, StewTourHost.
 
-// ── the words (approved by the owner, 2026-11-18 — CONSOLE-WALKTHROUGH-COPY-2026-11-18.html) ────────────────
-// `nav` names a console section the step points at; `targets` names any other anchor. A step with neither is
-// centred. `ownerOnly` drops the step for a helper: a helper cannot rename the church. `helperText` (here and in
-// STEW_TOUR_TIPS) is what a helper is told instead: the owner's words name things only the church key can do
-// (owner, 2026-11-19). A helper is the same `delegate` that drops ownerOnly — StewDashboard's `actingChurch`.
+// ── the words (approved by the owner, 2026-11-22 — CONSOLE-WALKTHROUGH-DETAIL-COPY-2026-11-22.html) ─────────
+// PART 1: the Overview page. `targets` names the anchors a step points at; a step with none is centred. `card`
+// marks a step that points at a card ON the Overview page: the host opens Overview before the tour starts so the
+// card is there, and a card that is not drawn (nobody waiting to join; no verse prompt out) is skipped like any
+// other missing anchor. `ownerOnly` drops the step for a helper: a helper cannot rename the church. A helper is
+// the `delegate` StewDashboard passes — its `actingChurch`.
+// The Overview's "Groups & rooms" card is NOT a step (owner, 2026-11-22): Groups is covered once, in Part 2.
 const STEW_TOUR_STEPS = [
-  { id: 'welcome', title: 'Welcome', text: 'Your church is ready. Here’s a quick look around. It takes under a minute, and you can skip it.' },
+  { id: 'welcome', title: 'Welcome', text: 'Your church is ready. Here’s a proper look around — a couple of minutes, and you can stop any time.' },
   { id: 'identity', title: 'Your church’s name', targets: ['identity'], ownerOnly: true,
     text: 'This is your church. Tap the name to change it. If you also help run a network or another church, switch to it from here.' },
-  { id: 'overview', title: 'Overview', nav: 'overview',
-    text: 'Start here each time. Anything that needs you, like new sign-ups or a clearance due for renewal, appears at the top.' },
-  { id: 'invite', title: 'Inviting people', targets: ['joincode'],
+  { id: 'needs', title: 'What needs you', targets: ['needs'], card: true,
+    text: 'Anything waiting on you shows here first — new people asking to join, and clearances coming up for renewal. Clear this and you’re up to date.' },
+  { id: 'verse', title: 'Verse prompt', targets: ['verse'], card: true,
+    text: 'A verse goes out to everyone’s phone each day. This shows what’s scheduled — change it under Resources.' },
+  { id: 'invite', title: 'Joining code', targets: ['joincode'], card: true,
     text: 'This is how people join. Share the code or QR: they scan it or type it into the TrinityOne app.' },
-  { id: 'members', title: 'Members', nav: 'members',
-    text: 'Everyone who has joined. Mark who is a child, and which adults are cleared to work with them. The safety rules then apply on their own.',
+  { id: 'activity', title: 'Recent activity', targets: ['activity'], card: true,
+    text: 'A running list of what’s happened lately — who joined, what was posted, what changed across the church.' },
+];
+// PART 2: one step per section in the side menu, keyed by the section's nav key. The step's title is the
+// section's own label from the nav unless `title` is given. `helperText` (here and in STEW_TOUR_TIPS) is what a
+// helper is told instead: the owner's words name things only the church key can do (owner, 2026-11-19). `also`
+// names a second anchor to ring. Manna has no entry on purpose (it is not built yet), so it gets no step.
+const STEW_TOUR_NAV = {
+  overview: { text: 'The page you just saw. Start here each time you open the console.' },
+  members: { text: 'Everyone who has joined. Mark who is a child, and which adults are cleared to work with them. The safety rules then apply on their own.',
     // A helper cannot mark children or cleared adults: the relay takes those lists only from the church key
     // (scripts/gateway.mjs, owner-only). So a helper is told only the first, true, sentence.
     helperText: 'Everyone who has joined.' },
-  { id: 'groups', title: 'Groups', nav: 'groups',
-    text: 'Chat rooms and announcement channels. Your starter groups are already here. Choose which are open, invite-only, or safe for children.' },
-  { id: 'settings', title: 'Settings and Help', nav: 'settings', also: ['help'],
+  groups: { text: 'Chat rooms and announcement channels. Choose which are open, invite-only, or safe for children.' },
+  rota: { text: 'Build serving teams, then fill the dates. People get a “Can you serve?” request and answer from their phone.' },
+  calendar: { text: 'Services, events and socials. Members see them in their app and can say they’re coming.' },
+  rooms: { text: 'The rooms in your building. Add them, then book one when you add an event.' },
+  resources: { text: 'Reading plans, devotionals, sermons, and the verse prompt your members see.' },
+  meals: { text: 'Meal trains, lifts and errands. Set up a need, and members sign up to help.' },
+  checkin: { text: 'The children’s register. Sign children in and out at the door, and see who’s in the room.' },
+  finance: { text: 'Record giving and spending, import a bank statement, and share a summary with the church.' },
+  settings: { title: 'Settings & Help', also: ['help'],
     text: 'Switch sections on or off, back up the church, and choose where its data lives. Stuck? Help is here, and so is this tour.',
     helperText: 'Stuck? Help is here, and so is this tour.' },
-];
+};
 // One per section. Manna has none on purpose (owner, 2026-11-18: it is not built yet).
 const STEW_TOUR_TIPS = {
   overview: { title: 'Overview', text: 'What needs you today, and recent activity across the church.' },
@@ -92,6 +112,14 @@ function stewTourChurch() {
 function stewTourKey(church, what) { return 'trinityone.steward.tour.' + (church || 'none') + '.' + what; }
 function stewTourSeen(church, what) { return tourKitFlag(stewTourKey(church, what)); }
 function stewTourSeenSet(church, what) { tourKitFlagSet(stewTourKey(church, what)); }
+// The tour has just covered every section, so none of them needs its own first-open tip (owner, 2026-11-22):
+// spend the tip of every section in `nav` (stewNav's output), and the locked-section tip. Called when the tour is
+// FINISHED, never when it is skipped. A section the church switches on later is not in `nav` now, so it keeps its tip.
+// A LOCKED section keeps its tip too (audit L4, 2026-11-22): it got no tour step, so a helper later given it still sees the tip once.
+function stewTourMarkTipsSeen(church, nav) {
+  for (const n of (Array.isArray(nav) ? nav : [])) { if (n && n.key && !n.locked) stewTourSeenSet(church, 'tip.' + n.key); }
+  stewTourSeenSet(church, 'locked');
+}
 
 // Ask for the tour. 'wizard' and 'brief' are the two automatic starts and happen at most once per church on
 // this device; 'replay' (Help) always starts it. Returns whether a start was queued.
@@ -114,28 +142,29 @@ function stewTourStart(reason, opts) {
 // ── pure logic (scripts/console-walkthrough.test.mjs RUNS these) ────────────────────────────────────────────
 // Which steps apply, given the church's nav (stewNav's output: switched-off sections already gone, a helper's
 // out-of-scope sections `locked`), the layout, and who is looking. Each returned step carries `targets`: the
-// data-tour anchors to highlight, the first being the one it must have (a step with none is centred).
+// data-tour anchors to highlight, the first being the one it must have (a step with none is centred); `card` is
+// true for a step that points at a card on the Overview page.
+// Part 1 is STEW_TOUR_STEPS. Part 2 is one step per entry of `nav`, in its order: a locked section is left out (a
+// helper is not walked through a section they cannot use), and so is one with no words in STEW_TOUR_NAV (Manna).
 function stewTourPlan(nav, opts) {
   const o = opts || {};
   const list = Array.isArray(nav) ? nav : [];
-  const navItem = (k) => list.find(n => n && n.key === k);
   const at = (k) => o.narrow ? 'menu' : 'nav-' + k;
   const out = [];
   for (const s of STEW_TOUR_STEPS) {
     if (s.ownerOnly && o.delegate) continue;
-    let targets = (s.targets || []).slice();
-    let title = s.title;
-    if (s.nav) {
-      const n = navItem(s.nav);
-      if (!n || n.locked) continue;           // switched off, or not this helper's
-      targets = [at(s.nav)].concat(targets);
-      if (o.narrow) title = s.title + ' (in the menu)';
-    }
-    for (const a of (s.also || [])) {
+    out.push({ id: s.id, title: s.title, text: (o.delegate && s.helperText) || s.text, targets: (s.targets || []).slice(), card: !!s.card });
+  }
+  for (const n of list) {
+    const w = n && STEW_TOUR_NAV[n.key];
+    if (!w || n.locked) continue;
+    const targets = [at(n.key)];
+    for (const a of (w.also || [])) {
       const t = a === 'help' ? (o.narrow ? 'menu' : 'help') : a;
       if (targets.indexOf(t) < 0) targets.push(t);
     }
-    out.push({ id: s.id, title, text: (o.delegate && s.helperText) || s.text, targets });
+    const title = w.title || n.label || n.key;
+    out.push({ id: 'nav.' + n.key, title: o.narrow ? title + ' · in the menu' : title, text: (o.delegate && w.helperText) || w.text, targets, card: false });
   }
   return out;
 }
@@ -263,8 +292,8 @@ function StewTourTip({ tip, onDone, onDock }) {
 
 // ── the host ────────────────────────────────────────────────────────────────────────────────────────────────
 // Mounted once by StewDashboard (inside its shared `content`, so it is in both layouts). `nav` is stewNav()'s
-// output, `tab` the open section, `onTab` the dashboard's setTab (the tour opens Overview so the joining code
-// is there to point at). `holdTips`: StewDashboard's own answer to "might the setup wizard still open, or is it
+// output, `tab` the open section, `onTab` the dashboard's setTab (the tour opens Overview so the cards its
+// Part 1 points at are there). `holdTips`: StewDashboard's own answer to "might the setup wizard still open, or is it
 // open?" — section tips wait for it, so a new owner sees the wizard first (audit L1: it ends when the dashboard
 // decides, so an abandoned wizard no longer holds the tips for ever).
 function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }) {
@@ -312,7 +341,7 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
       stewTourStore.pending = null;
       stewTourSeenSet(church, 'tour');
       setTip(null);
-      if (onTab && !pending.keepTab && tab !== 'overview' && plan.some(s => s.id === 'overview' || s.id === 'invite')) onTab('overview');
+      if (onTab && !pending.keepTab && tab !== 'overview' && plan.some(s => s.card)) onTab('overview');
       setRun({ i: 0 });
       return;
     }
@@ -350,8 +379,11 @@ function StewTourHost({ nav, tab, narrow, delegate, isNetwork, onTab, holdTips }
     const next = tourKitWalk(plan, run.i + 1, 1, present);
     const prev = tourKitWalk(plan, run.i - 1, -1, present);
     const end = () => setRun(null);
+    // FINISHED (Next on the last step that can be shown) is not SKIPPED (Skip tour, Escape, Android Back): only a
+    // finished tour has covered every section, so only it spends their first-open tips (owner, 2026-11-22).
+    const finish = () => { stewTourMarkTipsSeen(church, nav); end(); };
     return <StewTourBubble step={step} pos={live.indexOf(step) + 1} count={live.length} first={prev < 0} last={next < 0}
-      onSkip={end} onNext={() => { if (next < 0) end(); else setRun({ i: next }); }} onBack={() => { if (prev >= 0) setRun({ i: prev }); }} />;
+      onSkip={end} onNext={() => { if (next < 0) finish(); else setRun({ i: next }); }} onBack={() => { if (prev >= 0) setRun({ i: prev }); }} />;
   }
   if (tip && tip.section === tab && !blocked) return <StewTourTip tip={tip} onDone={() => { stewTourSeenSet(church, tip.key); setTip(null); }} onDock={() => setTip(t => (t && t.float ? { ...t, float: false } : t))} />;
   return null;
