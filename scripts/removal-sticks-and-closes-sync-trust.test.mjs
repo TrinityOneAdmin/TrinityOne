@@ -247,6 +247,7 @@ test('B0: removing a relay in a church with NO sync doc (the default) DOES tombs
   assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
     'A SYNC-OFF CHURCH GOT NO TOMBSTONE — the default church records no removal, so nothing can refuse the box later (B0): ' + JSON.stringify(w.tombs()));
   assert.equal(r.tombstoned, true, 'the result did not say the tombstone was written: ' + JSON.stringify(r));
+  assert.deepEqual(r.removedKeys, [KEY_B], 'the result did not name the key it tombstoned (unsignRelay hands it to the chosen drop): ' + JSON.stringify(r));
   assert.deepEqual(w.api._pendingTomb(), [], 'the pending key was not cleared once its tombstone landed');
 });
 
@@ -366,6 +367,7 @@ test('B0: removing a church-added ALIAS of a shared relay takes the row out but 
   });
   const r = await w.api.unenrolRelayNet(ALIAS);
   assert.equal(r.removed, true, 'the alias row was not removed: ' + JSON.stringify(r));
+  assert.deepEqual(r.removedKeys, [], 'the result named a shared key as tombstoned: ' + JSON.stringify(r));
   assert.equal(w.writesTo('trinityone/relays-removed').length, 0,
     'A SHARED RELAY KEY WAS TOMBSTONED — every console would then refuse the shared relay at all its addresses: ' + JSON.stringify(w.tombs()));
   assert.deepEqual(w.api._pendingTomb(), [], 'a shared key was left in the pending-tombstone set');

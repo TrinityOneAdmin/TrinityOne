@@ -127,13 +127,18 @@ function runSign({ enrolResult }) {
   return api.signRelay('wss://new.example/relay').then(async () => { await new Promise(r => setTimeout(r, 0)); return calls; });
 }
 
-function runUnsign({ removeResult }) {
+// N2 (2026-11-22): unsignRelay also drops a Removed box from the community `chosen` set (_dropChosen, a spy here —
+// the engine is run for real in community-relays-on-by-default.test.mjs). `trace`, when given, receives the order of
+// the queue slot and the drop, and every _dropChosen call's arguments.
+function runUnsign({ removeResult, trace }) {
   const body = fnBody(STEWARD, 'unsignRelay(url)', 'unsignRelay');
   assert.match(body, /publishRelayList\(\)/, 'vendor/steward.js: unsignRelay no longer publishes a 10002 on a successful Remove (C1 wire removed)');
   let calls = 0;
+  const t = trace || { order: [], drops: [] };
   const scope = scopeOf({
-    enrolSerial: (fn) => Promise.resolve(fn()),
+    enrolSerial: (fn) => { t.order.push('slot'); return Promise.resolve(fn()).then((v) => { t.order.push('slot-end'); return v; }); },
     unenrolRelayNet: async () => removeResult,
+    _dropChosen: (url, keys) => { t.order.push('drop'); t.drops.push([url, keys]); return Promise.resolve({ written: true }); },
     window: { Steward: { publishRelayList: () => { calls++; return Promise.resolve(null); } } },
     Promise,
   });
@@ -150,4 +155,29 @@ test('5. a successful Remove publishes a 10002; a notListed/unknown Remove does 
   assert.equal(await runUnsign({ removeResult: { removed: true } }), 1, 'a successful Remove did not republish the relay list');
   assert.equal(await runUnsign({ removeResult: { removed: false, notListed: true } }), 0, 'a Remove that changed nothing still republished');
   assert.equal(await runUnsign({ removeResult: { removed: false, unknown: true } }), 0, 'a Remove over an incomplete read republished anyway');
+});
+
+// ── N2: the WIRE from Remove into the `chosen` drop (rule 1: fails if the call is deleted) ─────────────────
+test('N2. a Remove that FINISHED drops the box from the community chosen set, after its queue slot; a partial / unknown / own-box Remove does not', async () => {
+  const K = 'ab'.repeat(32);
+  const done = { order: [], drops: [] };
+  await runUnsign({ removeResult: { removed: true, removedKeys: [K] }, trace: done });
+  assert.deepEqual(done.drops, [['wss://old.example/relay', [K]]],
+    'A REMOVED BOX WAS NOT DROPPED FROM `chosen` — it keeps its community cap slot for ever (N2): ' + JSON.stringify(done.drops));
+  assert.deepEqual(done.order, ['slot', 'slot-end', 'drop'],
+    'the chosen drop ran INSIDE the Remove\'s queue slot — _writeRelayPrefs enters the same queue and would deadlock: ' + JSON.stringify(done.order));
+  const never = { order: [], drops: [] };
+  await runUnsign({ removeResult: { removed: false, notListed: true, removedKeys: [] }, trace: never });
+  assert.equal(never.drops.length, 1, 'a box the church\'s list never named (a finished Remove) was not dropped from `chosen`');
+  for (const [why, res] of [
+    ['a PARTIAL removal (the tombstone has not landed)', { removed: false, unknown: true, syncPartial: true }],
+    ['a result that says notListed AND partial (the guard itself, whatever shape reaches it)', { removed: false, notListed: true, syncPartial: true }],
+    ['an unknown removal (a relay not answering)', { removed: false, unknown: true }],
+    ['an own-box refusal', { removed: false, ownBox: true }],
+    ['a church switch mid-removal', { removed: false, unknown: true, changed: true }],
+  ]) {
+    const t = { order: [], drops: [] };
+    await runUnsign({ removeResult: res, trace: t });
+    assert.deepEqual(t.drops, [], why + ' still dropped the box from `chosen`: ' + JSON.stringify(t.drops));
+  }
 });

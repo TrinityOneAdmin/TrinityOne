@@ -7009,6 +7009,28 @@ async function _writeRelayPrefs(mutate) {
   });
 }
 
+// A REMOVED BOX LEAVES `chosen` (N2, 2026-11-22). `chosen` is the per-church record of the community boxes the
+// auto-join adopted, and the cap counts it — so a Removed community box kept its cap slot for ever. Matched by
+// the key(s) the Remove tombstoned or by the address it was recorded under. READ FIRST, and write ONLY when the
+// box is really there: the common Remove (a box the auto-join never chose, a church with no prefs doc) must not
+// start writing a prefs doc. An inconclusive read writes nothing — a stale `chosen` entry only costs a cap slot.
+// NEVER CALL THIS FROM INSIDE AN enrolSerial SLOT: _writeRelayPrefs enters the queue itself, and nesting it
+// deadlocks. Its one caller is Steward.unsignRelay's `.then`, after the Remove's slot has resolved.
+async function _dropChosen(url, keys) {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const u = _k(normRelay(url) || '');
+  const ks = new Set([...(keys || [])].map(p => String(p || '').toLowerCase()).filter(p => /^[0-9a-f]{64}$/.test(p)));
+  const hit = (c) => !!c && (ks.has(String(c.pubkey || '').toLowerCase()) || (!!u && !!c.url && _k(c.url) === u));
+  const { prefs, complete } = await _readRelayPrefs();
+  if (!complete) return { written: false, unknown: true };
+  if (!prefs || !Array.isArray(prefs.chosen) || !prefs.chosen.some(hit)) return { written: false, absent: true };
+  const w = await _writeRelayPrefs(prev => ({ ...prev, chosen: (Array.isArray(prev && prev.chosen) ? prev.chosen : []).filter(c => !hit(c)) }));
+  // _writeRelayPrefs's own read-back asks whether what it WROTE is in the newest doc; a removal has to ask the
+  // opposite question, so it is asked here: `dropped` only when the newest doc no longer names the box.
+  return { ...w, dropped: !!(w && w.written && !((w.prefs && w.prefs.chosen) || []).some(hit)) };
+}
+
 // ── B2: THE AUTO-JOIN PASS (console, background, after syncHeal on the same triggers) ─────────────────────────
 async function autoJoinPublicRelays() {
   if (!sk || !pub) return { ran: false };
@@ -10169,6 +10191,13 @@ window.Steward = {
   unsignRelay(url) {
     const p = enrolSerial(() => unenrolRelayNet(url));
     p.then((r) => { try { if (r && r.removed === true) { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } } catch (e) {} }, () => {});
+    // N2 (2026-11-22): …and a Removed box leaves the community `chosen` set, freeing its cap slot. Here, in the
+    // `.then` — AFTER the Remove's queue slot has resolved — because _dropChosen's write enters enrolSerial itself
+    // and would deadlock if it ran inside unenrolRelayNet. Only when the Remove FINISHED: the box is out of the
+    // list (`removed`) or was never in it (`notListed`), and its tombstone step was not partial — `chosen` is one
+    // of the things that stops the auto-join re-adopting a box, so it is not dropped while the tombstone that
+    // replaces it has not landed. Fire-and-forget, swallowed on failure like the publish above.
+    p.then((r) => { try { if (r && (r.removed === true || r.notListed === true) && !r.syncPartial) { const dc = _dropChosen(url, r.removedKeys || []); if (dc && dc.catch) dc.catch(() => {}); } } catch (e) {} }, () => {});
     return p;
   },
 

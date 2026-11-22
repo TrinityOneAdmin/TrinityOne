@@ -20962,6 +20962,24 @@ zoo`.split("\n");
       }
     });
   }
+  async function _dropChosen(url, keys) {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return { written: false, skipped: true };
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const u = _k(normRelay(url) || "");
+    const ks = new Set([...keys || []].map((p) => String(p || "").toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p)));
+    const hit = (c) => !!c && (ks.has(String(c.pubkey || "").toLowerCase()) || !!u && !!c.url && _k(c.url) === u);
+    const { prefs, complete } = await _readRelayPrefs();
+    if (!complete) return { written: false, unknown: true };
+    if (!prefs || !Array.isArray(prefs.chosen) || !prefs.chosen.some(hit)) return { written: false, absent: true };
+    const w = await _writeRelayPrefs((prev) => ({ ...prev, chosen: (Array.isArray(prev && prev.chosen) ? prev.chosen : []).filter((c) => !hit(c)) }));
+    return { ...w, dropped: !!(w && w.written && !(w.prefs && w.prefs.chosen || []).some(hit)) };
+  }
   async function autoJoinPublicRelays() {
     if (!sk || !pub) return { ran: false };
     if (actingChurch || _viewingNetwork()) return { ran: false, skipped: "not this church\u2019s own console" };
@@ -23779,6 +23797,17 @@ zoo`.split("\n");
           if (r && r.removed === true) {
             const pl = window.Steward.publishRelayList();
             if (pl && pl.catch) pl.catch(() => {
+            });
+          }
+        } catch (e) {
+        }
+      }, () => {
+      });
+      p.then((r) => {
+        try {
+          if (r && (r.removed === true || r.notListed === true) && !r.syncPartial) {
+            const dc = _dropChosen(url, r.removedKeys || []);
+            if (dc && dc.catch) dc.catch(() => {
             });
           }
         } catch (e) {
