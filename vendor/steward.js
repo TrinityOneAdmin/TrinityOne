@@ -21015,25 +21015,28 @@ zoo`.split("\n");
     }
     if (moved()) return { ran: false, unknown: true };
     const have = new Set(relays());
-    let tombKeys = /* @__PURE__ */ new Set();
-    try {
-      const t = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAYS_REMOVED_D] }], 6e3, true);
-      const tev = t && t.ev && t.ev.pubkey === pub ? t.ev : null;
-      if (tev) {
-        let ts = [];
-        try {
-          ts = JSON.parse(tev.content || "[]");
-        } catch (e) {
-          ts = [];
-        }
-        for (const x of Array.isArray(ts) ? ts : []) {
-          const p = String(x && x.pubkey || "").toLowerCase();
-          if (/^[0-9a-f]{64}$/.test(p)) tombKeys.add(p);
-        }
+    const _kJ = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
       }
+    };
+    let _droppJ = /* @__PURE__ */ new Set();
+    try {
+      _droppJ = new Set(extraRelays().map(_kJ));
     } catch (e) {
+      _droppJ = /* @__PURE__ */ new Set();
+    }
+    let gone = null;
+    try {
+      gone = await _removedKeysRead(_droppJ);
+    } catch (e) {
+      gone = null;
     }
     if (moved()) return { ran: false, unknown: true };
+    if (!gone || !gone.complete) return { ran: false, incomplete: true, removedUnknown: true };
+    const tombKeys = gone.keys;
     const name = _ownChurchName();
     const added = [], skipped = [];
     for (const o of offers) {

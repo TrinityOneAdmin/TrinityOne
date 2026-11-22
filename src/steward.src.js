@@ -7059,14 +7059,24 @@ async function autoJoinPublicRelays() {
   if (moved()) return { ran: false, unknown: true };
   const have = new Set(relays());
   // Tombstoned keys: a box a steward Removed must not be auto-re-added (plan A2). Absent is normal.
-  let tombKeys = new Set();
-  try {
-    const t = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAYS_REMOVED_D] }], 6000, true);
-    const tev = (t && t.ev && t.ev.pubkey === pub) ? t.ev : null;
-    if (tev) { let ts = []; try { ts = JSON.parse(tev.content || '[]'); } catch (e) { ts = []; }
-      for (const x of (Array.isArray(ts) ? ts : [])) { const p = String((x && x.pubkey) || '').toLowerCase(); if (/^[0-9a-f]{64}$/.test(p)) tombKeys.add(p); } }
-  } catch (e) {}
+  //
+  // …AND AN UNFINISHED READ IS NOT "NO TOMBSTONES" (B3, 2026-11-22; audit F4). This was a bare read in a
+  // swallowed try/catch with no completeness test: a relay still logging in, a timeout or a thrown read all
+  // came back as an empty set, the Removed box was re-adopted, and signRelay then cleared its tombstone — on a
+  // pass that is ON by default and that nobody pressed. Now the one removed-keys read (_removedKeysRead:
+  // authenticated, completeness-checked, plus this console's own pending set) — and when it is not complete
+  // every candidate MAY be tombstoned, so the pass adopts NOTHING and the next trigger tries again. The
+  // droppable set is the Remove path's own (the church-added extras, excused only when themselves unreachable):
+  // a tombstone is WRITTEN under that rule, so it can always be READ under it, and one dead old-tunnel row
+  // cannot switch auto-join off for ever.
+  const _kJ = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  let _droppJ = new Set();
+  try { _droppJ = new Set(extraRelays().map(_kJ)); } catch (e) { _droppJ = new Set(); }
+  let gone = null;
+  try { gone = await _removedKeysRead(_droppJ); } catch (e) { gone = null; }
   if (moved()) return { ran: false, unknown: true };
+  if (!gone || !gone.complete) return { ran: false, incomplete: true, removedUnknown: true };
+  const tombKeys = gone.keys;
   const name = _ownChurchName();
   const added = [], skipped = [];
   // (The loop's address is `addr`, not `url`, deliberately: the token `signRelay(url)` must not appear in the bundle

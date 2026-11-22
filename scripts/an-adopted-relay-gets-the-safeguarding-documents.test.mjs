@@ -330,6 +330,10 @@ test('B2 auto-join (autoJoinPublicRelays): the community box it adopts is sent t
     selfPublicRelay: () => '',
     _gate: { provedKey: () => '' },
     _writeRelayPrefs: async () => ({ written: true }),
+    // B3 (2026-11-22): the pass reads the church's removed-relay keys through _removedKeysRead and stands down when
+    // that read is not complete. "Complete, nothing removed" here — this test is about the backfill; the read itself
+    // is run for real in community-relays-auto-join.test.mjs.
+    _removedKeysRead: async () => ({ complete: true, keys: new Set() }),
     rankOffersByLatency: undefined,  // lifted below
   };
   // B2 reads a tombstone doc via _oneComplete(RELAYS_REMOVED_D); the world's _oneComplete answers null for it (none).
