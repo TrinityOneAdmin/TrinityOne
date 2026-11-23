@@ -216,13 +216,19 @@ real `https://localhost` localStorage** (relay list, gate proofs, `followedChurc
   known gate-proof key). If the app's real relay list is visible → proceed. **If NOT visible (separate
   partition after all) → STOP and report;** Option B's reuse premise has failed and we rethink (do not
   fall back to an ungated relay list — rule 10).
+- **Audit F-C:** run this proof with the app **cold / backgrounded** (the real case when a 15-min worker
+  fires), not foregrounded — Chromium holds DOM storage in a per-renderer in-memory cache, so a
+  foreground app may not have flushed recent writes to the backing store. And keep Phase 1 **read-mostly**
+  (count only): two live contexts writing `docshub`/`memhub` can race, so leave cursor writes to Phase 3.
 
 ## Phase 1 gate 2 — boot the app code headlessly enough to get the admitted relay set
 - Import `src/fellowship.src.js` (bundled) in the shared-origin WebView; let `loadRelays()` /
   `churchRelayNet()` / the gate hydrate from the shared localStorage/caches.
-- Set the active church the way `app/app.jsx` does on launch — read `trinityone.followedChurches` and
-  set `window.Fellowship.churchPub` / active church. (Replicate ONLY the init sequence app.jsx runs;
-  do not render React.)
+- Set the active church the way `app/app.jsx` does on launch — read `trinityone.activeChurch` /
+  `trinityone.followedChurches` and set `window.Fellowship.churchPub` / active church. (Replicate ONLY
+  the init sequence app.jsx runs; do not render React.) **Audit F-F: this is a PREREQUISITE, not
+  optional — `_netRelays` defaults `cp` to `window.Fellowship.churchPub`, and several hot-path functions
+  early-return when `churchPub` doesn't match. Set churchPub BEFORE calling `relaysForChurch()`.**
 - Call the EXISTING `relaysForChurch()` / publish-set helpers to get the admitted set — do NOT
   duplicate or widen it (rule 10 / F5). If the proof cache is warm (shared from the app) this returns
   the real set without new round-trips; if cold, allow `verifyRelayIdentity` to re-prove (the normal
@@ -238,19 +244,29 @@ real `https://localhost` localStorage** (relay list, gate proofs, `followedChurc
   below) and injected — reusing the app's existing auth/signing path where possible.
 - Run ONE `since=<last-seen>` REQ across the notify-kinds (1 group, 4 DM, 7 reactions, 30078
   care/guardian), `#p`=member pubkey; read to EOSE; **count** new events since last-seen. Reuse the
-  shared `docshub`/`memhub` cursors + the `SINCE_SLOP` overlap pattern. (No content decode, no
-  notify-worthiness rules, no per-group naming — that is Phase 2. DM-cursor refinement is Phase 3;
-  Phase 1 may count DMs crudely via the inbox filter.)
+  shared `docshub`/`memhub` cursors + the `SINCE_SLOP` overlap pattern (READ them; don't rewrite — F-C).
+  (No content decode, no notify-worthiness rules, no per-group naming — that is Phase 2. DM-cursor
+  refinement is Phase 3; Phase 1 may count DMs crudely via the inbox filter.)
+- **Audit F-E (clock skew):** if the device clock is >600s off the relay, NIP-42 AUTH is refused and the
+  count silently comes back 0. Log a line distinguishing "auth failed / skew" from "genuinely nothing
+  new," so a dead count isn't mistaken for quiet.
 
 ## Native side (Kotlin) — reuse the proven spike patterns
 - `WorkManager` **periodic** worker (~15 min), main process, hosting the WebView on a main-Looper
   thread, kept alive via `CompletableDeferred` while async work runs. (All proven in Phase 0.)
-- **Signing key, native read:** read `capacitor-storage_trinityone.nostr.mnemonic` from
-  `WSSecureStorageSharedPreferences` (prefix `capacitor-storage_` is the verified default; no
-  `setKeyPrefix` anywhere). On this Oppo the value is a **plaintext mnemonic** (derive privkey via
-  nip06 `privateKeyFromSeedWords`); a passphrase install instead has `…mnemonic.enc` (AES/GCM via the
-  AndroidKeyStore alias) — **handle BOTH**. Reuse the spike's `SecretStoreCompat.kt` scheme
-  (byte-identical to the plugin). Inject the derived privkey into the WebView for auth.
+- **Signing key, native read (CORRECTED per audit F-A):** read **`capacitor-storage_trinityone.nostr.mnemonic`**
+  (STORE_KEY, the **plaintext mnemonic**) from `WSSecureStorageSharedPreferences` (prefix
+  `capacitor-storage_` is the verified default; no `setKeyPrefix` anywhere), then derive the privkey via
+  nip06 `privateKeyFromSeedWords`. Reuse the spike's `SecretStoreCompat.kt` scheme (byte-identical to
+  the plugin) — but note the spike README mistakenly targeted `…mnemonic.enc`; target STORE_KEY, NOT
+  ENC_KEY.
+  - **PIN/passphrase installs are OUT OF SCOPE for background notify.** Setting a PIN calls
+    `secureRemove()` (`src/identity.src.js:726`, "drop the plaintext seed") — it DELETES the plaintext
+    and keeps only `…mnemonic.enc`, encrypted with `PBKDF2(user-PIN)→AES-GCM` (identity.src.js:81-82).
+    The worker has no PIN, so the key is unreadable. **Product limitation to accept/flag:** a
+    PIN-protected member gets no background notifications. The worker must detect "no plaintext key"
+    and no-op quietly (not crash, not guess). *(Owner decision pending on whether PIN support matters
+    for the pilot — see report.)*
 - Post a generic **native** notification via `NotificationManagerCompat` when count>0 (no Capacitor
   plugin — no JS bridge in a bg WebView, confirmed Phase 0).
 - Reschedule the periodic work on boot (`RECEIVE_BOOT_COMPLETED` receiver, `exported="false"`);
@@ -263,13 +279,29 @@ real `https://localhost` localStorage** (relay list, gate proofs, `followedChurc
 TRACKED `plugins/…` path (NOT the gitignored `android/` tree); record any unavoidable `android/`
 manifest/gradle edits in a README so they're reproducible.
 
+## Build split (audit F-D) — what the SONNET build delivers
+**Commit 1 (the premise — this is the Sonnet deliverable):** gates 1→2→3 proven end-to-end, with the
+hard stop-and-report valves. A worker **triggered on-demand by adb** (like the Phase-0 spike — NOT the
+15-min periodic) that: proves shared localStorage (gate 1, app cold), boots fellowship to the admitted
+relay set (gate 2), does NIP-42 auth + a `since=` count (gate 3), and posts a generic **native**
+notification when count>0. Log each gate's result. **STOP here and hand back** — do not build the
+periodic/boot/battery machinery until the premise is proven.
+**Commit 2 (scaffolding, only after commit 1 proves out):** the periodic `WorkManager` schedule (~15
+min), `RECEIVE_BOOT_COMPLETED` reschedule, runtime `POST_NOTIFICATIONS`, and battery-optimisation
+exemption prompt. This is what makes it *testable over hours* on the Oppo (the Doze acceptance gate).
+
 ## Build / test / rules
 - Build an **in-app debug build inside `com.trinityone.app`** (needs the app's UID for real key +
   shared data). It's debug-signed on this box, so `adb install -r` is data-preserving — do NOT wipe the
-  owner's identity. Install on the Oppo (`J77HDMTC7TKBZDFM`), verify on-demand that it boots, gets the
-  real relay set, auths, counts, and notifies (logcat evidence). **Leave it installed** for the owner's
-  multi-hour test — does the Oppo keep firing the ~15-min periodic under Doze (the real acceptance
-  gate)? Tell the owner how to restore their clean build.
+  owner's identity. Install on the Oppo (`J77HDMTC7TKBZDFM`).
+- **Audit F-B — make this the FIRST on-device task:** Phase 0 did NOT prove reading the REAL key (the
+  spike ran under its own UID). On the first in-app run, confirm the native read of
+  `capacitor-storage_trinityone.nostr.mnemonic` returns the real mnemonic and derives the member's known
+  pubkey. If it doesn't, stop — nothing downstream works.
+- After commit 1: verify on-demand that it boots, gets the real relay set, auths, counts, and notifies
+  (logcat evidence). After commit 2: **leave it installed** for the owner's multi-hour test — does the
+  Oppo keep firing the ~15-min periodic under Doze (the real acceptance gate)? Tell the owner how to
+  restore their clean build.
 - Do NOT touch admission code beyond CALLING existing helpers; never widen the relay set (rule 10).
   No merge, no push. Commit to the notifications branch; list every file incl. gitignored `android/`
   edits and the shared-code user-list (CLAUDE.md rule 2). Don't run the full suite.
