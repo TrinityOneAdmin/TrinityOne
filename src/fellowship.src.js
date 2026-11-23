@@ -7215,7 +7215,16 @@ window.Fellowship = {
     // Stage 1 untouched. Nothing needed them: the console records them as `claimed…` and the card deliberately
     // renders the name IT resolved from the roster instead, precisely because a requester-supplied name is
     // forgeable (SECURITY-AUDIT-2026-07-20 C1). So they are simply gone. AUDIT-2026-07-27.
-    const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
+    // THE CHILD'S OWN ACKNOWLEDGEMENT, embedded in the request as `ack` and NEVER published on its own (SIGNUP-SAFEGUARDING-GAPS gap 1,
+    // the app half of the relay's guardAckOk in scripts/gateway.mjs). Signed with the CHILD'S key, which only this phone holds, so
+    // nobody can forge it for somebody else: it says "I am the child of THIS parent at THIS church". A relay that verifies it treats
+    // the child as a minor from the moment the request lands, instead of only after a steward presses Confirm. THE SHAPE IS A
+    // CONTRACT with the relay — kind 30078, pubkey = the child, d = 'trinityone/guardreq:ack:<churchpub>' (built from the guardreq
+    // prefix so it is NOT a new document type), a ['p', parentpub] tag, content {parent, church} — and the request must carry a
+    // ['p', churchpub] tag naming a registered church. A drift here is SILENT (the relay just ignores a bad ack), so
+    // scripts/a-parent-minted-child-is-a-minor-on-a-real-relay.test.mjs publishes this function's own output to a real gateway.
+    const ack = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:ack:' + cp], ['p', pub]], content: JSON.stringify({ parent: pub, church: cp }) }, childSk);
+    const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }, sk);
     // PUBLISH FIRST, REVEAL SECOND. This used to console.warn each failure and return the twelve words
     // regardless. On a bad link a parent wrote them down, set up the child's phone, and there was no join
     // document, no sealed name and nothing for the steward — the row said "Waiting for steward to confirm"

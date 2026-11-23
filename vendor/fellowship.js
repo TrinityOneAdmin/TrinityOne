@@ -13449,7 +13449,8 @@
       } catch (e) {
       }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
-      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
+      const ack = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:ack:" + cp], ["p", pub]], content: JSON.stringify({ parent: pub, church: cp }) }, childSk);
+      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }, sk);
       const why = { join: "", k0: "", name: "", req: "" };
       const sent = async (e, key) => {
         if (!e) return false;
