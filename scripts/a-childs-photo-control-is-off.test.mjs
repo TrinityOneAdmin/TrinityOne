@@ -51,7 +51,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
-import { miniReact, find, texts } from './render-jsx-screen.mjs';
+import { miniReact, find, texts, eventTarget } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SRC = readFileSync(join(ROOT, 'app/identity.jsx'), 'utf8');
@@ -72,7 +72,9 @@ async function photoControl({ church, safeguard }) {
   const { React, draw } = miniReact();
   const globals = {
     React, useId: React.useState, useIdE: React.useEffect,
-    window: { TrinityData: { RELAYS: [] }, TrinityWallet: null, Fellowship: null, TrinityLN: null },
+    // eventTarget(): ProfileSheet subscribes to 'trinity-relays'/'trinity-relays-verified' from an effect
+    // (c50e48f4) — without a real addEventListener that effect throws and every render here fails.
+    window: { ...eventTarget(), TrinityData: { RELAYS: [] }, TrinityWallet: null, Fellowship: null, TrinityLN: null },
     AvatarPicker: Stub('AvatarPicker'), Overlay: function Overlay(p) { return p.children; },
     Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), UserAvatar: Stub('UserAvatar'),
     DirectoryToggle: Stub('DirectoryToggle'), BackupCard: Stub('BackupCard'),

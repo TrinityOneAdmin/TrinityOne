@@ -24,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
-import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { loadScreen, miniReact, find, texts, eventTarget } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/identity.js'), 'utf8');
@@ -154,8 +154,10 @@ async function profileWithSwitch({ stored = null, native = null } = {}) {
   const W = { status: () => Promise.resolve(native == null ? { supported: true } : { supported: true, enabled: native }), setEnabled: () => Promise.resolve(), requestPin: () => Promise.resolve({}) };
   const globals = {
     React, useId: React.useState, useIdE: React.useEffect,
-    window: { TrinityData: { RELAYS: [] }, TrinityWallet: null, TrinityLN: null, Fellowship: {}, Capacitor: { Plugins: { TrinityWidget: W } },
-      dispatchEvent() {} },
+    // eventTarget(): ProfileSheet subscribes to 'trinity-relays'/'trinity-relays-verified' from an effect
+    // (c50e48f4) — a window stub without a real addEventListener makes that effect throw and fails F3/F4
+    // for a reason no phone has. It also supplies the real dispatchEvent.
+    window: { ...eventTarget(), TrinityData: { RELAYS: [] }, TrinityWallet: null, TrinityLN: null, Fellowship: {}, Capacitor: { Plugins: { TrinityWidget: W } } },
     localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
     CustomEvent: class { constructor(t) { this.type = t; } },
     AvatarPicker: Stub('AvatarPicker'), Overlay: function Overlay(p) { return p.children; },

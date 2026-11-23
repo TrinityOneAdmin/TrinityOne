@@ -204,6 +204,26 @@ export function button(tree, label) {
   return find(tree, n => n.type === 'button' && texts(n).join(' ').includes(label));
 }
 
+// ── A REAL EVENT TARGET FOR A TEST'S `window` STUB ─────────────────────────────────────────────────────────
+//
+// Added 2026-11-23 (pre-merge audit A1b). Screens subscribe to window events from effects — ProfileSheet
+// gained `window.addEventListener('trinity-relays', …)` in c50e48f4 and every `window: { … }` stub without
+// the method makes that effect throw "window.addEventListener is not a function", failing the render for a
+// reason that is not on any phone. This is a working listener map, NOT a silent no-op: a registered listener
+// is really held, removeEventListener really drops it, and a test that wants to drive the subscription CAN
+// `dispatchEvent(new CustomEvent('trinity-relays'))` and see the screen move. Spread it into a window stub:
+//   window: { ...eventTarget(), TrinityIdentity: …, }
+// (list it FIRST, so a test that deliberately overrides one of the three methods keeps its override).
+export function eventTarget() {
+  const listeners = new Map();
+  return {
+    listeners,   // exposed so a test can assert what a screen subscribed to
+    addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(fn); },
+    removeEventListener(type, fn) { const s = listeners.get(type); if (s) s.delete(fn); },
+    dispatchEvent(ev) { const s = listeners.get(ev && ev.type); if (s) for (const fn of [...s]) fn(ev); return true; },
+  };
+}
+
 // ── THE TEXT AS A BROWSER WOULD LAY IT OUT ─────────────────────────────────────────────────────────────────
 //
 // Written for scripts/checkin-session-keys-are-not-issued-early.test.mjs on 2026-09-10 and lifted here on the
