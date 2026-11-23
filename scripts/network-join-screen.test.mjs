@@ -168,6 +168,12 @@ test('(d) a leave the console reports as failed is shown, not swallowed', async 
   p.draw();
   const row = nodes(p.draw()).find(n => n.props && typeof n.props.onLeave === 'function');
   await row.props.onLeave({ networkPub: NETPUB }); await settle();
+  // MERGE 2026-11-23: leaving asks first (main's SkConfirm replaced the window.confirm). The leave must NOT
+  // have fired yet, and the dialog's own Confirm must both fire it and SAY the refusal (B2a kept).
+  assert.equal(p.calls.leave.length, 0, 'leave fired before the steward confirmed in the dialog');
+  const ask = nodes(p.draw()).find(n => n.props && n.props.title === 'Leave this network?' && typeof n.props.onConfirm === 'function');
+  assert.ok(ask, 'no "Leave this network?" confirm appeared after pressing Leave');
+  await ask.props.onConfirm(); await settle();
   assert.equal(p.calls.leave.length, 1);
   assert.match(p.say(), /Couldn’t save to the relay/, 'a failed leave said nothing (this is publishErrorMessage\'s own wording for an error: refusal)');
 });

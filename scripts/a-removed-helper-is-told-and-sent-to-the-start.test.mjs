@@ -388,6 +388,10 @@ test('restoring from Settings → Church key also clears a helper mark for the r
   await THREE.ev(`(() => { const t=[...document.querySelectorAll('textarea')].find(t => (t.placeholder||'').startsWith('word one')); const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; set.call(t, ${JSON.stringify(words)}); t.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
   await sleep(300);
   await THREE.press(/^Restore church$/, 'Restore church');
+  // MERGE 2026-11-23: a console that already holds a key is asked "Replace this church?" in SkConfirm
+  // (main replaced the window.confirm) — press its Continue before expecting the key to change.
+  await THREE.waitFor(`[...document.querySelectorAll('button')].some(x => /^Continue$/.test((x.textContent||'').trim()))`, 30000, 'the "Replace this church?" confirm (SkConfirm)');
+  await THREE.press(/^Continue$/, 'Continue (replace this church)');
   await THREE.waitFor(`window.Steward.churchPub === ${JSON.stringify(pk)}`, 30000, 'the Settings restore loading the key from those words');
   assert.equal(await THREE.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)})`), null, 'THE HAZARD: a church restored from Settings still carries a helper mark');
 });

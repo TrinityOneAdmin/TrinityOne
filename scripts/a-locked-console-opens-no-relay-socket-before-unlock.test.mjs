@@ -268,6 +268,10 @@ test('Settings -> Church key -> Restore from a recovery phrase: a console that h
   assert.equal(await evalIn(`(() => { const t=document.querySelector('textarea[placeholder^="word one"]'); const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; set.call(t, ${JSON.stringify(wordsD)}); t.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`), 'ok');
   await sleep(300);
   await press('/Restore church/', 'Restore church');
+  // MERGE 2026-11-23: "Restore church" on a console that already holds a key now asks "Replace this church?"
+  // in SkConfirm (main replaced the window.confirm) — press its Continue before expecting the key to change.
+  await waitFor(`[...document.querySelectorAll('button')].some(x => /^Continue$/.test((x.textContent||'').trim()))`, 30000, 'the "Replace this church?" confirm (SkConfirm)');
+  await press('/^Continue$/', 'Continue (replace this church)');
   await waitFor(`window.Steward.churchPub !== ${JSON.stringify(churchA)}`, 30000, 'CONTROL: pressing Restore church changed the console\'s key (the screen calls restoreKey)');
   const churchD = await evalIn(`window.Steward.churchPub`);
   await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 60000, 'the forced-PIN screen after the restore');
