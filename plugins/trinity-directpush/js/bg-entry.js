@@ -38,6 +38,17 @@ function visibleGroupIds(raw, myPub, minor) {
 const DP_OPTIN_KEY = 'trinityone.directpush.optin';
 function directPushOptedIn(raw) { return raw === '1'; }
 const readOptIn = () => { try { return localStorage.getItem(DP_OPTIN_KEY); } catch (e) { return null; } };
+// WIDGET COUNT DECISION (Deliverable 3). What the worker does to the home-screen widget's bare "N new messages" count
+// after this run: set it (a real count > 0), clear it (a REAL zero, or the reader is not allowed to run: opted out, wrong
+// identity, no church), or keep what is there (the run could not tell: no answer, auth/clock trouble, no admitted
+// relays, a fatal error — "NO-ANSWER" is not a zero and must not blank a true count). Pure; the worker applies it.
+function widgetCountAction(verdict, n) {
+  const v = String(verdict || '');
+  const k = Math.floor(Number(n));
+  if (v === 'new-events' && k > 0) return { op: 'set', n: k };
+  if (v === 'genuinely-0-new' || v === 'not-opted-in' || v === 'identity-mismatch' || v === 'no-church') return { op: 'clear' };
+  return { op: 'keep' };
+}
 const isBlockDoc = (e, cp, d) => !!e && e.kind === 30078 && e.pubkey === cp && ((e.tags || []).find((t) => t[0] === 'd') || [])[1] === d;
 // null => unparseable doc (caller fails closed); empty Set => no blocklist / nobody blocked.
 function parseBlocked(doc) {
@@ -213,6 +224,6 @@ window.__dpStart = async function (mnemonic, opts) {
 
 function finish(o) {
   const w = window.__dpWsStats || {};
-  if (DP_DEBUG) rep(Object.assign({ stage: 'summary', framesSent: w.sent, rx: (window.__dpRx || []).slice(0, 60), socketsOpened: Object.keys(w.urls || {}) }, o));
-  else rep({ stage: 'summary', verdict: o.verdict, newSinceCursor: o.newSinceCursor });
+  if (DP_DEBUG) rep(Object.assign({ stage: 'summary', framesSent: w.sent, rx: (window.__dpRx || []).slice(0, 60), socketsOpened: Object.keys(w.urls || {}), widget: widgetCountAction(o.verdict, o.newSinceCursor) }, o));
+  else rep({ stage: 'summary', verdict: o.verdict, newSinceCursor: o.newSinceCursor, widget: widgetCountAction(o.verdict, o.newSinceCursor) });
 }

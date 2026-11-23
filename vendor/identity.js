@@ -12061,6 +12061,13 @@ zoo`.split("\n"));
       } catch (e) {
       }
     }
+    if (W && W.clearMessageCount) {
+      try {
+        Promise.resolve(W.clearMessageCount()).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
   }
   function widgetSignalForgot() {
     try {

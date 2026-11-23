@@ -304,6 +304,14 @@ function NotifToggleRow({ icon, accent, label, sub, on, disabled, onFlip }) {
 const DP_OPTIN_KEY = 'trinityone.directpush.optin';
 const dpOptInGet = () => { try { return localStorage.getItem(DP_OPTIN_KEY) === '1'; } catch (e) { return false; } };
 const dpOptInSet = (on) => { try { localStorage.setItem(DP_OPTIN_KEY, on ? '1' : '0'); return true; } catch (e) { return false; } };
+// Opting out removes the widget's "N new messages" count at once (the app side HAS the Capacitor bridge). An APK
+// without the method, or the web build, has nothing to clear. Never throws.
+function dpWidgetCountClear() {
+  try {
+    const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
+    if (W && W.clearMessageCount) Promise.resolve(W.clearMessageCount()).catch(() => {});
+  } catch (e) {}
+}
 // What turning ON must do, given the key source. The reader can only read the key if there is no PIN, or the PIN's
 // "stay open" record exists (the PIN encrypts the key otherwise). 'enable' = nothing more needed; 'offer-remember' = ask
 // for the existing 30-day "stay open" (TrinityIdentity.rememberDevice); 'unlock-first' = PIN-locked right now, so
@@ -344,7 +352,7 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
   const flipDirect = async () => {
     if (dpOn) {   // opt-out: the reader no-ops from its next run
       dpOptInSet(false); setDpOn(false); setDpOffer(false);
-      // Deliverable 3: also clear widget count here
+      dpWidgetCountClear();   // the home-screen widget's count goes with the opt-in
       return;
     }
     const ID = window.TrinityIdentity || {};
@@ -431,7 +439,7 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
 
         <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '10px 6px 0' }}>
           {native
-            ? 'Serving reminders show on this device even when the app is closed. Message and announcement alerts arrive when the app is open.'
+            ? 'Serving reminders show on this device even when the app is closed. Message alerts can also arrive while the app is closed if you turn on Message notifications above and keep TrinityOne open on this phone; announcement alerts arrive when the app is open.'
             : 'Notifications arrive even when TrinityOne is closed, as long as your device allows them. Direct messages never include the message text.'}
         </p>
         <button onClick={() => ctx.openHelp && ctx.openHelp('notifications')} style={{ marginTop: 16, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,

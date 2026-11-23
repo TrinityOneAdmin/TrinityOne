@@ -69,6 +69,11 @@ public class TrinityWidgetService extends RemoteViewsService {
                     rv.setImageViewResource(id, state == WidgetStore.DOT_ON ? R.drawable.trinity_widget_dot_on : R.drawable.trinity_widget_dot_off);
                 }
             }, pages.get(page), page, pages.size(), verseLines);
+            int n = WidgetStore.messageCount(c, System.currentTimeMillis());
+            if (n > 0) {
+                v.setTextViewText(R.id.trinity_widget_count, c.getResources().getQuantityString(R.plurals.trinity_widget_new_messages, n, n));
+                v.setViewVisibility(R.id.trinity_widget_count, View.VISIBLE);
+            }
             v.setOnClickFillInIntent(R.id.trinity_widget_item, new Intent());
             return v;
         }

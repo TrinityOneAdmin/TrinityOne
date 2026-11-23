@@ -3,6 +3,8 @@ package church.trinityone.directpush
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -47,6 +49,12 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         const val HARD_TIMEOUT_MS = 70_000L
         private const val ORIGIN = "https://localhost"
         private const val OWN_PREFIX = "/__directpush/"
+        // The home-screen widget's store (native/trinity-widget WidgetStore: PREFS, K_DM_COUNT, K_DM_AT) and provider.
+        // Same app, same UID, so this module can write the widget's own prefs file; keep the names in step with it.
+        const val WIDGET_PREFS = "trinityone.widget"
+        const val WIDGET_COUNT = "dm.count"
+        const val WIDGET_AT = "dm.at"
+        private const val WIDGET_PROVIDER = "church.trinityone.widget.TrinityWidgetProvider"
     }
 
     override suspend fun doWork(): Result {
@@ -63,6 +71,8 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         if (keyRec == null) {
             // PIN/passphrase install (plaintext removed) or no identity: out of scope, never guess, never crash.
             Log.i(TAG, "KEYREAD none -> no usable key (PIN install without stay-open, or no identity). Quiet no-op.")
+            // Locked, forgotten or remember-me expired: the widget's count goes with the key.
+            applyWidgetCount(ctx, "clear", 0)
             return Result.success()
         }
         val mnemonic = keyRec.mnemonic
@@ -128,7 +138,36 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         val verdict = s?.optString("verdict", "none") ?: "no-summary"
         Log.i(TAG, "SUMMARY finished=$finished verdict=$verdict newSinceCursor=$count")
         if (count > 0) postGeneric(ctx)
+        // The page decides (bg-entry.js widgetCountAction); a summary without it (older bundle) changes nothing.
+        val w = s?.optJSONObject("widget")
+        applyWidgetCount(ctx, w?.optString("op", "keep") ?: "keep", w?.optInt("n", 0) ?: 0)
         return Result.success()
+    }
+
+    /**
+     * The widget's bare count: ONE integer and its timestamp, in the widget's own prefs, then a redraw of the placed
+     * widgets. Nothing else crosses: no name, no room, no text. Never throws (a worker that throws is retried and logs
+     * noise; the widget is a convenience). op: "set" | "clear" | anything else = keep.
+     */
+    private fun applyWidgetCount(ctx: Context, op: String, n: Int) {
+        try {
+            val p = ctx.getSharedPreferences(WIDGET_PREFS, Context.MODE_PRIVATE)
+            when (op) {
+                "set" -> if (n > 0) p.edit().putInt(WIDGET_COUNT, n).putLong(WIDGET_AT, System.currentTimeMillis()).apply() else return
+                "clear" -> p.edit().remove(WIDGET_COUNT).remove(WIDGET_AT).apply()
+                else -> return
+            }
+            val mgr = AppWidgetManager.getInstance(ctx)
+            val cn = ComponentName(ctx.packageName, WIDGET_PROVIDER)
+            val ids = mgr.getAppWidgetIds(cn)
+            if (ids != null && ids.isNotEmpty()) {
+                // The provider is exported=false: an explicit broadcast from our own process reaches it.
+                ctx.sendBroadcast(Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE).setComponent(cn).putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids))
+            }
+            Log.i(TAG, "WIDGET count op=$op")
+        } catch (e: Throwable) {
+            Log.w(TAG, "WIDGET count ${e.javaClass.simpleName}")
+        }
     }
 
     /** https://localhost/__directpush/<f> -> this module's assets; everything else -> the app's own web assets. */
