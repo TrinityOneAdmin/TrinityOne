@@ -24,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
-import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { loadScreen, miniReact, find, texts, eventTarget } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/identity.js'), 'utf8');
@@ -50,7 +50,7 @@ function plugin() {
 // The SHIPPED identity pieces, over a fake phone with a remembered record and the widget plugin present.
 function shippedIdentity(W, { deferRemove = false } = {}) {
   const secure = new Map([['trinityone.nostr.remember', JSON.stringify({ m: 'seed words', until: Math.floor(Date.now() / 1000) + 20 * 86400 })]]);
-  const local = new Map([['trinityone.widget', '1']]);
+  const local = new Map([['trinityone.widget', '1'], ['trinityone.directpush.optin', '1']]);   // the previous person opted into BOTH
   let release = null;
   const SS = { get: async k => (secure.has(k) ? secure.get(k) : null), set: async (k, v) => secure.set(k, v),
     // deferRemove: the secure store answers LATE (it does on a phone whose screen is asleep) — the delete completes
@@ -126,6 +126,20 @@ test('F4: a NEW ACCOUNT on this phone (regenerate / importMnemonic — a handove
   }
 });
 
+// ── B1 (audit 2026-11-23): Direct Mode push consent rides the SAME lifecycle as the widget ────────────────────────
+// The SHIPPED widgetOffForNewAccount (vendor/identity.js, lifted by bundle name in shippedIdentity above) is the one
+// place every new-person path reaches (regenerate, importMnemonic of a different person's words — asserted in F4).
+test('B1: a NEW account on this phone does NOT inherit the previous person\'s Direct Mode push opt-in', async () => {
+  const { W } = plugin();
+  const idn = shippedIdentity(W);
+  assert.equal(idn.local.get('trinityone.directpush.optin'), '1', 're-anchor: the fixture no longer seeds the previous person\'s push opt-in');
+  idn.widgetOffForNewAccount();
+  await settle();
+  assert.equal(idn.local.has('trinityone.directpush.optin'), false,
+    'the previous person\'s Direct Mode push opt-in carried onto the new account — the background reader keeps running for a person who never consented (audit B1)');
+  assert.equal(idn.local.has('trinityone.widget'), false, 'the widget clear (F4) must still hold alongside the push opt-in clear');
+});
+
 // ── the Settings switch, as it sits INSIDE the real ProfileSheet ───────────────────────────────────────────────
 async function profileWithSwitch({ stored = null, native = null } = {}) {
   const src = fnBody(IDJSX, 'function ProfileSheet(', 'ProfileSheet') + '\n' + fnBody(IDJSX, 'function HomeWidgetToggle(', 'HomeWidgetToggle');
@@ -140,8 +154,10 @@ async function profileWithSwitch({ stored = null, native = null } = {}) {
   const W = { status: () => Promise.resolve(native == null ? { supported: true } : { supported: true, enabled: native }), setEnabled: () => Promise.resolve(), requestPin: () => Promise.resolve({}) };
   const globals = {
     React, useId: React.useState, useIdE: React.useEffect,
-    window: { TrinityData: { RELAYS: [] }, TrinityWallet: null, TrinityLN: null, Fellowship: {}, Capacitor: { Plugins: { TrinityWidget: W } },
-      dispatchEvent() {} },
+    // eventTarget(): ProfileSheet subscribes to 'trinity-relays'/'trinity-relays-verified' from an effect
+    // (c50e48f4) — a window stub without a real addEventListener makes that effect throw and fails F3/F4
+    // for a reason no phone has. It also supplies the real dispatchEvent.
+    window: { ...eventTarget(), TrinityData: { RELAYS: [] }, TrinityWallet: null, TrinityLN: null, Fellowship: {}, Capacitor: { Plugins: { TrinityWidget: W } } },
     localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
     CustomEvent: class { constructor(t) { this.type = t; } },
     AvatarPicker: Stub('AvatarPicker'), Overlay: function Overlay(p) { return p.children; },

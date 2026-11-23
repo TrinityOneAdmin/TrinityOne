@@ -447,7 +447,7 @@ const stewardSpy = (log, { results } = {}) => ({
     return { results: rs, authed: true, childrenRefused: '' };
   },
   memberInviteUrl: (m) => 'https://app.trinityone.church/?follow=npub1abc#invite=' + encodeURIComponent(m),
-  qrSVG: (t) => '<svg data-qr="1"></svg>',
+  qrSVG: (t) => '<svg data-qr="' + t + '"></svg>',   // echoes what it encodes, so the test can tell the two QR kinds apart
   setNoPhoto: (list) => { log.push(['setNoPhoto', list]); return Promise.resolve(true); },
   tombstoneMemberAccount: async (m) => { log.push(['tombstone', m]); return true; },
 });
@@ -485,8 +485,20 @@ test('POINT OF USE: typing two names and driving the real modal creates two acco
   tree = draw(SetupAccountsModal, props);
   await press(tree, 'Print 2 slips');
   assert.equal(printed.length, 1, 'printing must go through skPrintable');
-  assert.ok(printed[0].includes('Maria Gonzalez') && printed[0].includes('John Park') && printed[0].split('data-qr').length === 3,
-    'one slip per person, each carrying its QR');
+  // the owner-approved slip design (0fb98bab): each slip carries TWO QRs — the sign-in QR (encodes the
+  // invite payload) and a download-the-app QR (encodes the plain install address). Removing either from
+  // the slip at the point of use fails here.
+  const slips = printed[0].split('<div class="slip">').slice(1);
+  assert.equal(slips.length, 2, 'one slip per person');
+  assert.ok(slips.some(s => s.includes('Maria Gonzalez')) && slips.some(s => s.includes('John Park')),
+    'each person gets their own slip');
+  for (const s of slips) {
+    assert.equal(s.split('data-qr="').length - 1, 2, 'every slip carries exactly two QRs');
+    assert.equal(s.split('data-qr="https://app.trinityone.church/?follow=npub1abc#invite=').length - 1, 1,
+      'one QR on each slip encodes the sign-in invite payload');
+    assert.equal(s.split('data-qr="https://app.trinityone.church"').length - 1, 1,
+      'and one QR on each slip encodes the plain download-the-app address');
+  }
   assert.ok(printed[0].includes('Someone set this up for me'), 'the slip must tell the person the route that reads it');
   tree = draw(SetupAccountsModal, props);
   press(tree, 'Done');
