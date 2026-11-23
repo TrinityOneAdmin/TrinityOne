@@ -32,6 +32,12 @@ function visibleGroupIds(raw, myPub, minor) {
   }
   return [...out];
 }
+// OPT-IN GATE (Deliverable 2). The member's choice lives in the app's own localStorage (same origin as this page) under
+// DP_OPTIN_KEY, written by NotifSettingsScreen in app/screens-extras.jsx. Anything but the exact string '1' is OFF
+// (absent = default OFF; a read that throws = OFF). Fails closed.
+const DP_OPTIN_KEY = 'trinityone.directpush.optin';
+function directPushOptedIn(raw) { return raw === '1'; }
+const readOptIn = () => { try { return localStorage.getItem(DP_OPTIN_KEY); } catch (e) { return null; } };
 const isBlockDoc = (e, cp, d) => !!e && e.kind === 30078 && e.pubkey === cp && ((e.tags || []).find((t) => t[0] === 'd') || [])[1] === d;
 // null => unparseable doc (caller fails closed); empty Set => no blocklist / nobody blocked.
 function parseBlocked(doc) {
@@ -46,6 +52,8 @@ function parseBlocked(doc) {
 window.__dpStart = async function (mnemonic, opts) {
   opts = opts || {};
   try {
+    // Not opted in: finish quietly BEFORE anything connects, authenticates or notifies (no Fellowship init, no sockets).
+    if (!directPushOptedIn(readOptIn())) return finish({ verdict: 'not-opted-in', newSinceCursor: 0 });
     window.__dpSetMnemonic(mnemonic);
     const F = window.Fellowship;
     await F.ready;                                          // fellowship derived its own sk/pub from the injected mnemonic
