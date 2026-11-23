@@ -110,6 +110,11 @@ window.__dpStart = async function (mnemonic, opts) {
     //      it cannot ask or has not heard, and for a fail-closed `catch`) -- an adults-only room is never counted.
     // Group chat events carry #t=<group id> (NOT #p=member). Missing cache => DM-only (never the full directory).
     const rawGroups = lsJson('trinityone.groups.' + np, []);
+    // !! SAFEGUARDING NOTE -- minor-detection here is BEST-EFFORT. assumeMinor() runs BEFORE the main authed REQ, so
+    // !! Fellowship's _relayAuthedAt is still unset and it FAILS CLOSED to minor=true (fewer rooms counted, never more).
+    // !! The RELAY is the real safeguarding authority: it refuses adults-only content to a known minor no matter what
+    // !! this phone asks for. Do NOT move this after any gated/authed read without re-checking that fail-closed
+    // !! behaviour. Pinned by scripts/the-background-notify-filter-counts-only-rooms-the-member-can-open.test.mjs.
     let minor = true;                                       // fail closed until the engine answers
     try { minor = !!(await F.assumeMinor(np)); } catch (e) { minor = true; }
     const groupIds = visibleGroupIds(rawGroups, pub, minor);
