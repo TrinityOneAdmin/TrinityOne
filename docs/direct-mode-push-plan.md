@@ -340,3 +340,32 @@ exemption prompt. This is what makes it *testable over hours* on the Oppo (the D
 4. **Running the live admission/proof machinery in the background** — battery/CPU if the cache is cold
    and it re-proves; acceptable if warm-shared, watch it.
 5. **Oppo/ColorOS Doze scheduling** — still the ultimate acceptance gate (owner's multi-hour test).
+
+---
+
+# Scope (owner, 2026-11-23) — deliverables + the lock-screen boundary
+
+**Lock-screen / widget safeguarding boundary (RECORD — do not erode):** any surface visible WITHOUT
+the PIN (home-screen widget, lock-screen notification) carries **public content or a bare count ONLY** —
+**never** message text, **sender/member names** (names are sealed precisely so they're not exposed),
+DMs, or any safeguarding-sensitive data (child status, guardian links, care needs, blocked lists).
+Gated/member content is shown only inside the app, behind the PIN. A notification says "new messages",
+never who or what; the widget shows a number, never a preview.
+
+**Three deliverables (in dependency order):**
+1. **Notify reader (core, already-audited — build FIRST).** Gates 1→3; key from the "stay open" record
+   (or plaintext for no-PIN). Posts a content-free native notification for **new direct messages (kind 4)
+   and new group-chat activity (kind 1)** since last-seen. No names, no content.
+2. **Member opt-in / opt-out.** A member setting to turn these notifications on/off (default off until the
+   member opts in). Because notify needs the key, **turning notifications ON prompts the member to enable
+   "Stay open on this phone for 30 days"** (reusing that feature's existing honest copy) if they have a PIN
+   and aren't already remembered. The reader runs only when: opted-in AND (remember-me active OR no PIN).
+   Opting out stops the reader and clears the widget count.
+3. **Widget "new messages" count.** A bare number on the existing home-screen widget ("N new messages"),
+   written by the reader/app, cleared on lock / "forget device" / remember-expiry (same lifecycle as the
+   widget's existing church settings, `rememberClear()` → `widgetForgetChurch()`). **Count only — boundary
+   above.**
+
+**Sequencing:** build + prove deliverable 1 (the hard part) FIRST; deliverables 2 & 3 are additive UI/
+widget work layered on a working reader and get their own plan review before building. For proving
+deliverable 1 on-device, the opt-in can be hardcoded on.
