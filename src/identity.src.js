@@ -201,6 +201,10 @@ function widgetForgetChurch() { widgetClearChurch(); widgetSignalForgot(); }
 // their own words (forgot-PIN unlock, their own transfer, their own backup) keeps it (audit re-check R2).
 function widgetOffForNewAccount() {
   try { localStorage.removeItem('trinityone.widget'); } catch (e) {}
+  // Direct Mode push rides the SAME consent lifecycle (audit 2026-11-23 B1): the previous person's opt-in
+  // (sole writer: NotifSettingsScreen in app/screens-extras.jsx; sole reader beyond it: the background
+  // reader's gate in plugins/trinity-directpush/js/bg-entry.js, same origin) must not carry onto a new person.
+  try { localStorage.removeItem('trinityone.directpush.optin'); } catch (e) {}
   const W = _widgetPlugin();
   if (W && W.setEnabled) { try { Promise.resolve(W.setEnabled({ on: false })).catch(() => {}); } catch (e) {} }
   try { window.dispatchEvent(new CustomEvent('trinity-widget-changed', { detail: false })); } catch (e) {}

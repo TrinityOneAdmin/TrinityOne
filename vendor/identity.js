@@ -12084,6 +12084,10 @@ zoo`.split("\n"));
       localStorage.removeItem("trinityone.widget");
     } catch (e) {
     }
+    try {
+      localStorage.removeItem("trinityone.directpush.optin");
+    } catch (e) {
+    }
     const W = _widgetPlugin();
     if (W && W.setEnabled) {
       try {
