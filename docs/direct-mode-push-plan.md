@@ -202,6 +202,31 @@ app's existing code, lets it bootstrap, and reads the admitted relay set + curso
 built. "Boot more of the app" means load more of its CODE in the hidden page — NOT show any UI. Still
 Google-free, still no extra app.
 
+## KEY SOURCE — reuse "Remember me / Stay open 30 days" (RESOLVES F-A; owner 2026-11-23)
+The PIN encrypts the key, so a background reader can't get it — **UNLESS** the member has turned on the
+existing **"Stay open on this phone for 30 days"** feature (`REMEMBER_KEY = 'trinityone.nostr.remember'`,
+`src/identity.src.js:138`; `rememberRead`/`rememberWrite` :141/:160). That feature stores the **mnemonic**
+in the OS hardware secure store, **readable by the app UID WITHOUT the PIN**, for 30 days — expiry enforced
+at read, and `rememberClear()` wipes it on lock / "forget device" / setPin / removePin / new identity /
+expiry.
+- **Precedent (this is exactly the owner's idea, already shipping):** the home-screen **widget** already
+  reads the church npub + relay addresses **outside the app lock**, gated on exactly "remember me (or no
+  PIN)" (`identity.src.js:172-178`). The notify reader rides the SAME gate, extended from "show church
+  settings" to "read relay + notify."
+- **Rule:** background notify is available **iff (no PIN) OR (remember-me active)**. Tie the notify
+  opt-in to enabling the 30-day window. The feature's existing copy already states the exact tradeoff
+  ("Anyone who can unlock this phone will be able to open your church"), so **no new consent and no new
+  key-handling redesign** — we reuse a credential the member already chose to create.
+- **Native read target (supersedes F-A's STORE_KEY plan):** read `capacitor-storage_trinityone.nostr.remember`
+  (JSON `{m, until, pub}`); use `m` only while `until > now`; derive privkey via nip06. Fall back to
+  `capacitor-storage_trinityone.nostr.mnemonic` (plaintext — the no-PIN case). If neither is present →
+  **no-op quietly** (a strict-PIN member who declined "stay open" gets no background notify; respected).
+- **Who gets notifications:** no-PIN members, and PIN members who ticked "stay open" (renewed each time
+  they open the app). Strict PIN-only members don't — by their own choice.
+- **Hardening (future, optional):** store/derive a **notify-only / read-only** credential instead of the
+  full seed (NIP-26 delegation + relay support) so the background holds less than full signing power. v1
+  reuses the remember seed, which is within the consent the member already gave.
+
 ## The crux assumption — PROVE THIS FIRST (Phase 1 gate 1)
 The whole of Option B rests on: **a WebView created inside the WorkManager worker can see the app's
 real `https://localhost` localStorage** (relay list, gate proofs, `followedChurches`,
