@@ -23,6 +23,7 @@ import org.json.JSONObject;
  *   publishPrompt({ npub, bases, validUntil, texts, cached }) → the church's public verse prompt config
  *   publishTexts({ npub, texts }) → { updated } — ONLY the texts of the stored config, if it is that church's
  *   clearPrompt()           → back to the daily verse only; stops the background fetch
+ *   clearMessageCount()     → remove the bare "N new messages" count (opt-out, lock, forget device, remember expiry)
  *   clear()                 → forget everything
  *   requestPin()            → Android 8+: ask the launcher to place the widget
  *   probe({ npub, bases })  → the app's one-off check of the public verse prompt (native GET, see PromptFetchJob)
@@ -206,6 +207,13 @@ public class TrinityWidgetPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void clearMessageCount(PluginCall call) {
+        try { WidgetStore.clearMessageCount(ctx()); WidgetStore.refresh(ctx()); }
+        catch (RuntimeException e) { call.reject("widget clear failed"); return; }
+        call.resolve();
+    }
+
+    @PluginMethod
     public void clear(PluginCall call) {
         try { forget(); } catch (RuntimeException e) { call.reject("widget clear failed"); return; }
         call.resolve();
@@ -229,6 +237,7 @@ public class TrinityWidgetPlugin extends Plugin {
         WidgetStore.write(ctx(), WidgetStore.K_VOTD, null);
         synchronized (WidgetStore.PROMPT_LOCK) { WidgetStore.write(ctx(), WidgetStore.K_PROMPT, null); }
         WidgetStore.forgetAllOrders(ctx());
+        WidgetStore.clearMessageCount(ctx());
         PromptFetchJob.cancel(ctx());
         WidgetStore.refresh(ctx());
     }

@@ -1,0 +1,31 @@
+// THROWAWAY Phase-0 spike app module.
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    namespace "com.trinityone.push0spike"
+    compileSdk 34
+    defaultConfig {
+        // DISTINCT applicationId: installs ALONGSIDE the owner's com.trinityone.app, its own UID
+        // sandbox, clean uninstall. Never overwrites or clobbers the real app.
+        applicationId "com.trinityone.push0spike"
+        minSdkVersion 24
+        targetSdkVersion 34
+        versionCode 1
+        versionName "0.0-spike"
+    }
+    buildTypes {
+        debug { }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation "androidx.core:core-ktx:1.12.0"
+    implementation "androidx.work:work-runtime-ktx:2.9.1"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4"
+}

@@ -7,4 +7,8 @@
     <string name="trinity_widget_empty">Open TrinityOne for today\'s verse</string>
     <string name="trinity_widget_tap_to_read">Tap to read it in TrinityOne</string>
     <string name="trinity_widget_flip">Next page</string>
+    <plurals name="trinity_widget_new_messages">
+        <item quantity="one">%d new message</item>
+        <item quantity="other">%d new messages</item>
+    </plurals>
 </resources>

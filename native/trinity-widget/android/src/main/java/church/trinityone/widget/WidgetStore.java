@@ -308,6 +308,33 @@ final class WidgetStore {
         for (int i = 0; i < d.length; i++) b.dot(i, d[i]);
     }
 
+    // ---- The bare "N new messages" count (Direct Mode, Deliverable 3) --------------------------------------------------
+    // Written by the background reader's WORKER (plugins/trinity-directpush DirectPushWorker.kt, which has no JS bridge)
+    // straight into THIS prefs file under these two keys; the app clears it through TrinityWidgetPlugin.clearMessageCount.
+    // A NUMBER and the time it was written — never a name, a room or any text. Keep the key names in step with
+    // DirectPushWorker.WIDGET_*.
+    static final String K_DM_COUNT = "dm.count";
+    static final String K_DM_AT = "dm.at";
+    /** A count older than this is not shown. The reader runs about every 15 minutes; if it stops (remember-me expired
+     *  and the app was not opened, or the member locked / forgot the device without the app running) nothing is left
+     *  to clear the number, so it must stop showing on its own. */
+    static final long DM_MAX_AGE_MS = 6L * 3600L * 1000L;
+
+    /** What to show: n, or 0 when it is not positive, was never stamped, is older than DM_MAX_AGE_MS or is stamped in
+     *  the future (a clock set back). Pure. */
+    static int shownCount(int n, long at, long now) {
+        if (n <= 0 || at <= 0) return 0;
+        if (now - at > DM_MAX_AGE_MS || at - now > 3600L * 1000L) return 0;
+        return n;
+    }
+
+    static int messageCount(Context c, long now) {
+        SharedPreferences p = prefs(c);
+        return shownCount(p.getInt(K_DM_COUNT, 0), p.getLong(K_DM_AT, 0), now);
+    }
+
+    static void clearMessageCount(Context c) { prefs(c).edit().remove(K_DM_COUNT).remove(K_DM_AT).apply(); }
+
     static ComponentName provider(Context c) { return new ComponentName(c, TrinityWidgetProvider.class); }
 
     static boolean enabled(Context c) {

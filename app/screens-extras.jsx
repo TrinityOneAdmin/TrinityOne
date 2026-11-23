@@ -299,6 +299,30 @@ function NotifToggleRow({ icon, accent, label, sub, on, disabled, onFlip }) {
   );
 }
 
+// ── Message notifications while the app is closed (Direct Mode, Android). Default OFF. The preference is read by the
+// background reader (plugins/trinity-directpush/js/bg-entry.js) from this same origin's localStorage. ──
+const DP_OPTIN_KEY = 'trinityone.directpush.optin';
+const dpOptInGet = () => { try { return localStorage.getItem(DP_OPTIN_KEY) === '1'; } catch (e) { return false; } };
+const dpOptInSet = (on) => { try { localStorage.setItem(DP_OPTIN_KEY, on ? '1' : '0'); return true; } catch (e) { return false; } };
+// Opting out removes the widget's "N new messages" count at once (the app side HAS the Capacitor bridge). An APK
+// without the method, or the web build, has nothing to clear. Never throws.
+function dpWidgetCountClear() {
+  try {
+    const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget;
+    if (W && W.clearMessageCount) Promise.resolve(W.clearMessageCount()).catch(() => {});
+  } catch (e) {}
+}
+// What turning ON must do, given the key source. The reader can only read the key if there is no PIN, or the PIN's
+// "stay open" record exists (the PIN encrypts the key otherwise). 'enable' = nothing more needed; 'offer-remember' = ask
+// for the existing 30-day "stay open" (TrinityIdentity.rememberDevice); 'unlock-first' = PIN-locked right now, so
+// "stay open" cannot be recorded (it reads the key from the unlocked session).
+function dpOnPlan(hasPin, locked, canRemember, rememberedUntil) {
+  if (!hasPin) return 'enable';
+  if (rememberedUntil > 0) return 'enable';
+  if (!canRemember) return 'enable';
+  return locked ? 'unlock-first' : 'offer-remember';
+}
+
 function NotifSettingsScreen({ open, onClose, ctx }) {
   const N = window.TrinityNotif;
   const [prefs, setPrefs] = useX(() => (N ? N.get() : { enabled: true, dm: true, announce: true, serving: true, reminders: true }));
@@ -321,6 +345,30 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
     <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 14 }}>{children}</div>
   );
   const off = !prefs.enabled;
+  // Message notifications while closed (Direct Mode). Shown on the phone app only; default OFF.
+  const [dpOn, setDpOn] = useX(dpOptInGet);
+  const [dpOffer, setDpOffer] = useX(false);   // the "stay open on this phone" prompt is showing
+  React.useEffect(() => { if (open) { setDpOn(dpOptInGet()); setDpOffer(false); } }, [open]);
+  const flipDirect = async () => {
+    if (dpOn) {   // opt-out: the reader no-ops from its next run
+      dpOptInSet(false); setDpOn(false); setDpOffer(false);
+      dpWidgetCountClear();   // the home-screen widget's count goes with the opt-in
+      return;
+    }
+    const ID = window.TrinityIdentity || {};
+    let until = 0; try { until = ID.rememberedUntil ? (await ID.rememberedUntil()) || 0 : 0; } catch (e) {}
+    const plan = dpOnPlan(!!(ID.hasPin && ID.hasPin()), !!(ID.isLocked && ID.isLocked()), !!(ID.canRemember && ID.canRemember()), until);
+    if (!dpOptInSet(true)) { ctx.toast('Couldn’t save that on this phone'); return; }
+    setDpOn(true);
+    if (plan === 'offer-remember') setDpOffer(true);
+    else if (plan === 'unlock-first') ctx.toast('Unlock with your PIN, then choose “Stay open” here so alerts can arrive');
+  };
+  const acceptStayOpen = async () => {
+    const ID = window.TrinityIdentity || {};
+    let ok = false; try { ok = !!(ID.rememberDevice && await ID.rememberDevice()); } catch (e) {}
+    setDpOffer(false);
+    ctx.toast(ok ? 'Done — this phone stays open for 30 days' : 'Couldn’t save “stay open” — alerts will wait until you unlock');
+  };
 
   return (
     <Overlay open={open} onClose={onClose}>
@@ -368,9 +416,30 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
           <NotifToggleRow icon="calendar" accent="var(--clay)" label="Serving reminders" sub="A nudge the evening before you serve" on={!!prefs.reminders} disabled={off} onFlip={() => apply({ reminders: !prefs.reminders })} />
         </Group>
 
+        {native ? (
+          <React.Fragment>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>WHILE THE APP IS CLOSED</div>
+            <Group>
+              <NotifToggleRow icon="chat" accent="var(--clay)" label="Message notifications" sub={dpOn ? 'On — this phone checks for new messages now and then' : 'Off — alerts for new messages arrive only when the app is open'} on={dpOn} onFlip={flipDirect} />
+            </Group>
+            {dpOn && dpOffer ? (
+              <div style={{ padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', marginBottom: 14 }}>
+                <div style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                  Your PIN is locking your church, so alerts can’t arrive while the app is locked. To get them, let this phone <b>stay open for 30 days</b> without asking for your PIN.
+                  <br /><span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone will be able to open your church.</span>
+                </div>
+                <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
+                  <button onClick={() => { setDpOffer(false); ctx.toast('Alerts will only arrive while this phone is unlocked in TrinityOne'); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Not now</button>
+                  <button onClick={acceptStayOpen} style={{ flex: 1, padding: 11, borderRadius: 12, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Stay open 30 days</button>
+                </div>
+              </div>
+            ) : null}
+          </React.Fragment>
+        ) : null}
+
         <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '10px 6px 0' }}>
           {native
-            ? 'Serving reminders show on this device even when the app is closed. Message and announcement alerts arrive when the app is open.'
+            ? 'Serving reminders show on this device even when the app is closed. Message alerts can also arrive while the app is closed if you turn on Message notifications above and keep TrinityOne open on this phone; announcement alerts arrive when the app is open.'
             : 'Notifications arrive even when TrinityOne is closed, as long as your device allows them. Direct messages never include the message text.'}
         </p>
         <button onClick={() => ctx.openHelp && ctx.openHelp('notifications')} style={{ marginTop: 16, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
