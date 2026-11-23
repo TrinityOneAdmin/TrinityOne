@@ -1,10 +1,24 @@
 # Direct Mode — Google-free, no-extra-app push (build plan)
 
-**Status:** PLAN — nothing built. Plan audited (Opus, read-only) 2026-11-22 → AMBER → findings
-F1–F5 folded in below → cleared for Phase 0.
-**Branch:** `feat/direct-mode-push-2026-11-22` (off `main` @ b8b92b95).
-**Author decisions (owner, 2026-11-22):** (1) Mode B — timer poll, lighter; (2) ALL message
-types in scope (DMs included); (3) Phase 0 spike via subagent only after this plan is green.
+**Status:** Phase 0 = GO (spike @39eaafe7 proved WebView-in-worker on the Oppo). Phase 1 "small slice"
+attempt = BLOCKED (see "Phase 1 reality" below) → owner approved **Option B (same-origin boot)** on
+2026-11-23. This doc's Phase-1 section is now the **Option B plan** at the bottom — awaiting its own
+plan audit before the (Sonnet) build.
+**Branch:** `feat/notifications-2026-11-23` (carries the plan + the throwaway spike; lineage off
+`main` @ b8b92b95).
+**Author decisions:** (owner 2026-11-22) Mode B timer poll; ALL message types incl. DMs; spike then
+plan-gated phases. (owner 2026-11-23) Phase 1 = Option B; **build by a Sonnet agent**; all work on the
+new notifications branch.
+
+> **Phase 1 reality (2026-11-23): the "small slice" does not exist.** A build subagent STOPPED at the
+> gate (built nothing) with two code-verified blockers: (1) `relaysForChurch()`→`_netRelays`→
+> `_gate.admit()` (`createRelayGate`) is the terminal read of a live, cache-backed admission subsystem —
+> `admit()` "consults the cache and nothing else" and drops any relay that "has never proved itself"
+> (`src/relay-net.src.js`), so a cold worker gets `[]` (or ungated CANONICAL, whose use = rule-10
+> widening). (2) Origin partition: `androidScheme` is unset → Capacitor-6 default `https` → app state
+> lives in `https://localhost` localStorage; a `file://` worker WebView is a SEPARATE partition and
+> cannot see the relay list, gate proofs, `followedChurches`, or the `docshub`/`memhub` cursors. A lean
+> SimplePool-only slice therefore can know neither which relays nor what's new. → **Option B.**
 
 > **Citations: by SYMBOL, not line.** (Audit F1: every line number in the first draft was stale
 > though every symbol was correct.) Find each at HEAD; do not trust a line number in this doc.
@@ -177,3 +191,95 @@ Goal: prove the gating unknowns, nothing more. Minimal/throwaway code, member ap
   `android/app/src/main/AndroidManifest.xml` (currently only INTERNET + CAMERA), `package.json`.
 - Shelved prior art: branch `push/nostr-unifiedpush`, its `docs/push-notifications.md`,
   `plugins/trinity-unifiedpush/`.
+
+---
+
+# Phase 1 — OPTION B (same-origin background boot) — the build plan (2026-11-23)
+
+**Premise shift (owner-approved):** we no longer try to lift a lean slice. Instead the background
+worker hosts a WebView that runs **at the app's own origin and shares the app's data**, imports the
+app's existing code, lets it bootstrap, and reads the admitted relay set + cursors the app already
+built. "Boot more of the app" means load more of its CODE in the hidden page — NOT show any UI. Still
+Google-free, still no extra app.
+
+## The crux assumption — PROVE THIS FIRST (Phase 1 gate 1)
+The whole of Option B rests on: **a WebView created inside the WorkManager worker can see the app's
+real `https://localhost` localStorage** (relay list, gate proofs, `followedChurches`,
+`docshub`/`memhub` cursors). Mechanics:
+- Serve the app assets under `https://localhost` in the worker's WebView via `WebViewAssetLoader` /
+  `shouldInterceptRequest` (so the origin matches the app, not `file://`).
+- Share the WebView **data directory**: Android isolates WebView storage per *process* by
+  `setDataDirectorySuffix`. WorkManager workers run in the app's **main process** by default, so with
+  the **default (no-suffix) data dir** the worker WebView should share the app's localStorage. Confirm
+  the worker is NOT configured into a `:remote`/separate process.
+- **Gate:** boot a tiny page in the worker WebView and read `localStorage.getItem(RELAYS_KEY)` (and a
+  known gate-proof key). If the app's real relay list is visible → proceed. **If NOT visible (separate
+  partition after all) → STOP and report;** Option B's reuse premise has failed and we rethink (do not
+  fall back to an ungated relay list — rule 10).
+
+## Phase 1 gate 2 — boot the app code headlessly enough to get the admitted relay set
+- Import `src/fellowship.src.js` (bundled) in the shared-origin WebView; let `loadRelays()` /
+  `churchRelayNet()` / the gate hydrate from the shared localStorage/caches.
+- Set the active church the way `app/app.jsx` does on launch — read `trinityone.followedChurches` and
+  set `window.Fellowship.churchPub` / active church. (Replicate ONLY the init sequence app.jsx runs;
+  do not render React.)
+- Call the EXISTING `relaysForChurch()` / publish-set helpers to get the admitted set — do NOT
+  duplicate or widen it (rule 10 / F5). If the proof cache is warm (shared from the app) this returns
+  the real set without new round-trips; if cold, allow `verifyRelayIdentity` to re-prove (the normal
+  path), but never use an unproven/ungated relay.
+- **If booting fellowship.src.js standalone proves intractable** (hard dependence on React/app.jsx
+  wiring that can't be reasonably replicated) → STOP and report specifics (this was the Phase-0-flagged
+  risk; an honest "can't boot headlessly" is a valid outcome, not a hack-around).
+
+## Phase 1 gate 3 — authenticate, then count new events
+- **NIP-42 auth is now in Phase-1 scope** (the builder's finding): kinds 4 (DM) and 30078
+  (care/guardian) are read-gated/default-deny, so the worker must complete NIP-42 to even COUNT them.
+  The worker signs the relay's auth challenge with the member privkey — derived natively (see keys
+  below) and injected — reusing the app's existing auth/signing path where possible.
+- Run ONE `since=<last-seen>` REQ across the notify-kinds (1 group, 4 DM, 7 reactions, 30078
+  care/guardian), `#p`=member pubkey; read to EOSE; **count** new events since last-seen. Reuse the
+  shared `docshub`/`memhub` cursors + the `SINCE_SLOP` overlap pattern. (No content decode, no
+  notify-worthiness rules, no per-group naming — that is Phase 2. DM-cursor refinement is Phase 3;
+  Phase 1 may count DMs crudely via the inbox filter.)
+
+## Native side (Kotlin) — reuse the proven spike patterns
+- `WorkManager` **periodic** worker (~15 min), main process, hosting the WebView on a main-Looper
+  thread, kept alive via `CompletableDeferred` while async work runs. (All proven in Phase 0.)
+- **Signing key, native read:** read `capacitor-storage_trinityone.nostr.mnemonic` from
+  `WSSecureStorageSharedPreferences` (prefix `capacitor-storage_` is the verified default; no
+  `setKeyPrefix` anywhere). On this Oppo the value is a **plaintext mnemonic** (derive privkey via
+  nip06 `privateKeyFromSeedWords`); a passphrase install instead has `…mnemonic.enc` (AES/GCM via the
+  AndroidKeyStore alias) — **handle BOTH**. Reuse the spike's `SecretStoreCompat.kt` scheme
+  (byte-identical to the plugin). Inject the derived privkey into the WebView for auth.
+- Post a generic **native** notification via `NotificationManagerCompat` when count>0 (no Capacitor
+  plugin — no JS bridge in a bg WebView, confirmed Phase 0).
+- Reschedule the periodic work on boot (`RECEIVE_BOOT_COMPLETED` receiver, `exported="false"`);
+  request `POST_NOTIFICATIONS` at runtime (guard by API — minSdk 22); add a battery-optimisation
+  exemption prompt/flow. No foreground service / no FGS type (Mode B).
+
+## Salvage directly from the Phase-0 spike (`spikes/push0/`)
+`SecretStoreCompat.kt`; the CoroutineWorker + main-Looper WebView + `CompletableDeferred` keep-alive;
+`NotificationManagerCompat` notify; the esbuild bundling approach for the JS. Promote native code to a
+TRACKED `plugins/…` path (NOT the gitignored `android/` tree); record any unavoidable `android/`
+manifest/gradle edits in a README so they're reproducible.
+
+## Build / test / rules
+- Build an **in-app debug build inside `com.trinityone.app`** (needs the app's UID for real key +
+  shared data). It's debug-signed on this box, so `adb install -r` is data-preserving — do NOT wipe the
+  owner's identity. Install on the Oppo (`J77HDMTC7TKBZDFM`), verify on-demand that it boots, gets the
+  real relay set, auths, counts, and notifies (logcat evidence). **Leave it installed** for the owner's
+  multi-hour test — does the Oppo keep firing the ~15-min periodic under Doze (the real acceptance
+  gate)? Tell the owner how to restore their clean build.
+- Do NOT touch admission code beyond CALLING existing helpers; never widen the relay set (rule 10).
+  No merge, no push. Commit to the notifications branch; list every file incl. gitignored `android/`
+  edits and the shared-code user-list (CLAUDE.md rule 2). Don't run the full suite.
+
+## Risks specific to Option B
+1. **Same-process localStorage sharing** (gate 1) — the make-or-break assumption; prove before building
+   the rest.
+2. **Booting fellowship.src.js without app.jsx/React** (gate 2) — the known hard part; stop-and-report
+   if intractable.
+3. **NIP-42 auth in a headless worker** — new scope; must sign correctly with the derived key.
+4. **Running the live admission/proof machinery in the background** — battery/CPU if the cache is cold
+   and it re-proves; acceptable if warm-shared, watch it.
+5. **Oppo/ColorOS Doze scheduling** — still the ultimate acceptance gate (owner's multi-hour test).
