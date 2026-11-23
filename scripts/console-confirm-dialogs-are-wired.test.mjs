@@ -262,6 +262,111 @@ test('settings: a GOOD handoff QR shows no "Invalid QR" notice', () => {
   assert.equal(h.confirms().length, 0, 'a dialog is on screen after a handoff that adoptChurch accepted');
 });
 
+// ── 4b · Settings: restoring a backup FILE over a church that is already on this device ─────────────────────
+// The route: Settings -> Church key -> "Restore from a file" (a hidden <input type=file>) -> the file is read and
+// recognised -> the passphrase box appears -> Restore -> the file is DECRYPTED -> and only then, if a church is
+// already held here, "Replace this church?" -> Continue -> TrinityBackup.applySteward(what the file held).
+// The same dialog serves the QR path (above) and the recovery-phrase path
+// (the-pin-gate-goes-back-in-a-browser.test.mjs); this is the third way in, and it had no test.
+//
+// WHAT IS REAL AND WHAT IS NOT. The backup envelope is made by the console's own TrinityBackup.encryptObj and
+// opened by its own decryptStr, so the passphrase step is the shipped one. Two things are replaced, and only
+// these: readFile (it wraps FileReader, which the harness has no working copy of) hands back the envelope text,
+// and applySteward (the thing that would overwrite the church key) records what it was given.
+const FILE_PASS = 'copper lantern orchard seventeen';
+const IN_THE_FILE = { kind: 'steward', marker: 'the-church-in-the-file' };
+async function fileRestore({ hasKey = true } = {}) {
+  const applied = [];
+  const h = mount({}, '{ DashSettings }');
+  // "A church is already on this device" is set AFTER the scripts load: steward-root.jsx starts real work at load
+  // when it sees a key, which a fake Steward cannot answer. The screen reads hasKey when Restore is pressed.
+  h.window.Steward.hasKey = hasKey;
+  assert.equal(h.window.Steward.hasKey, hasKey, 'the fixture could not say whether a church is on this device');
+  const TB = h.window.TrinityBackup;
+  assert.equal(typeof TB.encryptObj, 'function', 'backup.jsx did not install the real TrinityBackup — this test would be driving a stub');
+  const envelope = await TB.encryptObj(IN_THE_FILE, FILE_PASS);
+  TB.readFile = async () => envelope;
+  TB.applySteward = (obj) => { applied.push(obj); };
+  const draw = () => h.drawWith(() => h.mods.DashSettings({ initialSection: 'key' }));
+  draw();
+  // The handlers are async and the passphrase step does real key-stretching, so wait on what the SCREEN shows.
+  const until = async (what, cond) => {
+    for (let i = 0; i < 400; i++) { draw(); if (cond()) return; await new Promise(r => setTimeout(r, 10)); }
+    assert.fail('timed out waiting for ' + what);
+  };
+  const fileInput = () => nodes(h.tree).find(n => n.type === 'input' && n.props.type === 'file' && n.props.accept === '.json,application/json');
+  const passBox = () => nodes(h.tree).find(n => n.type === 'input' && n.props['aria-label'] === 'Passphrase of the backup file');
+  const restoreBtn = () => nodes(h.tree).find(n => n.type === 'button' && typeof n.props.onClick === 'function' && said(n) === 'Restore');
+  const replaceDlg = () => h.confirms().filter(n => n.props.title === 'Replace this church?');
+  // Choose the file, type the passphrase, press Restore — the button is handed a click EVENT, as in a browser.
+  const chooseAndRestore = async (pass = FILE_PASS) => {
+    assert.ok(fileInput(), 'no "Restore from a file" file input on the Church key page — re-anchor (initialSection "key")');
+    assert.equal(passBox(), undefined, 'the passphrase box is on screen before any file was chosen');
+    fileInput().props.onChange({ target: { files: [{ name: 'trinityone-st-marys-2026-11-23.json' }], value: 'C:\\fakepath\\x.json' } });
+    await until('the passphrase box after choosing a backup file', () => !!passBox());
+    passBox().props.onChange({ target: { value: pass } }); draw();
+    assert.ok(restoreBtn(), 'no Restore button beside the passphrase box');
+    assert.notEqual(restoreBtn().props.disabled, true, 'Restore is disabled with a passphrase typed');
+    restoreBtn().props.onClick({ type: 'click', preventDefault() {} });
+  };
+  // `h.tree` is a getter on the mount; the spread below would freeze it at this draw, so read it through here.
+  const shows = (re) => re.test(said(h.tree));
+  return { ...h, draw, until, applied, passBox, replaceDlg, chooseAndRestore, shows };
+}
+
+test('settings: restoring a FILE over an existing church asks "Replace this church?" and replaces nothing yet', async () => {
+  const h = await fileRestore();
+  assert.equal(h.confirms().length, 0, 'a dialog is on screen before anything was pressed');
+  await h.chooseAndRestore();
+  await h.until('the "Replace this church?" confirm after Restore', () => h.replaceDlg().length === 1);
+  assert.equal(h.applied.length, 0, 'the backup was applied over the church on this device before the steward confirmed');
+  const dlg = h.replaceDlg()[0];
+  assert.match(dlg.props.body, /Restore from the file\?/, 'the confirm is not the FILE one — it does not say what is about to be restored');
+  assert.match(dlg.props.body, /replaces the church currently on this device/, 'the confirm does not say what will be lost');
+  assert.equal(dlg.props.confirmLabel, 'Continue');
+  assert.equal(h.confirms().length, 1, 'more than one dialog is on screen');
+});
+
+test('settings: cancelling the file restore keeps the church that is here and closes the dialog', async () => {
+  const h = await fileRestore();
+  await h.chooseAndRestore();
+  await h.until('the "Replace this church?" confirm after Restore', () => h.replaceDlg().length === 1);
+  h.replaceDlg()[0].props.onCancel(); h.draw();
+  assert.equal(h.confirms().length, 0, 'the confirm stayed on screen after Cancel');
+  // Give a wrongly-wired Cancel the same time a real Continue takes before saying nothing was applied.
+  await new Promise(r => setTimeout(r, 400)); h.draw();
+  assert.equal(h.applied.length, 0, 'the backup replaced the church even though the steward cancelled');
+  assert.ok(h.passBox(), 'cancelling threw away the chosen file — the steward has to start again');
+});
+
+test('settings: Continue restores what the FILE held, once, and closes the dialog', async () => {
+  const h = await fileRestore();
+  await h.chooseAndRestore();
+  await h.until('the "Replace this church?" confirm after Restore', () => h.replaceDlg().length === 1);
+  h.replaceDlg()[0].props.onConfirm(); h.draw();
+  assert.equal(h.confirms().length, 0, 'the confirm stayed on screen after Continue');
+  await h.until('TrinityBackup.applySteward after Continue', () => h.applied.length > 0);
+  await h.until('the passphrase step to clear after the restore', () => !h.passBox());
+  assert.deepEqual(JSON.parse(JSON.stringify(h.applied)), [IN_THE_FILE], 'Continue did not hand the decrypted backup to TrinityBackup.applySteward exactly once');
+  assert.equal(h.confirms().length, 0, 'a dialog came back after the restore — Continue asked a second time');
+});
+
+test('settings: a wrong passphrase never reaches the "Replace this church?" confirm', async () => {
+  const h = await fileRestore();
+  await h.chooseAndRestore('not the passphrase at all');
+  await h.until('the wrong-passphrase message', () => h.shows(/passphrase didn’t open the file/));
+  assert.equal(h.confirms().length, 0, 'a file that could not be opened still asked to replace the church');
+  assert.equal(h.applied.length, 0);
+});
+
+test('settings: with NO church on this device a file restore goes straight through, with no confirm', async () => {
+  const h = await fileRestore({ hasKey: false });
+  await h.chooseAndRestore();
+  await h.until('TrinityBackup.applySteward after Restore', () => h.applied.length > 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.applied)), [IN_THE_FILE]);
+  assert.equal(h.confirms().length, 0, 'a console holding no church was asked to "replace" one');
+});
+
 // ── 5 · Care: closing a need ─────────────────────────────────────────────────────────────────────────────────
 function careNeed({ removeNeed } = {}) {
   const removed = []; let deleted = 0, closed = 0;
