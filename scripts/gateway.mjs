@@ -3614,6 +3614,79 @@ function rebuildApproved() { APPROVED.clear(); for (const s of APPROVED_BY.value
 const GUARDIANS_BY = new Map(); // churchpub -> Map(childPub -> Set(parentPubs))
 const GUARDIANS = new Map();    // childPub -> Set(parentPubs) (union across churches)
 function rebuildGuardians() { GUARDIANS.clear(); for (const m of GUARDIANS_BY.values()) for (const [c, ps] of m) { let s = GUARDIANS.get(c); if (!s) { s = new Set(); GUARDIANS.set(c, s); } for (const p of ps) s.add(p); } }
+// ── PENDING CHILDREN, AND THE ONE SET EVERY MINOR GATE READS (SIGNUP-SAFEGUARDING-GAPS gap 1A; owner rulings D1, D6) ──
+// `MINORS_BY` (churchpub -> Set) is what minorOf() and ~20 raw gates read. It used to be exactly the church-signed
+// `minors:` list, so a child existed for the relay only AFTER a human wrote it. It is now the EFFECTIVE set, rebuilt per
+// church by rebuildEffectiveMinors():
+//     explicit `minors:`  ∪  PENDING children
+// where C is PENDING in church cp iff some parent P has
+//     ( a VALID-ACK guardreq (C,P) naming cp   OR   `guardians:<cp>` links C to P )
+//     AND C is not in `minors:` AND the pair "C|P" is not `closed` AND C is not cleared (`approved:`), a steward, or a church.
+// Both signals are unforgeable: the ack is signed by the CHILD'S OWN key (verified at fold time in note(), so live,
+// /import, sync and hydrate all verify it), and `guardians:` is church-signed and owner-only. There is deliberately NO
+// "not linked" exclusion: Confirm writes guardians: and THEN minors: as two relay writes, and a steward-initiated link
+// (linkParent) does the same, so a linked-but-unmarked child must stay gated until `minors:` lands or the pair is closed.
+// PER CHURCH, never the relay-wide union (AUDIT-2026-07-30 S3, minorOf's comment): an entry lives in the set of the church
+// the ack/link names, and a co-tenant church cannot put anyone in another church's set. DESIGNED BEHAVIOUR (owner D1): the
+// union reaches the DM and care gates too, so a parent cannot DM their own pending child until the link is confirmed.
+const MINORS_EXPLICIT_BY = new Map();   // churchpub -> Set(pubkeys) — the church-signed minors: list ONLY
+const PENDING_REQ_BY = new Map();       // churchpub -> Map(childPub -> Set(parentPub)) — guardreqs carrying a valid child-key ack
+const GUARDIANS_CLOSED_BY = new Map();  // churchpub -> Set("childPub|parentPub") — declined / unlinked pairs, from guardians:.closed
+function rebuildEffectiveMinors(cp) {
+  if (!cp) return;
+  const explicit = MINORS_EXPLICIT_BY.get(cp) || EMPTY_SET, closed = GUARDIANS_CLOSED_BY.get(cp) || EMPTY_SET, approved = APPROVED_BY.get(cp) || EMPTY_SET;
+  const out = new Set(explicit);
+  const cand = new Map();   // child -> Set(parents) that vouch for them, from either signal
+  const add = (c, p) => { let t = cand.get(c); if (!t) { t = new Set(); cand.set(c, t); } t.add(p); };
+  const reqs = PENDING_REQ_BY.get(cp); if (reqs) for (const [c, ps] of reqs) for (const p of ps) add(c, p);
+  const links = GUARDIANS_BY.get(cp); if (links) for (const [c, ps] of links) for (const p of ps) add(c, p);   // THIS church's map, never the relay-wide GUARDIANS union
+  for (const [c, ps] of cand) {
+    if (explicit.has(c) || approved.has(c) || c === cp || CHURCH_PUBS.has(c) || stewardCan(c, cp, 'any')) continue;
+    for (const p of ps) if (!closed.has(c + '|' + p)) { out.add(c); break; }
+  }
+  MINORS_BY.set(cp, out);
+  if (!_hydrating) rebuildMinors();
+}
+// The ack's d-tag. DELIBERATELY BUILT FROM THE GUARDREQ PREFIX, not a new `trinityone/…:` name: the ack is a detached event
+// that is NEVER stored or published on its own, so it must not become a registered document type (doc-registry.test.mjs
+// refuses a literal the registry has not declared, and declaring it write:'member' would tell the registry members may
+// publish one). Were one ever published standalone it would read as a guardreq naming the "child" `ack:<cp>`, which is not
+// 64-hex, so accept()'s GUARDREQ_D branch refuses it at the door and note() ignores it.
+const GUARDACK_D = GUARDREQ_D + 'ack:';
+// Is this guardreq's ack GENUINE for church cp? The ack is a detached event the CHILD'S key signed: kind 30078, d =
+// GUARDACK_D + <cp> (= the guardreq prefix + 'ack:'), a ['p', parent] tag naming the guardreq's author, content {parent, church}. Anything else
+// (absent, malformed, signed by another key, naming another parent or church) is simply not an ack — the guardreq is
+// stored and ignored, never refused, so older apps keep working.
+function guardAckOk(e, child, cp) {
+  let c; try { c = JSON.parse(e.content || ''); } catch { return false; }
+  const a = c && typeof c === 'object' ? c.ack : null;
+  if (!a || typeof a !== 'object' || a.kind !== 30078 || a.pubkey !== child) return false;
+  try { if (!verifyEvent(a)) return false; } catch { return false; }
+  const tags = Array.isArray(a.tags) ? a.tags : [];
+  const dT = tags.find(t => t[0] === 'd'), pT = tags.find(t => t[0] === 'p');
+  if (!dT || dT[1] !== GUARDACK_D + cp) return false;
+  if (!pT || (toHexPub(pT[1]) || pT[1]) !== e.pubkey) return false;
+  let ac; try { ac = JSON.parse(a.content || ''); } catch { return false; }
+  return !!ac && (toHexPub(ac.church) || ac.church) === cp && (toHexPub(ac.parent) || ac.parent) === e.pubkey;
+}
+// Fold ONE guardreq document into PENDING_REQ_BY. Called from note(), so every route that stores an event runs it.
+function foldGuardReq(e, d, removed) {
+  const child = toHexPub(d.slice(GUARDREQ_D.length)) || '';
+  if (!child || child === e.pubkey) return;
+  const touched = new Set();
+  for (const [cp, m] of PENDING_REQ_BY) { const ps = m.get(child); if (ps && ps.delete(e.pubkey)) { if (!ps.size) m.delete(child); touched.add(cp); } }   // the doc is replaceable: the newest copy decides
+  if (!removed) {
+    for (const t of (e.tags || [])) {
+      if (t[0] !== 'p' || !t[1]) continue;
+      const cp = toHexPub(t[1]) || t[1];
+      if (!CHURCH_PUBS.has(cp) || !guardAckOk(e, child, cp)) continue;
+      let m = PENDING_REQ_BY.get(cp); if (!m) { m = new Map(); PENDING_REQ_BY.set(cp, m); }
+      let ps = m.get(child); if (!ps) { ps = new Set(); m.set(child, ps); }
+      ps.add(e.pubkey); touched.add(cp);
+    }
+  }
+  if (!_hydrating) for (const cp of touched) rebuildEffectiveMinors(cp);
+}
 function guardianLinked(a, b) { const ga = GUARDIANS.get(a); if (ga && ga.has(b)) return true; const gb = GUARDIANS.get(b); return !!(gb && gb.has(a)); }
 // ── per-church safeguarding (SECURITY-AUDIT-2026-07-20 C2, CRITICAL) ───────────────────────────────
 // MINORS / APPROVED / GUARDIANS are relay-wide UNIONS of every church's list, and the DM gate consulted
@@ -4363,7 +4436,7 @@ let _hydrating = false;
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
-                   GUARDIANS_BY, NETWORKS_BY, NETWORK_SCOPES_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
+                   GUARDIANS_BY, MINORS_EXPLICIT_BY, PENDING_REQ_BY, GUARDIANS_CLOSED_BY, NETWORKS_BY, NETWORK_SCOPES_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
                    FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS, PUBVERSE,
                    LIVE_AT, VOID_DEF, VOID_FLOOR, VOID_ROSTER]) { try { m.clear(); } catch {} }
@@ -4422,7 +4495,9 @@ function hydrateMaps() {
     store.eachKind([30078], note);                     // uncapped ASC iteration — no 10k truncation of old docs
   }
   finally { _hydrating = false; }
-  rebuildBlocked(); rebuildMinors(); rebuildApproved(); rebuildGuardians(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
+  rebuildApproved(); rebuildGuardians();
+  for (const cp of CHURCH_PUBS) rebuildEffectiveMinors(cp);   // AFTER every input is in (minors, approved, guardians, closed, guardreqs, stewards) — order-independent by construction
+  rebuildBlocked(); rebuildMinors(); rebuildNetworks();   // rebuildBlocked() also rebuilds MEMBERS from the full maps
 }
 // MIGRATION (AUDIT-2026-07-24): tombstones are new, so every kind-5 already on disk from an older build has no
 // deletions row — and a kind-5 the relay already holds comes back from put() as 'duplicate', which means it would
@@ -4673,11 +4748,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(MINORS_D) && CHURCH_PUBS.has(cp = d.slice(MINORS_D.length)) && e.pubkey === cp) {   // safeguarding: church's minors list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    MINORS_BY.set(cp, set); if (!_hydrating) rebuildMinors();
+    MINORS_EXPLICIT_BY.set(cp, set); if (!_hydrating) rebuildEffectiveMinors(cp);   // the effective set (explicit ∪ pending) is what MINORS_BY holds
   }
   else if (d.startsWith(APPROVED_D) && CHURCH_PUBS.has(cp = d.slice(APPROVED_D.length)) && e.pubkey === cp) {   // safeguarding: church's cleared-adults list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    APPROVED_BY.set(cp, set); rebuildApproved();
+    APPROVED_BY.set(cp, set); rebuildApproved(); if (!_hydrating) rebuildEffectiveMinors(cp);   // a cleared adult is never pending
   }
   else if (d.startsWith(NOPHOTO_D) && CHURCH_PUBS.has(cp = d.slice(NOPHOTO_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'safeguarding'))) {   // moderation: photo-suppression list — church key or a safeguarding steward, mirroring the write gate below
     // Authorship mirrors accept()'s NOPHOTO_D branch exactly. Anything looser would let a member reinstate
@@ -4693,6 +4768,14 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const map = new Map();
     if (!removed) { try { const links = (JSON.parse(e.content).links) || {}; for (const [c, ps] of Object.entries(links)) { const ch = toHexPub(c); if (!ch) continue; const set = new Set(); (ps || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); map.set(ch, set); } } catch {} }
     GUARDIANS_BY.set(cp, map); rebuildGuardians();
+    // `closed` ("child|parent" -> ts): declined and unlinked pairs. Read here because a pair the church closed is no longer pending.
+    const closedSet = new Set();
+    if (!removed) { try { for (const k of Object.keys(JSON.parse(e.content).closed || {})) { const [c, p] = String(k).split('|'); const ch = toHexPub(c), ph = toHexPub(p); if (ch && ph) closedSet.add(ch + '|' + ph); } } catch {} }
+    GUARDIANS_CLOSED_BY.set(cp, closedSet);
+    if (!_hydrating) rebuildEffectiveMinors(cp);
+  }
+  else if (d.startsWith(GUARDREQ_D)) {   // a parent's guardian-link REQUEST: fold it if (and only if) the child's own key vouched for it
+    foldGuardReq(e, d, removed);
   }
   else if (d.startsWith(STEWARDS_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey) {   // OWNER-ONLY: a church's steward roster (delegated, revocable authority)
     const set = new Set(); const caps = new Map();
@@ -4712,6 +4795,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const before = STEWARDS_BY.get(e.pubkey) || new Set();
     STEWARDS_BY.set(e.pubkey, set); STEWARD_CAPS.set(e.pubkey, caps);
     _replayVoidLive(e.pubkey, [...set].filter(k => !before.has(k)));   // a removed or narrowed steward's live entries are void now — see LIVE_AT
+    if (!_hydrating) rebuildEffectiveMinors(e.pubkey);   // a steward is never pending
   }
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
