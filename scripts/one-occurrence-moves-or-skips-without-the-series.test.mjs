@@ -78,6 +78,9 @@ function buildSched(stewardStub, events) {
   };
   const h = (type, p, ...kids) => ({ type, props: { ...(p || {}), children: kids.flat() } });
   const nil = () => [];
+  // Skip / Remove no longer call confirm(): they set state and SchEventDetail renders the SkConfirm dialog. This
+  // harness does not expand child components, so the stub is only an identity the test finds in the tree.
+  const SkConfirm = () => null;
   const window = {
     expandEvents, Steward: stewardStub,
     useStewardServices: nil, useStewardEvents: () => events, useStewardRotas: nil, useStewardRosters: nil,
@@ -86,14 +89,14 @@ function buildSched(stewardStub, events) {
     useStewardRunsheets: nil, eventImgStyle: () => ({}), confirm: () => true,
   };
   const scope = {
-    React, h, Frag: 'Frag', window, Icon: () => null, CustomEvent: class {}, confirm: () => true,
+    React, h, Frag: 'Frag', window, Icon: () => null, CustomEvent: class {}, confirm: () => true, SkConfirm,
     useStewDialog: () => ({ current: null }), todayISO: () => '2026-10-01',
     document: { createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => 'data:image/jpeg;base64,AAAA' }) },
     Image: class { set src(v) {} }, FileReader: class { readAsDataURL() {} },
   };
   const names = Object.keys(scope);
   const mod = new Function(...names, jsx(SCHED) + '\nreturn { DashCalendar, SchEventDetail };')(...names.map(n => scope[n]));
-  return { mod, reset: () => { idx = 0; } };
+  return { mod, reset: () => { idx = 0; }, SkConfirm };
 }
 const flat = (n, out = []) => { if (!n || typeof n !== 'object') return out; if (Array.isArray(n)) { n.forEach(x => flat(x, out)); return out; } out.push(n); flat(n.props && n.props.children, out); return out; };
 const stopEv = { preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {}, effectAllowed: '', dropEffect: '' } };
@@ -166,17 +169,26 @@ test('dragging a ONE-OFF event changes its own date (no exceptions, no series)',
 test('"Skip just this week" writes a { skip:true } exception, never removeEvent', () => {
   const calls = [];
   const steward = { publishEvent: (doc) => { calls.push({ fn: 'publishEvent', doc }); return Promise.resolve({}); }, removeEvent: (id) => calls.push({ fn: 'removeEvent', id }) };
-  const { mod, reset } = buildSched(steward, []);
+  const { mod, reset, SkConfirm } = buildSched(steward, []);
   reset();
   // An expanded occurrence, exactly as DashCalendar hands SchEventDetail: date = this week, seriesDate = anchor,
   // occDate = canonical date, exceptions = whatever the series already carries.
   const occ = { id: 's1', title: 'Prayer', time: '19:30', recur: 'weekly', day: 1, date: '2026-03-16', seriesDate: '2026-01-05', occDate: '2026-03-16', recurring: true, exceptions: {} };
-  const nodes = flat(mod.SchEventDetail({ event: occ, onClose() {} }));
-  // Locate the handler by a stable token in its body (it is the only one here that writes `exceptions`), then RUN
-  // it — the same locate-then-run the item-3 test uses, never a text assertion about behaviour (CLAUDE.md rule 3).
-  const skip = nodes.find(n => n.type === 'button' && n.props && typeof n.props.onClick === 'function' && String(n.props.onClick).includes('exceptions'));
+  let closed = 0;
+  const draw = () => { reset(); return flat(mod.SchEventDetail({ event: occ, onClose() { closed++; } })); };
+  const label = (n) => flat(n).length && (function t(x) { if (x == null) return ''; if (typeof x === 'string' || typeof x === 'number') return String(x); if (Array.isArray(x)) return x.map(t).join(''); return x.props ? t(x.props.children) : ''; })(n);
+  // The Skip button is found by what it SAYS on screen, then RUN (CLAUDE.md rule 3: no behaviour is asserted from text).
+  // It asks first now: the press opens the SkConfirm dialog, and only the dialog's Confirm writes the exception.
+  const skip = draw().find(n => n.type === 'button' && n.props && typeof n.props.onClick === 'function' && /Skip just this week/.test(label(n)));
   assert.ok(skip, 'SchEventDetail shows no "Skip just this week" control on a recurring occurrence');
+  assert.equal(draw().filter(n => n.type === SkConfirm).length, 0, 'a confirm dialog is on screen before anything was pressed');
   skip.props.onClick();
+  assert.equal(calls.length, 0, 'pressing Skip wrote something before the steward confirmed');
+  const dialogs = draw().filter(n => n.type === SkConfirm);
+  assert.equal(dialogs.length, 1, 'pressing Skip did not open the confirm dialog');
+  assert.equal(dialogs[0].props.confirmLabel, 'Skip', 'the dialog on screen is not the Skip one');
+  dialogs[0].props.onConfirm();
+  assert.equal(closed, 1, 'the card did not close after the skip was confirmed');
   assert.ok(!calls.some(c => c.fn === 'removeEvent'), 'Skip called removeEvent — that deletes the whole series');
   const pub = calls.find(c => c.fn === 'publishEvent');
   assert.ok(pub, 'Skip did not publish');

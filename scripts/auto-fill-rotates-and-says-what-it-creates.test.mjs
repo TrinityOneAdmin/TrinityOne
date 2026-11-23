@@ -11,6 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountBoard, PUB_A, PUB_B, PUB_C } from './rota-board-harness.mjs';
+import { find } from './render-jsx-screen.mjs';
 
 const PEOPLE = [{ id: 'p1', name: 'Ruth', pub: PUB_A }, { id: 'p2', name: 'Sam', pub: PUB_B }, { id: 'p3', name: 'Tim', pub: PUB_C }];
 const ROSTERS = [{ team: 't1', roles: [{ id: 'r1', name: 'Greeter' }], people: PEOPLE, pods: [] }];
@@ -20,12 +21,27 @@ const FOUR_WEEKS = [svc('s1', '2099-01-04'), svc('s2', '2099-01-11'), svc('s3', 
 const settle = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await new Promise(r => setImmediate(r)); };
 const who = (call) => (call.assign['t1::r1'] || {}).name;
 
+// The bulk fill entries no longer call window.confirm(): choosing one sets state and the board renders the SkConfirm
+// dialog, whose Confirm runs the fill. The harness does not expand child components, so this stub is only an identity
+// found in the tree; answer() reads the dialog's wording and presses its own onConfirm / onCancel.
+const SkConfirm = function SkConfirm() { return null; };
+const dialogs = (m) => find(m.draw(), n => n.type === SkConfirm);
 function board(over = {}) {
   const confirms = [];
-  const m = mountBoard({ rosters: ROSTERS, rotas: [], services: FOUR_WEEKS, confirm: (msg) => { confirms.push(msg); return over.confirmAnswer !== false; }, ...over });
+  const m = mountBoard({ rosters: ROSTERS, rotas: [], services: FOUR_WEEKS, scope: { SkConfirm }, ...over });
   return { m, confirms };
 }
 async function chooseFill(m, label) { await m.press('Auto-fill'); await m.press(label); }
+// the steward answers the dialog a bulk entry opened; returns what the dialog said
+async function answer(m, yes) {
+  const d = dialogs(m);
+  assert.equal(d.length, 1, 'choosing a bulk fill did not open exactly one confirm dialog (found ' + d.length + ')');
+  assert.deepEqual([m.calls.publishService.length, m.calls.publishRota.length], [0, 0], 'the fill ran before the steward confirmed');
+  const said = String(d[0].props.body);
+  await (yes ? d[0].props.onConfirm() : d[0].props.onCancel());
+  assert.equal(dialogs(m).length, 0, 'the dialog stayed open after it was answered');
+  return said;
+}
 
 test('CONTROL: the menu opens and offers the fill entries', async () => {
   const { m } = board();
@@ -36,6 +52,7 @@ test('CONTROL: the menu opens and offers the fill entries', async () => {
 test('a bulk fill ROTATES: three people over four weeks is Ruth, Sam, Tim, Ruth — not Ruth four times', async () => {
   const { m } = board();
   await chooseFill(m, 'Fill existing services — this month');
+  await answer(m, true);
   await settle(() => m.calls.publishRota.length >= 4);
   const order = m.calls.publishRota.slice().sort((a, b) => a.service.localeCompare(b.service)).map(who);
   assert.deepEqual(order, ['Ruth', 'Sam', 'Tim', 'Ruth'],
@@ -68,6 +85,7 @@ test('EVEN LEVEL, the roster order still decides: the first person listed goes f
 test('"Fill existing services" creates NOTHING, and fills only the services already on the calendar in the window', async () => {
   const { m } = board();
   await chooseFill(m, 'Fill existing services — this month');
+  await answer(m, true);
   await settle(() => m.calls.publishRota.length >= 4);
   assert.deepEqual(m.calls.publishService, [], 'a "fill existing" run created services');
   assert.deepEqual(m.calls.publishRota.map(c => c.service).sort(), ['s1', 's2', 's3', 's4'],
@@ -77,6 +95,7 @@ test('"Fill existing services" creates NOTHING, and fills only the services alre
 test('"Add weekly copies" creates the missing weekly services from the one on screen, and its confirm NAMES that service', async () => {
   const { m, confirms } = board({ services: [svc('s1', '2099-01-04')] });
   await chooseFill(m, 'Add weekly copies — this month');
+  confirms.push(await answer(m, true));
   await settle(() => m.calls.publishService.length >= 4);
   assert.equal(m.calls.publishService.length, 4, 'five weekly dates less the one that already exists is four new services');
   assert.ok(m.calls.publishService.every(s => s.name === 'Sunday Gathering' && s.time === '10:30'));
@@ -95,8 +114,9 @@ test('the menu says which entries create things and which do not', async () => {
 });
 
 test('declining the confirm does nothing at all', async () => {
-  const { m } = board({ confirmAnswer: false });
+  const { m } = board();
   await chooseFill(m, 'Add weekly copies — this month');
+  await answer(m, false);
   await new Promise(r => setImmediate(r));
   assert.deepEqual([m.calls.publishService.length, m.calls.publishRota.length], [0, 0]);
 });

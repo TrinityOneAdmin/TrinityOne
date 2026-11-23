@@ -2442,7 +2442,7 @@ function SchEventDetail({ event, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return memPending(m); };
   const [attendance, setAttendance] = React.useState(null);   // 'going' | 'maybe' | 'no' | null: which list is open
-  const [confirmAction, setConfirmAction] = useSch(null);   // { type: 'remove' } | { type: 'skip' } | null
+  const [confirmAction, setConfirmAction] = React.useState(null);   // { type: 'remove' } | { type: 'skip' } | null
   const rs = schRsvpGroups(rsvps, e.id, nameFor);
   const total = rs.going.length + rs.maybe.length + rs.no.length;
   // Counts only: a church of 200 would make an inline name list a wall of text. The names are one tap away.
@@ -2561,7 +2561,7 @@ function DashRooms() {
   const today = todayISO();
   const [roomErr, setRoomErr] = React.useState('');
   const [roomBusy, setRoomBusy] = React.useState(false);
-  const [pendingRoomDel, setPendingRoomDel] = useSch(null);   // room to confirm-delete
+  const [pendingRoomDel, setPendingRoomDel] = React.useState(null);   // room to confirm-delete
   const addRoom = async () => {
     const n = newRoom.trim(); if (!n || roomBusy) return;
     setRoomBusy(true); setRoomErr('');

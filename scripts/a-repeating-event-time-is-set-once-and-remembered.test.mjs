@@ -2,6 +2,7 @@
 // defaults to 19:30, and fixing it means editing each occurrence").
 // Run: node --test scripts/a-repeating-event-time-is-set-once-and-remembered.test.mjs
 //
+// (HISTORY - superseded 2026-11-23, see the last test: a repeat is now ONE recurring event, not one event per date.)
 // The New event form publishes one event PER DATE of a repeat, all with the one Time typed in the form - so the time IS
 // editable once for every occurrence, but only before Save. Two things made that invisible: the field opened at 19:30
 // whatever the church actually meets at, and nothing said the one time applied to every date. A steward who missed it
@@ -79,14 +80,31 @@ test('saving an event remembers its time', async () => {
   assert.deepEqual(m.writes, [['trinityone.steward.eventTime', '09:00']]);
 });
 
-test('a repeat that will publish several dates says they all use this time; a single date does not', () => {
+// CHANGED 2026-11-23 (fix/suite-confirm-dialogs): a repeat in the New event form is now ONE recurring event (recur/day
+// on a single document), not one event per date. So there are no "N dates" for the one Time to apply to: the "All N
+// dates use this time" note and the Until box are gone for a repeat, the form says the event repeats instead, and the
+// one Time typed is the series' time. This used to assert the "all 4 dates use this time" note.
+test('a repeat is ONE recurring event at the one Time typed; the form says it repeats and carries no "all N dates" note', async () => {
   const once = mount();
-  assert.doesNotMatch(once.text(), /all use this time|every date/i, 'a one-off event carries a note about repeats');
+  assert.doesNotMatch(once.text(), /all use this time|every date|dates use this time|This event repeats/i, 'a one-off event carries a note about repeats');
   const rep = mount();
   // The Repeat control is its own component (SchRepeatRow); this harness does not expand children, so the real
-  // setters the modal hands it are called directly - the same functions its Weekly button and Until box call.
-  const row = rep.nodes().find(n => n && n.type && n.type.name === 'SchRepeatRow');
-  assert.ok(row, 'the form has no repeat control - re-anchor this test');
-  row.props.setRepeat('weekly'); row.props.setUntil('2026-11-27');
-  assert.match(rep.text(), /all 4 dates use this time/i, 'a four-date repeat does not say the one time applies to every date. On screen: ' + rep.text().slice(0, 400));
+  // setter the modal hands it is called directly - the same function its Weekly button calls.
+  const findRow = () => rep.nodes().find(n => n && n.type && n.type.name === 'SchRepeatRow');
+  assert.ok(findRow(), 'the form has no repeat control - re-anchor this test');
+  assert.ok(!findRow().props.hideUntil, 'a one-off form hides Until before any repeat is chosen');
+  findRow().props.setRepeat('weekly');
+  assert.equal(findRow().props.hideUntil, true, 'a repeating event still offers an Until box, though it is saved as one open-ended series');
+  assert.doesNotMatch(rep.text(), /dates use this time/i, 'a series still talks about "N dates". On screen: ' + rep.text().slice(0, 400));
+  assert.match(rep.text(), /This event repeats weekly/i, 'a weekly repeat does not say that it repeats. On screen: ' + rep.text().slice(0, 400));
+  rep.input('Title').props.onChange({ target: { value: 'Prayer breakfast' } });
+  rep.input('Time').props.onChange({ target: { value: '09:00' } });
+  await press(rep, /^\s*Add\b|Save|Add event|Publish/i);
+  assert.equal(rep.published.length, 1, 'a weekly repeat must publish ONE recurring event, not one per date');
+  const ev = rep.published[0];
+  assert.equal(ev.recur, 'weekly');
+  assert.equal(ev.date, '2026-11-06');
+  assert.equal(ev.day, new Date('2026-11-06T12:00:00').getDay(), 'the series repeats on the weekday of its first date');
+  assert.equal(ev.time, '09:00', 'the one Time typed is the time of the whole series');
+  assert.deepEqual(rep.writes, [['trinityone.steward.eventTime', '09:00']], 'saving a series remembers its time too');
 });

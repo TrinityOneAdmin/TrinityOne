@@ -1,6 +1,9 @@
 // A MONTHLY REPEAT LANDS ON THE SAME WEEKDAY IN THE SAME WEEK OF EVERY MONTH.
 // Run: node --test scripts/a-monthly-repeat-keeps-its-week.test.mjs
 //
+// (2026-11-23: "New event" now saves a repeat as ONE recurring event rather than one-off documents; "Add a service"
+// is unchanged. The rule below is the same for both — see the note above saveMonthly for how each is read.)
+//
 // THE DEFECT (FIX-PLAN-2026-10-01 item 2). The console's "Add a service" and "New event" dialogs publish a
 // monthly repeat as one-off documents, one per month, and they stepped by CALENDAR DATE: a Tuesday meeting
 // started on 13 Oct 2026 went out as Friday 13 Nov, and a start on 31 Jan landed on 3 Mar. Neither dialog
@@ -75,6 +78,13 @@ const NO_DATES = 'No date matches before “Until”.';
 
 // Type a monthly repeat into a dialog and press its save button (whether or not it is enabled — a disabled
 // button that still published would be the defect). Returns the published dates and what the dialog showed.
+//
+// THE TWO DIALOGS NO LONGER SAVE A REPEAT THE SAME WAY (2026-11-23, fix/suite-confirm-dialogs):
+//   · SchAddServiceModal still publishes ONE SERVICE PER DATE up to "Until" — `dates` is that list.
+//   · SchEventModal publishes ONE RECURRING EVENT ({ recur, day, nth } on a single document) and shows no "Until"
+//     box at all: the calendar expands it, and Skip-this-week / Remove-series only exist for an event carrying
+//     `recur`. So for it `published` has one entry, and WHERE IT LANDS is read by expanding that entry with the
+//     real app/recur.jsx walk (lands(), below) — the same function that paints it on every calendar.
 async function saveMonthly(component, { date, until, pick, changeDateTo, title = 'Elders', hooks = {} }) {
   const published = [];
   const steward = {
@@ -88,7 +98,10 @@ async function saveMonthly(component, { date, until, pick, changeDateTo, title =
   const monthly = m.nodes().find(n => n.type === 'button' && m.text(n) === 'Monthly');
   assert.ok(monthly, component + ': no "Monthly" button — re-anchor');
   monthly.props.onClick();
-  m.byLabel('Until').props.onChange({ target: { value: until } });
+  if (component === 'SchEventModal') {
+    assert.equal(m.byLabel('Until'), undefined, 'SchEventModal: a repeat is saved as one open-ended series, yet the dialog still offers an "Until" box');
+    assert.equal(until, undefined, 're-anchor: this test passes an Until to a dialog that has none');
+  } else m.byLabel('Until').props.onChange({ target: { value: until } });
   let sel = m.byLabel('Which week of the month');
   assert.ok(sel, component + ': THE DEFECT — a monthly repeat shows no "Which week" picker, so the steward cannot say which Tuesday');
   if (pick !== undefined) sel.props.onChange({ target: { value: String(pick) } });
@@ -111,6 +124,22 @@ async function saveMonthly(component, { date, until, pick, changeDateTo, title =
   };
 }
 
+// WHERE A PUBLISHED SERIES LANDS, anchor day through `through` inclusive: the real app/recur.jsx walk, run on the
+// very document SchEventModal handed to publishEvent.
+function lands(ev, through) {
+  const span = Math.round((new Date(through + 'T12:00:00') - new Date(ev.date + 'T12:00:00')) / 864e5);
+  return realExpandEvents()([ev], ev.date, span).map(o => o.date).filter(d => d >= ev.date && d <= through).sort();
+}
+// Save a monthly repeat in the New event dialog and hand back the ONE recurring event it published.
+async function saveSeries(opts) {
+  const r = await saveMonthly('SchEventModal', opts);
+  assert.equal(r.published.length, 1, 'SchEventModal: a monthly repeat must publish ONE recurring event, not one per date — got ' + r.published.length);
+  const ev = r.published[0];
+  assert.equal(ev.recur, 'monthly', 'the published event does not carry recur: it is a one-off, and has no Skip-this-week / Remove-series');
+  assert.equal(r.closed, true, 'the dialog stayed open over a save that published');
+  return { ...r, ev };
+}
+
 // Run fn with the process in another time zone (Node re-reads TZ when it is assigned), always restoring it.
 async function inZone(tz, fn) {
   const was = process.env.TZ;
@@ -121,7 +150,7 @@ async function inZone(tz, fn) {
   } finally { if (was === undefined) delete process.env.TZ; else process.env.TZ = was; }
 }
 
-for (const component of ['SchAddServiceModal', 'SchEventModal']) {
+for (const component of ['SchAddServiceModal']) {   // SchEventModal saves a repeat differently: its own block follows
   test(`${component}: a 2nd-Tuesday start repeats on the 2nd Tuesday, not on the 13th`, async () => {
     const r = await saveMonthly(component, { date: '2026-10-13', until: '2027-01-31' });
     assert.equal(r.shown, 2, 'the picker did not default to the start date\'s week (13 Oct 2026 is the 2nd Tuesday)');
@@ -208,28 +237,113 @@ for (const component of ['SchAddServiceModal', 'SchEventModal']) {
   });
 }
 
-test('the new-event clash note checks the dates that will be published, not the date typed', async () => {
-  // start 13 Oct, Monthly, "Last": the first date published is 27 Oct. Choir at 19:30 on 27 Oct clashes;
-  // Choir at 19:30 on 13 Oct does not — nothing will be published that day (re-audit of ffcdcfe, finding 2).
+// ── SchEventModal: ONE RECURRING EVENT, the same rule ──────────────────────────────────────────────────────
+// The same nine situations as the loop above wherever they still exist. The three about "Until" (first date after
+// Until / Until on or before the start / Until inclusive) have no counterpart — there is no Until — and are
+// replaced by the one test that says so.
+test('SchEventModal: a 2nd-Tuesday start is ONE monthly event on the 2nd Tuesday, not on the 13th', async () => {
+  const r = await saveSeries({ date: '2026-10-13' });
+  assert.equal(r.shown, 2, 'the picker did not default to the start date\'s week (13 Oct 2026 is the 2nd Tuesday)');
+  assert.deepEqual([r.ev.date, r.ev.day, r.ev.nth], ['2026-10-13', 2, 2], 'the series is not anchored on 13 Oct as "2nd Tuesday"');
+  assert.deepEqual(lands(r.ev, '2027-01-31'), ['2026-10-13', '2026-11-10', '2026-12-08', '2027-01-12'],
+    'THE DEFECT: the series does not land on the 2nd Tuesday of each month (13 Nov 2026 is a Friday)');
+});
+
+test('SchEventModal: a start on the 30th is the LAST Friday, every month', async () => {
+  const r = await saveSeries({ date: '2026-10-30' });
+  assert.equal(r.shown, -1, 'a start on the 29th-31st should default to "Last", not a 5th that skips months');
+  assert.deepEqual([r.ev.day, r.ev.nth], [5, -1]);
+  assert.deepEqual(lands(r.ev, '2027-01-31'), ['2026-10-30', '2026-11-27', '2026-12-25', '2027-01-29']);
+});
+
+test('SchEventModal: 31 January does not drift to 3 March', async () => {
+  const r = await saveSeries({ date: '2027-01-31' });
+  assert.deepEqual([r.ev.day, r.ev.nth], [0, -1]);
+  const dates = lands(r.ev, '2027-04-30');
+  assert.ok(!dates.includes('2027-03-03'), 'THE DEFECT: 31 Jan + 1 month rolled over into March');
+  assert.deepEqual(dates, ['2027-01-31', '2027-02-28', '2027-03-28', '2027-04-25'], 'the last Sunday of each month');
+});
+
+test('SchEventModal: the week follows the date until the steward picks one, and a pick is kept', async () => {
+  const reseeded = await saveSeries({ date: '2026-10-13', changeDateTo: '2026-10-30' });
+  assert.equal(reseeded.shown, -1, 'changing the date did not re-seed the week');
+  assert.deepEqual([reseeded.ev.date, reseeded.ev.day, reseeded.ev.nth], ['2026-10-30', 5, -1], 'the re-seeded week did not reach the published series');
+  assert.deepEqual(lands(reseeded.ev, '2026-12-31'), ['2026-10-30', '2026-11-27', '2026-12-25']);
+  const picked = await saveSeries({ date: '2026-10-13', pick: 1, changeDateTo: '2026-10-14' });
+  assert.equal(picked.shown, 1, 'the steward\'s explicit pick was overwritten by a date change');
+  assert.deepEqual([picked.ev.date, picked.ev.day, picked.ev.nth], ['2026-10-14', 3, 1], 'the picked week did not reach the published series');
+  // 14 Oct is a Wednesday, the 2nd; "1st" means the first 1st Wednesday ON OR AFTER it — 4 Nov. The typed
+  // date is not an occurrence of the rule, so the series does not land on it (audit of 484cc00, finding 1).
+  assert.deepEqual(lands(picked.ev, '2027-01-31'), ['2026-11-04', '2026-12-02', '2027-01-06'],
+    'the picked week did not reach the calendar, or the series lands on a date that is not a 1st Wednesday');
+  assert.equal(picked.first, 'First: Wed 4 Nov', 'the dialog does not show where the first one lands');
+  const labels = picked.options.map(o => [o.props.value, o.props.children.join('')]);
+  assert.ok(labels.some(([v, l]) => v === -1 && l === 'Last'), 'the picker offers no "Last" option');
+});
+
+test('SchEventModal: a picked week other than the start\'s own starts at that week, never on the typed date too', async () => {
+  const last = await saveSeries({ date: '2026-10-13', pick: -1 });
+  assert.deepEqual([last.ev.day, last.ev.nth], [2, -1]);
+  assert.deepEqual(lands(last.ev, '2027-01-31'), ['2026-10-27', '2026-11-24', '2026-12-29', '2027-01-26'],
+    'THE AUDIT DEFECT: start 13 Oct + "Last" lands on 13 Oct AND 27 Oct — two in one month');
+  assert.equal(last.first, 'First: Tue 27 Oct');
+  const first = await saveSeries({ date: '2026-10-13', pick: 1 });
+  assert.deepEqual(lands(first.ev, '2027-01-31'), ['2026-11-03', '2026-12-01', '2027-01-05'], 'start 13 Oct + "1st" must begin on 3 Nov');
+  assert.equal(first.first, 'First: Tue 3 Nov');
+  const own = await saveSeries({ date: '2026-10-13' });
+  assert.equal(own.first, '', 'a "First:" line shows when the first date IS the date typed — copy nobody needs');
+});
+
+test('SchEventModal: a repeat has no "Until" — Save is enabled, nothing says "no date matches", and it publishes once', async () => {
+  // (saveMonthly itself asserts the Until box is not on the form once Monthly is pressed.)
+  for (const pick of [undefined, -1, 1]) {
+    const r = await saveSeries({ date: '2026-10-13', pick });
+    assert.equal(r.none, '', 'a "no date matches before Until" line shows on a dialog with no Until (pick ' + pick + ')');
+    assert.equal(r.disabled, false, 'Save is disabled on a monthly repeat that has a date (pick ' + pick + ')');
+    assert.equal(r.amber, false);
+    assert.equal(r.alert, '', 'the save reported a failure: ' + r.alert);
+    assert.equal('until' in r.ev, false, 'the series carries an end date nobody could have typed');
+  }
+});
+
+test('SchEventModal: the weekday of the series is the typed date\'s own in a zone whose clock changes at midnight (Santiago, Beirut)', async () => {
+  // Chile goes forward at 00:00 on Sun 6 Sep 2026; Lebanon at 00:00 on Sun 28 Mar 2027. `day` is worked out from the
+  // typed date in the steward's zone, and the walk that paints it must still reach the date just past the change.
+  const santiago = await inZone('America/Santiago', async () => { const r = await saveSeries({ date: '2026-08-10', pick: 1 }); return { ev: r.ev, dates: lands(r.ev, '2026-09-07') }; });
+  assert.deepEqual([santiago.ev.day, santiago.ev.nth], [1, 1], 'America/Santiago: 10 Aug 2026 is a Monday');
+  assert.deepEqual(santiago.dates, ['2026-09-07'], 'America/Santiago: the 1st Monday just past the clock change (7 Sep) was dropped');
+  const beirut = await inZone('Asia/Beirut', async () => { const r = await saveSeries({ date: '2027-03-11', pick: -1 }); return { ev: r.ev, dates: lands(r.ev, '2027-03-25') }; });
+  assert.deepEqual([beirut.ev.day, beirut.ev.nth], [4, -1], 'Asia/Beirut: 11 Mar 2027 is a Thursday');
+  assert.deepEqual(beirut.dates, ['2027-03-25'], 'Asia/Beirut: the last Thursday (25 Mar) was dropped');
+});
+
+test('the new-event clash note checks the dates the series lands on, not the date typed', async () => {
+  // start 13 Oct, Monthly, "Last": the first date the series lands on is 27 Oct. Choir at 19:30 on 27 Oct clashes;
+  // Choir at 19:30 on 13 Oct does not — nothing happens that day (re-audit of ffcdcfe, finding 2).
   const choir = (date) => ({ useStewardEvents: () => [{ id: 'c', title: 'Choir', date, time: '19:30' }] });
-  const onFirst = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-27') });
+  const onFirst = await saveSeries({ date: '2026-10-13', pick: -1, hooks: choir('2026-10-27') });
+  assert.ok(lands(onFirst.ev, '2026-12-31').includes('2026-10-27') && !lands(onFirst.ev, '2026-12-31').includes('2026-10-13'), 're-anchor: the fixture series does not land where this test says');
   assert.equal(onFirst.clash, 'same time as Choir on Tue 27 Oct',
     'the clash note does not name the date it clashes on — for a repeat that is not the date typed (audit of 812948b, item 2)');
-  const onTyped = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-13') });
-  assert.equal(onTyped.clash, '', 'a clash note for the typed date, which this save does not publish');
+  const onTyped = await saveSeries({ date: '2026-10-13', pick: -1, hooks: choir('2026-10-13') });
+  assert.equal(onTyped.clash, '', 'a clash note for the typed date, which this series does not land on');
 });
 
 test('a far-off Until does not make every render walk to the year 9999', async () => {
   // schPlanned runs on every render; the monthly walk grew with Until — 9999-12-31 cost ~370 ms a call, on
   // every keystroke (audit of 812948b, item 1). Capped at 400 months, the ceiling the weekly walk has.
   // Asserted on the span handed to the engine, which is what the cost grows with, not on a wall clock.
+  // SchEventModal has no Until to type (a repeat there is one series), so only the bound on its render walk is
+  // asserted: it previews a few months for the "First:" line and the clash note, never an open-ended series.
   for (const component of ['SchAddServiceModal', 'SchEventModal']) {
     const spans = [];
     const real = realExpandEvents();
     const hooks = { expandEvents: (evs, from, days) => { spans.push(days); return real(evs, from, days); } };
-    const r = await saveMonthly(component, { date: '2026-10-13', until: '9999-12-31', hooks });
+    const series = component === 'SchEventModal';
+    const r = await saveMonthly(component, { date: '2026-10-13', ...(series ? {} : { until: '9999-12-31' }), hooks });
     assert.ok(spans.length > 0, 're-anchor: the dialog never reached expandEvents');
-    assert.ok(Math.max(...spans) <= 400 * 31, `${component}: a monthly repeat to 9999 walked ${Math.max(...spans)} days on a render — uncapped`);
+    assert.ok(Math.max(...spans) <= 400 * 31, `${component}: a monthly repeat walked ${Math.max(...spans)} days on a render — uncapped`);
+    if (series) { assert.equal(r.published.length, 1, 'SchEventModal: expected one recurring event'); assert.equal(r.published[0].recur, 'monthly'); continue; }
     assert.equal(r.dates.length, 400, `${component}: expected the 400-date ceiling, got ${r.dates.length}`);
     assert.equal(r.dates[0], '2026-10-13');
   }
