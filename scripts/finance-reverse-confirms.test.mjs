@@ -2,8 +2,9 @@
 // tap size. Run: node --test scripts/finance-reverse-confirms.test.mjs
 //
 // Renders the REAL DashFinanceBook through scripts/console-screens.mjs and drives the rendered ↩ control:
-//   · with confirm() denied, clicking ↩ publishes NO reversal (the guard held);
-//   · with confirm() granted, clicking ↩ publishes the reversal (the action still works);
+//   · clicking ↩ opens the SkConfirm dialog (the guard is wired);
+//   · dismissing (onCancel) publishes NO reversal (the guard held);
+//   · confirming (onConfirm) publishes the reversal (the action still works);
 //   · the row's Correct + ↩ buttons carry a ≥44px tap target (bkRowBtn / bkRowIconBtn).
 // Reading the rendered tree, never the .jsx text, so a deleted guard or a reverted size fails the test.
 //
@@ -55,21 +56,36 @@ function bookDocs() {
 const reversalsPublished = (pub) => pub.filter(p => /^finance\/journal:/.test(p.d) && p.body && p.body.reverses != null);
 const reverseBtn = (tree) => nodes(tree).find(n => n.type === 'button' && (n.kids || []).some(k => k === '↩'));
 const correctBtn = (tree) => nodes(tree).find(n => n.type === 'button' && (n.kids || []).some(k => k === 'Correct'));
+const skConfirmNode = (h) => nodes(h.tree).find(n => n.type === h.window.SkConfirm);
 
-test('with confirm() DENIED, clicking ↩ publishes no reversal (the guard held)', async () => {
+test('clicking ↩ opens the confirm dialog', () => {
   const h = setup(); h.feed(bookDocs());
-  h.window.confirm = () => false;
   const btn = reverseBtn(h.tree);
   assert.ok(btn, 'no ↩ Reverse control on the normal row');
+  assert.ok(!skConfirmNode(h), 'SkConfirm is showing before the button was clicked');
   btn.props.onClick();
+  h.draw();
+  assert.ok(skConfirmNode(h), 'clicking ↩ did not open the SkConfirm dialog');
+});
+
+test('dismissing the confirm publishes no reversal (the guard held)', async () => {
+  const h = setup(); h.feed(bookDocs());
+  reverseBtn(h.tree).props.onClick();
+  h.draw();
+  const dlg = skConfirmNode(h);
+  assert.ok(dlg, 'the confirm dialog did not appear after clicking ↩');
+  dlg.props.onCancel();
   await new Promise(r => setImmediate(r));
   assert.equal(reversalsPublished(h.pub).length, 0, 'a reversal was published even though the treasurer cancelled the confirm');
 });
 
-test('with confirm() GRANTED, clicking ↩ publishes the reversal (the action still works)', async () => {
+test('confirming the dialog publishes the reversal (the action still works)', async () => {
   const h = setup(); h.feed(bookDocs());
-  h.window.confirm = () => true;
   reverseBtn(h.tree).props.onClick();
+  h.draw();
+  const dlg = skConfirmNode(h);
+  assert.ok(dlg, 'the confirm dialog did not appear after clicking ↩');
+  dlg.props.onConfirm();
   await new Promise(r => setImmediate(r));
   const revs = reversalsPublished(h.pub);
   assert.equal(revs.length, 1, 'confirming the reverse did not publish exactly one reversal');

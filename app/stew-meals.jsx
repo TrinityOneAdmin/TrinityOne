@@ -1211,6 +1211,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const zeroAudience = mealsS.visibility === 'team' && (!mealsS.adminGroupId || careTeamPeople.filter(p => p && p.pub).length === 0);
   const [busy, setBusy]     = React.useState(false);
   const [err, setErr]       = React.useState('');
+  const [confirmClose, setConfirmClose] = React.useState(false);
   const canSave = label.trim().length > 0 && dates.length > 0 && !busy;
   const save = async () => {
     if (!canSave) return;
@@ -1231,7 +1232,10 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   };
   const remove = async () => {
     if (!isEdit) return;
-    if (!window.confirm('Close this care need? Members will no longer see it.')) return;
+    setConfirmClose(true);
+  };
+  const doRemove = async () => {
+    setConfirmClose(false);
     setBusy(true);
     try { await window.StewardMeals.removeNeed(need.id); onDeleted && onDeleted(); }
     catch (e) { setErr((e && e.message) || 'Could not close.'); setBusy(false); }
@@ -1363,6 +1367,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
           <button onClick={save} disabled={!canSave} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: canSave ? 1 : 0.5 }}><Icon name="check" size={14} color="var(--on-clay)" /> {isEdit ? 'Save changes' : 'Open this need'}</button>
         </div>
       </div>
+      {confirmClose ? <window.SkConfirm icon="x" title="Close this care need?" body="Members will no longer see it." confirmLabel="Close" onConfirm={doRemove} onCancel={() => setConfirmClose(false)} /> : null}
     </div>
   );
 }

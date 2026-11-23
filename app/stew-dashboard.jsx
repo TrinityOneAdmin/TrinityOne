@@ -7346,6 +7346,7 @@ function DashPlans() {
   const [creating, setCreating] = React.useState(false);
   const [editingPlan, setEditingPlan] = React.useState(null);   // the shared plan open in the edit form
   const [planErr, setPlanErr] = React.useState({});   // plan id -> short "didn't save" note beside its Website switch
+  const [pendingPlanAction, setPendingPlanAction] = React.useState(null);   // { title, body, label, action }
   // Flip "Show on website". The switch reads p.public from the plans subscription, so it only moves once the
   // new copy has really landed; a refused publish (publishPlan resolves with no ts) leaves it where it was.
   const togglePublic = (p) => {
@@ -7386,7 +7387,7 @@ function DashPlans() {
           ? <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <button onClick={() => setEditingPlan(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 10px', fontSize: 12.5 }} title="Edit this plan" aria-label={'Edit ' + p.title}><Icon name="pen" size={14} color="currentColor" /></button>
               {p.draft
-                ? <button onClick={() => { if (confirm('Delete "' + p.title + '" for good? This cannot be undone.')) window.Steward.removePlan(p.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 10px', fontSize: 12.5 }} title="Delete this draft plan for good" aria-label={'Delete ' + p.title}><Icon name="trash" size={14} color="currentColor" /></button>
+                ? <button onClick={() => setPendingPlanAction({ title: 'Delete this plan?', body: 'Delete “' + p.title + '” for good? This cannot be undone.', label: 'Delete', action: () => window.Steward.removePlan(p.id) })} className="sk-btn sk-btn--ghost" style={{ padding: '7px 10px', fontSize: 12.5 }} title="Delete this draft plan for good" aria-label={'Delete ' + p.title}><Icon name="trash" size={14} color="currentColor" /></button>
                 : <button onClick={() => unshare(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 10px', fontSize: 12.5 }} title="Unshare — members and your website stop seeing it; it moves to drafts" aria-label={'Unshare ' + p.title}><Icon name="eyeOff" size={14} color="currentColor" /></button>}
             </div>
           : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Publish this plan so members (and your website) can see and follow it"><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
@@ -7398,11 +7399,12 @@ function DashPlans() {
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
       {editingPlan ? <NewPlanModal editing={editingPlan} onClose={() => setEditingPlan(null)} /> : null}
+      {pendingPlanAction ? <SkConfirm icon="send" title={pendingPlanAction.title} body={pendingPlanAction.body} confirmLabel={pendingPlanAction.label} onConfirm={() => { pendingPlanAction.action(); setPendingPlanAction(null); }} onCancel={() => setPendingPlanAction(null)} /> : null}
       {/* single scroll container so a long drafts list can't push the library off the bottom */}
       <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
-          {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
+          {planDrafts.length > 0 ? <button onClick={() => setPendingPlanAction({ title: 'Publish drafts?', body: `Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`, label: 'Publish', action: () => planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })) })} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
           <button onClick={() => window.TrinityTemplates.openReadPlanTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The format + house style for a reading plan you can upload"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
           <button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New plan</button>
         </div>}>
@@ -7545,6 +7547,7 @@ function DashDevotionals() {
   // the list to show: the live order, unless we're mid-drag with a local working order
   const list = order || devos;
   const draftCount = devos.filter(d => d.draft).length;   // held items not yet visible to members
+  const [pendingDevoAction, setPendingDevoAction] = React.useState(null);   // { title, body, label, action }
   const [seriesOpen, setSeriesOpen] = React.useState({});   // collapsible series sections (keyed by series id)
   const [churchName, setChurchName] = React.useState('');   // labels a series group by the church that uploaded it
   React.useEffect(() => {
@@ -7614,9 +7617,10 @@ function DashDevotionals() {
       {editing ? <NewDevotionalModal editing={editing} onClose={() => setEditing(null)} seriesOptions={seriesOptions} /> : null}
       {seriesRename ? <SeriesNameModal current={seriesRename.current} count={seriesRename.items.length} onSave={(n) => renameSeries(seriesRename.items, n)} onClose={() => setSeriesRename(null)} /> : null}
       {seriesSchedule ? <SeriesScheduleModal label={seriesSchedule.label} count={seriesSchedule.items.length} onApply={(start, interval) => scheduleSeries(seriesSchedule.items, start, interval)} onClear={() => unscheduleSeries(seriesSchedule.items)} onClose={() => setSeriesSchedule(null)} /> : null}
+      {pendingDevoAction ? <SkConfirm icon="send" title={pendingDevoAction.title} body={pendingDevoAction.body} confirmLabel={pendingDevoAction.label} onConfirm={() => { pendingDevoAction.action(); setPendingDevoAction(null); }} onCancel={() => setPendingDevoAction(null)} /> : null}
       <Panel scroll title={`Devotionals${devos.length ? ` · ${devos.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {draftCount > 0 ? <button onClick={() => { if (confirm(`Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) publishDrafts(devos); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
+          {draftCount > 0 ? <button onClick={() => setPendingDevoAction({ title: 'Publish drafts?', body: `Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`, label: 'Publish', action: () => publishDrafts(devos) })} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
           <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New devotional</button>
         </div>} style={{ height: '100%' }}>
@@ -11066,10 +11070,11 @@ function DashNetworksPanel() {
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [created, setCreated] = React.useState(null);   // { npub, mnemonic } just-created — show to save
+  const [pendingLeave, setPendingLeave] = React.useState(null);   // network to confirm-leave
   const [naming, setNaming] = React.useState(false);    // the create-network wizard
   const [newName, setNewName] = React.useState('');
   const join = () => { const r = window.Steward.joinNetwork && window.Steward.joinNetwork(draft.trim()); if (!r) { setErr('Paste the network’s code (npub1…).'); return; } Promise.resolve(r).then(() => { setDraft(''); setErr(''); }); };
-  const leave = (n) => { if (window.confirm('Leave this network? Your members will stop seeing its shared content.')) window.Steward.leaveNetwork(n.networkPub); };
+  const leave = (n) => setPendingLeave(n);
   const doCreate = async () => {
     if (!newName.trim()) return;
     setBusy(true); setNaming(false);
@@ -11124,6 +11129,7 @@ function DashNetworksPanel() {
       )}
       {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
       <NetworkAnnounceComposer />
+      {pendingLeave ? <SkConfirm icon="x" title="Leave this network?" body="Your members will stop seeing its shared content." confirmLabel="Leave" onConfirm={() => { window.Steward.leaveNetwork(pendingLeave.networkPub); setPendingLeave(null); }} onCancel={() => setPendingLeave(null)} /> : null}
     </Panel>
   );
 }
@@ -14240,13 +14246,15 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
   // The church backup file, restored IN THIS SCREEN. It used to ask for the passphrase through window.prompt —
   // a system dialog that shows it in clear, asked before the file had been read, so the wrong file wasted it —
   // and reported every failure through window.alert. This is the church key; it deserves better than that.
-  // The confirm before applySteward stays deliberately as it is (AUDIT-BACKLOG: key overwrite should look
-  // unambiguous and a little ugly). UX audit 2026-08-16, finding F9.
+  // The confirm before applySteward now uses SkConfirm (window.confirm silently returns false in Tauri v2
+  // WKWebView). UX audit 2026-08-16, finding F9.
   const [cFile, setCFile] = React.useState(null);   // { name, text }
   const [cPass, setCPass] = React.useState('');
   const [cShow, setCShow] = React.useState(false);
   const [cErr, setCErr] = React.useState('');
   const [confirmRemove, setConfirmRemove] = React.useState(false);   // "remove church from this device" guard
+  const [confirmRestore, setConfirmRestore] = React.useState(null);   // { type: 'qr' | 'replace-phrase' | 'replace-file', payload? } | null
+  const [restoreQrErr, setRestoreQrErr] = React.useState('');   // replaces window.alert for bad QR
   const [showQR, setShowQR] = React.useState(false);                 // handoff QR (new steward scans it)
   const [scanning, setScanning] = React.useState(false);             // camera open to scan ANOTHER device's handoff QR
   const handoffSvg = showQR ? (window.Steward.qrSVG ? window.Steward.qrSVG(window.Steward.handoffPayload()) : '') : '';
@@ -14254,7 +14262,9 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
   const adoptScanned = (payload) => {
     setScanning(false);
     if (!payload) return;
-    if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. You’ll be asked to set a PIN.')) return;
+    setConfirmRestore({ type: 'qr', payload });   // the steward confirms in SkConfirm; doAdoptQr runs on Confirm
+  };
+  const doAdoptQr = (payload) => {
     // NO reload here. adoptChurch → restoreKey keeps the seed in MEMORY ONLY and sets needsPin, so the
     // forced-PIN modal can encrypt and persist it; a reload throws that memory away. StewardRoot swaps
     // StewDashboard for StewardForcedPin on the needsPin event and remounts it after, which is the refresh
@@ -14267,13 +14277,15 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
     // SO THE HAZARD A RELOAD CAUSES IS THE OPPOSITE ONE, AND QUIETER: the restored seed is lost, the OLD key
     // is still there, and the console comes back looking perfectly normal as the church it was before. The
     // steward believes they adopted a church and did not. Same rule, right reason. Audit item 13, 2026-09-14.
-    try { window.Steward.adoptChurch(payload); }
-    catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
+    try { window.Steward.adoptChurch(payload); setConfirmRestore(null); }
+    catch (e) { setConfirmRestore(null); setRestoreQrErr('That QR isn’t a valid church handoff.'); }
   };
-  const doRestore = () => {
+  // `confirmed` must be exactly true: the Restore button passes doRestore straight to onClick, so the first
+  // argument is otherwise a click event (truthy) and would skip the confirm.
+  const doRestore = (confirmed) => {
     setRestoreErr('');
     // confirm BEFORE we replace anything — restoreKey overwrites + persists the church key on this device
-    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue?')) return;
+    if (window.Steward.hasKey && confirmed !== true) { setConfirmRestore({ type: 'replace-phrase' }); return; }
     try {
       // NO reload — see adoptScanned. restoreKey() deliberately does NOT persist: the seed lives in memory
       // until the forced-PIN modal encrypts it.
@@ -14301,7 +14313,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
     }
     setCFile({ name: f.name || 'the backup', text });
   };
-  const restoreFromFile = async () => {
+  // `confirmed` must be exactly true — the Restore button passes this straight to onClick (a click event).
+  const restoreFromFile = async (confirmed) => {
     if (!cFile) return;
     setCErr('');
     let obj = null;
@@ -14318,8 +14331,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
         : 'That file doesn’t say what it is, so it isn’t safe to restore.');
       return;
     }
-    // confirm BEFORE applySteward replaces the on-device key — deliberately a plain confirm, see above
-    if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — back it up first.\n\nRestore from the file?')) return;
+    // confirm BEFORE applySteward replaces the on-device key (SkConfirm below; re-enters here with confirmed === true)
+    if (window.Steward.hasKey && confirmed !== true) { setConfirmRestore({ type: 'replace-file' }); return; }
     // NO reload — applySteward() calls the same restoreKey() (and removes church-key.enc itself), so the
     // restored seed is memory-only until the forced-PIN modal persists it. See doRestore above.
     try { window.TrinityBackup.applySteward(obj); setCFile(null); setCPass(''); }
@@ -14332,7 +14345,26 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
       {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
-      <div ref={shellRef} className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
+      {restoreQrErr ? <SkConfirm icon="x" tint="var(--clay-ink)" title="Invalid QR" body={restoreQrErr} confirmLabel="OK" onConfirm={() => setRestoreQrErr('')} onCancel={() => setRestoreQrErr('')} /> : null}
+      {confirmRestore ? <SkConfirm
+        icon={confirmRestore.type === 'qr' ? 'download' : 'refresh'}
+        tint="var(--clay-ink)"
+        title={confirmRestore.type === 'qr' ? 'Restore this church?' : 'Replace this church?'}
+        body={confirmRestore.type === 'qr'
+          ? 'This replaces the church key currently held here — make sure it’s backed up. You’ll be asked to set a PIN.'
+          : (confirmRestore.type === 'replace-file'
+            ? 'This replaces the church currently on this device — back it up first.\n\nRestore from the file?'
+            : 'This replaces the church currently on this device — make sure its recovery phrase is backed up first.')}
+        confirmLabel={confirmRestore.type === 'qr' ? 'Restore' : 'Continue'}
+        onConfirm={() => {
+          const r = confirmRestore; setConfirmRestore(null);
+          if (r.type === 'qr') doAdoptQr(r.payload);
+          else if (r.type === 'replace-phrase') doRestore(true);
+          else if (r.type === 'replace-file') restoreFromFile(true);
+        }}
+        onCancel={() => setConfirmRestore(null)}
+      /> : null}
+      <div ref={shellRef}className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
       {/* THE LIST. On a phone it is the whole first screen; in a browser it is the left-hand column, always
           on screen beside the page. Sixteen pages is a lot to scan and most stewards live in one or two
           groups, so each GROUP is a disclosure — owner, 2026-09-09, "that will help tidy it up".

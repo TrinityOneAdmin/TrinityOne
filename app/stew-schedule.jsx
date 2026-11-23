@@ -547,7 +547,7 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
 
 // `planned` = what the dialog will publish (schPlanned). Empty -> ONE line saying so, and the dialog's Save is
 // disabled; a monthly first date that is not the date typed -> "First: Tue 27 Oct". Never both.
-function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, planned }) {
+function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, planned, hideUntil }) {
   const none = repeat !== 'none' && !!date && Array.isArray(planned) && !planned.length;
   const firstOn = repeat === 'monthly' && Array.isArray(planned) && planned[0] && planned[0] !== date ? planned[0] : '';   // empty planned -> no First line
   return (
@@ -567,7 +567,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, p
           {firstOn ? (() => { const p = schParts(firstOn); return <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6 }}>First: {p.dow} {p.day} {p.mon}</div>; })() : null}
         </React.Fragment>
       ) : null}
-      {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
+      {repeat !== 'none' && !hideUntil ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
       {none ? <div role="status" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>{SCH_NO_DATES}</div> : null}
     </React.Fragment>
   );
@@ -969,6 +969,7 @@ function DashRota({ onNewTeam }) {
   const [rosterTeam, setRosterTeam] = useSch(null);
   const [adding, setAdding] = useSch(false);
   const [fillMenu, setFillMenu] = useSch(false);
+  const [confirmFill, setConfirmFill] = useSch(null);   // { title, label, msg, action } for the fill / copy / rotate confirm
   const [flash, setFlash] = useSch('');
 
   // Flip the visibility / auto-confirm immediately (visOverride), then let the real publish decide. On a write no
@@ -1404,9 +1405,9 @@ function DashRota({ onNewTeam }) {
                       const entries = [['This service only', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on ' + nm + ', ' + when]];
                       [[1, 'this month', '~4 weeks'], [3, 'this quarter', '~3 months']].forEach(([m, lbl, long]) => {
                         const sp = span(m);
-                        entries.push(['Fill existing services — ' + lbl, () => { setFillMenu(false); if (window.confirm('Fill the gaps on the ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar over the next ' + long + ', starting ' + when + '? This creates nothing new. It publishes each rota and asks the people assigned to serve.')) autoFillAhead(m, { existingOnly: true }); },
+                        entries.push(['Fill existing services — ' + lbl, () => { setFillMenu(false); setConfirmFill({ msg: 'Fill the gaps on the ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar over the next ' + long + ', starting ' + when + '? This creates nothing new. It publishes each rota and asks the people assigned to serve.', action: () => autoFillAhead(m, { existingOnly: true }) }); },
                           'The ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar. Creates nothing']);
-                        entries.push(['Add weekly copies — ' + lbl, () => { setFillMenu(false); if (window.confirm('Add a copy of “' + nm + '” (' + (svc.time || '') + ') EVERY WEEK from ' + when + ' for the next ' + long + ' — ' + sp.copies + ' services in all, any already on the calendar kept — and fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(m); },
+                        entries.push(['Add weekly copies — ' + lbl, () => { setFillMenu(false); setConfirmFill({ msg: 'Add a copy of “' + nm + '” (' + (svc.time || '') + ') EVERY WEEK from ' + when + ' for the next ' + long + ' — ' + sp.copies + ' services in all, any already on the calendar kept — and fill them? This publishes them and asks the people assigned to serve.', action: () => autoFillAhead(m) }); },
                           'Repeats “' + nm + '” every week — adds up to ' + sp.copies + ' services']);
                       });
                       return entries;
@@ -1526,7 +1527,7 @@ function DashRota({ onNewTeam }) {
                     {(r.pods && r.pods.length) ? (
                       <select value="" onFocus={pinSel} onMouseDown={pinSel} onChange={e => {
                         const v = e.target.value; e.target.value = '';
-                        if (v === '__rotate__') { if (window.confirm('Rotate ' + r.pods.length + ' pods across all upcoming services for ' + m.name + '?\n\nEach pod serves every ' + r.pods.length + ' weeks. This publishes them and asks everyone assigned.')) rotatePods(t); }
+                        if (v === '__rotate__') { setConfirmFill({ title: 'Rotate pods?', label: 'Rotate', msg: 'Rotate ' + r.pods.length + ' pods across all upcoming services for ' + m.name + '?\n\nEach pod serves every ' + r.pods.length + ' weeks. This publishes them and asks everyone assigned.', action: () => rotatePods(t) }); }
                         else { const pod = (r.pods || []).find(p => p.id === v); if (pod) applyPod(t, pod); }
                       }} title="Apply a serving pod" style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, appearance: 'auto' }}>
                         <option value="">Apply a serving pod…</option>
@@ -1591,7 +1592,8 @@ function DashRota({ onNewTeam }) {
       )}
 
       <TeamRemovalHost />
-      {flash ? <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
+      {confirmFill ? <SkConfirm icon="refresh" title={confirmFill.title || 'Fill services?'} body={confirmFill.msg} confirmLabel={confirmFill.label || 'Fill'} onConfirm={() => { const a = confirmFill.action; setConfirmFill(null); a(); }} onCancel={() => setConfirmFill(null)} /> : null}
+      {flash ?<div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
       {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assignFor(slotSvcId(assignSlot)) || {}} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
       {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterFor(rosterTeam.id)} members={members} onClose={() => setRosterTeam(null)} /> : null}
       {adding ? <SchAddServiceModal onClose={() => setAdding(false)} /> : null}
@@ -1765,15 +1767,19 @@ function SchEventModal({ day, onClose }) {
   // informational, never blocks Save. It checked the typed date, which a monthly repeat with another week
   // picked does not publish at all (re-audit of ffcdcfe, finding 2).
   const clashes = React.useMemo(() => (planned.length && time) ? (existingEvents || []).filter(e => e && planned.includes(e.date) && e.time === time && (e.title || '').trim()) : [], [existingEvents, plannedKey, time]);
+  // A REPEAT IS ONE RECURRING EVENT (recur/day/nth on a single doc), not N one-offs: the calendar expands it,
+  // and "Skip just this week" / "Remove series" in SchEventDetail only exist for an event that carries `recur`.
+  const isSeries = repeat !== 'none';
   const save = async () => {
-    if (!title.trim() || !date || busy || !planned.length) return;   // no date to add: SchRepeatRow says so; Save is disabled
+    if (!title.trim() || !date || busy || (!isSeries && !planned.length)) return;
     setBusy(true); setErr('');
-    const dates = planned;
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
-    const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid }, asPub)));
-    // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted. Every date of a repeat gets
-    // its own event and so its own opt-out. A church event only: a network-published event has no share: doc.
+    const out = isSeries
+      ? [await Promise.resolve(window.Steward.publishEvent({ title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid, recur: repeat, day: new Date(date + 'T12:00:00').getDay(), ...(repeat === 'monthly' ? { nth } : {}) }, asPub))]
+      : await Promise.all(planned.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid }, asPub)));
+    // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted.
+    // A church event only: a network-published event has no share: doc.
     // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
     // so the dialog closes as usual). The engine refuses the opt-out until it has read the church's share:
     // document — a write built on defaults would drop every existing opt-out (audit of 7ffcfaf).
@@ -1798,7 +1804,7 @@ function SchEventModal({ day, onClose }) {
       <React.Fragment>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={!title.trim() || !date || busy || !planned.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy && planned.length) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
+          <button onClick={save} disabled={!title.trim() || !date || busy || !planned.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy && planned.length) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add meeting'}</button>
         </div>
         {/* in the footer, not the body: a "not saved" under a scrolled-away body is a failure nobody sees */}
         <SchNotSaved msg={err} />
@@ -1826,7 +1832,7 @@ function SchEventModal({ day, onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
-      {planned.length > 1 ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.4 }}>All {planned.length} dates use this time — set it here, once, before you add them.</div> : null}
+      {!isSeries && planned.length > 1 ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.4 }}>All {planned.length} dates use this time — set it here, once, before you add them.</div> : null}
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
           <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
@@ -1863,7 +1869,8 @@ function SchEventModal({ day, onClose }) {
       <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} history={history.images} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} hideUntil={isSeries} />
+      {isSeries ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 8, lineHeight: 1.4 }}>This event repeats {repeat === 'fortnightly' ? 'every 2 weeks' : repeat === 'monthly' ? 'monthly' : 'weekly'}. You can skip or move individual weeks after it’s created.</div> : null}
     </SchModal>
   );
 }
@@ -2435,6 +2442,7 @@ function SchEventDetail({ event, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return memPending(m); };
   const [attendance, setAttendance] = React.useState(null);   // 'going' | 'maybe' | 'no' | null: which list is open
+  const [confirmAction, setConfirmAction] = React.useState(null);   // { type: 'remove' } | { type: 'skip' } | null
   const rs = schRsvpGroups(rsvps, e.id, nameFor);
   const total = rs.going.length + rs.maybe.length + rs.no.length;
   // Counts only: a church of 200 would make an inline name list a wall of text. The names are one tap away.
@@ -2452,8 +2460,10 @@ function SchEventDetail({ event, onClose }) {
   // the anchor the series must keep; the rest of the series fields ride through on { ...e }.
   const skipWeek = () => {
     if (!window.Steward || !e.recur) return;
+    setConfirmAction({ type: 'skip' });
+  };
+  const doSkip = () => {
     const occ = e.occDate || e.date;
-    if (!window.confirm(`Skip “${e.title || 'this meeting'}” on ${e.date} only? The rest of the series stays.`)) return;
     window.Steward.publishEvent({ ...e, date: e.seriesDate || e.date, exceptions: { ...(e.exceptions || {}), [occ]: { skip: true } } });
     onClose();
   };
@@ -2508,13 +2518,28 @@ function SchEventDetail({ event, onClose }) {
           <button onClick={() => setMessaging(true)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="send" size={15} color="currentColor" /> Message</button>
           {/* The confirm has to say what actually happens: removeEvent() deletes the whole DOC, so on a repeating
               meeting it takes every occurrence with it — "Remove this event" read as "just this date". */}
-          <button onClick={() => { if (window.confirm(e.recur
-              ? `Remove “${e.title || 'this meeting'}” and ALL its repeats, for everyone? This cannot be undone.`
-              : `Remove “${e.title || 'this event'}” for everyone? This cannot be undone.`)) { window.Steward.removeEvent(e.id); onClose(); } }}
+          <button onClick={() => setConfirmAction({ type: 'remove' })}
             className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5, color: 'var(--clay-ink)' }}><Icon name="trash" size={15} color="currentColor" /> {e.recur ? 'Remove series' : 'Remove'}</button>
         </div>
       </div>
     </div>
+    {/* The wrapper lifts the confirm ABOVE this card: SkConfirm's own scrim is zIndex 220 and the card's is 300,
+        so as a bare sibling it would open underneath. No transform here, so its `position: fixed` still fills the viewport. */}
+    {confirmAction ? <div style={{ position: 'relative', zIndex: 310 }}><SkConfirm
+      icon={confirmAction.type === 'skip' ? 'x' : 'trash'}
+      tint="var(--clay-ink)"
+      title={confirmAction.type === 'skip'
+        ? `Skip this week?`
+        : (e.recur ? `Remove this series?` : `Remove this event?`)}
+      body={confirmAction.type === 'skip'
+        ? `Skip “${e.title || 'this meeting'}” on ${e.date} only? The rest of the series stays.`
+        : (e.recur
+          ? `Remove “${e.title || 'this meeting'}” and ALL its repeats, for everyone? This cannot be undone.`
+          : `Remove “${e.title || 'this event'}” for everyone? This cannot be undone.`)}
+      confirmLabel={confirmAction.type === 'skip' ? 'Skip' : 'Remove'}
+      onConfirm={() => { if (confirmAction.type === 'skip') doSkip(); else { window.Steward.removeEvent(e.id); onClose(); } }}
+      onCancel={() => setConfirmAction(null)}
+    /></div> : null}
     </React.Fragment>
   );
 }
@@ -2536,6 +2561,7 @@ function DashRooms() {
   const today = todayISO();
   const [roomErr, setRoomErr] = React.useState('');
   const [roomBusy, setRoomBusy] = React.useState(false);
+  const [pendingRoomDel, setPendingRoomDel] = React.useState(null);   // room to confirm-delete
   const addRoom = async () => {
     const n = newRoom.trim(); if (!n || roomBusy) return;
     setRoomBusy(true); setRoomErr('');
@@ -2569,7 +2595,7 @@ function DashRooms() {
           {rooms.map(r => (
             <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 10px', borderRadius: 999, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13, fontWeight: 700 }}>
               <Icon name="marker" size={13} color="var(--sage)" /> {r.name}
-              <button onClick={() => { if (confirm('Remove “' + r.name + '”? Its bookings stay but show as an unknown room.')) window.Steward.removeRoom(r.id); }} title="Remove room" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0, marginLeft: 2 }}><Icon name="x" size={13} color="currentColor" /></button>
+              <button onClick={() => setPendingRoomDel(r)} title="Remove room" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 0, marginLeft: 2 }}><Icon name="x" size={13} color="currentColor" /></button>
             </span>
           ))}
         </div>
@@ -2606,6 +2632,7 @@ function DashRooms() {
       </div>
 
       {bkModal ? <RoomBookingModal bk={bkModal} rooms={rooms} bookings={bookings} onClose={() => setBkModal(null)} /> : null}
+      {pendingRoomDel ? <SkConfirm icon="trash" tint="var(--clay-ink)" title={'Remove “' + pendingRoomDel.name + '”?'} body="Its bookings stay but show as an unknown room." confirmLabel="Remove" onConfirm={() => { window.Steward.removeRoom(pendingRoomDel.id); setPendingRoomDel(null); }} onCancel={() => setPendingRoomDel(null)} /> : null}
     </Panel>
   );
 }
