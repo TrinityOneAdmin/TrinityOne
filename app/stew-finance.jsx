@@ -2584,6 +2584,7 @@ function DashFinanceBook() {
     bump();
     return ok;
   };
+  const [pendingReverse, setPendingReverse] = React.useState(null);   // entry seq to confirm-reverse
   const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { if (!ok) _dropIfRefused(b, rev); bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
   // "Correct this entry": reverse the original (append-only), then open BooksRecord pre-filled from it so the
   // treasurer re-enters the fixed version through the ordinary record() path. TWO appended entries, in order —
@@ -3399,12 +3400,13 @@ function DashFinanceBook() {
                 which has no BooksRecord (income/expense) shape to pre-fill. */}
             {!v.isReversal && !v.wasReversed && !v.isTransfer && <button title="Reverse this entry and enter a corrected copy" onClick={() => correctEntry(e)} disabled={bookErrors.length > 0} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Correct</button>}
             {/* Reverse posts a matching, member-visible reversal and cannot be undone once published — confirm
-                first (console house pattern: window.confirm, as plan-delete / leave-network do). "Correct" keeps
+                first (the on-theme SkConfirm rendered after this list). "Correct" keeps
                 its own flow (it is a deliberate reverse-then-re-enter), per the owner. */}
-            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" aria-label="Reverse this entry" onClick={() => { if (window.confirm('Reverse this entry? It posts a matching reversal, which members see on shared statements. The original stays in the ledger.')) undo(e.seq); }} style={{ ...bkRowIconBtn, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
+            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" aria-label="Reverse this entry" onClick={() => setPendingReverse(e.seq)} style={{ ...bkRowIconBtn, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
           </div>
         ); })}
       </div>}
+      {pendingReverse != null ? <window.SkConfirm icon="refresh" title="Reverse this entry?" body="It posts a matching reversal, which members see on shared statements. The original stays in the ledger." confirmLabel="Reverse" onConfirm={() => { undo(pendingReverse); setPendingReverse(null); }} onCancel={() => setPendingReverse(null)} /> : null}
 
       {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

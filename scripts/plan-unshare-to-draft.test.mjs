@@ -25,6 +25,7 @@ async function load(initial, { confirmAnswer = true, refuse = false } = {}) {
     js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
   } finally { rmSync(tmp, { force: true }); }
   const { React, draw } = miniReact();
+  const SkConfirm = () => null;
   const store = { plans: initial.slice(), published: [], removed: [], confirms: [] };
   const Steward = {
     // behaves like the relay: a republish of the same id REPLACES that plan in place
@@ -34,6 +35,9 @@ async function load(initial, { confirmAnswer = true, refuse = false } = {}) {
   const globals = {
     React, Icon: () => null, Panel: (p) => p.children, NewPlanModal: () => null,
     confirm: (m) => { store.confirms.push(m); return confirmAnswer; },
+    // Delete no longer calls confirm(): it sets state and DashPlans renders the on-theme SkConfirm dialog. The stub
+    // draws nothing; the test reads its props (title/body/onConfirm/onCancel) off the tree, as a steward's tap would.
+    SkConfirm,
     window: { useStewardPlans: () => store.plans, SK: { planLibrary: [] }, Steward },
   };
   const key = '__planunshare_' + Math.random().toString(36).slice(2);
@@ -41,7 +45,8 @@ async function load(initial, { confirmAnswer = true, refuse = false } = {}) {
   const pre = Object.keys(globals).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
   const { DashPlans } = await import('data:text/javascript;base64,' + Buffer.from(pre + '\n' + js).toString('base64'));
   let tree = draw(DashPlans, {});
-  return { store, redraw: () => { tree = draw(DashPlans, {}); }, tree: () => tree, btn: (l) => button(tree, l), all: () => texts(tree).join(' | ') };
+  return { store, redraw: () => { tree = draw(DashPlans, {}); }, tree: () => tree, btn: (l) => button(tree, l), all: () => texts(tree).join(' | '),
+    dialogs: () => find(tree, n => n.type === SkConfirm) };
 }
 const DAYS = [{ d: 1, ref: 'John 1', label: 'Day 1 - Word' }, { d: 2, ref: 'John 2', label: 'Day 2 - Wine' }];
 const live = (over) => ({ id: 'custom-a', title: 'Easter', days: DAYS, created: 100, ts: 100, public: true, draft: false, ...over });
@@ -63,13 +68,23 @@ test('Unshare republishes the plan as a draft (same id, days, created) and never
 });
 
 test('a draft row offers Delete (confirmed) - the ONLY path to removePlan; declining keeps the plan', async () => {
-  const no = await load([live({ draft: true })], { confirmAnswer: false });
+  const no = await load([live({ draft: true })]);
   assert.equal(no.btn('Unshare').length, 0);
-  no.btn('Delete')[0].props.onClick(); await tick();
-  assert.equal(no.store.confirms.length, 1); assert.equal(no.store.removed.length, 0, 'declined: nothing deleted');
-  const yes = await load([live({ draft: true })], { confirmAnswer: true });
+  assert.equal(no.dialogs().length, 0, 'no dialog until Delete is pressed');
+  no.btn('Delete')[0].props.onClick(); await tick(); no.redraw();
+  assert.equal(no.dialogs().length, 1, 'Delete asks first, in the on-theme dialog');
+  assert.ok(/Easter/.test(no.dialogs()[0].props.body), 'the dialog names the plan');
+  assert.equal(no.store.removed.length, 0, 'pressing Delete alone deletes nothing');
+  no.dialogs()[0].props.onCancel(); await tick(); no.redraw();
+  assert.equal(no.dialogs().length, 0, 'Cancel closes the dialog');
+  assert.equal(no.store.removed.length, 0, 'declined: nothing deleted');
+  assert.ok(/Easter/.test(no.all()), 'declined: the plan is still listed');
+  const yes = await load([live({ draft: true })]);
   yes.btn('Delete')[0].props.onClick(); await tick(); yes.redraw();
+  assert.equal(yes.store.removed.length, 0, 'not deleted before the confirm');
+  yes.dialogs()[0].props.onConfirm(); await tick(); yes.redraw();
   assert.deepEqual(yes.store.removed, ['custom-a']);
+  assert.equal(yes.dialogs().length, 0, 'the dialog closes after the confirm');
   assert.ok(!/Easter/.test(yes.all()), 'gone after a confirmed delete');
   const liveRow = await load([live()]);
   assert.equal(liveRow.btn('Delete').length, 0, 'a LIVE row has no Delete');

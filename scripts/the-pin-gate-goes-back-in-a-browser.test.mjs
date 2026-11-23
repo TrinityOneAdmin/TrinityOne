@@ -217,10 +217,21 @@ test('Restore over an existing church → the gate → "Keep my current church" 
   await js(`(() => { const b = [...document.querySelectorAll('button')].find(e => /^Church key/.test((e.innerText||'').trim())); b.click(); return 1; })()`);
   await sleep(800);
   await click('Restore from a recovery phrase');
-  await js(`window.confirm = () => true`);   // "This replaces the church currently on this device" — a real confirm parks headless Chromium for ever
+  // "This replaces the church currently on this device" is asked in the console's own SkConfirm dialog now, not
+  // window.confirm (which silently answers false in the Suite's Tauri window). A native confirm would also park
+  // headless Chromium for ever, so it is replaced by a tripwire: it answers, and the walk fails if it was asked.
+  await js(`window.__nativeConfirms = 0; window.confirm = () => { window.__nativeConfirms++; return true; }`);
   assert.equal(await type('textarea[placeholder="word one  word two  word three …"]', generateSeedWords()), 'ok', 're-anchor: the restore textarea is gone');
   await sleep(300);
   await click('Restore church');
+  const REPLACE_DLG = `[role="dialog"][aria-label="Replace this church?"]`;
+  await waitFor(`!!document.querySelector(${JSON.stringify(REPLACE_DLG)})`, 15000, 'the "Replace this church?" dialog after Restore church');
+  assert.equal(await js(`window.__nativeConfirms`), 0, 'the restore asked through window.confirm, which the Suite window answers "no" to without showing anything');
+  assert.equal(await js(`window.Steward.npub`), npub, 'the church was replaced BEFORE the steward answered the dialog');
+  assert.notEqual(await heading(), 'Set a console PIN', 'the PIN gate is up before the steward answered the dialog');
+  // press the dialog's OWN Continue (scoped to the dialog: other screens have a Continue too)
+  const pressed = await js(`(() => { const d = document.querySelector(${JSON.stringify(REPLACE_DLG)}); const b = d && [...d.querySelectorAll('button')].find(e => (e.innerText||'').trim() === 'Continue'); if (!b) return false; b.click(); return true; })()`);
+  assert.ok(pressed, `the "Replace this church?" dialog has no Continue button — buttons were: ${await buttons()}`);
   await waitFor(`(document.querySelector('h1')||{}).innerText === 'Set a console PIN'`, 15000, 'the gate after a restore');
   assert.equal(await js(`window.Steward.npub === ${JSON.stringify(npub)}`), false, 're-anchor: the restore did not put a different key in memory');
   assert.equal(await hasButton('Keep my current church'), true, `THE DEFECT: no "Keep my current church" on the gate after a restore over an existing church. Buttons: ${await buttons()}`);

@@ -27,7 +27,19 @@ const rota = (service, ts, a) => ({ id: service, service, published: true, ts, a
 const V1 = () => [rota('svc1', 100, { r1: RUTH, r2: RUTH }), rota('svc2', 100, { r1: RUTH, r2: RUTH })];
 const settle = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
 
-const board = (over = {}) => mountBoard({ effects: true, rosters: ROSTERS, services: [SVC1, SVC2], rotas: V1(), ...over });
+// Rotate pods and the bulk Auto-fill entries no longer call window.confirm(): they set state and the board renders the
+// SkConfirm dialog, whose Confirm runs the action. The harness does not expand child components, so this stub is only
+// an identity found in the tree; confirmDialog() presses the dialog's own onConfirm, as the steward's tap would.
+const SkConfirm = function SkConfirm() { return null; };
+const board = (over = {}) => mountBoard({ effects: true, rosters: ROSTERS, services: [SVC1, SVC2], rotas: V1(), scope: { SkConfirm }, ...over });
+const confirmDialog = async (m, labelRe) => {
+  const d = find(m.draw(), n => n.type === SkConfirm);
+  assert.equal(d.length, 1, 'expected exactly one confirm dialog on the board, found ' + d.length);
+  assert.match(d[0].props.confirmLabel || 'Fill', labelRe, 'the dialog on screen is not the one this test meant to confirm');
+  assert.deepEqual(m.calls.publishRota, [], 'something was published before the steward confirmed');
+  await d[0].props.onConfirm();
+  assert.equal(find(m.draw(), n => n.type === SkConfirm).length, 0, 'the dialog stayed open after Confirm');
+};
 // the steward changes one slot through the real picker (AssignModal's own onAssign)
 const edit = (m, roleName, person) => {
   const slot = find(m.draw(), n => n.type === 'button' && new RegExp('^' + roleName + ': ').test(n.props['aria-label'] || ''))[0];
@@ -115,7 +127,8 @@ test('(c) Rotate pods SKIPS the service someone else changed, publishes the rest
   m.deliver([rota('svc1', 200, { r1: RUTH, r2: TIM }), rota('svc2', 100, { r1: RUTH, r2: RUTH })]);
   const sel = find(m.draw(), n => n.type === 'select' && /serving pod/.test(n.props.title || ''))[0];
   assert.ok(sel, 'no pod menu on the board');
-  sel.props.onChange({ target: { value: '__rotate__' } }); await settle();
+  sel.props.onChange({ target: { value: '__rotate__' } });
+  await confirmDialog(m, /^Rotate$/); await settle();
   assert.deepEqual(publishedFor(m, 'svc1'), [], 'THE DEFECT: rotating pods replaced the other steward\'s rota');
   assert.equal(publishedFor(m, 'svc2').length, 1, 'the untouched service was not rotated');
   assert.match(m.text(), /1 skipped/, 'the skip was silent');
@@ -126,7 +139,8 @@ test('(c) Auto-fill existing services SKIPS the service someone else changed, fi
   edit(m, 'Greeter', SAM);
   m.deliver([rota('svc1', 200, { r1: RUTH, r2: TIM }), rota('svc2', 100, { r1: RUTH, r2: RUTH })]);
   await m.press('Auto-fill');
-  await m.press('Fill existing services'); await settle();
+  await m.press('Fill existing services');
+  await confirmDialog(m, /^Fill$/); await settle();
   assert.deepEqual(publishedFor(m, 'svc1'), [], 'THE DEFECT: auto-fill replaced the other steward\'s rota');
   assert.equal(publishedFor(m, 'svc2').length, 1, 'the untouched service was not filled');
   assert.match(m.text(), /1 skipped/, 'the skip was silent');
@@ -171,14 +185,15 @@ const assertEchoIsOwn = async (m, edited) => {
 test('Rotate pods: an unpublished edit on ANOTHER service does not turn the echo of the rotation into a warning', async () => {
   const m = await editOneSelectAnother('svc1', 'svc2');
   find(m.draw(), n => n.type === 'select' && /serving pod/.test(n.props.title || ''))[0].props.onChange({ target: { value: '__rotate__' } });
-  await settle();
+  await confirmDialog(m, /^Rotate$/); await settle();
   assert.equal(publishedFor(m, 'svc1').length, 1, 'the fixture did not rotate svc1');
   await assertEchoIsOwn(m, 'svc1');
 });
 
 test('Auto-fill: an unpublished edit on ANOTHER service does not turn the echo of the fill into a warning', async () => {
   const m = await editOneSelectAnother('svc2', 'svc1', true);   // fills run from the service on screen forwards
-  await m.press('Auto-fill'); await m.press('Fill existing services'); await settle();
+  await m.press('Auto-fill'); await m.press('Fill existing services');
+  await confirmDialog(m, /^Fill$/); await settle();
   assert.equal(publishedFor(m, 'svc2').length, 1, 'the fixture did not fill svc2');
   await assertEchoIsOwn(m, 'svc2');
 });

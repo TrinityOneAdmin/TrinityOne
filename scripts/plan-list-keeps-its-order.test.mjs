@@ -53,7 +53,10 @@ async function screen(r) {
   let js;
   try { writeFileSync(tmp, body + '\nexport { DashPlans };\n'); js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' }); } finally { rmSync(tmp, { force: true }); }
   const { React, draw } = miniReact();
-  const globals = { React, Icon: () => null, Panel: (p) => p.children, NewPlanModal: () => null, confirm: () => true,
+  // "Publish N drafts" no longer calls confirm(): it sets state and DashPlans renders the SkConfirm dialog. The stub
+  // draws nothing; confirm() below presses the dialog's own onConfirm, read off the tree.
+  const SkConfirm = () => null;
+  const globals = { React, Icon: () => null, Panel: (p) => p.children, NewPlanModal: () => null, confirm: () => true, SkConfirm,
     window: { useStewardPlans: () => r.now(), SK: { planLibrary: [] }, Steward: { publishPlan: (p) => r.api.publishPlan(p), removePlan() {} } } };
   const key = '__planord_' + Math.random().toString(36).slice(2);
   globalThis[key] = globals;
@@ -63,7 +66,8 @@ async function screen(r) {
   const redraw = () => { tree = draw(DashPlans, {}); };
   const order = () => { const t = texts(tree).join('|'); return ['Alpha', 'Bravo', 'Charlie'].map(n => [t.indexOf(n), n]).filter(x => x[0] >= 0).sort((a, b) => a[0] - b[0]).map(x => x[1]).join(','); };
   const click = async (label, nth) => { const bs = find(tree, n => n.props && n.props.onClick && (label === 'switch' ? n.props.role === 'switch' : texts(n).join('').includes(label))); const b = bs[nth || 0]; b.props.onClick({ stopPropagation() {} }); await new Promise(res => setTimeout(res, 0)); redraw(); };
-  return { order, click, redraw };
+  const confirm = async () => { const d = find(tree, n => n.type === SkConfirm); assert.equal(d.length, 1, 'expected exactly one confirm dialog on screen'); d[0].props.onConfirm(); await new Promise(res => setTimeout(res, 0)); redraw(); assert.equal(find(tree, n => n.type === SkConfirm).length, 0, 'the dialog did not close after Confirm'); };
+  return { order, click, redraw, confirm };
 }
 const days = [{ d: 1, ref: 'John 1' }];
 async function three() {
@@ -91,7 +95,9 @@ test('publishing a draft from the list leaves it where it was', async () => {
   await r.api.publishPlan({ id: 'c', title: 'Charlie', days });
   const s = await screen(r);
   assert.equal(s.order(), 'Alpha,Bravo,Charlie', 'setup');
-  await s.click('Publish', 0);
+  await s.click('Publish', 0);   // "Publish 1 draft" in the panel header: it asks first
+  assert.equal(r.now().find(p => p.id === 'b').draft, true, 'pressing Publish alone, before the confirm, must not publish');
+  await s.confirm();
   assert.equal(r.now().find(p => p.id === 'b').draft, false, 'the draft really went live');
   assert.equal(s.order(), 'Alpha,Bravo,Charlie');
 });
