@@ -102,7 +102,7 @@ function sgFor(warm, { marked = false, guardianOf = null } = {}) {
   return {
     loaded: true, clearedKnown: true, cleared: {},
     minors, approved: [], nophoto: [],
-    ...(warm ? { minorsKnown: true } : {}),
+    ...(warm ? { minorsKnown: true, guardiansKnown: true } : {}),   // guardiansKnown: un-marking also removes the child's parent links, so toggleMinor wants the parent-link map real too (owner D7)
     _guardianOf: guardianOf,
   };
 }
@@ -140,7 +140,7 @@ async function screen({ warm, row = 'join', marked = false, guardianOf = null })
     React, window: win, CustomEvent, Promise,
     // toggleMinor's world
     sg, minorsSet: new Set(sg.minors), approvedSet: new Set(sg.approved), nophotoSet: new Set(sg.nophoto),
-    parentSet, ckClearedSet: new Set(), guardians, guardiansClosed: {},
+    parentSet, ckClearedSet: new Set(), guardians, guardiansClosed: {}, guardiansAt: 0,
     kidPhotosAllowed: false,
     nameByPub: { [PK]: NAME, [KID_A]: 'Alice', [KID_B]: 'Ben' },
     setMinorNotice: (n) => calls.notice.push(n),
