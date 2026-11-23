@@ -8624,28 +8624,46 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
     const acc = (typeof church.accent === 'string' && /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(church.accent.trim())) ? church.accent.trim() : '#b4533f';
     const mark = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });
     const markImg = mark ? `<img class="mark" src="${esc(mark)}" alt="">` : '';
+    const dlQr = window.Steward.qrSVG ? window.Steward.qrSVG('https://app.trinityone.church') : '';
+    const boxes = Array.from({ length: 12 }, (_, i) => `<div class="box"><span class="n">${i + 1}</span><span class="line"></span></div>`).join('');
     const slips = ok.map(r => {
       const qr = window.Steward.qrSVG ? window.Steward.qrSVG(window.Steward.memberInviteUrl(r.mnemonic)) : '';
-      return `<div class="slip">${markImg}<div class="qr">${qr}</div><div class="nm">${esc(r.name)}</div>`
+      return `<div class="slip">${markImg}`
+        + `<div class="qrow"><div class="qcol"><div class="qr">${qr}</div><div class="qcap">Scan to sign in</div></div>`
+        + `<div class="qcol"><div class="qr">${dlQr}</div><div class="qcap">No app yet? Scan to get it</div></div></div>`
+        + `<div class="nm">${esc(r.name)}</div>`
         + `<div class="ch">Welcome to ${esc(church.name || 'our church')} on TrinityOne</div>`
-        + `<div class="hint">Open TrinityOne on your phone, choose “I’ve used it before” → “Someone set this up for me”, and point the camera at this code. You’re in — nothing to type.</div>`
+        + `<div class="hint">Open TrinityOne on your phone, choose “I’ve used it before” → “Someone set this up for me”, and point the camera at the sign-in code. You’re in — nothing to type.</div>`
         + `<div class="sec">Keep this slip private — it IS your sign-in.</div>`
         + (r.isChild ? `<div class="sec kid">This account is for a young person. Keep this slip especially secure.</div>` : '')
+        + `<div class="rec-h">My 12-word recovery phrase</div>`
+        + `<div class="rec-sub">When the app shows your 12 words, write them here and keep this slip safe. No one — not even your church — can recover them for you.</div>`
+        + `<div class="grid12">${boxes}</div>`
         + `</div>`;
     }).join('');
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Sign-in slips · ${esc(church.name || '')}</title><style>`
       + `body{font-family:system-ui,sans-serif;margin:0;padding:14px;color:#1b1714}`
       + `.bar{background:#f4efe6;border:1px solid #e6ddcb;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;display:flex;gap:12px;align-items:center}`
       + `.bar button{font:inherit;background:${acc};color:#fff;border:none;border-radius:8px;padding:7px 13px;cursor:pointer;font-weight:700}`
-      + `.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}`
-      + `.slip{border:1px dashed #bbb;border-top:4px solid ${acc};border-radius:12px;padding:16px 14px;text-align:center;page-break-inside:avoid;display:flex;flex-direction:column;align-items:center;gap:6px}`
+      + `.grid{display:flex;flex-direction:column;gap:10px}`
+      + `.slip{border:1px dashed #bbb;border-top:4px solid ${acc};border-radius:12px;padding:22px 18px;text-align:center;page-break-inside:avoid;display:flex;flex-direction:column;align-items:center;gap:7px}`
+      + `.slip:not(:last-child){page-break-after:always}`
       + `.mark{width:46px;height:46px;border-radius:999px;object-fit:cover}`
-      + `.qr{width:160px;height:160px}.qr svg{width:100%;height:100%}`
-      + `.nm{font-weight:800;font-size:18px;margin-top:2px}.ch{font-size:12px;color:${acc};font-weight:600}`
-      + `.hint{font-size:11px;color:#555;max-width:240px;line-height:1.35;margin-top:4px}`
-      + `.sec{font-size:11px;font-weight:700;color:#8a2f1f;max-width:240px}.sec.kid{color:#5c2a84}`
+      + `.qrow{display:flex;gap:28px;justify-content:center;flex-wrap:wrap;margin-top:4px}`
+      + `.qcol{display:flex;flex-direction:column;align-items:center;gap:5px}`
+      + `.qr{width:150px;height:150px}.qr svg{width:100%;height:100%}`
+      + `.qcap{font-size:11px;font-weight:700;color:#555}`
+      + `.nm{font-weight:800;font-size:18px;margin-top:4px}.ch{font-size:12px;color:${acc};font-weight:600}`
+      + `.hint{font-size:11px;color:#555;max-width:340px;line-height:1.35;margin-top:4px}`
+      + `.sec{font-size:11px;font-weight:700;color:#8a2f1f;max-width:340px}.sec.kid{color:#5c2a84}`
+      + `.rec-h{font-weight:800;font-size:15px;margin-top:14px}`
+      + `.rec-sub{font-size:11px;color:#6b6052;max-width:360px;line-height:1.35;margin-bottom:4px}`
+      + `.grid12{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;width:100%;max-width:400px;margin-top:4px}`
+      + `.box{display:flex;align-items:center;gap:9px;border:1px solid #ddd5c6;border-radius:9px;height:40px;padding:0 12px}`
+      + `.box .n{font-weight:800;font-size:13px;color:${acc};width:18px;flex-shrink:0;text-align:right}`
+      + `.box .line{flex:1;border-bottom:1.5px dotted #c9bfac;height:1px}`
       + `@media print{.bar{display:none}}`
-      + `</style></head><body><div class="bar"><span>${ok.length} sign-in slip${ok.length === 1 ? '' : 's'} for ${esc(church.name || 'your church')}. Print, cut along the dashes, and hand each slip to its person — don’t keep copies.</span><button onclick="window.print()">Print / Save as PDF</button></div><div class="grid">${slips}</div></body></html>`;
+      + `</style></head><body><div class="bar"><span>${ok.length} sign-in slip${ok.length === 1 ? '' : 's'} for ${esc(church.name || 'your church')}, one per page. Print, hand each slip to its person — don’t keep copies.</span><button onclick="window.print()">Print / Save as PDF</button></div><div class="grid">${slips}</div></body></html>`;
     // `printed` only says the print window was OPENED — pressing Print proves nothing about paper (a popup
     // blocker, a cancelled dialog, a closed tab all print nothing), so closing still confirms below (audit F8)
     if (window.skPrintable) { window.skPrintable(html); setPrinted(true); }
@@ -8672,6 +8690,7 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
   const kids = rows.filter(r => r.isChild), adults = rows.length - kids.length;
   const ekids = entries.filter(r => r.isChild);
   return (
+    <React.Fragment>
     <CkModal title="Set up accounts" onClose={requestClose}>
       {stage === 'input' ? <React.Fragment>
         <GoPublicNote gate={gate} />
@@ -8756,15 +8775,6 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 10 }}>
             {(results || []).map((r, i) => <div key={i} style={{ fontSize: 13, display: 'flex', gap: 8 }}><span>{r.ok ? '✓' : '✗'}</span><span style={{ flex: 1 }}>{r.name}{r.isChild ? ' (child)' : ''}</span>{!r.ok && r.reason ? <span style={{ color: 'var(--clay-ink)', fontSize: 12 }}>{r.reason}</span> : null}</div>)}
           </div>
-          {closing ? (printed
-            // after Print was pressed the slips MAY be on paper, so closing must never withdraw the accounts —
-            // it only checks, because a cancelled print dialog or blocked popup printed nothing (audit F8)
-            ? <SkConfirm icon="qr" title="Did the slips print?" confirmLabel="Yes — close"
-                body={'If they didn’t, go back and press “Print again” — a cancelled or blocked print window printed nothing, and these slips are the only sign-in codes. Closing keeps the ' + (results || []).filter(r => r.attempted).length + ' account(s) either way.'}
-                onConfirm={onClose} onCancel={() => setClosing(false)} />
-            : <SkConfirm icon="shield" title="Close without printing?" confirmLabel={cleaning ? 'Withdrawing…' : 'Close anyway'}
-                body={'You haven’t printed the slips. If you close now, nobody will ever have these accounts’ sign-in codes — so the ' + (results || []).filter(r => r.attempted).length + ' account(s) just made will be withdrawn from your church’s relays.'}
-                busy={cleaning} onConfirm={closeAnyway} onCancel={() => { if (!cleaning) setClosing(false); }} />) : null}
           <div style={{ display: 'flex', gap: 10 }}>
             <button onClick={requestClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11 }}>{printed ? 'Done' : 'Close'}</button>
             <button onClick={print} disabled={!ok.length} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 11, opacity: ok.length ? 1 : 0.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> {printed ? 'Print again' : ('Print ' + ok.length + ' slip' + (ok.length === 1 ? '' : 's'))}</button>
@@ -8772,6 +8782,18 @@ function SetupAccountsModal({ onClose, sg, kidPhotosAllowed, nameByPub, delegate
         </React.Fragment>;
       })() : null}
     </CkModal>
+    {closing ? (printed
+      // after Print was pressed the slips MAY be on paper, so closing must never withdraw the accounts —
+      // it only checks, because a cancelled print dialog or blocked popup printed nothing (audit F8).
+      // Rendered as a SIBLING of CkModal, not inside it: the modal panel's transform + overflow:hidden
+      // establish a containing block that would clip this position:fixed confirm (UI bug, 2026-11-23).
+      ? <SkConfirm icon="qr" title="Did the slips print?" confirmLabel="Yes — close"
+          body={'If they didn’t, go back and press “Print again” — a cancelled or blocked print window printed nothing, and these slips are the only sign-in codes. Closing keeps the ' + (results || []).filter(r => r.attempted).length + ' account(s) either way.'}
+          onConfirm={onClose} onCancel={() => setClosing(false)} />
+      : <SkConfirm icon="shield" title="Close without printing?" confirmLabel={cleaning ? 'Withdrawing…' : 'Close anyway'}
+          body={'You haven’t printed the slips. If you close now, nobody will ever have these accounts’ sign-in codes — so the ' + (results || []).filter(r => r.attempted).length + ' account(s) just made will be withdrawn from your church’s relays.'}
+          busy={cleaning} onConfirm={closeAnyway} onCancel={() => { if (!cleaning) setClosing(false); }} />) : null}
+    </React.Fragment>
   );
 }
 window.SetupAccountsModal = SetupAccountsModal;

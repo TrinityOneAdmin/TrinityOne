@@ -1,0 +1,12 @@
+<!-- TrinityOne mark for the status-bar / notification small icon: the broken ring of three arcs + centred
+     dot, white/alpha on transparent (Android tints small icons). Geometry from icons/halo.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path android:pathData="M 416.5 346.3 A 184.2 184.2 0 0 1 159.4 412.8" android:strokeColor="#FFFFFFFF" android:strokeWidth="34" android:strokeLineCap="round"/>
+    <path android:pathData="M 97.5 349.9 A 184.2 184.2 0 0 1 168.5 93.9" android:strokeColor="#FFFFFFFF" android:strokeWidth="34" android:strokeLineCap="round"/>
+    <path android:pathData="M 254.0 71.8 A 184.2 184.2 0 0 1 440.1 261.3" android:strokeColor="#FFFFFFFF" android:strokeWidth="34" android:strokeLineCap="round"/>
+    <path android:pathData="M 222 256 a 34 34 0 1 0 68 0 a 34 34 0 1 0 -68 0 Z" android:fillColor="#FFFFFFFF"/>
+</vector>

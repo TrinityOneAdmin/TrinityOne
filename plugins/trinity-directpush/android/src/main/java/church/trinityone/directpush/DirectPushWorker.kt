@@ -17,6 +17,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.graphics.drawable.toBitmap
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.CompletableDeferred
@@ -137,7 +138,7 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         val count = s?.optInt("newSinceCursor", 0) ?: 0
         val verdict = s?.optString("verdict", "none") ?: "no-summary"
         Log.i(TAG, "SUMMARY finished=$finished verdict=$verdict newSinceCursor=$count")
-        if (count > 0) postGeneric(ctx)
+        if (count > 0) postGeneric(ctx, count)
         // The page decides (bg-entry.js widgetCountAction); a summary without it (older bundle) changes nothing.
         val w = s?.optJSONObject("widget")
         applyWidgetCount(ctx, w?.optString("op", "keep") ?: "keep", w?.optInt("n", 0) ?: 0)
@@ -154,7 +155,7 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
             val p = ctx.getSharedPreferences(WIDGET_PREFS, Context.MODE_PRIVATE)
             when (op) {
                 "set" -> if (n > 0) p.edit().putInt(WIDGET_COUNT, n).putLong(WIDGET_AT, System.currentTimeMillis()).apply() else return
-                "clear" -> p.edit().remove(WIDGET_COUNT).remove(WIDGET_AT).apply()
+                "clear" -> { p.edit().remove(WIDGET_COUNT).remove(WIDGET_AT).apply(); try { NotificationManagerCompat.from(ctx).cancel(NOTIFY_ID) } catch (e: Throwable) {} }
                 else -> return
             }
             val mgr = AppWidgetManager.getInstance(ctx)
@@ -193,7 +194,7 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         }
     }
 
-    private fun postGeneric(ctx: Context) {
+    private fun postGeneric(ctx: Context, count: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "New messages", NotificationManager.IMPORTANCE_DEFAULT))
@@ -202,11 +203,15 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         val pi = launch?.let {
             PendingIntent.getActivity(ctx, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
+        val appIcon = try { ctx.packageManager.getApplicationIcon(ctx.packageName).toBitmap() } catch (e: Throwable) { null }
+        val body = if (count == 1) "You have 1 new message" else "You have $count new messages"
         val n = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(R.drawable.ic_notify_trinity)
             .setContentTitle("TrinityOne")
-            .setContentText("You have new messages")
+            .setContentText(body)
+            .setNumber(count)
             .setAutoCancel(true)
+            .apply { if (appIcon != null) setLargeIcon(appIcon) }
             .apply { if (pi != null) setContentIntent(pi) }
             .build()
         try {
