@@ -32,7 +32,7 @@ object SecretStoreCompat {
     const val REMEMBER_PREFIXED_KEY = "capacitor-storage_trinityone.nostr.remember"
 
     /** Where the mnemonic came from, for the log only. */
-    data class Key(val mnemonic: String, val source: String)
+    data class Key(val mnemonic: String, val source: String, val recordPub: String = "")
 
     /**
      * KEY SOURCE (docs/direct-mode-push-plan.md, "KEY SOURCE"): 1) the remember-me record, only while until > now;
@@ -46,7 +46,7 @@ object SecretStoreCompat {
                 val o = org.json.JSONObject(r)
                 val m = o.optString("m", "")
                 val until = o.optLong("until", 0L)
-                if (m.isNotBlank() && until > System.currentTimeMillis() / 1000) return Key(m, "remember")
+                if (m.isNotBlank() && until > System.currentTimeMillis() / 1000) return Key(m, "remember", o.optString("pub", ""))
             }
         } catch (e: Throwable) {
             android.util.Log.w("DIRECTPUSH", "remember record unreadable: ${e.javaClass.simpleName}")

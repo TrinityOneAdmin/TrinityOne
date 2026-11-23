@@ -4,7 +4,7 @@ Plan: docs/direct-mode-push-plan.md (Phase 1 Option B). A plain Android library 
 (not a Capacitor plugin). Native Kotlin + a background WebView at https://localhost.
 
 ## Build
-    node plugins/trinity-directpush/build-bg.mjs          # bundles js/bg-entry.js + src/fellowship.src.js -> assets/directpush/bg-bundle.js (gitignored, generated)
+    node plugins/trinity-directpush/build-bg.mjs --debug  # DEBUG bundle (adb test switches + verbose reporting) for the in-app debug build. WITHOUT --debug the bundle is release-inert: switches/reporting are compiled out (gitignored, generated)
     cd android && JAVA_HOME=/mnt/storage/android-tools/jdk ANDROID_HOME=/mnt/storage/android-tools/sdk ./gradlew :app:assembleDebug   # needs network; --offline fails (kotlin 2.3.0)
 
 ## Gitignored android/ edits (main app) — reproduce by hand on a fresh checkout

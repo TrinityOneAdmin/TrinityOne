@@ -7,6 +7,7 @@
 (function () {
   function rep(o) { try { window.DPNative.result(JSON.stringify(o)); } catch (e) {} }
   window.__dpRep = rep;
+  var DBG = false; try { DBG = !!window.DPNative.isDebug(); } catch (e) {}
   var g = { stage: 'gate1', origin: location.origin };
   try {
     var rl = localStorage.getItem('trinityone.relays');
@@ -19,12 +20,13 @@
     g.followed = fc ? JSON.parse(fc).map(function (c) { return c && (c.npub || c.id); }) : null;
     g.visible = !!(g.relaysKey && g.relaysKey.length && g.verifiedKeys && g.verifiedKeys.length);
   } catch (e) { g.err = String(e); g.visible = false; }
-  rep(g);
+  if (DBG) rep(g);
 
   // Every frame this page sends, so the log proves WHICH relays were contacted and with WHAT (rule 10).
   var NativeWS = window.WebSocket, sent = { REQ: 0, EVENT: 0, AUTH: 0, CLOSE: 0, other: 0 }, urls = {};
   window.__dpWsStats = { sent: sent, urls: urls };
-  window.WebSocket = function (u, p) {
+  // Frame/rx instrumentation is for debuggable builds only; a release build leaves WebSocket untouched.
+  if (DBG) window.WebSocket = function (u, p) {
     var ws = p === undefined ? new NativeWS(u) : new NativeWS(u, p);
     urls[u] = (urls[u] || 0) + 1;
     var rx = (window.__dpRx = window.__dpRx || []);
@@ -38,8 +40,8 @@
     };
     return ws;
   };
-  window.WebSocket.prototype = NativeWS.prototype;
-  ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function (k) { window.WebSocket[k] = NativeWS[k]; });
+  if (DBG) { window.WebSocket.prototype = NativeWS.prototype;
+  ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function (k) { window.WebSocket[k] = NativeWS[k]; }); }
 
   // fellowship's init() waits on TrinityIdentity.ready, then asks exportMnemonic(). The native layer resolves it.
   var resolve; var mnemonic = null;

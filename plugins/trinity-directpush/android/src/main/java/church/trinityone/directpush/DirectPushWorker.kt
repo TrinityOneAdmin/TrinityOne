@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -68,7 +69,10 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         val words = mnemonic.trim().split(Regex("\\s+")).size
         Log.i(TAG, "KEYREAD ok source=${keyRec.source} words=$words (value never logged)")
 
-        val since = inputData.getLong(KEY_SINCE, 0L)
+        val debuggable = (ctx.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        // Test switches are honoured only on a debuggable build; a release build ignores them whatever the input data says.
+        val since = if (debuggable) inputData.getLong(KEY_SINCE, 0L) else 0L
+        val debugJson = if (debuggable) (inputData.getString(KEY_DEBUG) ?: "{}") else "{}"
         val done = CompletableDeferred<Boolean>()
         var summary: JSONObject? = null
         var wv: WebView? = null
@@ -81,11 +85,14 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
             v.settings.domStorageEnabled = true
             v.settings.allowFileAccess = false
             v.settings.allowContentAccess = false
-            WebView.setWebContentsDebuggingEnabled(true)   // debug app only matters; lets CDP attach to the bg page
+            // CDP on this WebView exposes a page holding the injected key: ONLY for a debuggable build, never release.
+            if (debuggable) WebView.setWebContentsDebuggingEnabled(true)
             v.addJavascriptInterface(object {
                 @JavascriptInterface
+                fun isDebug(): Boolean = debuggable
+                @JavascriptInterface
                 fun result(json: String) {
-                    Log.i(TAG, "JS> $json")
+                    if (debuggable) Log.i(TAG, "JS> $json")
                     try {
                         val o = JSONObject(json)
                         if (o.optString("stage") == "summary") summary = o
@@ -101,7 +108,7 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
                 override fun onPageFinished(view: WebView, url: String) {
                     Log.i(TAG, "page finished: $url")
                     // Hand the key to the page ONLY now, after the page's own gate-1 read has already run.
-                    val opts = JSONObject().put("since", since).put("debug", try { JSONObject(inputData.getString(KEY_DEBUG) ?: "{}") } catch (e: Throwable) { JSONObject() }).toString()
+                    val opts = JSONObject().put("since", since).put("source", keyRec.source).put("recordPub", keyRec.recordPub).put("debug", try { JSONObject(debugJson) } catch (e: Throwable) { JSONObject() }).toString()
                     view.evaluateJavascript(
                         "window.__dpStart(${JSONObject.quote(mnemonic)}, $opts);", null
                     )
