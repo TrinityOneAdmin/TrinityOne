@@ -3441,6 +3441,10 @@ function idOwnerOk(owner, e, id) {
 }
 // the church a steward-authored CONTENT event acts for: its ["church", <cp>] tag, validated to a configured church.
 const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church'); const h = t && (toHexPub(t[1]) || t[1]); return h && CHURCH_PUBS.has(h) ? h : ''; };
+// The church a CHAT LINE names with a `['p', <churchpub>]` tag, when this relay carries it; '' when none does. The member
+// app tags every group message this way. It is an author-supplied clue, so it is only ever used to NARROW a read
+// (see canRead's kind-1 branch), and is never an authorization grant by itself.
+const messageNamedChurch = (e) => { for (const t of (e.tags || [])) { if (t[0] !== 'p' || !t[1]) continue; const h = toHexPub(t[1]) || t[1]; if (CHURCH_PUBS.has(h)) return h; } return ''; };
 // Resolve the church a kind-30078 doc BELONGS to, for the default-deny read gate (C1). Four shapes exist
 // in the corpus, in decreasing order of trustworthiness:
 //   1. `<prefix><churchpub>` — the d-tag names it outright (member:/minors:/stewards:/careavail:/safetycheck:…);
@@ -7197,13 +7201,27 @@ function canRead(e, authed) {
       const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);
       return !!gcp && (authed === gcp || stewardCan(authed, gcp, 'content'));
     }
-    const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);   // …and the same fallback here: see the note in accept()
+    // THE OWNING CHURCH, from three clues in order: the stored definition, the church the id names, and — new —
+    // the church THE MESSAGE ITSELF names. The member app p-tags every chat line with its church
+    // (src/fellowship.src.js, publishGroupMessage: `['p', cp]`; NOT a `church` tag, so namedChurch() is the wrong
+    // reader). The clue is the AUTHOR'S claim, so it is used only to NARROW who may read: it can route a line to
+    // the readers of the church it names (and apply THAT church's minors rule), never to everyone on the box.
+    // SIGNUP-SAFEGUARDING-GAPS gap 2.
+    const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g) || messageNamedChurch(e);
     if (gcp) {
       if (!churchReader(authed, gcp)) return false;
       // safeguarding, unchanged in intent: an adults-only group is withheld from a minor OF THAT CHURCH.
       if (!GROUP_CHILDSAFE.has(g) && (MINORS_BY.get(gcp) || new Set()).has(authed)) return false;
-    } else if (!MEMBER_CHURCHES.has(authed) && !CHURCH_PUBS.has(authed)) {   // WALL 2026-11-18: no NETWORKS.has(authed)
-      return false;   // a group we hold no definition for: still never serve it to a total stranger
+    } else {
+      // UNRESOLVED: a LEGACY id from before namespacing, or an id naming a church this box does not carry, and a
+      // line that names no church we carry either. This fell through to `GROUP_VIS.get(g) !== 'invite'` (true for
+      // a group with no entry) and was served to EVERY member of EVERY church on the box with the minors check
+      // skipped. FAIL CLOSED: the author keeps their own line (the same "your own events stay yours" exception the
+      // `!g` case below uses); nobody else is served until a definition (or a church clue) arrives. The WRITE side
+      // is deliberately unchanged — a wiped relay must still accept chat — and this accepts the availability cost
+      // that a no-clue line in an undefined group is invisible on THIS box until the definition reaches it
+      // (owner ruling D4, fail closed).
+      return authed === e.pubkey;
     }
   }
   // AUDIT-2026-07-30 S5: `!g` fell into this `return true` and was served to ANYONE, unauthenticated. A kind-1
