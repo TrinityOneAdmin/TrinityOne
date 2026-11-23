@@ -20304,6 +20304,15 @@ zoo`.split("\n");
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
   var BACKFILL_SEND_MS = 8e3;
+  function _knownJoinApproval() {
+    let v = null;
+    try {
+      v = window.Steward && typeof window.Steward.joinPolicyFresh === "function" ? window.Steward.joinPolicyFresh() : null;
+    } catch (e) {
+      v = null;
+    }
+    return v === true ? true : v === false ? false : null;
+  }
   async function _backfillSafeguardTo(target) {
     const u = String(target || "");
     if (!/^wss?:\/\//i.test(u)) return { landed: false, why: "no-target" };
@@ -20386,7 +20395,7 @@ zoo`.split("\n");
       if (!got2.ev) return "absent";
       return sendDoc(got2.ev);
     };
-    const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+    const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp, joinpolicy: JOINPOLICY_D + cp };
     const got = {};
     await Promise.all(Object.keys(ds).map(async (k) => {
       got[k] = await readDoc(ds[k]);
@@ -20396,6 +20405,8 @@ zoo`.split("\n");
     results.minors = await carry(got.minors);
     if (moved()) return { landed: false, why: "changed", results };
     results.blocked = await carry(got.blocked);
+    if (moved()) return { landed: false, why: "changed", results };
+    results.joinpolicy = await carry(got.joinpolicy);
     for (const k of ["approved", "guardians", "nophoto"]) {
       if (moved()) return { landed: false, why: "changed", results };
       try {
@@ -20405,8 +20416,10 @@ zoo`.split("\n");
       }
     }
     const ok = (x) => x === "landed" || x === "absent";
-    const landed = ok(results.minors) && ok(results.blocked);
-    return { landed, why: landed ? "" : "not-landed", results };
+    const known = _knownJoinApproval();
+    const joinOk = known === true ? results.joinpolicy === "landed" : known === false;
+    const landed = ok(results.minors) && ok(results.blocked) && joinOk;
+    return { landed, why: landed ? "" : known === null && ok(results.minors) && ok(results.blocked) ? "policy-unknown" : "not-landed", results };
   }
   var BACKFILL_OWED_LS = "trinityone.steward.backfill-owed";
   function _owedBackfills() {

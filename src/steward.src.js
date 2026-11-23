@@ -6248,8 +6248,10 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 //   3. SEND VERBATIM, TO THE TARGET ONLY, AND READ ITS ANSWER. The owner's own signed event, never re-signed.
 //      OK true (or "duplicate") = landed. OK false "…a newer version…" = landed too: the box already holds a
 //      NEWER copy. Any other refusal, a timeout or a dead socket = not landed.
-//   4. `landed` = minors: AND blocked: each landed or are known not to exist. Those are the two whose ABSENCE is
-//      the dangerous direction. approved:, guardians: and nophoto: are carried BEST-EFFORT and never decide
+//   4. `landed` = minors: AND blocked: each landed or are known not to exist — plus joinpolicy: WHEN THIS CONSOLE KNOWS
+//      THE CHURCH REQUIRES APPROVAL (_knownJoinApproval: true -> it must have landed; null -> not landed, `policy-unknown`;
+//      false -> best effort). Those are the ones whose ABSENCE is the dangerous direction (a box without joinpolicy serves an
+//      approval church as open-join). approved:, guardians: and nophoto: are carried BEST-EFFORT and never decide
 //      `landed`: their absence is the safe direction (nobody is cleared, no exemption, no suppression lifted) —
 //      and a stale approved: naming a current minor is refused by the relay for ever, which would otherwise
 //      strand the box. minors: is sent before approved: for the same reason.
@@ -6269,6 +6271,15 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // own box, or hold it) — the two whose result DECIDES something; refreshNamedRelays' tunnel swap and
 // adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
 const BACKFILL_SEND_MS = 8000;
+// DOES THIS CONSOLE'S OWN, SETTLED READ SAY THE CHURCH REQUIRES APPROVAL TO JOIN? true | false | null (not known yet).
+// Steward.joinPolicyFresh answers only when a narrow read of the joinpolicy document has settled genuinely on every connected
+// relay (_freshDocRead); a bare EOSE, an offline console, or no subscription open answers null. Used by _backfillSafeguardTo to
+// decide whether `joinpolicy` must LAND — it cannot be decided from the TARGET read, which is empty by definition.
+function _knownJoinApproval() {
+  let v = null;
+  try { v = (window.Steward && typeof window.Steward.joinPolicyFresh === 'function') ? window.Steward.joinPolicyFresh() : null; } catch (e) { v = null; }
+  return v === true ? true : v === false ? false : null;
+}
 async function _backfillSafeguardTo(target) {
   const u = String(target || '');
   if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
@@ -6322,7 +6333,7 @@ async function _backfillSafeguardTo(target) {
     if (!got.ev) return 'absent';
     return sendDoc(got.ev);
   };
-  const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+  const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp, joinpolicy: JOINPOLICY_D + cp };
   const got = {};
   await Promise.all(Object.keys(ds).map(async (k) => { got[k] = await readDoc(ds[k]); }));
   if (moved()) return { landed: false, why: 'changed' };
@@ -6330,13 +6341,25 @@ async function _backfillSafeguardTo(target) {
   results.minors = await carry(got.minors);          // FIRST: the relay refuses an approved: that names a minor it knows
   if (moved()) return { landed: false, why: 'changed', results };
   results.blocked = await carry(got.blocked);
+  // joinpolicy: the OWNER-AUTHORED copy only (authors:[cp], re-checked in readDoc), carried verbatim and never re-signed. A box that
+  // lacks it serves an approval church as OPEN-JOIN (absent == approval off), so its absence is the dangerous direction — see `landed`.
+  // A delegated steward's copy is not carried (it needs the stewards: document on the box first; the same deferral as nophoto).
+  if (moved()) return { landed: false, why: 'changed', results };
+  results.joinpolicy = await carry(got.joinpolicy);
   for (const k of ['approved', 'guardians', 'nophoto']) {
     if (moved()) return { landed: false, why: 'changed', results };
     try { results[k] = await carry(got[k]); } catch (e) { results[k] = 'failed'; }
   }
   const ok = (x) => x === 'landed' || x === 'absent';
-  const landed = ok(results.minors) && ok(results.blocked);
-  return { landed, why: landed ? '' : 'not-landed', results };
+  // joinpolicy decides `landed` from THIS CONSOLE'S OWN settled knowledge of the church's policy, never from the target read:
+  //   true  (approval required)  -> it MUST have landed on the box (sent and accepted, or the box already holds a newer one) —
+  //                                 an owner copy that is absent here, unread, refused or timed out is NOT landed;
+  //   false (open join)          -> carried best-effort; its absence cannot make a box more open than the church is;
+  //   null  (not known)          -> FAIL CLOSED: not landed, `policy-unknown`; the owed retry asks again.
+  const known = _knownJoinApproval();
+  const joinOk = known === true ? results.joinpolicy === 'landed' : known === false;
+  const landed = ok(results.minors) && ok(results.blocked) && joinOk;
+  return { landed, why: landed ? '' : (known === null && ok(results.minors) && ok(results.blocked) ? 'policy-unknown' : 'not-landed'), results };
 }
 // ── ADOPT ONE RELAY: PROVE → BACKFILL → ONLY THEN SIGN (plan Part A, A2, 2026-11-22) ─────────────────────────
 //

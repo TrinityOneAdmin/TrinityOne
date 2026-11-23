@@ -25,7 +25,7 @@ const CP = 'c'.repeat(64);                                   // the church key (
 const CHILD = 'a'.repeat(64), ADULT = 'b'.repeat(64), PARENT = 'd'.repeat(64), BANNED = 'e'.repeat(64), STEWARD_KEY = '9'.repeat(64);
 const OWN = 'wss://own.example/relay', POOL = 'wss://pool.example/relay', NEW = 'wss://newbox.example/relay';
 const KEY_OWN = '1'.repeat(64), KEY_POOL = '2'.repeat(64), KEY_NEW = '3'.repeat(64);
-const DOCS = ['minors', 'blocked', 'approved', 'guardians', 'nophoto'];
+const DOCS = ['minors', 'blocked', 'approved', 'guardians', 'nophoto', 'joinpolicy'];
 const dOf = (ev) => ((ev.tags || []).find((t) => t[0] === 'd') || [])[1] || '';
 const kindOf = (ev) => (dOf(ev).match(/^trinityone\/([a-z-]+)/) || [])[1] || ('kind' + ev.kind);
 
@@ -38,6 +38,7 @@ function fullDocs() {
     approved: doc('approved', { pubkeys: [ADULT], cleared: { [ADULT]: { by: CP, at: 9 } }, expiry: {} }),
     guardians: doc('guardians', { links: { [CHILD]: [PARENT] } }),
     nophoto: doc('nophoto', { pubkeys: [ADULT] }),
+    joinpolicy: doc('joinpolicy', { approval: true }),
   };
 }
 
@@ -53,7 +54,7 @@ const GATE_LIFT = [
   ['st', 'var _gate = createRelayGate('], ['fn', 'async function admitRemoteRelay'],
 ];
 const ENGINE_LIFT = [
-  ['st', 'var BACKFILL_SEND_MS = '], ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '],
+  ['st', 'var BACKFILL_SEND_MS = '], ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '], ['st', 'var JOINPOLICY_D = '], ['fn', 'function _knownJoinApproval'],
   ['fn', 'function _readCovers'], ['fn', 'function _unprovedDroppable(provedUrls) {'],
   ['fn', 'async function _backfillSafeguardTo(target) {'],
 ];
@@ -85,7 +86,9 @@ function world(opts = {}) {
     Date: { now: () => state.t },
     normalizeURL: (u) => String(u), normalizeURL2: (u) => String(u),
     localStorage: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, String(v)); }, removeItem: (k) => { mem.delete(k); } },
-    window: { dispatchEvent: () => true }, CustomEvent: function (n) { this.type = n; },
+    // this console's OWN settled read of the church's join policy: true | false | null (default: OPEN join, KNOWN — so a world with no joinpolicy document still lands; the approval-required cases pass opts.join). The real _knownJoinApproval is lifted.
+    __join: () => (opts.join === undefined ? false : opts.join),
+    window: { dispatchEvent: () => true, Steward: { joinPolicyFresh: () => (opts.join === undefined ? false : opts.join) } }, CustomEvent: function (n) { this.type = n; },
     CANONICAL_RELAY_PUBS: Object.freeze({ [POOL]: [KEY_POOL] }), CANONICAL_RELAYS: [POOL],
     relayNetEntries: async () => (opts.netEntries || []), _ownOrigin: () => 'https://own.example',
     relayNetCandidates: () => [OWN], relaysRaw: () => state.relays.slice(),
@@ -141,7 +144,7 @@ test('…and neither is a box answering at a SHIPPED address with a key we do no
 });
 
 // ── 2. a proved box that accepts: all five, verbatim, to that box only, minors before approved ─────────────
-test('a PROVED box that accepts is sent the five current documents — verbatim, to that box only, minors: before approved: — and reads as landed', async () => {
+test('a PROVED box that accepts is sent the six current documents — verbatim, to that box only, minors: before approved: — and reads as landed', async () => {
   const w = world();
   const r = await w.api._backfillSafeguardTo(NEW);
   assert.equal(r.landed, true, JSON.stringify(r));
@@ -285,7 +288,7 @@ function adoptWorld(opts = {}) {
         return opts.enrolResult || { published: true, full: true, proven: [{ url: NEW, pubkey: KEY_NEW }], entries: [{ pubkey: KEY_NEW, url: NEW }] }; },
       _writeTombstone: async () => ({ wrote: false }), autoSyncHeal: async () => ({}),
       ...(opts.scope || {}) },
-    more: '\nconst _st = { ' + fnBody(STEWARD, '  signRelay(url) {', 'signRelay') + ' };\nwindow.Steward = { signRelay: (u) => _st.signRelay(u), publishRelayList: () => Promise.resolve(null) };',
+    more: '\nconst _st = { ' + fnBody(STEWARD, '  signRelay(url) {', 'signRelay') + ' };\nwindow.Steward = { joinPolicyFresh: () => __join(), signRelay: (u) => _st.signRelay(u), publishRelayList: () => Promise.resolve(null) };',
     expose: ', signRelay: (u) => _st.signRelay(u), retryOwedBackfills, _owedBackfills' });
   const realPublish = w.scope.pool.publish;
   w.scope.pool.publish = (urls, ev) => { log.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
@@ -439,7 +442,7 @@ function swapWorld(opts = {}) {
       _staleBoxSpelling: (u) => ((opts.staleSwap && u === MOVED) ? STALE : ''), _alreadyACandidate: () => false,
       setAdoptedRelays: () => {}, adoptedRelays: () => [], _rememberAdoptedName: () => {}, _tagAdopted: () => {}, NETDOC_ADOPT_MAX: 8,
     },
-    more: '\nwindow.Steward = { publishRelayList: () => { __order.push("relay-list"); return Promise.resolve(null); }, addRelay: (u) => { __add(u); return u; } };',
+    more: '\nwindow.Steward = { joinPolicyFresh: () => __join(), publishRelayList: () => { __order.push("relay-list"); return Promise.resolve(null); }, addRelay: (u) => { __add(u); return u; } };',
     expose: ', refreshNamedRelays, adoptNetDocAddresses' });
   w.scope.__order = order; w.scope.__add = (u) => { store = [...store, u]; };
   const realPublish = w.scope.pool.publish;
@@ -486,7 +489,7 @@ function autoPickWorld(opts = {}) {
   // non-global identifier, so a Function parameter would be shadowed by `undefined`.)
   w.scope.__picked = added; w.scope.__sign = w.api.signRelay;
   const pick = new Function('scope', 'with (scope) { const _o = { ' + fnBody(STEWARD, 'async autoPickRelays(n) {', 'autoPickRelays') +
-    ' }; window.Steward = { addRelay: (u) => { __picked.push(u); return u; }, signRelay: __sign, publishRelayList: () => Promise.resolve(null) }; return (n) => _o.autoPickRelays(n); }')(
+    ' }; window.Steward = { joinPolicyFresh: () => __join(), addRelay: (u) => { __picked.push(u); return u; }, signRelay: __sign, publishRelayList: () => Promise.resolve(null) }; return (n) => _o.autoPickRelays(n); }')(
     new Proxy(w.scope, { has: (t, k) => (k in t) || !(String(k) in globalThis), get: (t, k) => (k === Symbol.unscopables ? undefined : t[k]) }));
   return { ...w, added, autoPickRelays: pick };
 }
@@ -763,4 +766,59 @@ test('FF1: when the removed-keys read is NOT whole the retry does nothing at all
   await mute.api.retryOwedBackfills();
   assert.equal(mute.enrols.length, 0); assert.deepEqual(mute.published, []);
   assert.deepEqual(mute.owed(), [{ churchPub: CP, url: NEW }], 'a box that proved nothing lost its owed marker');
+});
+
+// ── 9. joinpolicy (SIGNUP-SAFEGUARDING-GAPS gap 3, owner D5) ───────────────────────────────────────────────────
+// A box without the church's joinpolicy serves an approval church as OPEN-JOIN (absent == approval off). `landed` for it is
+// decided from THIS CONSOLE'S OWN settled knowledge of the church's policy (Steward.joinPolicyFresh, via the lifted
+// _knownJoinApproval) — never from the target read, which is empty by definition: true -> must land; null -> not landed
+// (`policy-unknown`); false -> best effort. The document is the OWNER-signed copy only, sent verbatim, never re-signed.
+const { joinpolicy: _jp, ...docsNoJoin } = fullDocs();
+test('D5 approval REQUIRED (console knows): joinpolicy is sent verbatim to the new box, and a landed box reads as landed', async () => {
+  const w = world({ join: true });
+  const r = await w.api._backfillSafeguardTo(NEW);
+  assert.ok(w.sentTo(NEW).includes('joinpolicy'), 'the church\'s join policy was not carried to the new box');
+  assert.equal(w.published.find((p) => kindOf(p.ev) === 'joinpolicy').ev, w.docs.joinpolicy, 'joinpolicy was not the verbatim owner-signed event');
+  assert.equal(r.results.joinpolicy, 'landed'); assert.equal(r.landed, true, JSON.stringify(r));
+});
+test('D5 approval REQUIRED: a box that REFUSES joinpolicy is NOT landed even though minors: and blocked: landed (it would serve an approval church as open-join)', async () => {
+  const w = world({ join: true, answers: { joinpolicy: 'refuse' } });
+  const r = await w.api._backfillSafeguardTo(NEW);
+  assert.equal(r.results.minors, 'landed'); assert.equal(r.results.blocked, 'landed');
+  assert.match(r.results.joinpolicy, /^refused: /);
+  assert.equal(r.landed, false, 'A BOX THAT REFUSED THE JOIN POLICY OF AN APPROVAL CHURCH COUNTED AS LANDED: ' + JSON.stringify(r));
+  assert.equal(r.why, 'not-landed');
+});
+test('D5 approval REQUIRED: a timed-out or dead send is not landed; a "newer version already stored" answer IS (the box already holds one)', async () => {
+  for (const a of ['timeout', 'dead']) assert.equal((await world({ join: true, answers: { joinpolicy: a } }).api._backfillSafeguardTo(NEW)).landed, false, a);
+  assert.equal((await world({ join: true, answers: { joinpolicy: 'newer' } }).api._backfillSafeguardTo(NEW)).landed, true);
+});
+test('D5 approval REQUIRED but the owner has NO joinpolicy copy to send (e.g. only a steward ever wrote one): NOT landed — absent is only ok when the church is open', async () => {
+  const w = world({ join: true, docs: docsNoJoin });
+  const r = await w.api._backfillSafeguardTo(NEW);
+  assert.equal(r.results.joinpolicy, 'absent');
+  assert.equal(r.landed, false, 'a box with no join policy was counted as landed for a church the console knows requires approval');
+});
+test('D5 policy NOT KNOWN (null): fails CLOSED — not landed with why "policy-unknown", even when every document landed', async () => {
+  const w = world({ join: null });
+  const r = await w.api._backfillSafeguardTo(NEW);
+  assert.equal(r.results.minors, 'landed'); assert.equal(r.results.joinpolicy, 'landed');
+  assert.equal(r.landed, false, 'A BOX WAS COUNTED AS LANDED WHILE THE CONSOLE DID NOT KNOW WHETHER THE CHURCH REQUIRES APPROVAL');
+  assert.equal(r.why, 'policy-unknown');
+});
+test('D5 OPEN-join church (console knows false): joinpolicy is best-effort — a refusal, or no copy at all, does not strand the box', async () => {
+  assert.equal((await world({ join: false, answers: { joinpolicy: 'refuse' } }).api._backfillSafeguardTo(NEW)).landed, true);
+  assert.equal((await world({ join: false, docs: docsNoJoin }).api._backfillSafeguardTo(NEW)).landed, true);
+});
+test('D5 a steward-signed joinpolicy is NOT forwarded as the church\'s (owner-authored only; deferred like nophoto)', async () => {
+  const w = world({ join: false, docs: { ...fullDocs(), joinpolicy: doc('joinpolicy', { approval: true }, STEWARD_KEY) } });
+  await w.api._backfillSafeguardTo(NEW);
+  assert.ok(!w.sentTo(NEW).includes('joinpolicy'), 'a document not signed by the church key was forwarded as the church\'s');
+});
+test('D5 POINT OF USE: signRelay does NOT sign a box into the church\'s list when the church requires approval and the box refused joinpolicy', async () => {
+  const w = adoptWorld({ join: true, answers: { joinpolicy: 'refuse' } });
+  const r = await w.api.signRelay(NEW);
+  assert.equal(r.pending, true, 'a box that refused the join policy of an approval church did not come back pending: ' + JSON.stringify(r));
+  assert.equal(w.enrols.length, 0, 'AN APPROVAL CHURCH\'S NEW BOX WAS SIGNED INTO THE RELAY LIST WITHOUT ITS JOIN POLICY — members are routed to a box that admits anyone');
+  assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }], 'the box was not marked as owed');
 });
