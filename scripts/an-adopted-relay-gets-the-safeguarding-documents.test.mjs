@@ -274,25 +274,68 @@ const ADOPT_LIFT = [
   ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
   ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '], ['fn', 'function _pendingTomb() {'], ['fn', 'function _tombable(keys, never) {'], ['fn', 'async function _removedKeysRead(droppable) {'],
-  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
+  ['st', 'var _removePressed = '], ['fn', 'async function _adoptRelay(u, opts) {'], ['fn', 'function _adoptRelayAuto(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
 ];
+// THE REAL TOMBSTONE WRITER (FF1 in-flight, 2026-11-22), for the worlds that ask for it (`realTomb`). It is lifted
+// under another name so the `_writeTombstone` every shipped caller reaches is a RECORDING SPY THAT FORWARDS EVERY
+// ARGUMENT to it: the spy says WHO asked for a tombstone to be cleared, the real writer says what that did to the
+// church's removed-keys document (`docs['relays-removed']`, which the world's reads serve and its `publish` replaces).
+const REAL_TOMB = (() => {
+  const a = 'async function _writeTombstone(opts) {';
+  const body = fnBody(STEWARD, a, a);
+  assert.equal(body.split(a).length - 1, 1, 're-anchor: the shipped _writeTombstone no longer starts the way this rename expects');
+  return fnBody(STEWARD, 'function _setPendingTomb(keys) {', '_setPendingTomb') + '\n' + body.replace(a, 'async function _realWriteTombstone(opts) {');
+})();
+// A console that can adopt. `listed` is extraRelays() — the SAME array is returned as `w.listed`, so a test takes a
+// row off this console's list by emptying it. Hooks, all optional:
+//   onSend(doc, n)   called as the n-th backfill document is handed to the box (n === 5 is the last)
+//   onEnrol()        called inside the signing step, before it answers
+//   onRemovedRead(n) called AFTER the n-th read of the church's removed-keys document has been answered (the read
+//                    itself is served untouched; what the hook changes is what the console finds when it returns)
+// `w.spy` records what the adopt path asked its collaborators for: every _writeTombstone argument (`tomb`), every
+// autoSyncHeal argument (`heals`), publishRelayList calls (`lists`) and every call made THROUGH window.Steward.signRelay
+// (`stewardSign`). `w.log` also carries 'read:removed' each time the church's removed-keys document is read.
 function adoptWorld(opts = {}) {
-  const log = [];            // 'send:<doc>' and 'enrol', in the order they happened
+  const log = [];            // 'send:<doc>', 'read:removed' and 'enrol', in the order they happened
   const enrols = [];
   const listed = opts.listed || [NEW];
+  const spy = { tomb: [], tombWrites: [], heals: [], lists: 0, stewardSign: [] };
+  let wt = 0;
   const w = world({ ...opts,
-    lifts: ADOPT_LIFT,
+    lifts: [...ADOPT_LIFT, ...(opts.lifts || [])],
     scope: {
       normRelay: (u) => String(u || '').trim(), extraRelays: () => listed.slice(),
       enrolRelayNet: async (o) => { log.push('enrol'); enrols.push(o);
+        if (opts.onEnrol) await opts.onEnrol();
         return opts.enrolResult || { published: true, full: true, proven: [{ url: NEW, pubkey: KEY_NEW }], entries: [{ pubkey: KEY_NEW, url: NEW }] }; },
-      _writeTombstone: async () => ({ wrote: false }), autoSyncHeal: async () => ({}),
+      _writeTombstone: async (...a) => { spy.tomb.push(a[0]); return opts.realTomb ? w.api._realWriteTombstone(...a) : { wrote: false }; },
+      autoSyncHeal: async (...a) => { spy.heals.push(a[0]); return {}; },
+      __spy: spy,
+      // what the real tombstone writer stands on: a clock, a signer, and a relay that keeps the newest copy
+      now: () => 3000, _monotonic: (t) => t,
+      finalizeEvent: (t) => ({ ...t, pubkey: CP, id: 'tomb-w' + (++wt) }), finalizeEvent2: (t) => ({ ...t, pubkey: CP, id: 'tomb-w' + (++wt) }),
+      publish: async (ev) => { spy.tombWrites.push(ev); w.docs['relays-removed'] = ev; return ev; },
       ...(opts.scope || {}) },
-    more: '\nconst _st = { ' + fnBody(STEWARD, '  signRelay(url) {', 'signRelay') + ' };\nwindow.Steward = { joinPolicyFresh: () => __join(), signRelay: (u) => _st.signRelay(u), publishRelayList: () => Promise.resolve(null) };',
-    expose: ', signRelay: (u) => _st.signRelay(u), retryOwedBackfills, _owedBackfills' });
+    more: (opts.realTomb ? '\n' + REAL_TOMB : '') + '\nconst _st = { ' + fnBody(STEWARD, '  signRelay(url) {', 'signRelay') + ' };' +
+      '\nwindow.Steward = { joinPolicyFresh: () => __join(), signRelay: (...a) => { __spy.stewardSign.push(a); return _st.signRelay(...a); }, publishRelayList: (...a) => { __spy.lists++; return Promise.resolve(null); } };' + (opts.more || ''),
+    expose: ', signRelay: (...a) => _st.signRelay(...a), retryOwedBackfills, _owedBackfills' + (opts.realTomb ? ', _realWriteTombstone' : '') + (opts.expose || '') });
   const realPublish = w.scope.pool.publish;
-  w.scope.pool.publish = (urls, ev) => { log.push('send:' + kindOf(ev)); return realPublish(urls, ev); };
-  return { ...w, log, enrols, listed, owed: () => JSON.parse(w.mem.get(OWED_KEY) || '[]') };
+  w.scope.pool.publish = (urls, ev) => {
+    log.push('send:' + kindOf(ev));
+    if (opts.onSend) opts.onSend(kindOf(ev), log.filter((x) => x.startsWith('send:')).length);
+    return realPublish(urls, ev);
+  };
+  const realRead = w.scope._oneComplete;
+  w.scope._oneComplete = async (filters, ms, priv) => {
+    if (!/relays-removed/.test(String((filters[0]['#d'] || [])[0] || ''))) return realRead(filters, ms, priv);
+    log.push('read:removed');
+    const r = await realRead(filters, ms, priv);
+    if (opts.onRemovedRead) opts.onRemovedRead(log.filter((x) => x === 'read:removed').length);
+    return r;
+  };
+  // The keys the church's removed-keys document names RIGHT NOW (what every console's heal and auto-join will read).
+  const tombKeys = () => { const ev = w.docs['relays-removed']; if (!ev) return []; return JSON.parse(ev.content || '[]').map((t) => t.pubkey).sort(); };
+  return { ...w, log, enrols, listed, spy, tombKeys, owed: () => JSON.parse(w.mem.get(OWED_KEY) || '[]') };
 }
 // signOutcome is a top-level function in app/stew-dashboard.jsx (shipped unbundled), sliced out and RUN (rule 3).
 // test-slice's brace matcher cannot walk the regex literals inside it, so the slice is "from its first line to the
@@ -821,4 +864,222 @@ test('D5 POINT OF USE: signRelay does NOT sign a box into the church\'s list whe
   assert.equal(r.pending, true, 'a box that refused the join policy of an approval church did not come back pending: ' + JSON.stringify(r));
   assert.equal(w.enrols.length, 0, 'AN APPROVAL CHURCH\'S NEW BOX WAS SIGNED INTO THE RELAY LIST WITHOUT ITS JOIN POLICY — members are routed to a box that admits anyone');
   assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }], 'the box was not marked as owed');
+});
+// ── 20. FF1 IN-FLIGHT (PLAN-FIX-FF1-2026-11-22): a Remove that lands WHILE an automatic adopt is running ──
+// Section 19 is the Remove that landed BEFORE the pass: the up-front read sees it. These are the Removes that land
+// AFTER that read — while the church's documents are being sent to the box, which takes seconds — and before the
+// box is signed. Everything is entered at the point of use (retryOwedBackfills; autoJoinPublicRelays), the real
+// _adoptRelayAuto / _adoptRelay / gate / backfill run, and the tombstone writer is the SHIPPED one behind a
+// forwarding spy (`realTomb`). The ONE spy that answers for itself is enrolRelayNet, the signing step: "was the box
+// signed" is "was that step reached".
+//
+// The Remove is staged from inside `pool.publish`, on the LAST of the five backfill sends — after the pass's
+// up-front removed-keys read, before the signing slot. Each test re-anchors that ordering from the log.
+const TOMB_LS = 'trinityone.steward.tomb-pending.' + CP;
+const midFlight = (stage, extra = {}) => {
+  const fired = { n: 0 };
+  const w = owedWorld({ realTomb: true, ...extra, onSend: (_doc, n) => { if (n === DOCS.length) { fired.n++; stage(w); } } });
+  return Object.assign(w, { fired });
+};
+// The Remove was staged exactly once, after a removed-keys read (the pass's own) — and where the last send sits.
+const lastSendAt = (w) => w.log.reduce((at, x, i) => (x.startsWith('send:') ? i : at), -1);
+const assertStagedMidFlight = (w, why) => {
+  assert.equal(w.fired.n, 1, why + ': re-anchor — the mid-flight Remove was never staged (the backfill no longer makes five sends)');
+  assert.ok(w.log.slice(0, lastSendAt(w)).includes('read:removed'),
+    why + ': re-anchor — the pass did not read the removed keys BEFORE the backfill, so this Remove is not "after the up-front read": ' + JSON.stringify(w.log));
+};
+test('FF1 in-flight POINT OF USE (owed retry): another console\'s Remove lands while the documents are being sent — the box is NOT signed and its tombstone is NOT cleared (control: no Remove, it is signed)', async () => {
+  const control = midFlight(() => {});
+  const c = await control.api.retryOwedBackfills();
+  await settle();
+  assert.equal(control.enrols.length, 1, 'CONTROL: with no Remove the owed box should land and be signed: ' + JSON.stringify(c));
+  assert.deepEqual(control.owed(), [], 'CONTROL: a signed box was left owed');
+  // The Remove: the church's removed-keys document now names the box's key. The row is still on THIS console's list.
+  const w = midFlight((x) => { x.docs['relays-removed'] = tombDoc([KEY_NEW]); });
+  const out = await w.api.retryOwedBackfills();
+  await settle();
+  assertStagedMidFlight(w, 'tombstone');
+  assert.equal(w.enrols.length, 0,
+    'A RELAY REMOVED WHILE THE OWED RETRY WAS SENDING IT THE CHURCH\'S DOCUMENTS WAS SIGNED BACK INTO THE LIST — nobody pressed anything (FF1 in-flight): ' + JSON.stringify(w.log));
+  assert.deepEqual(w.tombKeys(), [KEY_NEW], 'THE FRESH TOMBSTONE WAS ERASED BY AN AUTOMATIC PASS — the Remove is undone for good: ' + JSON.stringify(w.docs['relays-removed']));
+  assert.deepEqual(w.spy.tombWrites, [], 'the removed-keys document was re-signed by an automatic pass');
+  assert.deepEqual(w.owed(), [], 'a removed box kept its owed marker — it is retried on every pass');
+  assert.deepEqual(out.rows, [{ url: NEW, pending: false, signed: false }], JSON.stringify(out));
+  assert.ok(w.log.lastIndexOf('read:removed') > lastSendAt(w), 'the removed keys were not read again after the backfill: ' + JSON.stringify(w.log));
+  assert.deepEqual(w.spy.heals, [], 'a pass that signed nothing forced a sync heal');
+  assert.equal(w.spy.lists, 0, 'a pass that signed nothing republished the member relay list');
+});
+
+test('FF1 in-flight (owed retry): the row is taken off THIS console\'s list mid-flight — not signed, marker dropped; and with a tombstone as well, that tombstone stays', async () => {
+  // What removeRelay does on this console: the address leaves the church-added list AND the list every read asks.
+  // (Leaving it in the asked list would make the in-slot removed-keys read incomplete — the box would then go
+  // unsigned for THAT reason, and this would not be testing the still-listed question at all.)
+  const unlist = (x) => { x.listed.length = 0; x.state.relays = x.state.relays.filter((u) => u !== NEW); };
+  const w = midFlight(unlist);
+  await w.api.retryOwedBackfills();
+  await settle();
+  assertStagedMidFlight(w, 'withdrawn');
+  assert.equal(w.enrols.length, 0, 'A ROW THE STEWARD TOOK OFF THE LIST WHILE THE RETRY WAS RUNNING WAS SIGNED ANYWAY: ' + JSON.stringify(w.log));
+  assert.deepEqual(w.owed(), [], 'a withdrawn row kept its owed marker');
+  // Both at once — what a Remove on another console looks like once this console has also dropped the row.
+  const both = midFlight((x) => { x.docs['relays-removed'] = tombDoc([KEY_NEW]); unlist(x); });
+  await both.api.retryOwedBackfills();
+  await settle();
+  assertStagedMidFlight(both, 'tombstone + withdrawn');
+  assert.equal(both.enrols.length, 0);
+  assert.deepEqual(both.tombKeys(), [KEY_NEW], 'the tombstone was cleared');
+  assert.deepEqual(both.owed(), []);
+});
+
+test('FF1 in-flight (owed retry): a Remove still PENDING on this console (its tombstone has not landed) stops the signing too', async () => {
+  const w = midFlight((x) => { x.mem.set(TOMB_LS, JSON.stringify([KEY_NEW])); });
+  await w.api.retryOwedBackfills();
+  await settle();
+  assertStagedMidFlight(w, 'pending');
+  assert.equal(w.enrols.length, 0, 'A RELAY WHOSE REMOVE IS PENDING ON THIS CONSOLE WAS SIGNED BY THE RETRY: ' + JSON.stringify(w.log));
+  assert.deepEqual(JSON.parse(w.mem.get(TOMB_LS)), [KEY_NEW], 'the pending Remove was withdrawn by an automatic pass — its tombstone will now never be written');
+  assert.deepEqual(w.owed(), []);
+});
+
+test('FF1 in-flight FAIL CLOSED (owed retry): when the removed keys cannot be read whole inside the slot, or the box\'s key cannot be resolved there, nothing is signed and the row stays OWED', async () => {
+  // The shared relay — which may hold a tombstone written a second ago — stops answering after the up-front read.
+  const blind = midFlight((x) => { x.state.silent.add(POOL); });
+  await blind.api.retryOwedBackfills();
+  await settle();
+  assertStagedMidFlight(blind, 'unreadable');
+  assert.equal(blind.enrols.length, 0, 'A BOX WAS SIGNED BY AN AUTOMATIC PASS THAT COULD NOT TELL WHETHER IT HAD JUST BEEN REMOVED: ' + JSON.stringify(blind.log));
+  assert.deepEqual(blind.owed(), [{ churchPub: CP, url: NEW }], 'an unreadable removed-keys document dropped the owed marker — the box is never tried again');
+  // No key: the gate's proof has lapsed and the box does not answer a fresh one — which box is this? Cannot say.
+  const mute = midFlight((x) => { x.state.keys[NEW] = ''; x.state.t += 31 * 24 * 3600 * 1000; });
+  await mute.api.retryOwedBackfills();
+  await settle();
+  assertStagedMidFlight(mute, 'unproven');
+  assert.equal(mute.api._gate.provedKey(NEW, CP), '', 're-anchor: the gate still holds a valid proof, so the key WAS resolvable and this is not the unproven case');
+  assert.equal(mute.enrols.length, 0, 'A BOX WHOSE KEY COULD NOT BE RESOLVED WAS SIGNED — its key cannot have been looked up among the removed ones: ' + JSON.stringify(mute.log));
+  assert.deepEqual(mute.owed(), [{ churchPub: CP, url: NEW }], 'a box that could not prove its key in the slot lost its owed marker');
+});
+
+test('FF1 in-flight: an automatic adopt that DOES sign runs the forced heal and republishes the relay list — and never asks for a tombstone to be cleared, never goes through Steward.signRelay', async () => {
+  const OTHER = '8'.repeat(64);
+  const w = owedWorld({ realTomb: true, docs: { ...fullDocs(), 'relays-removed': tombDoc([OTHER]) } });
+  await w.api.retryOwedBackfills();
+  await settle();
+  assert.equal(w.enrols.length, 1, 're-anchor: the owed box was not signed');
+  assert.deepEqual(w.spy.heals, [{ force: true }], 'a box signed by the retry did not get the forced sync heal a Connect gets: ' + JSON.stringify(w.spy.heals));
+  assert.equal(w.spy.lists, 1, 'a box signed by the retry was not followed by a republished member relay list');
+  assert.deepEqual(w.spy.tomb.filter((o) => o && o.remove), [],
+    'AN AUTOMATIC PASS ASKED FOR A REMOVAL TOMBSTONE TO BE CLEARED — only a steward\'s own Add may undo a Remove: ' + JSON.stringify(w.spy.tomb));
+  assert.deepEqual(w.spy.stewardSign, [], 'the owed retry went through Steward.signRelay, whose success path clears the tombstone of the key it signs');
+  assert.deepEqual(w.tombKeys(), [OTHER]);
+});
+
+test('FF1 in-flight, WHAT IS NOT CLOSED: a Remove from another console that lands while the signing step itself is running is signed over for that beat — but its tombstone SURVIVES', async () => {
+  const w = owedWorld({ realTomb: true, onEnrol: () => { w.docs['relays-removed'] = tombDoc([KEY_NEW]); } });
+  await w.api.retryOwedBackfills();
+  await settle();
+  assert.equal(w.enrols.length, 1, 're-anchor: the signing step was not reached, so the Remove was not staged');
+  assert.deepEqual(w.tombKeys(), [KEY_NEW],
+    'A REMOVE THAT LANDED DURING AN AUTOMATIC SIGNING HAD ITS TOMBSTONE ERASED — the box is re-trusted for good, not for a beat: ' + JSON.stringify(w.docs['relays-removed']));
+  assert.deepEqual(w.spy.tomb.filter((o) => o && o.remove), []);
+});
+
+test('FF1 in-flight REGRESSION: a steward\'s OWN Connect is unchanged — it signs a tombstoned box and CLEARS that tombstone, even one that landed mid-flight, and does not need the row on the list', async () => {
+  // Re-Add of a removed box: last write wins, by owner decision.
+  const KEPT = '8'.repeat(64);
+  const w = adoptWorld({ realTomb: true, docs: { ...fullDocs(), 'relays-removed': tombDoc([KEY_NEW, KEPT]) } });
+  const r = await w.api.signRelay(NEW);
+  await settle();
+  assert.equal(w.enrols.length, 1, 'A STEWARD\'S DELIBERATE CONNECT OF A REMOVED BOX WAS REFUSED — the automatic re-check has leaked into the deliberate path: ' + JSON.stringify(r));
+  assert.deepEqual(w.spy.tomb.map((o) => o.remove), [[KEY_NEW]], 'the deliberate Connect did not ask for exactly its own key to be un-tombstoned: ' + JSON.stringify(w.spy.tomb));
+  assert.deepEqual(w.tombKeys(), [KEPT], 'a deliberate Connect did not clear the tombstone of the box it connected (or cleared another): ' + JSON.stringify(w.docs['relays-removed']));
+  assert.deepEqual(w.spy.heals, [{ force: true }]); assert.equal(w.spy.lists, 1);
+  assert.deepEqual(w.owed(), []);
+  assert.ok(!w.log.slice(0, w.log.indexOf('enrol')).includes('read:removed'),
+    'the deliberate path now reads the removed keys before signing — it must be unchanged: ' + JSON.stringify(w.log));
+  // …the Remove lands mid-flight: still signed, still cleared (VP12 — the steward's Add is the later act).
+  const fired = { n: 0 };
+  const mid = adoptWorld({ realTomb: true, onSend: (_d, n) => { if (n === DOCS.length) { fired.n++; mid.docs['relays-removed'] = tombDoc([KEY_NEW]); mid.mem.set(TOMB_LS, JSON.stringify([KEY_NEW])); } } });
+  await mid.api.signRelay(NEW);
+  await settle();
+  assert.equal(fired.n, 1, 're-anchor: the mid-flight Remove was never staged');
+  assert.equal(mid.enrols.length, 1, 'a deliberate Connect was stopped by a Remove that landed while it ran');
+  assert.deepEqual(mid.tombKeys(), [], 'a deliberate Connect left the tombstone of the box it connected');
+  // …and a row that is not on this console's list still signs: the deliberate path never asked that question.
+  const unlisted = adoptWorld({ realTomb: true, listed: [] });
+  await unlisted.api.signRelay(NEW);
+  assert.equal(unlisted.enrols.length, 1, 'a deliberate Connect now requires the row to be on the list');
+});
+
+// The community auto-join, entered at ITS point of use: the REAL autoJoinPublicRelays over the same real
+// _adoptRelayAuto / _adoptRelay / gate / backfill / tombstone writer. Its directory, its preferences document and
+// its registration call are this world's; the box is offered, proves KEY_NEW, registers, and is added to the list.
+const JOIN_LIFT = [
+  ['st', 'var PUBLIC_TARGET_DEFAULT = '], ['fn', 'function _clampPublicTarget(n) {'], ['fn', 'function _communityCap(publicTarget) {'], ['fn', 'function _mergeChosen(a, b) {'],
+  ['fn', 'function rankOffersByLatency(offers) {'], ['fn', 'async function autoJoinPublicRelays() {'],
+];
+function joinWorld(opts = {}) {
+  const chosenWrites = [];
+  const fired = { n: 0 };
+  const w = adoptWorld({ realTomb: true, listed: [], relays: [OWN, POOL], lifts: JOIN_LIFT, ...opts,
+    onSend: (_doc, n) => { if (n === DOCS.length && opts.stage) { fired.n++; opts.stage(w); } },
+    scope: {
+      _readRelayPrefs: async () => ({ prefs: null, complete: true }),
+      _writeRelayPrefs: async (mutate) => { chosenWrites.push(mutate({}).chosen); return { written: true }; },
+      discoverRelayOffers: async () => [{ url: NEW, name: 'newbox', ms: 10 }],
+      relays: () => [OWN, POOL], selfPublicRelay: () => '', ownRelay: () => OWN,
+      _ownChurchName: () => 'St Aidan', _isDeclined: () => false, isSharedRelaySpelling: () => false, isOwnRelaySpelling: () => false,
+      __addRow: (u) => { if (!w.listed.includes(u)) { w.listed.push(u); w.state.relays.push(u); } return u; },
+    },
+    more: '\nwindow.Steward.registerAtRelay = async () => ({ ok: true, status: 200 }); window.Steward.addRelay = (u) => __addRow(u); window.Steward.rememberRelayName = () => {};',
+    expose: ', autoJoinPublicRelays' });
+  return Object.assign(w, { chosenWrites, fired });
+}
+test('FF1 in-flight POINT OF USE (community auto-join): a Remove lands while the pass is sending the box the church\'s documents — not signed, not recorded as chosen, tombstone NOT cleared (control: no Remove, it is adopted)', async () => {
+  const control = joinWorld();
+  const c = await control.api.autoJoinPublicRelays();
+  await settle();
+  assert.equal(control.enrols.length, 1, 'CONTROL: with no Remove the offered box should be signed: ' + JSON.stringify(c));
+  assert.deepEqual(c.added, [{ url: NEW, pubkey: KEY_NEW }], JSON.stringify(c));
+  assert.deepEqual(control.spy.stewardSign, [], 'the auto-join went through Steward.signRelay, whose success path clears the tombstone of the key it signs');
+  assert.deepEqual(control.spy.tomb.filter((o) => o && o.remove), [], 'the auto-join asked for a removal tombstone to be cleared: ' + JSON.stringify(control.spy.tomb));
+  assert.deepEqual(control.spy.heals, [{ force: true }], 'a box the auto-join signed did not get the forced sync heal');
+
+  const w = joinWorld({ stage: (x) => { x.docs['relays-removed'] = tombDoc([KEY_NEW]); } });
+  const out = await w.api.autoJoinPublicRelays();
+  await settle();
+  assert.equal(w.fired.n, 1, 're-anchor: the mid-flight Remove was never staged');
+  assert.ok(w.log.slice(0, w.log.indexOf('send:minors')).includes('read:removed'), 're-anchor: the pass did not read the removed keys before the backfill: ' + JSON.stringify(w.log));
+  assert.equal(w.enrols.length, 0,
+    'THE DEFAULT-ON AUTO-JOIN SIGNED A BOX THAT WAS REMOVED WHILE IT WAS BEING ADOPTED — nobody pressed anything (FF1 in-flight): ' + JSON.stringify(w.log));
+  assert.deepEqual(w.tombKeys(), [KEY_NEW], 'THE FRESH TOMBSTONE WAS ERASED BY THE AUTO-JOIN: ' + JSON.stringify(w.docs['relays-removed']));
+  assert.deepEqual(w.spy.tombWrites, [], 'the removed-keys document was re-signed by the auto-join');
+  assert.deepEqual(out.added, [], 'a removed box was reported as adopted: ' + JSON.stringify(out));
+  assert.deepEqual(w.chosenWrites, [], 'a removed box was recorded in the church-wide chosen set (it would hold a cap slot on every console)');
+  assert.deepEqual(out.skipped, [[NEW, 'unsigned']], JSON.stringify(out));
+  assert.deepEqual(w.owed(), [], 'a removed box was left owed by the auto-join — the retry would try it on every pass');
+});
+
+// ── 21. FF1 in-flight, post-build audit: the church SWITCHES while the signing slot is reading ────────────
+// The automatic slot awaits two things before it signs (a proof, when the gate holds none, and the removed-keys
+// read). enrolRelayNet signs for whichever church is active WHEN IT RUNS, so a console that changed church during
+// those awaits would sign church A's owed box into church B's list. The switch is made as the in-slot read (the
+// second removed-keys read of the pass) comes back — a whole read, no tombstone: every other check says go.
+test('FF1 in-flight POINT OF USE (owed retry): the console switches church while the signing slot is reading the removed keys — the box is NOT signed, and the first church still owes it', async () => {
+  const OTHER_CHURCH = '7'.repeat(64);
+  for (const [why, switchTo] of [
+    ['another church is unlocked', (x) => { x.state.pub = OTHER_CHURCH; x.state.sk = 'sk-of-the-other-church'; }],
+    ['the console starts acting for a helped church', (x) => { x.state.actingChurch = OTHER_CHURCH; }],
+  ]) {
+    let switched = 0;
+    const w = owedWorld({ realTomb: true, onRemovedRead: (n) => { if (n === 2) { switched++; switchTo(w); } } });
+    const out = await w.api.retryOwedBackfills();
+    await settle();
+    assert.equal(switched, 1, why + ': re-anchor — the pass made no second removed-keys read, so the church never switched: ' + JSON.stringify(w.log));
+    assert.ok(w.log.indexOf('send:minors') < w.log.lastIndexOf('read:removed'), why + ': re-anchor — the switch was not made after the backfill (inside the slot): ' + JSON.stringify(w.log));
+    assert.equal(w.enrols.length, 0,
+      why + ': AN AUTOMATIC PASS SIGNED A RELAY FOR THE WRONG CHURCH — the console changed church while the slot was reading, and the signing step signs for whoever is active when it runs: ' + JSON.stringify(w.log));
+    assert.deepEqual(w.owed(), [{ churchPub: CP, url: NEW }], why + ': the first church\'s owed marker was dropped — its box is never tried again: ' + JSON.stringify(out));
+    assert.deepEqual(w.spy.heals, [], why + ': a sync heal was forced for a pass that signed nothing');
+    assert.equal(w.spy.lists, 0, why + ': the member relay list was republished for a pass that signed nothing');
+  }
 });
