@@ -13492,8 +13492,6 @@
         return () => {
         };
       }
-      let approval = false;
-      let policyNewest = null;
       const admittedByAuthor = /* @__PURE__ */ new Map();
       const _admittedUnion = () => {
         const all = /* @__PURE__ */ new Set();
@@ -13516,8 +13514,18 @@
         if (winBy !== pubk && !(roster && roster.has(winBy))) return false;
         return !!win.open;
       };
+      const _approval = () => {
+        const roster = _churchRoster.get(pubk);
+        let win = null;
+        for (const [author, v] of policyByAuthor) {
+          if (author !== pubk && !(roster && roster.has(author))) continue;
+          if (!win || v.at > win.at || v.at === win.at && String(v.id) < String(win.id)) win = v;
+        }
+        return win ? !!win.approval : false;
+      };
       const emit = () => {
         const isAdmitted = !!(me && _admittedUnion().has(me));
+        const approval = _approval();
         onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed, openKnown: _openKnown() });
       };
       return _onChurchDocs(pubk, {
@@ -13539,37 +13547,21 @@
             const prev = policyByAuthor.get(e.pubkey);
             const at = e.created_at || 0, id = String(e.id || "");
             if (!prev || at > prev.at || at === prev.at && id < prev.id) {
-              let open = false;
+              let open = false, approval = false;
               if (!e.tags.some((t) => t[0] === "deleted") && e.content) {
                 try {
                   const j = JSON.parse(e.content);
                   open = !!(j && typeof j === "object" && j.approval === false);
+                  approval = !!(j && typeof j === "object" && j.approval);
                 } catch {
                   open = false;
+                  approval = false;
                 }
               }
-              policyByAuthor.set(e.pubkey, { at, id, open });
-            }
-            if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) {
-              emit();
-              return;
-            }
-          }
-          if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
-          if (d === "trinityone/joinpolicy:" + pubk) {
-            const at = e.created_at || 0, id = String(e.id || "");
-            const pv = policyNewest, pvOk = !!pv && (pv.by === pubk || !!(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(pv.by)));
-            if (pvOk && id !== pv.id && (at < pv.at || at === pv.at && !(id < pv.id))) return;
-            policyNewest = { at, id, by: e.pubkey };
-            if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
-            else {
-              try {
-                approval = !!JSON.parse(e.content).approval;
-              } catch {
-                approval = false;
-              }
+              policyByAuthor.set(e.pubkey, { at, id, open, approval });
             }
             emit();
+            return;
           }
         },
         onroster() {

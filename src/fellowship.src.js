@@ -7281,8 +7281,10 @@ window.Fellowship = {
   subscribeChurchJoin(churchNpub, onState) {
     const pubk = toPub(churchNpub);
     if (!pubk) { onState({ approval: false, isAdmitted: true, isPending: false }); return () => {}; }
-    let approval = false;
-    let policyNewest = null;   // { at, id } of the trusted joinpolicy copy `approval` came from — newest wins (R-M1)
+    // `approval` is NOT held as a variable any more: it is computed when it is READ (_approval below), from every author's
+    // newest joinpolicy copy and the roster AS IT IS NOW. It used to be decided at ARRIVAL, which dropped a steward's newer
+    // copy that beat the roster here and never looked at it again — so a phone that took church(approval:true) then a newer
+    // steward(false) and THEN the roster ended on `true` (SIGNUP-SAFEGUARDING-GAPS gap 4, reproduced on the shipped bundle).
     // THE ADMITTED LIST IS A UNION OF EVERY AUTHOR'S NEWEST COPY, NOT WHICHEVER DOCUMENT ARRIVED LAST. `admitted:` is
     // one replaceable document PER AUTHOR (the church, and each steward who approves people), the relay's gate
     // unions them (scripts/gateway.mjs rebuildAdmitted), and so does the console (subscribeAdmitted). This kept one
@@ -7326,7 +7328,7 @@ window.Fellowship = {
     //     fall back to an older trusted "open" (audit of 928e87c9). Default-deny: a stranger's copy can at worst
     //     hide this button, never show it. No document, a deletion, an empty or unparseable body, or
     //     approval:true → false. "We never heard" is never "open".
-    const policyByAuthor = new Map();   // author pubkey -> { at, id, open }
+    const policyByAuthor = new Map();   // author pubkey -> { at, id, open, approval }
     const _openKnown = () => {
       const roster = _churchRoster.get(pubk);
       let win = null;
@@ -7338,7 +7340,22 @@ window.Fellowship = {
       if (winBy !== pubk && !(roster && roster.has(winBy))) return false;   // newest copy is untrusted → unknown
       return !!win.open;
     };
-    const emit = () => { const isAdmitted = !!(me && _admittedUnion().has(me));
+    // WHAT THE PHONE SHOWS FOR "does joining need approval?" — the NEWEST copy among the authors we trust RIGHT NOW (the church key,
+    // or a steward on the current roster), whoever signed it; a same-second tie goes to the lower event id, as the relays decide. An
+    // author who is not (or is no longer) trusted pins NOTHING (the removed-helper void rule, Fable audit LOW). A tombstone, an
+    // empty or an unparseable body reads `false`, and so does having no trusted copy at all — the existing default; this is a
+    // DISPLAY value (the relay enforces approval whatever this phone shows). `approval` is stored separately from `open` because
+    // `open` is "approval === false" and so cannot tell approval:true from a deleted or unparseable copy.
+    const _approval = () => {
+      const roster = _churchRoster.get(pubk);
+      let win = null;
+      for (const [author, v] of policyByAuthor) {
+        if (author !== pubk && !(roster && roster.has(author))) continue;
+        if (!win || v.at > win.at || (v.at === win.at && String(v.id) < String(win.id))) win = v;
+      }
+      return win ? !!win.approval : false;
+    };
+    const emit = () => { const isAdmitted = !!(me && _admittedUnion().has(me)); const approval = _approval();
       onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed, openKnown: _openKnown() }); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
@@ -7349,34 +7366,19 @@ window.Fellowship = {
           admittedByAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
           emit(); return;   // who counts is decided in _admittedUnion, when it is read
         }
-        // openKnown's per-author record, kept BEFORE the trust check below (which is arrival-time and would drop
-        // a steward's copy that beat the roster here). Who counts is decided in _openKnown, when it is read.
+        // The per-author record for BOTH `approval` and `openKnown`: kept whoever signed it, and who counts is decided when
+        // each is READ (_approval / _openKnown), never at arrival.
         if (d === 'trinityone/joinpolicy:' + pubk) {
           const prev = policyByAuthor.get(e.pubkey);
           const at = e.created_at || 0, id = String(e.id || '');
           if (!prev || at > prev.at || (at === prev.at && id < prev.id)) {
-            let open = false;
-            if (!e.tags.some(t => t[0] === 'deleted') && e.content) { try { const j = JSON.parse(e.content); open = !!(j && typeof j === 'object' && j.approval === false); } catch { open = false; } }
-            policyByAuthor.set(e.pubkey, { at, id, open });
+            let open = false, approval = false;
+            if (!e.tags.some(t => t[0] === 'deleted') && e.content) { try { const j = JSON.parse(e.content); open = !!(j && typeof j === 'object' && j.approval === false); approval = !!(j && typeof j === 'object' && j.approval); } catch { open = false; approval = false; } }
+            policyByAuthor.set(e.pubkey, { at, id, open, approval });
           }
-          // An UNTRUSTED author's copy is dropped by the check below without an emit, but it can change openKnown
-          // (a newer untrusted copy makes it unknown), so say so now. approval/isAdmitted/isPending are re-emitted
-          // with the values they already had.
-          if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) { emit(); return; }
-        }
-        if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
-        // NEWEST TRUSTED COPY WINS, NOT THE LAST TO ARRIVE (plan PLAN-removed-steward-fixes-F1-F4 §0b R-M1; memory
-        // member-join-approval-is-last-arrival-wins). A removed helper's setting is carried dated one second after
-        // theirs (owner answer k), so a later change by someone else can arrive FIRST and must not be overwritten by the
-        // carried copy arriving second. Same tie rule as its siblings: same second, the lower event id.
-        if (d === 'trinityone/joinpolicy:' + pubk) {
-          const at = e.created_at || 0, id = String(e.id || '');
-          // VOID: a copy whose author is no longer the church or a roster steward pins nothing (Fable audit LOW — the relay's
-          // own rule since 0c N1): a removed helper's newer copy must not hold back the church's older correction
-          const pv = policyNewest, pvOk = !!pv && (pv.by === pubk || !!(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(pv.by)));
-          if (pvOk && id !== pv.id && (at < pv.at || (at === pv.at && !(id < pv.id)))) return;
-          policyNewest = { at, id, by: e.pubkey };
-          if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit();
+          // Recorded BEFORE any trust check, whoever signed it: who counts is decided when it is READ (_approval, _openKnown), on
+          // every emit, so a copy that arrived before the roster is counted the moment the roster arrives (onroster -> emit).
+          emit(); return;
         }
       },
       onroster() { emit(); },
