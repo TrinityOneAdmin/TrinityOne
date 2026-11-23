@@ -49,6 +49,41 @@ function widgetCountAction(verdict, n) {
   if (v === 'genuinely-0-new' || v === 'not-opted-in' || v === 'identity-mismatch' || v === 'no-church') return { op: 'clear' };
   return { op: 'keep' };
 }
+// AUTH OUTCOME (pre-merge audit 2026-11-23, B4). A relay that challenged us and then REFUSED our AUTH (OK false --
+// e.g. our clock beyond its limit) still flushes its held EOSE after a grace (gateway.mjs EOSE_AUTH_GRACE_MS), so a
+// run can end 'eose+auth-grace' with zero events while the gated content was never actually open to us. That must
+// never read as a real zero. nostr-tools hands the AUTH's OK result to NO callback this reader is given -- the
+// automatic path (AbstractRelay._onmessage 'AUTH' -> relay.auth(onauth)) swallows the promise -- but the relay
+// object the pool keeps exposes it honestly: relay.authPromise settles on the relay's OK frame for OUR signed AUTH
+// event (OK true -> resolved; OK false -> rejected; nostr-tools' own publishTimeout also rejects it, and a run that
+// ends before any of that leaves it pending). Called from inside the signer, where authPromise is not yet assigned
+// (relay.auth() is still in its synchronous half); one microtask later it is. Anything this cannot see stays
+// 'sent' = unconfirmed, and an unconfirmed AUTH keeps the widget -- the failure direction is always KEEP.
+function watchAuthOutcome(pool, outcomes, url) {
+  if (!outcomes[url]) outcomes[url] = 'sent';
+  Promise.resolve().then(() => {
+    try {
+      const r = pool && pool.relays && typeof pool.relays.get === 'function' ? pool.relays.get(url) : null;
+      const p = r && r.authPromise;
+      if (p && typeof p.then === 'function') p.then(() => { outcomes[url] = 'ok'; }, () => { outcomes[url] = 'refused'; });
+    } catch (e) {}
+  });
+}
+// THE VERDICT (B4). A zero only counts as REAL when the gated reads were really open to us: no relay refused our
+// AUTH, and, if any relay challenged us, at least one confirmed it OK=true. A run with no challenge at all (an
+// ungated/open relay set) is still a legitimate zero -- real zeros MUST keep clearing, that is the widget's
+// staleness design. Anything else returns a verdict widgetCountAction does not know, which is a KEEP (no set, no
+// clear, and the worker does not cancel the posted notification). Pure; lifted and run by tests.
+function readerVerdict(fetched, newer, endedBy, authProblem, skewBad, authOutcomes) {
+  const o = authOutcomes || {};
+  let challenged = false, refused = false, confirmed = false;
+  for (const u in o) { challenged = true; if (o[u] === 'refused') refused = true; if (o[u] === 'ok') confirmed = true; }
+  if (fetched === 0 && (authProblem || skewBad)) return 'AUTH-FAILED-OR-CLOCK-SKEW (count is NOT a real zero)';
+  if (fetched === 0 && endedBy !== 'eose' && endedBy !== 'eose+auth-grace') return 'NO-ANSWER (' + endedBy + ') (count is NOT a real zero)';
+  if (newer > 0) return 'new-events';
+  if (refused || (challenged && !confirmed)) return 'auth-unconfirmed (count is NOT a real zero)';
+  return 'genuinely-0-new';
+}
 const isBlockDoc = (e, cp, d) => !!e && e.kind === 30078 && e.pubkey === cp && ((e.tags || []).find((t) => t[0] === 'd') || [])[1] === d;
 // null => unparseable doc (caller fails closed); empty Set => no blocklist / nobody blocked.
 function parseBlocked(doc) {
@@ -112,9 +147,10 @@ window.__dpStart = async function (mnemonic, opts) {
 
     const pool = new SimplePool();
     const stats = { authSigned: 0, closed: [] };
+    const authOutcomes = {};                                // url -> 'sent' | 'ok' | 'refused' (B4; see watchAuthOutcome)
     const sign = (url) => async (authEvent) => {
       if (!F.relayVerified(url)) throw new Error('nip42: relay not admitted');   // same refusal fellowship applies
-      stats.authSigned++; return finalizeEvent(authEvent, sk);
+      stats.authSigned++; watchAuthOutcome(pool, authOutcomes, url); return finalizeEvent(authEvent, sk);
     };
     pool.automaticallyAuth = sign;
     const seen = new Map();
@@ -177,7 +213,7 @@ window.__dpStart = async function (mnemonic, opts) {
           const rt = (ev.tags || []).find((t) => t[0] === 'relay');
           const url = rt && rt[1];
           if (!url || set.indexOf(url) < 0 || !F.relayVerified(url)) throw new Error('nip42: relay not admitted');
-          stats.authSigned++; return finalizeEvent(ev, sk);
+          stats.authSigned++; watchAuthOutcome(pool, authOutcomes, url); return finalizeEvent(ev, sk);
         },
         onevent(e) {
           if (isBlockDoc(e, cp, BLOCKED_D)) { if (!blockDoc || (e.created_at || 0) > (blockDoc.created_at || 0)) blockDoc = e; return; }
@@ -202,14 +238,12 @@ window.__dpStart = async function (mnemonic, opts) {
     const newer = evs.filter((e) => e.created_at > since);
     const authProblem = stats.closed.some((r) => /auth|restricted|blocked/i.test(r));
     const skewBad = typeof skew === 'number' && Math.abs(skew) > 600;
-    let verdict;
-    if (evs.length === 0 && (authProblem || skewBad)) verdict = 'AUTH-FAILED-OR-CLOCK-SKEW (count is NOT a real zero)';
-    else if (evs.length === 0 && stats.endedBy !== 'eose' && stats.endedBy !== 'eose+auth-grace') verdict = 'NO-ANSWER (' + stats.endedBy + ') (count is NOT a real zero)';
-    else if (newer.length === 0) verdict = 'genuinely-0-new';
-    else verdict = 'new-events';
+    // B4: the whole ladder lives in readerVerdict (pure, tested). A refused or unconfirmed AUTH comes out as a
+    // verdict widgetCountAction keeps on, so a false zero can no longer blank a true count or cancel its notification.
+    const verdict = readerVerdict(evs.length, newer.length, stats.endedBy, authProblem, skewBad, authOutcomes);
     const byKind = {}; for (const e of newer) byKind[e.kind] = (byKind[e.kind] || 0) + 1;
     return finish({ verdict, newSinceCursor: newer.length, fetchedInWindow: evs.length, byKind, endedBy: stats.endedBy,
-      authSigned: stats.authSigned, closedReasons: stats.closed, skew, cursor, since, reqSince, groupIds: groupIds.length, dirSize, minor, blockDocSeen: !!blockDoc, blockedCount: bl ? bl.size : -1, droppedBlocked });
+      authSigned: stats.authSigned, authOutcomes, closedReasons: stats.closed, skew, cursor, since, reqSince, groupIds: groupIds.length, dirSize, minor, blockDocSeen: !!blockDoc, blockedCount: bl ? bl.size : -1, droppedBlocked });
   } catch (e) {
     // NEVER echo secrets: release sends only the error class; debug sends a message/stack scrubbed of the mnemonic and any 64-hex key.
     let err = String(e && e.name || 'Error');
