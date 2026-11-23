@@ -87,7 +87,7 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
     // minorsKnown: toggleMinor refuses a whole-list setMinors until the church's list of children has
     // actually arrived (FIX 1, 2026-10-13). This fixture is a WARM console; the cold case has its own file,
     // scripts/a-cold-console-cannot-empty-the-list-of-children.test.mjs.
-    loaded: true, minorsKnown: true, clearedKnown: true, cleared: {},
+    loaded: true, minorsKnown: true, guardiansKnown: true, clearedKnown: true, cleared: {},
     minors: minor ? [PK] : [],
     approved: cleared ? [PK] : [],
     nophoto: [],
@@ -117,7 +117,7 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       setMinorNotice: (n) => calls.notice.push(n),
       _reseal: (...a) => calls.reseal.push(a),
       // the row's own furniture — none of it is the control under test
-      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, guardiansClosed: {}, parentSet, ckClearedSet: new Set(),
+      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, guardiansClosed: {}, guardiansAt: 0, parentSet, ckClearedSet: new Set(),
       minorNotice: null, delegated: false, photosAllowed: false,
       SkBadge: Stub('SkBadge'), SkPill: Stub('SkPill'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },

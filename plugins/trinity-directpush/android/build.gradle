@@ -1,0 +1,33 @@
+// Direct Mode background push (docs/direct-mode-push-plan.md, Phase 1 Option B). A plain Android library: it is NOT a
+// Capacitor plugin (a background WebView has no JS bridge) — it is native code compiled INTO com.trinityone.app so the
+// worker shares the app's UID (Keystore + SharedPreferences) and its process (WebView data dir -> localStorage).
+// Needs the kotlin-gradle-plugin classpath in the APP's android/build.gradle (already there for UnifiedPush work);
+// wiring into the gitignored android/ tree is recorded in ../README.md.
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace "church.trinityone.directpush"
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 34
+    defaultConfig {
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 22
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 34
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+    lintOptions { abortOnError false }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation "androidx.core:core-ktx:1.12.0"
+    implementation "androidx.work:work-runtime-ktx:2.9.1"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.1"
+}

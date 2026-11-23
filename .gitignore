@@ -16,6 +16,10 @@ ios/
 # same pattern. Without this exception `git add` silently drops its Java.
 !/native/trinity-media-session/android/
 /native/trinity-media-session/android/build/
+# …and the Direct Mode background-push module (plugins/trinity-directpush, docs/direct-mode-push-plan.md), same pattern.
+!/plugins/trinity-directpush/android/
+/plugins/trinity-directpush/android/build/
+/plugins/trinity-directpush/android/src/main/assets/directpush/bg-bundle.js
 *.apk
 dist/
 *.log

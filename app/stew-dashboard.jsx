@@ -9239,6 +9239,16 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     }
     const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const unmarking = minorsSet.has(pk);
+    // UNMARKING A CHILD ALSO REMOVES THEIR PARENT LINKS (owner D7, SIGNUP-SAFEGUARDING-GAPS gap 1). The relay treats a child as a minor
+    // while `guardians:` links them to a parent and `minors:` does not name them (that is what makes the window between Confirm's two writes
+    // fail closed), so an unmark that left the link behind would change nothing — a child turning 18 would stay gated for ever. Removing the
+    // child's key from the map is a whole-document replace, so it needs the same "the map is real" evidence approveGuardian asks for; and
+    // it is asked BEFORE anything is written, so a console that cannot do the second half does not do the first half either.
+    if (unmarking && (sg.guardiansKnown !== true || guardiansAt < (Number(sg.guardiansAt) || 0))) {
+      setMinorNotice({ pk, tone: 'fail', text: 'Nothing was changed — this console hasn’t received your church’s parent links yet, and un-marking '
+        + (nameByPub[pk] || 'this member') + ' also removes theirs. Try again in a moment.' });
+      return null;
+    }
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
     let r = null;
@@ -9305,6 +9315,27 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       // them all (removedAll) and carries the parent's whole list from the map just written (owner, 2026-10-01).
       if (unlinkedFrom.length) { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, unlinkedFrom[0], nextG, unlinkedFrom, nextClosed, noticeScope); } catch (e) {} }
     }
+    // …AND THE CHILD-SIDE MIRROR (owner D7). Un-marking removes this child's key from the parent-link map and writes a `closed` pair for each
+    // parent, exactly as unlinkParent does per pair, so (a) the relay stops treating them as a minor on the strength of the link, and (b) the
+    // parents' old requests do not come back as "Confirm" cards. Minors first, links second, so the protection is only ever lifted by the
+    // second write; if that one is refused the child stays gated by the relay and the notice says exactly that.
+    let childUnlinkedFrom = [];
+    if (unmarking && (guardians[pk] || []).length) {
+      const parentsOf = (guardians[pk] || []).slice();
+      const nextG2 = { ...guardians }; delete nextG2[pk];
+      const nextClosed2 = { ...guardiansClosed }; const at2 = Math.floor(Date.now() / 1000);
+      parentsOf.forEach(pp => { nextClosed2[pk + '|' + pp] = at2; });
+      let okG2 = null;
+      try { okG2 = await Promise.resolve(window.Steward.setGuardians(nextG2, nextClosed2)); } catch (e) { okG2 = null; }
+      if (!okG2) {
+        setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is no longer marked as a child, but they are STILL linked to '
+          + parentsOf.map(pp => nameByPub[pp] || 'a parent').join(', ') + ' — the relay didn’t accept the removal, and while a link stands the relay still treats them as a child. Try again.' });
+        _reseal(next, nextApproved, [pk]);
+        return r;
+      }
+      parentsOf.forEach(pp => { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pp, pk, nextG2, undefined, nextClosed2, noticeScope); } catch (e) {} });
+      childUnlinkedFrom = parentsOf; nextG = nextG2;
+    }
     // A CHILD IS NEVER A CLEARED CHECK-IN WORKER EITHER — so marking somebody withdraws the check-in clearance
     // they hold, as unmarking withdraws the youth one below. Owner's decision 2026-09-11 (device finding D4's
     // second half): the relay already refuses every USE of a marked child's clearance, but the document stayed
@@ -9363,9 +9394,11 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         if (landedN > 0 && M > landedN) outage = ' Their child protection reached ' + landedN + ' of your ' + M + ' relay machines — a machine that is off or away does not have it until it is back and in sync. The Relays page shows which.';
       } catch (e) {}
     }
+    const linkNote = childUnlinkedFrom.length ? ' Their parent link' + (childUnlinkedFrom.length > 1 ? 's were' : ' was') + ' removed too (' + childUnlinkedFrom.map(pp => nameByPub[pp] || 'a parent').join(', ') + '), so the church now treats them as an adult.' : '';
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
-      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
-      : (unlinkedFrom.length
+      ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' + linkNote }
+      : (unmarking && linkNote ? { pk, text: 'No longer marked as a child.' + linkNote }
+      : unlinkedFrom.length
         ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian. Un-marking them will not put those links back.' + outage }
         : (outage ? { pk, text: 'Marked as a child.' + outage } : null)));
     // With the new map when a link was removed: the unlinked children's sealed clearances are the only place

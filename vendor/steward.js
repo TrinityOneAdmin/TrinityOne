@@ -20304,6 +20304,15 @@ zoo`.split("\n");
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
   var BACKFILL_SEND_MS = 8e3;
+  function _knownJoinApproval() {
+    let v = null;
+    try {
+      v = window.Steward && typeof window.Steward.joinPolicyFresh === "function" ? window.Steward.joinPolicyFresh() : null;
+    } catch (e) {
+      v = null;
+    }
+    return v === true ? true : v === false ? false : null;
+  }
   async function _backfillSafeguardTo(target) {
     const u = String(target || "");
     if (!/^wss?:\/\//i.test(u)) return { landed: false, why: "no-target" };
@@ -20386,7 +20395,7 @@ zoo`.split("\n");
       if (!got2.ev) return "absent";
       return sendDoc(got2.ev);
     };
-    const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+    const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp, joinpolicy: JOINPOLICY_D + cp };
     const got = {};
     await Promise.all(Object.keys(ds).map(async (k) => {
       got[k] = await readDoc(ds[k]);
@@ -20396,6 +20405,8 @@ zoo`.split("\n");
     results.minors = await carry(got.minors);
     if (moved()) return { landed: false, why: "changed", results };
     results.blocked = await carry(got.blocked);
+    if (moved()) return { landed: false, why: "changed", results };
+    results.joinpolicy = await carry(got.joinpolicy);
     for (const k of ["approved", "guardians", "nophoto"]) {
       if (moved()) return { landed: false, why: "changed", results };
       try {
@@ -20405,8 +20416,10 @@ zoo`.split("\n");
       }
     }
     const ok = (x) => x === "landed" || x === "absent";
-    const landed = ok(results.minors) && ok(results.blocked);
-    return { landed, why: landed ? "" : "not-landed", results };
+    const known = _knownJoinApproval();
+    const joinOk = known === true ? results.joinpolicy === "landed" : known === false;
+    const landed = ok(results.minors) && ok(results.blocked) && joinOk;
+    return { landed, why: landed ? "" : known === null && ok(results.minors) && ok(results.blocked) ? "policy-unknown" : "not-landed", results };
   }
   var BACKFILL_OWED_LS = "trinityone.steward.backfill-owed";
   function _owedBackfills() {
@@ -20425,22 +20438,103 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  async function _adoptRelay(u) {
+  var _removePressed = /* @__PURE__ */ new Map();
+  async function _adoptRelay(u, opts) {
     if (!sk || !pub) throw new Error("No church key on this device");
+    const automatic = !!(opts && opts.automatic);
     if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
     const cp = pub, sk0 = sk;
     const moved = () => sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork();
+    const pressed0 = automatic ? _removePressed.get(u) || 0 : 0;
+    const pressed = () => automatic && (_removePressed.get(u) || 0) !== pressed0;
     const bf = await _backfillSafeguardTo(u);
     if (moved() || bf && bf.why === "changed") return { published: false, unknown: true, changed: true };
     if (bf && bf.why === "unproven") return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
     if (!bf || !bf.landed) {
+      if (pressed()) return { removedMidFlight: true, withdrawn: true };
       _setOwedBackfill(cp, u, true);
       return { pending: true, url: u, backfill: bf && bf.results || null };
     }
     _setOwedBackfill(cp, u, true);
+    if (automatic) {
+      const _kA = (x) => {
+        try {
+          return normalizeURL2(x);
+        } catch (e) {
+          return String(x || "");
+        }
+      };
+      const ra = await enrolSerial(async () => {
+        if (pressed()) return { removedMidFlight: true, withdrawn: true };
+        let listed = [];
+        try {
+          listed = extraRelays();
+        } catch (e) {
+          listed = [];
+        }
+        if (!listed.includes(u)) return { removedMidFlight: true, withdrawn: true };
+        let key = "";
+        try {
+          key = String(_gate.provedKey(u, cp) || "").toLowerCase();
+        } catch (e) {
+          key = "";
+        }
+        if (!/^[0-9a-f]{64}$/.test(key)) {
+          try {
+            const pr = await verifyRelayIdentity(u);
+            key = String(pr && pr.relayPub || "").toLowerCase();
+          } catch (e) {
+            key = "";
+          }
+        }
+        if (!/^[0-9a-f]{64}$/.test(key)) return { removedMidFlight: true, unproven: true };
+        let gone = null;
+        try {
+          gone = await _removedKeysRead(new Set(listed.map(_kA)));
+        } catch (e) {
+          gone = null;
+        }
+        if (!gone || !gone.complete) return { removedMidFlight: true, removedUnknown: true };
+        if (gone.keys.has(key) || _pendingTomb().some((k) => k === key)) return { removedMidFlight: true, removed: true };
+        if (moved()) return { published: false, unknown: true, changed: true };
+        return enrolRelayNet({ extra: [u] });
+      });
+      if (ra && ra.removedMidFlight) {
+        if (!moved() && (ra.removed || ra.withdrawn)) _setOwedBackfill(cp, u, false);
+        return ra;
+      }
+      if (!moved() && _signedIn(ra, u)) _setOwedBackfill(cp, u, false);
+      return ra;
+    }
     const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
     if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
     return r;
+  }
+  function _adoptRelayAuto(u) {
+    const a = normRelay(u);
+    if (!a) return Promise.resolve(null);
+    const p = _adoptRelay(a, { automatic: true });
+    p.then((r) => {
+      try {
+        if (r && !r.unknown && !r.removedMidFlight && (r.published || (r.proven || []).length > 0)) {
+          try {
+            const h = autoSyncHeal({ force: true });
+            if (h && h.catch) h.catch(() => {
+            });
+          } catch (e) {
+          }
+          try {
+            const pl = window.Steward.publishRelayList();
+            if (pl && pl.catch) pl.catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+      } catch (e) {
+      }
+    }, () => {
+    });
+    return p;
   }
   function _signedIn(r, u) {
     if (!r || r.unknown || r.skipped || r.pending) return false;
@@ -20547,7 +20641,7 @@ zoo`.split("\n");
         }
         let r = null;
         try {
-          r = await window.Steward.signRelay(e.url);
+          r = await _adoptRelayAuto(e.url);
         } catch (x) {
           r = null;
         }
@@ -21380,6 +21474,10 @@ zoo`.split("\n");
         skipped.push([addr, "shared"]);
         continue;
       }
+      if (isOwnRelaySpelling(addr)) {
+        skipped.push([addr, "own"]);
+        continue;
+      }
       let proof = null;
       try {
         proof = await verifyRelayIdentity(addr);
@@ -21421,7 +21519,7 @@ zoo`.split("\n");
       }
       let _sr = null;
       try {
-        _sr = await window.Steward.signRelay(addr);
+        _sr = await _adoptRelayAuto(addr);
       } catch (e) {
         _sr = null;
       }
@@ -24022,8 +24120,10 @@ zoo`.split("\n");
     // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
     // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
     // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
-    // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
-    // retryOwedBackfills.
+    // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoPickRelays (a
+    // devtools helper, no screen). NOT the two automatic passes any more (FF1 in-flight, 2026-11-22):
+    // retryOwedBackfills and autoJoinPublicRelays call _adoptRelayAuto, which shares _adoptRelay with this method and
+    // never runs the un-tombstone below.
     signRelay(url) {
       const u = normRelay(url);
       if (!u) return Promise.resolve(null);
@@ -24123,6 +24223,11 @@ zoo`.split("\n");
       try {
         const _uo = normRelay(url);
         if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false);
+      } catch (e) {
+      }
+      try {
+        const _ur = normRelay(url);
+        if (_ur) _removePressed.set(_ur, (_removePressed.get(_ur) || 0) + 1);
       } catch (e) {
       }
       const p = enrolSerial(() => unenrolRelayNet(url));

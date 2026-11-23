@@ -46,11 +46,11 @@ const LIFT = [
   ['st', 'pool.automaticallyAuth = (url) => async (authEvent) => {'],
   ['fn', 'function _oneComplete(filters, ms = 6e3, privateDoc = false) {'],
   // the engine and the choke
-  ['st', 'var BACKFILL_SEND_MS = '], ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '],
+  ['st', 'var BACKFILL_SEND_MS = '], ['st', 'var MINORS_D = '], ['st', 'var APPROVED_D = '], ['st', 'var GUARDIANS_D = '], ['st', 'var BLOCKED_D = '], ['st', 'var NOPHOTO_D = '], ['st', 'var JOINPOLICY_D = '], ['fn', 'function _knownJoinApproval'],
   ['fn', 'function _readCovers'], ['fn', 'function _unprovedDroppable(provedUrls) {'], ['fn', 'async function _backfillSafeguardTo(target) {'],
   ['fn', 'function lsGet(k) {'], ['fn', 'function lsSet(k, v) {'], ['st', 'var _enrolQueue = '], ['fn', 'function enrolSerial'],
   ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'],
-  ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '], ['fn', 'function _pendingTomb() {'], ['fn', 'function _tombable(keys, never) {'], ['fn', 'async function _removedKeysRead(droppable) {'],
+  ['st', 'var _removePressed = '], ['fn', 'async function _adoptRelay(u, opts) {'], ['fn', 'function _adoptRelayAuto(u) {'], ['fn', 'function _signedIn(r, u) {'], ['st', 'var RELAYS_REMOVED_D = '], ['st', 'var TOMB_PENDING_LS = '], ['fn', 'function _pendingTomb() {'], ['fn', 'function _tombable(keys, never) {'], ['fn', 'async function _removedKeysRead(droppable) {'],
   ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
 ].map(([k, a]) => (k === 'fn' ? fnBody(STEWARD, a, a) : stmt(STEWARD, a, a))).join('\n');
 
@@ -79,7 +79,9 @@ function makeConsole(onEnrol) {
     pool, normalizeURL, normalizeURL2: normalizeURL, finalizeEvent, finalizeEvent2: finalizeEvent, verifyEvent, verifyEvent2: verifyEvent,
     fetch: globalThis.fetch, AbortController, AbortSignal, URL, setTimeout, clearTimeout, console,
     localStorage: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, String(v)); }, removeItem: (k) => { mem.delete(k); } },
-    window: { dispatchEvent: () => true }, CustomEvent: function (n) { this.type = n; },
+    // this console's OWN settled read of the church's join policy (Steward.joinPolicyFresh): an OPEN-join church here, so the
+    // joinpolicy document is carried best-effort and does not decide `landed`; the real _knownJoinApproval is lifted above.
+    window: { dispatchEvent: () => true, Steward: { joinPolicyFresh: () => false } }, CustomEvent: function (n) { this.type = n; },
     CANONICAL_RELAY_PUBS: Object.freeze({}), CANONICAL_RELAYS: [],
     relayNetEntries: async () => [], _ownOrigin: () => OLD.base, location: undefined,
     relayNetCandidates: () => [OLD.wsUrl], relaysRaw: () => [OLD.wsUrl, NEW.wsUrl], extraRelays: () => [NEW.wsUrl],
@@ -99,7 +101,7 @@ function makeConsole(onEnrol) {
   });
   const api = new Function('scope', 'with (scope) {' + LIFT +
     '\nconst _st = { ' + fnBody(STEWARD, '  signRelay(url) {', 'signRelay') + ' };' +
-    '\nwindow.Steward = { signRelay: (u) => _st.signRelay(u), publishRelayList: () => Promise.resolve(null) };' +
+    '\nwindow.Steward = { joinPolicyFresh: () => false, signRelay: (u) => _st.signRelay(u), publishRelayList: () => Promise.resolve(null) };' +
     '\nreturn { signRelay: (u) => _st.signRelay(u), retryOwedBackfills, _backfillSafeguardTo, admitRemoteRelay }; }')(proxy);
   return { api, enrols, owed: () => JSON.parse(mem.get(OWED_KEY) || '[]') };
 }

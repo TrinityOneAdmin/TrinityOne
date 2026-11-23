@@ -43,6 +43,7 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
     // actually arrived (FIX 1, 2026-10-13). This fixture is a WARM console; the cold case has its own file,
     // scripts/a-cold-console-cannot-empty-the-list-of-children.test.mjs.
     minorsKnown: true,
+    guardiansKnown: true,   // un-marking also removes the child's parent links (owner D7), so the parent-link map must be real too
     minors: marking ? [] : [pk],
     approved: cleared ? [pk] : [],
     nophoto: alreadySuppressed ? [pk] : [],
@@ -51,7 +52,7 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
   // `guardians` / `parentSet`: toggleMinor now reads the parent map when MARKING, to end any guardian role the
   // person holds (a child is never a guardian — D2). Nobody here is a guardian; that path has its own tests in
   // console-safeguarding-controls-are-wired.test.mjs.
-  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub', 'guardians', 'parentSet', 'ckClearedSet',
+  const fn = new Function('sg', 'minorsSet', 'nophotoSet', 'kidPhotosAllowed', 'window', '_reseal', 'setMinorNotice', 'calls', 'nameByPub', 'guardians', 'parentSet', 'ckClearedSet', 'guardiansAt', 'guardiansClosed',
     body + '\nreturn toggleMinor;')(
     sg,
     new Set(sg.minors),
@@ -69,6 +70,7 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
     { },   // nameByPub — only read on the failure branches, which these cases do not take
     {}, new Set(),   // guardians, parentSet
     new Set(ckCleared ? [pk] : []),   // ckClearedSet — who holds a check-in clearance
+    0, {},   // guardiansAt, guardiansClosed
   );
   await fn(pk);
   return calls;

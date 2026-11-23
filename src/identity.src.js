@@ -182,6 +182,9 @@ function _widgetPlugin() {
 function widgetClearChurch() {
   const W = _widgetPlugin();
   if (W && W.clearPrompt) { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} }
+  // The widget's bare "N new messages" count (Direct Mode) rides this SAME lifecycle: it exists only while the key can be
+  // read in the background, so every path that clears the church settings clears it too.
+  if (W && W.clearMessageCount) { try { Promise.resolve(W.clearMessageCount()).catch(() => {}); } catch (e) {} }
 }
 // Today keeps an hourly probe throttle; this tells it the settings are gone so it writes them again WHEN ALLOWED
 // (audit re-check R3). Today's re-run reads rememberedUntil(), so from rememberClear() this must fire only AFTER the

@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- API 33+ runtime permission; the prompt itself is Commit 2. Without it notify() is a quiet no-op there. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application>
+        <!-- DEBUG-ONLY on-demand trigger (Commit 1 is adb-driven, not periodic). exported=false: nothing outside this
+             app can fire it; from a shell it is reached through `run-as com.trinityone.app am broadcast -n ...`, and
+             the receiver itself refuses to act unless the host app is debuggable. -->
+        <receiver
+            android:name="church.trinityone.directpush.DirectPushDebugReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

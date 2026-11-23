@@ -45,7 +45,9 @@ const LIFT = [
   ['fn', 'function _tombable(keys, never) {'],
   ['fn', 'async function _flushPendingTomb() {'],
   // A2 (2026-11-22): signRelay goes through the real _adoptRelay; its backfill is a scope stub answering "landed".
-  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'], ['fn', 'async function _adoptRelay(u) {'], ['fn', 'function _signedIn(r, u) {'],
+  ['st', 'var BACKFILL_OWED_LS = '], ['fn', 'function _owedBackfills() {'], ['fn', 'function _setOwedBackfill(cp, url, on) {'], ['st', 'var _removePressed = '], ['fn', 'async function _adoptRelay(u, opts) {'], ['fn', 'function _signedIn(r, u) {'],
+  // FF1 in-flight (2026-11-22): the automatic adopt and the owed retry that calls it, real, so a Remove can race them.
+  ['fn', 'function _adoptRelayAuto(u) {'], ['st', 'var BACKFILL_RETRY_MS = '], ['st', 'var _owedRetrying = '], ['st', 'var _owedRetryLastAt = '], ['fn', 'async function retryOwedBackfills(opts) {'],
   ['fn', 'async function _removedKeysRead(droppable) {'],
   ['fn', 'function _unprovedDroppable(provedUrls) {'],
   // BF3/BF1: the relay-prefs reader/writer and the chosen drop, real, so unsignRelay's two follow-ups run for real.
@@ -96,6 +98,7 @@ function makeWorld(cfg) {
     localStorage: { getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null), setItem: (k, v) => { lsMap.set(k, String(v)); }, removeItem: (k) => { lsMap.delete(k); } },
     enrolRelayNet: cfg.enrol || (async () => ({ published: false, proven: [] })),
     _backfillSafeguardTo: async () => ({ landed: true, results: {} }),   // A2: run for real in an-adopted-relay-gets-the-safeguarding-documents.test.mjs
+    _gate: { provedKey: () => '' },   // no cached proof: the automatic adopt resolves the box's key by a fresh verifyRelayIdentity (below)
     autoSyncHeal: async () => ({}),   // signRelay chains a forced heal; the heal itself is point-of-use tested in sync-list-heals-itself
     now: () => NOW, _monotonic: (t) => t,
     _isHex64: (p) => /^[0-9a-f]{64}$/.test(String(p || '')),
@@ -132,14 +135,14 @@ function makeWorld(cfg) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   const api = new Function('scope', 'with (scope) {' + LIFT + (cfg.realHeal ? '\n' + LIFT_HEAL : '') +
-    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, _removedKeysRead, _owedBackfills, _setOwedBackfill, autoSyncHeal, ' +
+    '\nreturn { unenrolRelayNet, syncHeal, _writeTombstone, _closeSyncTrust, enrolSerial, _pendingTomb, _setPendingTomb, _flushPendingTomb, _removedKeysRead, _owedBackfills, _setOwedBackfill, autoSyncHeal, retryOwedBackfills, ' +
     fnBody(BUNDLE, '  signRelay(url) {', 'signRelay in the shipped bundle') + ', ' +
     fnBody(BUNDLE, 'async syncEnable() {', 'syncEnable in the shipped bundle') + ', ' +
     fnBody(BUNDLE, '  unsignRelay(url) {', 'unsignRelay in the shipped bundle') + ', ' +
     fnBody(BUNDLE, 'async publishRelayList() {', 'publishRelayList in the shipped bundle') + ' }; }')(proxy);
   // B1: the console's own probe pass, as relayIdentities reports it — every relay this console LISTS, with the key it
   // proves right now ('' when it proves none). syncEnable signs from this snapshot.
-  scope.window = { Steward: { publishRelayList: () => api.publishRelayList(), relayIdentities: async () => relays.map(r => ({ url: r.url, base: String(r.url).replace(/^wss:/, 'https:').replace(/\/relay$/, ''), pubkey: (r.up && r.key) || '', name: '', online: !!r.up })) } };
+  scope.window = { Steward: { signRelay: (...a) => api.signRelay(...a), publishRelayList: () => api.publishRelayList(), relayIdentities: async () => relays.map(r => ({ url: r.url, base: String(r.url).replace(/^wss:/, 'https:').replace(/\/relay$/, ''), pubkey: (r.up && r.key) || '', name: '', online: !!r.up })) } };
   // Read the NEWEST copy exactly as _oneComplete / the engine does: created_at desc, and on a tie the
   // LAST-written wins (insertion index) — a constant now() + identity _monotonic make every write in a test tie,
   // and breaking the tie any other way would let a later re-sign hide behind an earlier one (it masked a real
@@ -715,4 +718,109 @@ test('FF1: Remove clears the owed marker for that address — also when the Remo
   const r2 = await stuck.api.unsignRelay(B);
   assert.equal(r2.unknown, true, 'precondition: this Remove should not have been able to finish: ' + JSON.stringify(r2));
   assert.deepEqual(stuck.api._owedBackfills().map(e => e.url), [C], 'a Remove that could not finish left the box owed');
+});
+
+// ── FF1 IN-FLIGHT (PLAN-FIX-FF1-2026-11-22): the steward presses Remove on THIS console while the owed retry is
+// adopting that same box ───────────────────────────────────────────────────────────────────────────────────────
+// The REAL retryOwedBackfills -> _adoptRelayAuto -> _adoptRelay, racing the REAL Steward.unsignRelay ->
+// unenrolRelayNet -> _closeSyncTrust -> _writeTombstone, through the one real signing queue. X is an owed box: on
+// this console's list, proving KEY_B, not yet in the church's relay-net. The signing step (enrolRelayNet) is the spy.
+function owedRaceWorld(hooks = {}, cfg = {}) {
+  const OWN = 'wss://own.example/relay', X = 'wss://x.example/relay';
+  const enrols = [];
+  const w = makeWorld({
+    relays: [{ url: OWN, key: KEY_A, up: true }, { url: X, key: KEY_B, up: true }],
+    net: [{ pubkey: KEY_A, url: OWN }], sync: null, own: OWN, extra: [X],
+    enrol: async (o) => { enrols.push(o); if (hooks.onEnrol) hooks.onEnrol(w, X); return { published: true, full: true, proven: [{ url: X, pubkey: KEY_B }], entries: [{ pubkey: KEY_A, url: OWN }, { pubkey: KEY_B, url: X }] }; },
+    ...cfg,
+  });
+  w.scope._backfillSafeguardTo = async () => { if (hooks.onBackfill) hooks.onBackfill(w, X); return { landed: hooks.landed !== false, results: {} }; };
+  w.api._setOwedBackfill(PUB, X, true);
+  return Object.assign(w, { enrols, X });
+}
+const drain = async () => { for (let i = 0; i < 40; i++) await settle(); };
+test('FF1 in-flight POINT OF USE: Remove pressed on this console WHILE the owed retry is sending the box its documents — the retry does not sign it, and the Remove\'s tombstone stands (control: no Remove, it is signed)', async () => {
+  const control = owedRaceWorld();
+  await control.api.retryOwedBackfills();
+  await drain();
+  assert.equal(control.enrols.length, 1, 'CONTROL: with no Remove the owed box should be signed');
+  assert.deepEqual(control.api._owedBackfills(), []);
+
+  let removing = null;
+  const w = owedRaceWorld({ onBackfill: (x, X) => { removing = x.api.unsignRelay(X); } });
+  await w.api.retryOwedBackfills();
+  const rm = await removing;
+  await drain();
+  assert.equal(rm && rm.notListed, true, 're-anchor: the Remove did not run as a not-yet-signed removal: ' + JSON.stringify(rm));
+  assert.equal(rm.tombstoned, true, 're-anchor: the Remove wrote no tombstone, so there is nothing for the retry to honour: ' + JSON.stringify(rm));
+  assert.equal(w.enrols.length, 0,
+    'THE OWED RETRY SIGNED A BOX THE STEWARD HAD JUST REMOVED ON THIS VERY CONSOLE — the Remove was queued ahead of the signing and the signing did not look (FF1 in-flight)');
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B], 'THE REMOVE\'S TOMBSTONE WAS ERASED BY THE RETRY: ' + JSON.stringify(w.tombs()));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 1, 'the removed-keys document was re-signed after the Remove wrote it: ' + JSON.stringify(w.writesTo('trinityone/relays-removed').map(e => e.content)));
+  assert.deepEqual(w.api._owedBackfills(), [], 'the removed box was left owed — the next pass tries it again');
+});
+
+test('FF1 in-flight: Remove pressed WHILE the retry\'s signing step is running — the Remove runs after it in the queue, and nothing un-tombstones the box afterwards', async () => {
+  let removing = null;
+  const w = owedRaceWorld({ onEnrol: (x, X) => { removing = x.api.unsignRelay(X); } });
+  await w.api.retryOwedBackfills();
+  const rm = await removing;
+  await drain();
+  assert.equal(w.enrols.length, 1, 're-anchor: the signing step was not reached, so the Remove was never pressed');
+  assert.equal(rm && rm.tombstoned, true, 're-anchor: the Remove wrote no tombstone: ' + JSON.stringify(rm));
+  assert.deepEqual(tombKeys(w.tombs()), [KEY_B],
+    'A REMOVE PRESSED DURING AN AUTOMATIC SIGNING HAD ITS TOMBSTONE CLEARED BY THAT PASS\'S FOLLOW-UP — the steward removed the box and the console quietly re-trusted it: ' + JSON.stringify(w.tombs()));
+  assert.equal(w.writesTo('trinityone/relays-removed').length, 1, 'the removed-keys document was re-signed after the Remove wrote it');
+});
+
+// ── FF1 audit (2026-11-22): a Remove that writes NO tombstone still stops an automatic adopt in flight ────
+// The church's relay-net list cannot be read whole (a relay mid-login is withholding it), so the REAL
+// unenrolRelayNet answers `unknown` before it has marked any key: no tombstone, nothing pending. The dashboard keeps
+// the row on the list for that answer ("remove it again once your relays are answering"), so the row is still in
+// extraRelays() — and the removed-keys read, a different document, IS whole. Every question the signing slot asked
+// before this fix answers "go".
+const BLIND_NET = { incompleteD: 'trinityone/relay-net' };
+test('FF1 audit POINT OF USE: Remove pressed during the owed retry\'s backfill answers "unknown" and writes NO tombstone — the retry still does not sign the box, and does not leave it owed (controls: no Remove, it is signed; a Remove pressed BEFORE the pass does not stop a later one)', async () => {
+  const control = owedRaceWorld({}, BLIND_NET);
+  await control.api.retryOwedBackfills();
+  await drain();
+  assert.equal(control.enrols.length, 1, 'CONTROL: in this same world, with no Remove pressed, the owed box should be signed');
+
+  let removing = null;
+  const w = owedRaceWorld({ onBackfill: (x, X) => { removing = x.api.unsignRelay(X); } }, BLIND_NET);
+  await w.api.retryOwedBackfills();
+  const rm = await removing;
+  await drain();
+  assert.equal(rm && rm.unknown, true, 're-anchor: the Remove did not answer `unknown`: ' + JSON.stringify(rm));
+  assert.equal(w.tombs(), null, 're-anchor: the Remove wrote a tombstone, so the removed-keys check would have stopped the retry anyway: ' + JSON.stringify(w.tombs()));
+  assert.deepEqual(w.api._pendingTomb(), [], 're-anchor: the Remove marked a key pending, so the pending check would have stopped the retry anyway');
+  assert.ok(w.scope.extraRelays().includes(w.X), 're-anchor: the row left this console\'s list, so the still-listed check would have stopped the retry anyway');
+  assert.equal(w.enrols.length, 0,
+    'THE OWED RETRY FINISHED AN ADOPTION THE STEWARD HAD JUST PRESSED REMOVE ON — that Remove could not reach the church\'s list, wrote no tombstone, and nothing else told the pass it had been pressed (FF1 audit)');
+  assert.deepEqual(w.api._owedBackfills(), [], 'the box was left owed after its Remove — the next pass signs it');
+
+  // A Remove pressed and finished BEFORE a pass begins is not held against that pass: the steward connected again.
+  const later = owedRaceWorld({}, BLIND_NET);
+  const first = await later.api.unsignRelay(later.X);
+  assert.equal(first && first.unknown, true, 're-anchor: ' + JSON.stringify(first));
+  later.api._setOwedBackfill(PUB, later.X, true);   // what a later Connect that came back pending writes
+  await later.api.retryOwedBackfills();
+  await drain();
+  assert.equal(later.enrols.length, 1, 'AN EARLIER REMOVE BLOCKED EVERY LATER RETRY OF THAT ADDRESS — the count must be compared with where it stood when the adopt began');
+});
+
+test('FF1 audit: Remove pressed while the retry is sending documents to a box that then does NOT take them — the retry does not write the owed marker back (control: no Remove, it stays owed)', async () => {
+  const control = owedRaceWorld({ landed: false }, BLIND_NET);
+  await control.api.retryOwedBackfills();
+  await drain();
+  assert.deepEqual(control.api._owedBackfills(), [{ churchPub: PUB, url: control.X }], 'CONTROL: with no Remove pressed, a box that has not taken the documents stays owed');
+
+  let removing = null;
+  const w = owedRaceWorld({ landed: false, onBackfill: (x, X) => { removing = x.api.unsignRelay(X); } }, BLIND_NET);
+  await w.api.retryOwedBackfills();
+  await removing;
+  await drain();
+  assert.equal(w.enrols.length, 0);
+  assert.deepEqual(w.api._owedBackfills(), [],
+    'THE RETRY WROTE THE OWED MARKER BACK AFTER THE STEWARD PRESSED REMOVE — the box is tried again on every pass and signed the moment it accepts the documents');
 });

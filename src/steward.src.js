@@ -6248,8 +6248,10 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 //   3. SEND VERBATIM, TO THE TARGET ONLY, AND READ ITS ANSWER. The owner's own signed event, never re-signed.
 //      OK true (or "duplicate") = landed. OK false "…a newer version…" = landed too: the box already holds a
 //      NEWER copy. Any other refusal, a timeout or a dead socket = not landed.
-//   4. `landed` = minors: AND blocked: each landed or are known not to exist. Those are the two whose ABSENCE is
-//      the dangerous direction. approved:, guardians: and nophoto: are carried BEST-EFFORT and never decide
+//   4. `landed` = minors: AND blocked: each landed or are known not to exist — plus joinpolicy: WHEN THIS CONSOLE KNOWS
+//      THE CHURCH REQUIRES APPROVAL (_knownJoinApproval: true -> it must have landed; null -> not landed, `policy-unknown`;
+//      false -> best effort). Those are the ones whose ABSENCE is the dangerous direction (a box without joinpolicy serves an
+//      approval church as open-join). approved:, guardians: and nophoto: are carried BEST-EFFORT and never decide
 //      `landed`: their absence is the safe direction (nobody is cleared, no exemption, no suppression lifted) —
 //      and a stale approved: naming a current minor is refused by the relay for ever, which would otherwise
 //      strand the box. minors: is sent before approved: for the same reason.
@@ -6269,6 +6271,15 @@ function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], 
 // own box, or hold it) — the two whose result DECIDES something; refreshNamedRelays' tunnel swap and
 // adoptNetDocAddresses (both branches), awaited and best-effort. NOT addRelay.
 const BACKFILL_SEND_MS = 8000;
+// DOES THIS CONSOLE'S OWN, SETTLED READ SAY THE CHURCH REQUIRES APPROVAL TO JOIN? true | false | null (not known yet).
+// Steward.joinPolicyFresh answers only when a narrow read of the joinpolicy document has settled genuinely on every connected
+// relay (_freshDocRead); a bare EOSE, an offline console, or no subscription open answers null. Used by _backfillSafeguardTo to
+// decide whether `joinpolicy` must LAND — it cannot be decided from the TARGET read, which is empty by definition.
+function _knownJoinApproval() {
+  let v = null;
+  try { v = (window.Steward && typeof window.Steward.joinPolicyFresh === 'function') ? window.Steward.joinPolicyFresh() : null; } catch (e) { v = null; }
+  return v === true ? true : v === false ? false : null;
+}
 async function _backfillSafeguardTo(target) {
   const u = String(target || '');
   if (!/^wss?:\/\//i.test(u)) return { landed: false, why: 'no-target' };
@@ -6322,7 +6333,7 @@ async function _backfillSafeguardTo(target) {
     if (!got.ev) return 'absent';
     return sendDoc(got.ev);
   };
-  const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp };
+  const ds = { minors: MINORS_D + cp, blocked: BLOCKED_D + cp, approved: APPROVED_D + cp, guardians: GUARDIANS_D + cp, nophoto: NOPHOTO_D + cp, joinpolicy: JOINPOLICY_D + cp };
   const got = {};
   await Promise.all(Object.keys(ds).map(async (k) => { got[k] = await readDoc(ds[k]); }));
   if (moved()) return { landed: false, why: 'changed' };
@@ -6330,13 +6341,25 @@ async function _backfillSafeguardTo(target) {
   results.minors = await carry(got.minors);          // FIRST: the relay refuses an approved: that names a minor it knows
   if (moved()) return { landed: false, why: 'changed', results };
   results.blocked = await carry(got.blocked);
+  // joinpolicy: the OWNER-AUTHORED copy only (authors:[cp], re-checked in readDoc), carried verbatim and never re-signed. A box that
+  // lacks it serves an approval church as OPEN-JOIN (absent == approval off), so its absence is the dangerous direction — see `landed`.
+  // A delegated steward's copy is not carried (it needs the stewards: document on the box first; the same deferral as nophoto).
+  if (moved()) return { landed: false, why: 'changed', results };
+  results.joinpolicy = await carry(got.joinpolicy);
   for (const k of ['approved', 'guardians', 'nophoto']) {
     if (moved()) return { landed: false, why: 'changed', results };
     try { results[k] = await carry(got[k]); } catch (e) { results[k] = 'failed'; }
   }
   const ok = (x) => x === 'landed' || x === 'absent';
-  const landed = ok(results.minors) && ok(results.blocked);
-  return { landed, why: landed ? '' : 'not-landed', results };
+  // joinpolicy decides `landed` from THIS CONSOLE'S OWN settled knowledge of the church's policy, never from the target read:
+  //   true  (approval required)  -> it MUST have landed on the box (sent and accepted, or the box already holds a newer one) —
+  //                                 an owner copy that is absent here, unread, refused or timed out is NOT landed;
+  //   false (open join)          -> carried best-effort; its absence cannot make a box more open than the church is;
+  //   null  (not known)          -> FAIL CLOSED: not landed, `policy-unknown`; the owed retry asks again.
+  const known = _knownJoinApproval();
+  const joinOk = known === true ? results.joinpolicy === 'landed' : known === false;
+  const landed = ok(results.minors) && ok(results.blocked) && joinOk;
+  return { landed, why: landed ? '' : (known === null && ok(results.minors) && ok(results.blocked) ? 'policy-unknown' : 'not-landed'), results };
 }
 // ── ADOPT ONE RELAY: PROVE → BACKFILL → ONLY THEN SIGN (plan Part A, A2, 2026-11-22) ─────────────────────────
 //
@@ -6380,15 +6403,32 @@ function _setOwedBackfill(cp, url, on) {
     lsSet(BACKFILL_OWED_LS, JSON.stringify(rest));
   } catch (e) {}
 }
-async function _adoptRelay(u) {
+// REMOVE WAS PRESSED FOR THIS ADDRESS (FF1 audit, 2026-11-22) — a count per normalised address, for this page's
+// lifetime, bumped by Steward.unsignRelay the moment it is called. An automatic adopt notes the count when it starts
+// and stops if it has moved. WHY A COUNT AND NOT THE TOMBSTONE: a Remove does not always write one. One that cannot
+// read the church's relay-net list whole answers `unknown` BEFORE it has marked any key (and so does one cut short
+// by a church switch, or one that throws); the steward is told "remove it again", the row STAYS on this console's
+// list, and nothing in the removed-keys document or the pending set says a Remove was ever pressed. Every question
+// the signing slot asks then answers "go", and the pass finishes the adoption the steward had just tried to cancel.
+// In memory only, on purpose: an adopt in flight does not survive a reload either, and unsignRelay has already
+// dropped the owed marker, so nothing restarts it. Read by _adoptRelay's automatic path ONLY — a steward's own
+// Connect racing their own Remove is last-write-wins, as before.
+const _removePressed = new Map();
+async function _adoptRelay(u, opts) {
   if (!sk || !pub) throw new Error('No church key on this device');
+  const automatic = !!(opts && opts.automatic);   // set ONLY by _adoptRelayAuto (the owed retry, the community auto-join)
   if (actingChurch || _viewingNetwork()) return enrolSerial(() => enrolRelayNet({ extra: [u] }));
   const cp = pub, sk0 = sk;
   const moved = () => (sk !== sk0 || pub !== cp || !!actingChurch || _viewingNetwork());
+  const pressed0 = automatic ? (_removePressed.get(u) || 0) : 0;
+  const pressed = () => automatic && (_removePressed.get(u) || 0) !== pressed0;   // Remove pressed for this address since this adopt began
   const bf = await _backfillSafeguardTo(u);
   if (moved() || (bf && bf.why === 'changed')) return { published: false, unknown: true, changed: true };
   if (bf && bf.why === 'unproven') return { published: false, proven: [], unproven: [u], entries: [], unadmitted: true };
   if (!bf || !bf.landed) {
+    // …and a Remove pressed while the documents were being sent has already dropped the owed marker: an automatic
+    // pass does not write it back (it would be retried, and signed, on the next pass).
+    if (pressed()) return { removedMidFlight: true, withdrawn: true };
     _setOwedBackfill(cp, u, true);
     return { pending: true, url: u, backfill: (bf && bf.results) || null };
   }
@@ -6399,9 +6439,78 @@ async function _adoptRelay(u) {
   // (An address that never proves is not here at all: it returned above, un-owed. This cannot retry for ever on a
   // box that will never prove — only on one that proved and took the documents.)
   _setOwedBackfill(cp, u, true);
+  if (automatic) {
+    // AN AUTOMATIC ADOPT ASKS "HAS THIS BOX BEEN REMOVED?" AGAIN, INSIDE THE SIGNING SLOT (FF1 in-flight, 2026-11-22).
+    // The two automatic callers read the church's removed keys ONCE, up front, and then this function spends
+    // seconds outside the queue (the backfill above: up to five reads, five sends and their proofs). A Remove that
+    // landed in those seconds — on this console or another — was signed straight over, with nobody pressing
+    // anything. So the question is asked again here, in the same queue slot that signs (the precedent is
+    // syncEnable, which reads the tombstones inside its slot for the same reason), and it FAILS CLOSED:
+    //   · Remove was pressed on this console since this adopt
+    //     began (_removePressed — whatever that Remove answered)  → consent withdrawn: nothing signed, marker dropped;
+    //   · the row is no longer on this console's list            → consent withdrawn: nothing signed, marker dropped;
+    //   · the box's key cannot be resolved (the gate's still-valid
+    //     proof, else a fresh one)                                → nothing signed, marker KEPT (the next pass retries);
+    //   · the removed-keys read is not whole                      → nothing signed, marker KEPT;
+    //   · the key is removed, or its Remove is pending here       → nothing signed, marker dropped.
+    // Plain reads and a cache lookup only — nothing in here enters enrolSerial (the no-nesting rule).
+    // WHAT THIS DOES NOT DO: it narrows the window to the signing step's own few seconds, it does not close it. A
+    // Remove from ANOTHER console that lands while enrolRelayNet below is running can still be signed over for that
+    // beat. Its tombstone is not cleared (see _adoptRelayAuto) — but NOTHING TAKES THE BOX BACK OUT of the church's
+    // relay-net list afterwards: no pass prunes that list by tombstone (syncHeal re-signs the sync-trust document
+    // only). The surviving tombstone keeps the key out of sync trust and out of the auto-join; the list entry stays
+    // until a steward removes it again.
+    // A STEWARD'S OWN Add/Connect does not come through this branch at all: the lines below it are unchanged.
+    const _kA = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+    const ra = await enrolSerial(async () => {
+      if (pressed()) return { removedMidFlight: true, withdrawn: true };
+      let listed = []; try { listed = extraRelays(); } catch (e) { listed = []; }
+      if (!listed.includes(u)) return { removedMidFlight: true, withdrawn: true };
+      let key = ''; try { key = String(_gate.provedKey(u, cp) || '').toLowerCase(); } catch (e) { key = ''; }
+      if (!/^[0-9a-f]{64}$/.test(key)) { try { const pr = await verifyRelayIdentity(u); key = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { key = ''; } }
+      if (!/^[0-9a-f]{64}$/.test(key)) return { removedMidFlight: true, unproven: true };
+      let gone = null; try { gone = await _removedKeysRead(new Set(listed.map(_kA))); } catch (e) { gone = null; }
+      if (!gone || !gone.complete) return { removedMidFlight: true, removedUnknown: true };
+      if (gone.keys.has(key) || _pendingTomb().some(k => k === key)) return { removedMidFlight: true, removed: true };
+      if (moved()) return { published: false, unknown: true, changed: true };
+      return enrolRelayNet({ extra: [u] });
+    });
+    if (ra && ra.removedMidFlight) {
+      if (!moved() && (ra.removed || ra.withdrawn)) _setOwedBackfill(cp, u, false);   // the Remove is honoured: drop the marker, leave the box alone
+      return ra;                                                                       // removedUnknown / unproven: the marker stays, the next pass asks again
+    }
+    if (!moved() && _signedIn(ra, u)) _setOwedBackfill(cp, u, false);
+    return ra;
+  }
   const r = await enrolSerial(() => enrolRelayNet({ extra: [u] }));
   if (!moved() && _signedIn(r, u)) _setOwedBackfill(cp, u, false);
   return r;
+}
+// THE AUTOMATIC ADOPT (FF1 in-flight, 2026-11-22) — what the owed retry and the community auto-join call INSTEAD of
+// Steward.signRelay. Two differences from a steward's own Add/Connect, and no others:
+//   1. the removal re-check inside the signing slot (_adoptRelay's `automatic` branch, above);
+//   2. it NEVER clears a removal tombstone. Steward.signRelay's success path un-tombstones the key it signed —
+//      right for a deliberate Add (a steward changing their mind is the one way a Remove is undone), and exactly
+//      wrong for a pass nobody pressed: a Remove that landed while the pass was signing had its fresh tombstone
+//      erased, so the box was re-trusted for good. An automatic pass has already established that the key is NOT
+//      tombstoned before it gets here, so there is never anything legitimate for it to clear.
+// On a result that signed (the same test signRelay applies) it runs signRelay's other two follow-ups, unchanged:
+// the forced sync heal and the authoritative kind-10002 — both fire-and-forget, swallowed, after the slot resolved.
+// CALLERS (rule 2): retryOwedBackfills, autoJoinPublicRelays. Nothing on a screen calls this, and it is not on
+// window.Steward.
+function _adoptRelayAuto(u) {
+  const a = normRelay(u);
+  if (!a) return Promise.resolve(null);
+  const p = _adoptRelay(a, { automatic: true });
+  p.then((r) => {
+    try {
+      if (r && !r.unknown && !r.removedMidFlight && (r.published || ((r.proven || []).length > 0))) {
+        try { const h = autoSyncHeal({ force: true }); if (h && h.catch) h.catch(() => {}); } catch (e) {}
+        try { const pl = window.Steward.publishRelayList(); if (pl && pl.catch) pl.catch(() => {}); } catch (e) {}
+      }
+    } catch (e) {}
+  }, () => {});
+  return p;
 }
 // IS THIS BOX NOW IN THE CHURCH'S SIGNED LIST, by what enrolRelayNet answered? The box proved at THIS address, and
 // either it is a shared relay (admitted on its own pin — there is nothing to sign), or the list names its key AND
@@ -6419,7 +6528,9 @@ function _signedIn(r, u) {
 }
 // THE RETRY. Called by the console on the signals it already follows (mount/unlock, a relay returning, window
 // focus, a relay-list change) — events, never a timer. No owed rows for this church → returns at once. One pass at
-// a time. Through window.Steward.signRelay, so a row that lands gets everything a first-time Connect gets.
+// a time. Through _adoptRelayAuto (FF1 in-flight, 2026-11-22; it was window.Steward.signRelay): a row that lands gets
+// the backfill, the signing, the forced heal and the republished relay list a first-time Connect gets — and, unlike
+// a Connect, a second look at the church's removals inside the signing slot, and no tombstone is ever cleared.
 //
 // THE DAMPER (F2, 2026-11-22 — small pipes). Every pass costs an identity proof per listed relay, five reads and up
 // to five sends per owed row, and the console's signals fire on every window focus. So: at most one pass per ten
@@ -6441,10 +6552,12 @@ async function retryOwedBackfills(opts) {
   _owedRetrying = true;
   const rows = [];
   try {
-    // A REMOVE OUTRANKS AN OWED MARKER (FF1, 2026-11-22). This pass calls signRelay, and signRelay's success path
-    // CLEARS the tombstone of the address it signs — that is right for a steward's deliberate Add, and exactly
+    // A REMOVE OUTRANKS AN OWED MARKER (FF1, 2026-11-22). This pass used to call signRelay, and signRelay's success
+    // path CLEARS the tombstone of the address it signs — that is right for a steward's deliberate Add, and exactly
     // wrong here: an owed box that a steward (on this console or another) has since Removed would be proved,
-    // signed back in, un-tombstoned and re-advertised to members with nobody pressing anything. So before any
+    // signed back in, un-tombstoned and re-advertised to members with nobody pressing anything. (It now calls
+    // _adoptRelayAuto, which clears nothing and asks again inside the signing slot; this up-front read stays, so
+    // a removed box is not even sent the church's documents.) So before any
     // row is tried, the church's removed keys are read — the same read syncEnable and the auto-join make, plus
     // this console's pending set — and it FAILS CLOSED: if that read is not whole, nothing is done this pass and
     // every marker stays. Then, per row, the key the box proves (now, or by the gate's still-valid proof) is
@@ -6471,7 +6584,7 @@ async function retryOwedBackfills(opts) {
       if (!sk || pub !== cp || actingChurch || _viewingNetwork()) break;
       if (!/^[0-9a-f]{64}$/.test(key)) { rows.push({ url: e.url, unproven: true }); continue; }
       if (gone.keys.has(key)) { _setOwedBackfill(cp, e.url, false); rows.push({ url: e.url, removed: true }); continue; }
-      let r = null; try { r = await window.Steward.signRelay(e.url); } catch (x) { r = null; }
+      let r = null; try { r = await _adoptRelayAuto(e.url); } catch (x) { r = null; }
       rows.push({ url: e.url, pending: !!(r && r.pending), signed: _signedIn(r, e.url) });
     }
   } finally { _owedRetrying = false; }
@@ -7447,6 +7560,15 @@ async function autoJoinPublicRelays() {
     if (have.has(addr)) { skipped.push([addr, 'listed']); continue; }                         // already in the publish set
     if (_isDeclined(addr)) { skipped.push([addr, 'declined']); continue; }                     // a steward dropped it before
     if (isSharedRelaySpelling(addr)) { skipped.push([addr, 'shared']); continue; }             // never a 2nd spelling of the pool
+    // NOR A SPELLING OF THE BOX THIS CONSOLE IS SERVED FROM (FF1 audit, 2026-11-22). Steward.addRelay refuses one,
+    // so the row never reaches this console's list, and the automatic adopt signs nothing that is not listed: the
+    // pick was proved, registered, sent the whole backfill and then dropped — and it still spent one of this pass's
+    // attempts, so with one slot to fill and the own box ranked fastest the pass adopted nobody. The own box is
+    // enrolled by autoEnrolRelayNet, never from here. WHEN THIS IS REACHED: the console is served from the box's
+    // public origin, the box advertises itself open under a spelling `have` does not hold as an exact string (host
+    // case, an explicit default port — the directory keeps the address as the box claimed it), and the church's
+    // list did not show the box's key this pass (it is not signed in yet, or that read came back empty).
+    if (isOwnRelaySpelling(addr)) { skipped.push([addr, 'own']); continue; }
     // 4a. IDENTITY PROOF AT THE ADDRESS — the key is not carried by the offers directory, so prove it here.
     let proof = null; try { proof = await verifyRelayIdentity(addr); } catch (e) { proof = null; }
     if (moved()) return { ran: false, unknown: true };
@@ -7460,12 +7582,14 @@ async function autoJoinPublicRelays() {
     let reg = null; try { reg = await window.Steward.registerAtRelay(addr, name); } catch (e) { reg = { ok: false }; }
     if (moved()) return { ran: false, unknown: true };
     if (!reg || !reg.ok) { skipped.push([addr, 'register:' + ((reg && reg.status) || 'err')]); continue; }
-    // 5. ADOPT exactly as manual Auto-find: add + name/key binding + signRelay (which signs it into relay-net, clears
-    //    any tombstone, fires the forced heal and republishes the authoritative 10002) + record in `chosen`.
+    // 5. ADOPT: add + name/key binding + _adoptRelayAuto (which backfills, signs it into relay-net, fires the forced
+    //    heal and republishes the authoritative 10002) + record in `chosen`. NOT Steward.signRelay (FF1 in-flight,
+    //    2026-11-22): that clears the tombstone of the key it signs, and this pass is one nobody pressed — the key
+    //    was not tombstoned at the read above, so anything it cleared would be a Remove that landed since.
     try { window.Steward.addRelay(addr); } catch (e) {}
     try { window.Steward.rememberRelayName((o && o.name) || '', addr, p); } catch (e) {}
     let _sr = null;
-    try { _sr = await window.Steward.signRelay(addr); } catch (e) { _sr = null; }
+    try { _sr = await _adoptRelayAuto(addr); } catch (e) { _sr = null; }
     if (moved()) return { ran: false, unknown: true };
     // ONLY A BOX THAT IS ACTUALLY SIGNED IN TAKES A SLOT (F5, 2026-11-22). signRelay can now answer `pending` (the
     // box proved but has not accepted the church's safeguarding documents) or come back unsigned; this recorded the
@@ -10464,8 +10588,10 @@ window.Steward = {
   // …AND IT IS THE SAFEGUARDING CHOKE POINT (plan Part A, A2, 2026-11-22): the box is proved, sent the church's
   // safeguarding documents and seen to ACCEPT them BEFORE it is signed — see _adoptRelay. A result of
   // { pending: true } means nothing was signed and the box is owed a retry; signOutcome says so to the steward.
-  // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoJoinPublicRelays;
-  // retryOwedBackfills.
+  // CALLERS (rule 2): app/stew-dashboard.jsx typed address field, Add card, Auto-find Connect; autoPickRelays (a
+  // devtools helper, no screen). NOT the two automatic passes any more (FF1 in-flight, 2026-11-22):
+  // retryOwedBackfills and autoJoinPublicRelays call _adoptRelayAuto, which shares _adoptRelay with this method and
+  // never runs the un-tombstone below.
   signRelay(url) {
     const u = normRelay(url);
     if (!u) return Promise.resolve(null);
@@ -10559,6 +10685,9 @@ window.Steward = {
     // FF1 (2026-11-22): a Remove ends any OWED state for that address, whatever the Remove itself then answers —
     // an owed marker is consent to connect, and pressing Remove is that consent withdrawn.
     try { const _uo = normRelay(url); if (_uo && pub && !actingChurch && !_viewingNetwork()) _setOwedBackfill(pub, _uo, false); } catch (e) {}
+    // …and an AUTOMATIC adopt of that address already in flight stops, whatever this Remove goes on to answer
+    // (FF1 audit, 2026-11-22 — see _removePressed): it would otherwise write the marker straight back and sign.
+    try { const _ur = normRelay(url); if (_ur) _removePressed.set(_ur, (_removePressed.get(_ur) || 0) + 1); } catch (e) {}
     const p = enrolSerial(() => unenrolRelayNet(url));
     // BF3 (2026-11-22): …or `pruned` — the relay-net prune landed but the sync-tombstone step was partial, so the
     // result says removed:false. The 10002 is what member phones route by; it must not wait on the tombstone.

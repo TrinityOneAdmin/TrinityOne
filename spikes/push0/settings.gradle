@@ -1,0 +1,16 @@
+// THROWAWAY Phase-0 spike build.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "push0-spike"
+include ':app'

@@ -63,6 +63,9 @@ function runJoin(opts = {}) {
     _ownChurchName: () => 'St Aidan',
     _isDeclined: (u) => declined.includes(u),
     isSharedRelaySpelling: (u) => shared.includes(u),
+    // `ownSpellings`: addresses that are a spelling of the box this console is served from (the shipped
+    // isOwnRelaySpelling compares them to ownRelay(); here the test says which are).
+    isOwnRelaySpelling: (u) => (opts.ownSpellings || []).includes(u),
     verifyRelayIdentity: async (u) => ({ relayPub: keyOf(u) }),
     // FIX 1 collaborators: the live-count deficit excludes canonical/shared pins (sharedRelayKeys) and this
     // church's OWN box(es) (the gate's ALREADY-PROVED key — a synchronous cache read, never a probe). The default
@@ -73,14 +76,18 @@ function runJoin(opts = {}) {
     ownRelay: () => '',
     _gate: { provedKey: (u) => (opts.ownKeyAt && opts.ownKeyAt(u)) || '' },
     _writeRelayPrefs: async (mutate) => { const r = mutate({ chosen: prefs && prefs.chosen }); writtenChosen.push(r.chosen); return opts.writePrefs || { written: true }; },
+    // THE ADOPT STEP (FF1 in-flight, 2026-11-22): the pass hands each pick to the module's _adoptRelayAuto — the
+    // automatic adopt, which never clears a removal tombstone — and NOT to Steward.signRelay (below: reaching that
+    // throws). Default answer: SIGNED IN — the shape the real one returns when the box proved, its documents landed
+    // and the church's list now names it (F5: the pass reads this through the shipped _signedIn). `signResult(url)`
+    // lets a test answer something else for one address. The real _adoptRelayAuto is run, from this pass, in
+    // an-adopted-relay-gets-the-safeguarding-documents.test.mjs.
+    _adoptRelayAuto: async (...a) => { const u = a[0]; log.push('sign:' + u); const alt = opts.signResult && opts.signResult(u); return alt || { published: true, proven: [{ url: u, pubkey: keyOf(u) }], entries: [{ pubkey: keyOf(u), url: u }] }; },
     window: { Steward: {
       registerAtRelay: async (u) => { log.push('reg:' + u); return reg(u); },
       addRelay: (u) => { log.push('add:' + u); return u; },
       rememberRelayName: (n, u, p) => { log.push('remember:' + u + ':' + (p || '').slice(0, 2)); },
-      // What Steward.signRelay answers. Default: SIGNED IN — the shape the real one returns when the box proved, its
-      // documents landed and the church's list now names it (F5: the pass reads this through the shipped _signedIn).
-      // `signResult(url)` lets a test answer something else for one address.
-      signRelay: async (u) => { log.push('sign:' + u); const alt = opts.signResult && opts.signResult(u); return alt || { published: true, proven: [{ url: u, pubkey: keyOf(u) }], entries: [{ pubkey: keyOf(u), url: u }] }; },
+      signRelay: (...a) => { log.push('STEWARD.signRelay:' + a[0]); throw new Error('autoJoin must NEVER adopt through Steward.signRelay — its success path clears the removal tombstone of the key it signs (FF1)'); },
       publishRelayList: () => { log.push('publishRelayList'); return Promise.resolve(null); },
       removeRelay: () => { throw new Error('autoJoin must NEVER auto-remove'); },
       unsignRelay: () => { throw new Error('autoJoin must NEVER auto-unsign'); },
@@ -306,4 +313,20 @@ test('FF2: one pass is BOUNDED by the slots it has to fill — one slot and eigh
   assert.equal(count('reg:'), 1); assert.equal(count('add:'), 1);
   assert.deepEqual(j.writtenChosen, [], 'a pending pick was recorded in chosen');
   assert.deepEqual(r.added, []);
+});
+
+// ── FF1 audit (2026-11-22): the console's OWN box, offered under another spelling, is not a candidate ─────
+// Steward.addRelay refuses an own-box spelling, so such a pick can never be listed and the automatic adopt signs
+// nothing unlisted. Before this skip the pass still proved it, registered the church with it, ran the adopt and
+// spent an attempt on it. One slot (target 2 = the canonical relay + 1), the own box ranked FASTEST.
+test('FF1 audit: an offer that is a spelling of this console\'s own box is skipped before anything is asked of it — and does not use up the pass\'s one slot', async () => {
+  const OWN_SPELT = 'wss://box-1.example/relay', COMMUNITY = 'wss://box-2.example/relay';
+  const j = runJoin({ offers: [offer(1, 5), offer(2, 50)], prefs: { publicAuto: true, publicTarget: 2, chosen: [] }, ownSpellings: [OWN_SPELT] });
+  const r = await j.run();
+  assert.deepEqual(j.log.filter((x) => x.includes(OWN_SPELT)), [],
+    'THE CONSOLE\'S OWN BOX WAS TREATED AS A COMMUNITY CANDIDATE — registered with, added or handed to the adopt step: ' + JSON.stringify(j.log));
+  assert.deepEqual(r.skipped, [[OWN_SPELT, 'own']], JSON.stringify(r));
+  assert.deepEqual(j.adopted(), [COMMUNITY],
+    'THE OWN BOX USED UP THE PASS\'S ONLY SLOT — the community relay behind it was never adopted: ' + JSON.stringify(j.log));
+  assert.deepEqual(r.added.map((a) => a.url), [COMMUNITY], JSON.stringify(r));
 });
