@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>directpush-bg</title></head>
+<body>
+<script>
+// Served at https://localhost/__directpush/bg.html — the SAME origin as the app, so localStorage is the app's.
+// Runs BEFORE fellowship boots, on purpose: gate 1 must read the app's storage before anything here can write it.
+(function () {
+  function rep(o) { try { window.DPNative.result(JSON.stringify(o)); } catch (e) {} }
+  window.__dpRep = rep;
+  var g = { stage: 'gate1', origin: location.origin };
+  try {
+    var rl = localStorage.getItem('trinityone.relays');
+    var vf = localStorage.getItem('trinityone.relays.verified');
+    var fc = localStorage.getItem('trinityone.followedChurches');
+    g.lsKeys = localStorage.length;
+    g.relaysKey = rl ? JSON.parse(rl) : null;
+    g.verifiedKeys = vf ? Object.keys(JSON.parse(vf)) : null;
+    g.activeChurch = localStorage.getItem('trinityone.activeChurch');
+    g.followed = fc ? JSON.parse(fc).map(function (c) { return c && (c.npub || c.id); }) : null;
+    g.visible = !!(g.relaysKey && g.relaysKey.length && g.verifiedKeys && g.verifiedKeys.length);
+  } catch (e) { g.err = String(e); g.visible = false; }
+  rep(g);
+
+  // Every frame this page sends, so the log proves WHICH relays were contacted and with WHAT (rule 10).
+  var NativeWS = window.WebSocket, sent = { REQ: 0, EVENT: 0, AUTH: 0, CLOSE: 0, other: 0 }, urls = {};
+  window.__dpWsStats = { sent: sent, urls: urls };
+  window.WebSocket = function (u, p) {
+    var ws = p === undefined ? new NativeWS(u) : new NativeWS(u, p);
+    urls[u] = (urls[u] || 0) + 1;
+    var rx = (window.__dpRx = window.__dpRx || []);
+    ws.addEventListener('message', function (m) {   // control frames only (never EVENT bodies): proves what each relay answered
+      try { var a = JSON.parse(m.data); var k = a[0]; if (k === 'EVENT') { rx.push(u.slice(8, 30) + ' EVENT k' + (a[2] && a[2].kind)); } else rx.push(u.slice(8, 30) + ' ' + k + ' ' + String(a[1] || '').slice(0, 20) + (k === 'OK' || k === 'CLOSED' || k === 'NOTICE' ? ' ' + String(a[2] === undefined ? '' : a[2]).slice(0, 80) + ' ' + String(a[3] || '').slice(0, 80) : '')); } catch (e) {}
+    });
+    var send = ws.send.bind(ws);
+    ws.send = function (d) {
+      try { var k = JSON.parse(d)[0]; if (sent[k] !== undefined) sent[k]++; else sent.other++; } catch (e) { sent.other++; }
+      return send(d);
+    };
+    return ws;
+  };
+  window.WebSocket.prototype = NativeWS.prototype;
+  ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function (k) { window.WebSocket[k] = NativeWS[k]; });
+
+  // fellowship's init() waits on TrinityIdentity.ready, then asks exportMnemonic(). The native layer resolves it.
+  var resolve; var mnemonic = null;
+  window.TrinityIdentity = {
+    locked: false,
+    ready: new Promise(function (r) { resolve = r; }),
+    exportMnemonic: function () { return Promise.resolve(mnemonic); },
+  };
+  window.__dpSetMnemonic = function (m) { mnemonic = m; resolve(); };
+})();
+</script>
+<script src="bg-bundle.js"></script>
+</body></html>
