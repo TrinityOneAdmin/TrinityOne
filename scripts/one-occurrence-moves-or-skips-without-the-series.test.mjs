@@ -196,6 +196,73 @@ test('"Skip just this week" writes a { skip:true } exception, never removeEvent'
   assert.deepEqual(pub.doc.exceptions, { '2026-03-16': { skip: true } }, 'Skip did not write exceptions[date] = { skip:true }');
 });
 
+// REMOVE ASKS FIRST TOO (CLAUDE.md rule 1 — point of use). The Remove button only sets state now; the SkConfirm
+// dialog is what calls removeEvent. With the dialog deleted from SchEventDetail the button does nothing at all, and
+// the Skip test above cannot see that: it never presses Remove. Same harness, same card, the other button.
+function removeHarness(event) {
+  const calls = [];
+  const steward = { publishEvent: (doc) => { calls.push({ fn: 'publishEvent', doc }); return Promise.resolve({}); }, removeEvent: (id) => calls.push({ fn: 'removeEvent', id }) };
+  const { mod, reset, SkConfirm } = buildSched(steward, []);
+  let closed = 0;
+  const draw = () => { reset(); return flat(mod.SchEventDetail({ event, onClose() { closed++; } })); };
+  const label = (x) => { if (x == null) return ''; if (typeof x === 'string' || typeof x === 'number') return String(x); if (Array.isArray(x)) return x.map(label).join(''); return x.props ? label(x.props.children) : ''; };
+  // Found by what it SAYS on screen ("Remove" / "Remove series"), then RUN.
+  const removeBtn = (re) => draw().find(n => n.type === 'button' && n.props && typeof n.props.onClick === 'function' && re.test(label(n).trim()));
+  const dialogs = () => draw().filter(n => n.type === SkConfirm);
+  return { calls, removeBtn, dialogs, closed: () => closed };
+}
+const ONE_OFF = { id: 'o1', title: 'Fair', time: '12:00', recur: '', date: '2026-03-16' };
+const SERIES_OCC = { id: 's1', title: 'Prayer', time: '19:30', recur: 'weekly', day: 1, date: '2026-03-16', seriesDate: '2026-01-05', occDate: '2026-03-16', recurring: true, exceptions: {} };
+
+test('"Remove" on a one-off opens the confirm, and removes nothing until it is confirmed', () => {
+  const h = removeHarness(ONE_OFF);
+  const btn = h.removeBtn(/^Remove$/);
+  assert.ok(btn, 'SchEventDetail shows no "Remove" control on a one-off event');
+  assert.equal(h.dialogs().length, 0, 'a confirm dialog is on screen before anything was pressed');
+  btn.props.onClick();
+  assert.equal(h.calls.length, 0, 'pressing Remove wrote something before the steward confirmed');
+  const dlg = h.dialogs();
+  assert.equal(dlg.length, 1, 'pressing Remove did not open the confirm dialog — the button now does nothing');
+  assert.equal(dlg[0].props.confirmLabel, 'Remove', 'the dialog on screen is not the Remove one');
+  assert.equal(dlg[0].props.title, 'Remove this event?', 'a one-off is asked about as if it were something else');
+  assert.match(dlg[0].props.body, /Fair/, 'the confirm does not name the event');
+  assert.equal(h.closed(), 0, 'the card closed before the steward answered');
+});
+
+test('cancelling the Remove confirm removes nothing and leaves the card open', () => {
+  const h = removeHarness(ONE_OFF);
+  h.removeBtn(/^Remove$/).props.onClick();
+  h.dialogs()[0].props.onCancel();
+  assert.equal(h.calls.length, 0, 'the event was removed (or republished) even though the steward cancelled');
+  assert.equal(h.dialogs().length, 0, 'the confirm stayed on screen after Cancel');
+  assert.equal(h.closed(), 0, 'cancelling the confirm closed the event card');
+});
+
+test('confirming Remove calls removeEvent for THAT event, once, and closes the card', () => {
+  const h = removeHarness(ONE_OFF);
+  h.removeBtn(/^Remove$/).props.onClick();
+  h.dialogs()[0].props.onConfirm();
+  assert.deepEqual(h.calls, [{ fn: 'removeEvent', id: 'o1' }], 'confirming Remove did not call removeEvent(id) exactly once and nothing else');
+  assert.equal(h.closed(), 1, 'the card did not close after the event was removed');
+});
+
+test('on a repeating meeting the button says "Remove series", the confirm says ALL its repeats, and it removes the doc', () => {
+  const h = removeHarness(SERIES_OCC);
+  assert.equal(h.removeBtn(/^Remove$/), undefined, 'a repeating meeting offers a bare "Remove" — it reads as "just this date" and deletes every one');
+  const btn = h.removeBtn(/^Remove series$/);
+  assert.ok(btn, 'SchEventDetail shows no "Remove series" control on a repeating meeting');
+  btn.props.onClick();
+  assert.equal(h.calls.length, 0, 'pressing Remove series wrote something before the steward confirmed');
+  const dlg = h.dialogs();
+  assert.equal(dlg.length, 1, 'pressing Remove series did not open the confirm dialog');
+  assert.equal(dlg[0].props.title, 'Remove this series?');
+  assert.match(dlg[0].props.body, /ALL its repeats/, 'the confirm does not say the whole series goes');
+  dlg[0].props.onConfirm();
+  // NOT a skip: nothing is published, the series document itself is removed.
+  assert.deepEqual(h.calls, [{ fn: 'removeEvent', id: 's1' }], 'confirming Remove series did not call removeEvent(seriesId) and nothing else');
+  assert.equal(h.closed(), 1, 'the card did not close after the series was removed');
+});
+
 // ── round-trip through vendor/steward.js: exceptions survive, and item-3's imgPos/imgZoom still do ────────────
 function realImgNorms() {
   return new Function(fnBody(STEWARD, 'function _evImgPos(p) {') + '\n' + fnBody(STEWARD, 'function _evImgZoom(z) {') + '\nreturn { _evImgPos, _evImgZoom };')();
