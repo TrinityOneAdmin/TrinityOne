@@ -18,6 +18,31 @@ const DM_KIND = 4, GROUP_KIND = 1;   // DMs are #p-tagged to the member; group c
 const SINCE_SLOP = 3 * 86400;            // fellowship's own overlap (SINCE_SLOP); kept equal, see summary
 const lsJson = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
 
+// ---- pure helpers (kept free of window/localStorage so they can be lifted and run by tests) ----
+// The room-visibility rule, mirrored from app/screens-chat.jsx `churchGroups`. FAILS CLOSED: anything not clearly visible is out.
+function visibleGroupIds(raw, myPub, minor) {
+  if (!Array.isArray(raw)) return [];
+  const me = String(myPub || '').toLowerCase();
+  const out = new Set();
+  for (const g of raw) {
+    if (!g || typeof g.id !== 'string' || !g.id) continue;
+    if (g.visibility === 'invite' && !(Array.isArray(g.members) && me && g.members.some((m) => String(m || '').toLowerCase() === me))) continue;
+    if (minor && g.childsafe !== true) continue;
+    out.add(g.id);
+  }
+  return [...out];
+}
+const isBlockDoc = (e, cp, d) => !!e && e.kind === 30078 && e.pubkey === cp && ((e.tags || []).find((t) => t[0] === 'd') || [])[1] === d;
+// null => unparseable doc (caller fails closed); empty Set => no blocklist / nobody blocked.
+function parseBlocked(doc) {
+  const out = new Set();
+  if (!doc) return out;
+  try {
+    const o = JSON.parse(doc.content || '{}');
+    for (const p of (Array.isArray(o.pubkeys) ? o.pubkeys : [])) out.add(String(p || '').toLowerCase());
+    return out;
+  } catch (e) { return null; }
+}
 window.__dpStart = async function (mnemonic, opts) {
   opts = opts || {};
   try {
@@ -74,14 +99,29 @@ window.__dpStart = async function (mnemonic, opts) {
     };
     pool.automaticallyAuth = sign;
     const seen = new Map();
+    let blockDoc = null;
 
-    // Group ids: the app caches the church's group list at localStorage 'trinityone.groups.<church npub>' (screens-chat.jsx,
-    // written from subscribeChurchGroups: [{id, name, ...}]). Group chat events carry #t=<group id> (NOT #p=member).
+    // GROUP IDS = the rooms THIS member could actually open, never the church's full directory (audit L1/F4).
+    // The app caches the church's group DIRECTORY (every group, unfiltered; screens-chat.jsx writes it from
+    // subscribeChurchGroups) at localStorage 'trinityone.groups.<church npub>'. Room visibility is applied at RENDER time
+    // in screens-chat.jsx (`churchGroups`), so we re-apply EXACTLY that rule here, and fail closed:
+    //   1. invite-only room: only if my pubkey is in its member list;
+    //   2. a young person sees only rooms the church marked `childsafe` (Fellowship.assumeMinor, which answers TRUE when
+    //      it cannot ask or has not heard, and for a fail-closed `catch`) -- an adults-only room is never counted.
+    // Group chat events carry #t=<group id> (NOT #p=member). Missing cache => DM-only (never the full directory).
     const rawGroups = lsJson('trinityone.groups.' + np, []);
-    const groupIds = Array.isArray(rawGroups) ? [...new Set(rawGroups.map((g) => g && g.id).filter((x) => typeof x === 'string' && x))] : [];
+    let minor = true;                                       // fail closed until the engine answers
+    try { minor = !!(await F.assumeMinor(np)); } catch (e) { minor = true; }
+    const groupIds = visibleGroupIds(rawGroups, pub, minor);
+    const dirSize = Array.isArray(rawGroups) ? rawGroups.length : 0;
     const filters = [{ kinds: [DM_KIND], '#p': [pub], since: reqSince }];
     if (groupIds.length) filters.push({ kinds: [GROUP_KIND], '#t': groupIds, since: reqSince });
-    else rep({ stage: 'groups', ok: false, why: 'no cached groups for this church; DM-only', key: 'trinityone.groups.<church>' });
+    else rep({ stage: 'groups', ok: false, why: 'no visible groups (no cache, none for me, or all adults-only for a minor); DM-only', dirSize, minor });
+    // BLOCKED SENDERS (audit L2): the church's own signed blocklist (kind 30078, author = church key, d = blocked:<cp>;
+    // same document fellowship's _withoutBlocked reads). Read on the SAME admitted/authed REQ; its event is never counted.
+    // A member may read it (the relay serves it to the church's members and to a blocked reader of their own entry).
+    const BLOCKED_D = 'trinityone/blocked:' + cp;
+    filters.push({ kinds: [30078], authors: [cp], '#d': [BLOCKED_D] });
     let KINDS = [DM_KIND, GROUP_KIND];
     if (DP_DEBUG) {
       // debug-build aids only (adb --es debug); compiled out of release. The relay set is never touched.
@@ -115,7 +155,10 @@ window.__dpStart = async function (mnemonic, opts) {
           if (!url || set.indexOf(url) < 0 || !F.relayVerified(url)) throw new Error('nip42: relay not admitted');
           stats.authSigned++; return finalizeEvent(ev, sk);
         },
-        onevent(e) { if (counts(e) && !seen.has(e.id)) seen.set(e.id, e); },
+        onevent(e) {
+          if (isBlockDoc(e, cp, BLOCKED_D)) { if (!blockDoc || (e.created_at || 0) > (blockDoc.created_at || 0)) blockDoc = e; return; }
+          if (counts(e) && !seen.has(e.id)) seen.set(e.id, e);
+        },
         // An EOSE that arrives while we have just signed an AUTH can precede the relay's post-auth replay of the gated
         // events; closing at once would count a false zero. Give a replay a short window, only when auth happened.
         oneose() { if (stats.authSigned > 0) setTimeout(() => fin('eose+auth-grace'), 4000); else fin('eose'); },
@@ -123,7 +166,15 @@ window.__dpStart = async function (mnemonic, opts) {
       });
       setTimeout(() => fin('timeout-30s'), 30000);
     });
-    const evs = [...seen.values()];
+    // Drop anything authored by a blocked sender (DMs and group chat alike). The blocklist arrives in the same stream, in any
+    // order, so it is applied AFTER collection. No doc at all = nobody blocked; a doc we cannot parse fails CLOSED (count nothing).
+    const bl = parseBlocked(blockDoc);
+    let droppedBlocked = 0;
+    const evs = [...seen.values()].filter((e) => {
+      if (bl === null) { droppedBlocked++; return false; }
+      if (bl.has(String(e.pubkey || '').toLowerCase())) { droppedBlocked++; return false; }
+      return true;
+    });
     const newer = evs.filter((e) => e.created_at > since);
     const authProblem = stats.closed.some((r) => /auth|restricted|blocked/i.test(r));
     const skewBad = typeof skew === 'number' && Math.abs(skew) > 600;
@@ -134,7 +185,7 @@ window.__dpStart = async function (mnemonic, opts) {
     else verdict = 'new-events';
     const byKind = {}; for (const e of newer) byKind[e.kind] = (byKind[e.kind] || 0) + 1;
     return finish({ verdict, newSinceCursor: newer.length, fetchedInWindow: evs.length, byKind, endedBy: stats.endedBy,
-      authSigned: stats.authSigned, closedReasons: stats.closed, skew, cursor, since, reqSince, groupIds: groupIds.length });
+      authSigned: stats.authSigned, closedReasons: stats.closed, skew, cursor, since, reqSince, groupIds: groupIds.length, dirSize, minor, blockDocSeen: !!blockDoc, blockedCount: bl ? bl.size : -1, droppedBlocked });
   } catch (e) {
     // NEVER echo secrets: release sends only the error class; debug sends a message/stack scrubbed of the mnemonic and any 64-hex key.
     let err = String(e && e.name || 'Error');

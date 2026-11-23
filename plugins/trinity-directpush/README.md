@@ -35,3 +35,7 @@ NOTE: `cmd jobscheduler run -f` on the periodic job does NOT run the worker (Wor
 5. Do not swipe-force-stop it; Force stop cancels background work until the app is opened again.
 6. Accept the "Allow ... run in the background" prompt on first launch of the debug build.
 Menu names vary by ColorOS version.
+
+## Phase 2 counting rules (what is counted)
+Group chat: only rooms THIS member could open, via the app's own cached directory (`trinityone.groups.<church npub>`) re-filtered with the screens-chat.jsx rule: invite-only rooms only if my pubkey is listed; a young person (Fellowship.assumeMinor, fail-closed TRUE) only `childsafe` rooms. No cache => DM-only, never the full directory.
+Blocked senders: the church-signed blocklist (kind 30078, `d=trinityone/blocked:<cp>`) is read on the same authed REQ and any event authored by a listed key is dropped (DMs and group chat). No doc = nobody blocked; unparseable doc = count nothing. Counts only; no names/content/group names leave the reader.
