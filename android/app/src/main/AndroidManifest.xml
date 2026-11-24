@@ -24,21 +24,45 @@
             </intent-filter>
 
             <!--
-              App link for church invites. Without this the app had only a LAUNCHER filter, so a member who
+              App links for church invites. Without this the app had only a LAUNCHER filter, so a member who
               followed an invite, installed the APK and opened it arrived at a blank first-run with the invite
               context (?follow=&relay=&name=) thrown away — they then had to type the church name by hand.
-              With it, /join opens straight into the app with the invite intact.
 
               autoVerify makes Android fetch https://<host>/.well-known/assetlinks.json and check our signing
-              cert; the relay serves that (see gateway.mjs). If verification fails — self-hosted church on a
+              cert; both hosts serve it (gateway.mjs route + the tracked .well-known/ copy in the Pages deploy —
+              scripts/assetlinks-on-every-surface.test.mjs). If verification fails — self-hosted church on a
               domain we don't serve, no network at install time — the link simply opens in the browser exactly
               as it does today. Nothing regresses; the app path is a bonus when it verifies.
+
+              WHAT THE QRs ACTUALLY ENCODE (2026-11-24 round; proven by scripts/qr-links-open-the-app.test.mjs,
+              which RUNS the URL builders against these filters):
+                /join?follow=…        console JoinCard QR + join slips (Steward.joinUrl via the /join rewrite)
+                /?follow=…            member "invite a friend" QR (joinLinkFor, app/identity-extras.jsx)
+                /?follow=…#invite=…   guardian→child handoff (inviteUrlFor) + Set up accounts member slips
+                                      (Steward.memberInviteUrl) — the seed rides in the FRAGMENT, never the query
+                https://app.trinityone.church   the console's plain "get the app" QR (path "/" once normalised)
+              So the app host claims /join* AND the bare root path. The ROOT path stays a SEPARATE filter from
+              the marketing apex below: Android unions hosts × paths WITHIN one filter, and trinityone.church/
+              is the marketing site — claiming it would swallow every link to the sales page.
+
+              trinityone.church: the web console runs there too (steward.html on the Pages deploy), and
+              joinUrl() builds from location.origin whenever it is public — so printed QRs with
+              https://trinityone.church/join?follow=… exist (see join.js). Claim /join on the apex, root NOT.
+              Self-hosted church domains cannot be claimed: the manifest is fixed at build time (and the
+              gateway's assetlinks note says the same) — those QRs keep opening the browser.
             -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="app.trinityone.church" android:pathPrefix="/join" />
+                <data android:scheme="https" android:host="app.trinityone.church" android:path="/" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="trinityone.church" android:pathPrefix="/join" />
             </intent-filter>
 
             <!-- BEGIN install-from-file (member only) -->
