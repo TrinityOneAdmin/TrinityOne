@@ -33,8 +33,11 @@ function runFallback({ tab, careOn, canSeeRota, checkinRegister = NO_KIDS }) {
   const calls = [];
   // React.useEffect runs its callback immediately here — we only care what the callback decides.
   const React = { useEffect: (fn) => fn() };
-  new Function('React', 'canSeeRota', 'careOn', 'tab', 'setTab', 'ctx', body)(
-    React, canSeeRota, careOn, tab, (t) => calls.push(t), { checkinRegister });
+  // 8d493fb2 (Networks member step 1) put `window.NETWORKS_ENABLED` and a markNetTabSeen effect reading the
+  // free `open` inside this slice. Switch OFF and overlay closed: these tests pin the NON-network tab set and
+  // its fallback; the network tab has its own coverage.
+  new Function('React', 'canSeeRota', 'careOn', 'tab', 'setTab', 'ctx', 'window', 'open', body)(
+    React, canSeeRota, careOn, tab, (t) => calls.push(t), { checkinRegister }, { NETWORKS_ENABLED: false }, false);
   return calls;
 }
 // Which tabs that slice actually produced, so a test can assert the SET rather than only the fallback.
@@ -43,9 +46,11 @@ function tabsFrom(opts) {
   const b = SRC.indexOf('  const _tabKeys =', a);
   assert.ok(b > a, 're-anchor: _tabKeys no longer follows the tab list');
   const React = { useEffect: () => {} };
-  return new Function('React', 'canSeeRota', 'careOn', 'ctx',
+  // window/open/tab as in runFallback: the slice reads window.NETWORKS_ENABLED, `_netOn` compares against the
+  // free `tab`, and an effect DEPS array reads `open`.
+  return new Function('React', 'canSeeRota', 'careOn', 'ctx', 'window', 'open', 'tab',
     SRC.slice(a, b) + '\nreturn _tabs.map(t => t[0]);')(
-    React, opts.canSeeRota !== false, !!opts.careOn, { checkinRegister: opts.checkinRegister || NO_KIDS });
+    React, opts.canSeeRota !== false, !!opts.careOn, { checkinRegister: opts.checkinRegister || NO_KIDS }, { NETWORKS_ENABLED: false }, false, 'serving');
 }
 
 test('switching care off while a member is ON the Care tab moves them somewhere real', () => {
