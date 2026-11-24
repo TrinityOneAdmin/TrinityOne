@@ -10104,7 +10104,7 @@ function serveStatic(req, res) {
   // build descriptors, wherever they turn up. relay-app/install.sh stays served on purpose — the
   // documented one-liner curls it — and so do decks/*.pdf, which about.html links.
   if (p.indexOf('\\') !== -1) { res.writeHead(404).end('not found'); return; }
-  const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src', 'deploy', 'ci']);
+  const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src', 'deploy', 'ci', 'plugins', 'spikes']);
   if (p.split('/').some(s => { const lo = s.toLowerCase(); return DENY_DIR.has(lo) || (s && s[0] === '.') || /[. ]$/.test(s); })) { res.writeHead(404).end('not found'); return; }
   if (p.toLowerCase().startsWith('/relay-app/desktop/')) { res.writeHead(404).end('not found'); return; }
   const DENY_EXT = new Set(['.md', '.service', '.yml', '.yaml', '.toml', '.rs', '.lock', '.gradle', '.pro']);

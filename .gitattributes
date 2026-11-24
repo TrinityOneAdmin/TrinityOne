@@ -86,3 +86,14 @@ native/trinity-widget/android export-ignore
 # STAYS (the root package.json names "file:native/trinity-media-session"), and so does its LICENSE (GPL-3.0-or-later,
 # shipped beside the package it covers; see NOTICE at the root).
 native/trinity-media-session/android export-ignore
+
+# ── THE DIRECT-MODE PUSH PLUGIN AND ITS SPIKE (plugins/trinity-directpush, spikes/push0) ──────────────────
+# 2026-11-24, same family as the Pages incident ecf57fd1 fixed — and that fix named the Pages removal list
+# ONLY, so the archive behind /relay-app/bundle.tgz still carried 53 files of Android plugin + spike sources,
+# gradle build files and gradle-wrapper.jar. Only an APK build from a git checkout reads them: the (untracked)
+# android/settings.gradle includes plugins/trinity-directpush/android, and build-bg.mjs runs from the repo
+# root. No relay does — the root package.json names no "file:plugins/…" dependency, so an `npm install` in an
+# unpacked bundle (relay-app/install.sh, scripts/relay-update.sh) loses nothing, and nothing served fetches
+# these paths. Guarded by scripts/bundle-contents.test.mjs; the static route refusal lives in DENY_DIR.
+plugins     export-ignore
+spikes      export-ignore
