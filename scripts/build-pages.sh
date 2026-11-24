@@ -19,7 +19,7 @@ git archive --format=tar HEAD | tar -x -C "$OUT"
 # directories is what failed: the removals now mirror the classes the gateway denies, and the sweep below
 # is RECURSIVE and ABORTS rather than trusting that the list stayed complete.
 rm -rf "$OUT"/scripts "$OUT"/src "$OUT"/reference "$OUT"/docs "$OUT"/.github "$OUT"/relay-app "$OUT"/android \
-       "$OUT"/deploy "$OUT"/ci "$OUT"/relay
+       "$OUT"/deploy "$OUT"/ci "$OUT"/relay "$OUT"/plugins "$OUT"/spikes
 rm -f  "$OUT"/package*.json "$OUT"/capacitor.config.* "$OUT"/tsconfig* \
        "$OUT"/.gitignore "$OUT"/.nojekyll "$OUT"/.design-canvas* 2>/dev/null || true
 # recursive, and by CLASS — the same set scripts/gateway.mjs refuses to serve. A nested document or config
