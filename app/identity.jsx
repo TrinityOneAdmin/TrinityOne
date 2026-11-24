@@ -1628,25 +1628,62 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const [wbal, setWbal] = useId(() => (window.TrinityWallet ? window.TrinityWallet.balance() : 0));
   useIdE(() => { const W = window.TrinityWallet; if (!W || !W.onChange) return; if (W.init) W.init().catch(() => {}); return W.onChange(setWbal); }, []);
 
-  // NETWORK row count: how many relays have PROVED they are this church's — the same thing the Relays sheet
-  // leads with, counted ONE PER BOX (several addresses that proved one key are one machine), NOT raw addresses.
+  // NETWORK row count: how many boxes have PROVED they are this church's AND are answering RIGHT NOW — the
+  // same thing the Relays sheet now calls Connected, counted ONE PER BOX (several addresses that proved one
+  // key are one machine), NOT raw addresses. Owner decision 2026-11-24: proof alone stopped being enough —
+  // proved-once-green-for-ever means the count only ever grows. A box counts when any of its proved
+  // addresses answered the live probe (Fellowship.relayStatus, throwaway WS, 2.5s timeout); an engine
+  // without relayStatus keeps the old proof-only count rather than sticking at 0 for ever.
   // The gate proves in the background and fires `trinity-relays-verified` when a verdict lands; without
   // subscribing to it this row painted the count at first render — a stale 0 on a cold boot, before any proof —
   // and never moved. Mirrors the wallet row above: a live count that follows the engine. Falls back to the
   // boolean relayVerified, then to the raw list, on an older engine.
-  const relayCount = () => {
+  const relayCount = (live) => {
     const FS = window.Fellowship, rs = (FS && FS.relays) || D.RELAYS || [];
-    if (FS && FS.relayDetail) { const keys = new Set(); let n = 0; for (const u of rs) { try { const d = FS.relayDetail(u) || {}; if (!d.verified) continue; if (d.key) { if (keys.has(d.key)) continue; keys.add(d.key); } n++; } catch (e) {} } return n; }
-    if (FS && FS.relayVerified) { let n = 0; for (const u of rs) { try { if (FS.relayVerified(u)) n++; } catch (e) {} } return n; }
+    const liveOk = (u) => !(FS && FS.relayStatus) || !!(live && live[u] === 'on');
+    if (FS && FS.relayDetail) {
+      const boxes = new Map(); let n = 0;
+      for (const u of rs) {
+        try {
+          const d = FS.relayDetail(u) || {};
+          if (!d.verified) continue;
+          if (!d.key) { if (liveOk(u)) n++; continue; }
+          const b = boxes.get(d.key);
+          if (!b) { const own = { live: liveOk(u) }; boxes.set(d.key, own); if (own.live) n++; }
+          else if (!b.live && liveOk(u)) { b.live = true; n++; }
+        } catch (e) {}
+      }
+      return n;
+    }
+    if (FS && FS.relayVerified) { let n = 0; for (const u of rs) { try { if (FS.relayVerified(u) && liveOk(u)) n++; } catch (e) {} } return n; }
     return rs.length;
   };
-  const [nRelays, setNRelays] = useId(relayCount);
+  const [liveNow, setLiveNow] = useId(null);
+  const [nRelays, setNRelays] = useId(() => relayCount(null));
+  // Re-bound per probe answer so the event handler never counts against a stale liveness map.
   useIdE(() => {
-    const f = () => setNRelays(relayCount());
+    setNRelays(relayCount(liveNow));
+    const f = () => setNRelays(relayCount(liveNow));
     window.addEventListener('trinity-relays', f);
     window.addEventListener('trinity-relays-verified', f);
     return () => { window.removeEventListener('trinity-relays', f); window.removeEventListener('trinity-relays-verified', f); };
-  }, []);
+  }, [liveNow]);
+  // The probe: once when the sheet opens, then debounced behind the same relay events the count follows —
+  // relayStatus() opens throwaway sockets outside the pool (app/app.jsx:816), so never in a free-running
+  // loop. `gone` keeps a probe that lands after close from setting state; `seq` makes overlapping probes
+  // latest-wins.
+  useIdE(() => {
+    if (!open) return;
+    const FS = window.Fellowship;
+    if (!(FS && FS.relayStatus)) return;
+    let gone = false, seq = 0, timer = null;
+    const run = () => { const my = ++seq; Promise.resolve(FS.relayStatus()).then(arr => { if (gone || my !== seq) return; const m = {}; for (const r of (arr || [])) { if (r && r.url) m[r.url] = r.status; } setLiveNow(m); }).catch(() => {}); };
+    const probe = () => { if (timer) clearTimeout(timer); timer = setTimeout(run, 250); };
+    run();
+    window.addEventListener('trinity-relays', probe);
+    window.addEventListener('trinity-relays-verified', probe);
+    return () => { gone = true; if (timer) clearTimeout(timer); window.removeEventListener('trinity-relays', probe); window.removeEventListener('trinity-relays-verified', probe); };
+  }, [open]);
 
   // ── edit mode ──
   if (edit) {
