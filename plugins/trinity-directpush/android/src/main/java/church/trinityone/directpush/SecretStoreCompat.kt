@@ -13,6 +13,8 @@ import javax.crypto.spec.GCMParameterSpec
  *   - SharedPreferences file : "WSSecureStorageSharedPreferences"
  *   - preference key         : <plugin prefix "capacitor-storage_"> + app key
  *   - value format           : base64(AES/GCM/NoPadding ciphertext) + '\u0010' + base64(iv)
+ *   - plaintext format       : the plugin JSON-encodes values before encrypting, so a JS string sits at rest as its
+ *                              JSON literal ("..."); entries written by older code are the raw string.
  *   - AES key                : AndroidKeyStore, alias == the prefixed key, 128-bit GCM tag
  *   - Base64 flags           : NO_PADDING | NO_WRAP
  *
@@ -40,19 +42,51 @@ object SecretStoreCompat {
      * and we never try to decrypt the ".enc" blob: there is no PIN here).
      */
     fun readKey(ctx: Context): Key? {
+        var rememberForm = "absent"
         try {
             val r = readSecret(ctx, REMEMBER_PREFIXED_KEY)
             if (r != null) {
-                val o = org.json.JSONObject(r)
+                val ru = unwrapPluginJson(r)
+                rememberForm = if (ru != r) "wrapped" else "raw"
+                val o = org.json.JSONObject(ru)
                 val m = o.optString("m", "")
                 val until = o.optLong("until", 0L)
-                if (m.isNotBlank() && until > System.currentTimeMillis() / 1000) return Key(m, "remember", o.optString("pub", ""))
+                if (m.isNotBlank() && until > System.currentTimeMillis() / 1000) {
+                    android.util.Log.i("DIRECTPUSH", "KEYREAD form remember=$rememberForm mnemonic=unread")
+                    return Key(m, "remember", o.optString("pub", ""))
+                }
             }
         } catch (e: Throwable) {
             android.util.Log.w("DIRECTPUSH", "remember record unreadable: ${e.javaClass.simpleName}")
         }
         val plain = readSecret(ctx, MNEMONIC_PREFIXED_KEY)
-        return if (!plain.isNullOrBlank()) Key(plain, "plaintext") else null
+        val mnemonicForm: String
+        val result: Key?
+        if (plain != null) {
+            val pu = unwrapPluginJson(plain)
+            mnemonicForm = if (pu != plain) "wrapped" else "raw"
+            result = if (pu.isNotBlank()) Key(pu, "plaintext") else null
+        } else {
+            mnemonicForm = "absent"
+            result = null
+        }
+        android.util.Log.i("DIRECTPUSH", "KEYREAD form remember=$rememberForm mnemonic=$mnemonicForm")
+        return result
+    }
+
+    /**
+     * One layer of the plugin's JSON encoding off (see "plaintext format" above). Only a leading '"' can be a
+     * wrapped value — BIP39 words and a raw {...} record never start with one — and any parse failure, or a
+     * non-string result, returns the input unchanged.
+     */
+    private fun unwrapPluginJson(s: String): String {
+        if (!s.startsWith('"')) return s
+        return try {
+            val v = org.json.JSONTokener(s).nextValue()
+            if (v is String) v else s
+        } catch (e: org.json.JSONException) {
+            s
+        }
     }
 
     /** Returns null when the entry is absent (PIN install, or not yet created). Throws on a real decrypt failure. */
