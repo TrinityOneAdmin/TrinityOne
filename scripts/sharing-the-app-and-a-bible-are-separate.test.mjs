@@ -501,8 +501,10 @@ function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false, fontsH
   const toasts = [], textShares = [], drawn = [], canvases = [];
   const win = { Capacitor: cap ? cap.Capacitor : undefined, Fellowship: { relays: ['wss://relay.example.org/relay'] } };
   // fontsHang: the font never finishes loading; then only the 2.5s timer lets the drawing go on — so the timer
-  // here fires at once, and it is the ONLY timer that does (the download's 60s revoke is not run)
-  const document = { ...browser.document, fonts: fonts || { load: fontsHang ? () => new Promise(() => {}) : async () => [] },
+  // here fires at once, and it is the ONLY timer that does (the download's 60s revoke is not run).
+  // `check: () => false` with it since 7988681a: shareCardFonts now asks shareCardFontsIn FIRST (the fast
+  // path), and a fonts object with no .check counts as "fonts in" — which skipped the very wait C9 pins.
+  const document = { ...browser.document, fonts: fonts || (fontsHang ? { load: () => new Promise(() => {}), check: () => false } : { load: async () => [] }),
     createElement: (tag) => { if (tag !== 'canvas') return browser.document.createElement(tag); const c = fakeCanvas(drawn, { noBlob, tag: numbered ? canvases.length + 1 : null }); canvases.push(c); return c; } };
   const timers = [];
   const S = loadScreen('app/share-app.jsx', ['ShareCard', 'shareOneFile'], {
@@ -954,7 +956,11 @@ test('C20 (re-audit LOW a) — the font redraw allowance is per opening: exhaust
 
 test('C21 (re-audit LOW b) — fonts that finish between the drawing\'s check and the save still get a redraw, with no event', async () => {
   let calls = 0;
-  const rig = fontRig(() => (calls++ === 0 ? false : true));   // missing when the drawing checks, in by the time it is saved
+  // Missing when the drawing checks, in by the time it is saved. Since 7988681a shareCardFonts itself asks
+  // twice BEFORE the drawing's own fontsOk read (the fast path, then the post-race re-check — each a single
+  // .check call, every() short-circuiting on the first false), so the first THREE calls say "missing" and the
+  // post-save re-check at share-app.jsx:614 is the first to see them in.
+  const rig = fontRig(() => (calls++ < 3 ? false : true));
   const cap = fakeCapacitor();
   const v = verseCard({ cap, fonts: rig.fonts, fontsHang: true, numbered: true });
   await v.settle(); await v.settle();
