@@ -198,6 +198,20 @@ const READ_LOC_KEY = (version) => 'trinityone.readLoc.' + String(version || '');
 // Today. Pure: takes the stored list and the new place, returns the new list. Anything malformed is dropped.
 const READ_HISTORY_MAX = 5;
 const READ_HISTORY_KEY = (version) => 'trinityone.readHistory.' + String(version || '');
+// B6 ?push=msgs: the background reader's PRE-SYNC cursor records, snapshotted at script evaluation —
+// before this session's hub saves or DM-seen writes can advance them — so the notification tap can tell
+// which conversations are newer than what the reader counted against (fellowship.src.js writes these;
+// bg-entry.js readerCursor reads the same three). Sinces only, nothing else is kept.
+const _pushPreCursors = (() => {
+  const out = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (/^trinityone\.(docshub|memhub|dmseen)\./.test(k || '')) { try { out[k] = (JSON.parse(localStorage.getItem(k)) || {}).since || 0; } catch (e) {} }
+    }
+  } catch (e) {}
+  return out;
+})();
 function pushReadHistory(list, loc) {
   const ok = (e) => e && Number.isInteger(Number(e.book)) && Number.isInteger(Number(e.chap)) && Number(e.chap) >= 1;
   if (!ok(loc)) return Array.isArray(list) ? list : [];
@@ -502,6 +516,29 @@ function App() {
     const pid = sp.get('plan'); if (pid) { const p = window.TrinityData.PLANS.find(x => x.id === pid); if (p) setPlan(p); }
     if (sp.get('share')) setShareSheet(window.TrinityData.VOTD);
     const dm = sp.get('dm'); if (dm === 'inbox') setDmInbox(true); else if (dm) setDmPeer(dm);
+    // B6: ?push=msgs — the Direct Mode notification tap (DirectPushWorker.postGeneric). The SAME navigation
+    // as dm=inbox above; then, if exactly ONE conversation carries messages newer than the reader's
+    // pre-sync cursor (_pushPreCursors — what the posted count was counted against), land in that
+    // conversation instead. Entirely in-app, post-unlock, like every other launch param in this effect; a
+    // new, distinct param name, consumed only here, so follow/invite/dm handlers never see it.
+    if (sp.get('push') === 'msgs') {
+      setDmPeer(null); dmPeerRef.current = null; setDmInbox(true);
+      try {
+        const F = window.Fellowship;
+        const cp = F && typeof F.subscribeDMs === 'function' && typeof F.churchPub === 'string' ? F.churchPub : '';
+        const cur = cp ? Math.max(_pushPreCursors['trinityone.docshub.' + cp] || 0, _pushPreCursors['trinityone.memhub.' + cp] || 0, _pushPreCursors['trinityone.dmseen.' + cp] || 0) : 0;
+        if (cur > 0) {
+          let latest = [];
+          const off = F.subscribeDMs((convos) => { latest = convos || []; });
+          setTimeout(() => {
+            try { if (off) off(); } catch (e) {}
+            const fresh = latest.filter(c => c && c.peer && (c.lastTs || 0) > cur);
+            // move only while the member is still on the inbox this tap opened — never yank them off a screen
+            if (fresh.length === 1 && dmInboxRef.current && !dmPeerRef.current) { setDmInbox(false); setDmPeer(fresh[0].peer); dmPeerRef.current = fresh[0].peer; }
+          }, 2500);
+        }
+      } catch (e) {}
+    }
   }, [Bible.loaded]);
   const version = Bible.activeVersion;
 
@@ -575,7 +612,8 @@ function App() {
   const churchParam = new URLSearchParams(location.search).get('church');   // '1' / 'follow' opens the switcher
   const dmParam = new URLSearchParams(location.search).get('dm');   // inbox | <peer pubkey> (verification deep-link)
   const servingParam = new URLSearchParams(location.search).get('serving');   // '1' opens the Serving overlay
-  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || inviteParam || dmParam || servingParam;   // any deep-link skips splash/onboarding
+  const pushParam = new URLSearchParams(location.search).get('push');   // 'msgs': the Direct Mode notification tap lands on the messages (B6)
+  const deepLinked = storeParam || tabParam || helpParam || concordParam || bookParam || moduleParam || collParam || churchParam || extraParam || idParam || followParam || inviteParam || dmParam || servingParam || pushParam;   // any deep-link skips splash/onboarding
   const [showSplash, setShowSplash] = useA(!deepLinked);
   const [bootReady, setBootReady] = useA(false);   // true once the church's core data has arrived — holds the splash until the cards are ready
   const onboardParam = new URLSearchParams(location.search).get('onboard');
@@ -730,6 +768,16 @@ function App() {
       }
       return out.get('follow') ? out.toString() : null;
     };
+    // B6: the Direct Mode notification tap. DirectPushWorker.postGeneric sets ACTION_VIEW + exactly this
+    // URI (https://app.trinityone.church/?push=msgs), so it arrives here like any launch URL — on a cold
+    // start through getLaunchUrl (replay-deduped below), on a warm app through appUrlOpen. Same scheme+host
+    // refusal as an invite (any installed app can fire a crafted intent at MainActivity); the token is
+    // static and NOTHING else is read off the URL — no count, no sender, no church.
+    const pushQuery = (url) => {
+      let u; try { u = new URL(url); } catch (e) { return null; }
+      if (u.protocol !== 'https:' || u.host !== APP_HOST) return null;
+      return u.searchParams.get('push') === 'msgs' ? 'push=msgs' : null;
+    };
     // `replay` = this URL came from getLaunchUrl(), which keeps returning the SAME url after we navigate, so it
     // must be de-duplicated or the app reload-loops on a cold start. An appUrlOpen event is the opposite: it
     // fires because the member just tapped a link THIS INSTANT, so it must always be honoured.
@@ -737,7 +785,7 @@ function App() {
     // invite again — and nothing happened at all, because the dedupe had already consumed it. No message, no
     // wizard, no church. The member's only escape was to force-quit the app.
     const apply = (url, replay) => {
-      const q = safeQuery(url);
+      const q = safeQuery(url) || pushQuery(url);   // an invite/join link, or the notification's push=msgs token (B6)
       if (!q) return;
       // getLaunchUrl keeps returning the same URL after we reload, so remember what we've handled or the app
       // reload-loops forever on a cold start from a link. Store a HASH, never the URL: a link can carry
