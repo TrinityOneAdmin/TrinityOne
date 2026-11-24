@@ -49,7 +49,10 @@ test('a need sealed with an OLD key still opens after rotation (the ring is real
 });
 
 test('careOpen in the shipped bundle tries every key in the ring', () => {
-  assert.match(body('careOpen('), /_careKeyRing/,
+  // RE-ANCHORED 2026-11-24: a CALL `S_.careOpen(body.enc)` (removal-save work, b98fc937 lineage, vendor
+  // :23326) now precedes the definition, so the bare 'careOpen(' slice read the caller's neighbourhood
+  // instead of the function. The signature anchors the DEFINITION, which still walks _careKeyRing.
+  assert.match(body('careOpen(ct) {'), /_careKeyRing/,
     'careOpen must walk the ring — with a single key, every need sealed before a rotation becomes permanently unreadable');
 });
 
