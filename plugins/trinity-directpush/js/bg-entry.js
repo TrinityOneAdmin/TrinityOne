@@ -84,6 +84,14 @@ function readerVerdict(fetched, newer, endedBy, authProblem, skewBad, authOutcom
   if (refused || (challenged && !confirmed)) return 'auth-unconfirmed (count is NOT a real zero)';
   return 'genuinely-0-new';
 }
+// THE READER'S CURSOR (B6, part 1c). The newest message-time the FOREGROUND app has persisted, across the two
+// hub records AND the DM-seen marker: kind-4 DMs advance neither hub cursor (the docs hub ingests only kind
+// 30078, the members hub kind 1 + member docs), so without the third record the reader re-counted — and
+// re-posted — DMs the app already holds, for ever. fellowship.src.js writes trinityone.dmseen.<cp> at its DM
+// ingest chokepoints; this page still only READS it. Pure; lifted and run by tests (T4).
+function readerCursor(docs, mems, dmseen) {
+  return Math.max((docs && docs.since) || 0, (mems && mems.since) || 0, (dmseen && dmseen.since) || 0);
+}
 const isBlockDoc = (e, cp, d) => !!e && e.kind === 30078 && e.pubkey === cp && ((e.tags || []).find((t) => t[0] === 'd') || [])[1] === d;
 // null => unparseable doc (caller fails closed); empty Set => no blocklist / nobody blocked.
 function parseBlocked(doc) {
@@ -140,7 +148,8 @@ window.__dpStart = async function (mnemonic, opts) {
     // ---- GATE 3: NIP-42 auth + ONE since= REQ, counted ----
     const docs = lsJson('trinityone.docshub.' + cp, {});
     const mems = lsJson('trinityone.memhub.' + cp, {});
-    const cursor = Math.max(docs.since || 0, mems.since || 0);          // READ only. We never write these (Phase 3).
+    const dmseen = lsJson('trinityone.dmseen.' + cp, {});               // the app-side DM-seen marker (B6)
+    const cursor = readerCursor(docs, mems, dmseen);                    // READ only. We never write these (Phase 3).
     const since = DP_DEBUG && opts.since && opts.since > 0 ? opts.since : cursor;   // opts.since is a debug override (compiled out of release)
     const reqSince = Math.max(0, since - SINCE_SLOP);
     let skew = null; try { skew = await F.measureRelaySkew(); } catch (e) {}
