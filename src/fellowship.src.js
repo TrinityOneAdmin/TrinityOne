@@ -2952,6 +2952,11 @@ const FULL_SYNC_S = 86400;         // at most one full (no-since) catch-all sync
 const HUB_SAVE_CAP = 3000000;      // don't persist a buffer bigger than ~3MB — drop the cursor instead
 const DOCSHUB_KEY = 'trinityone.docshub.';   // + churchPubHex -> { since, fullAt, events }
 const MEMHUB_KEY = 'trinityone.memhub.';     // + churchPubHex -> { since, fullAt, members }
+const DMSEEN_KEY = 'trinityone.dmseen.';     // + churchPubHex -> { since } — kind-4 DMs advance NEITHER hub cursor
+                                             // (docs hub ingests only kind 30078; mem hub kind 1 + member docs), so the
+                                             // background reader (plugins/trinity-directpush bg-entry.js readerCursor)
+                                             // reads this third record too. Written ONLY by _dmSeenNote below (the
+                                             // foreground DM ingest chokepoints); purged with the hubs on lock.
 // SAVED-HUB VERSION 2 (`v: 2` in both saves, read in both loaders, _docsHub and _memHub). A hub saved WITHOUT it
 // (every phone before 2026-11-18) loads with fullAt = 0, so its next open is one full fetch: phones left with a
 // stamped-but-never-received daily full (the cancelled-fetch bug, see _hubEosed) get their older documents on first
@@ -3444,6 +3449,65 @@ function _hubDropSlices(cp, prefixes) {
   if (n) { hub.dirty = true; _docsHubSaveNow(hub); }
   return n;
 }
+// ── B6 CLEAR-ON-SEEN (PLAN-FIX-B6, part 1a) ──────────────────────────────────────────────────────────────
+// The home-screen widget's bare "N new messages" count is computed by the background reader against
+// max(docshub.since, memhub.since, dmseen.since) for the ACTIVE church (bg-entry.js readerCursor). So the
+// moment the FOREGROUND app persists a cursor that advances that max past its value at launch (or at the
+// last clear), the count is spent by the reader's own definition — the app HOLDS the messages, whether or
+// not the member has read every thread (deliberate; owner's complaint was the count outliving the read).
+// Called from the THREE persist paths, each BEFORE its localStorage write lands, so the first call can seed
+// the launch baseline from the still-untouched persisted records: _docsHubSaveNow, _memHubSaveNow, and the
+// DM-seen debounce in _dmSeenNote. Native only (the same plugin guard as screens-extras dpWidgetCountClear);
+// web builds and the background reader's WebView have no Capacitor bridge and this is a no-op there.
+// WidgetStore.clearMessageCount also cancels the reader's status-bar notification (part 1b), so a clear from
+// here removes both at once. Throttled: >= 10s between bridge calls, so a save storm cannot spam it.
+const _WSEEN_GAP_MS = 10000;
+const _wSeenSt = new Map();   // churchPubHex -> { base: cursor at launch/last clear, clearedAt: ms }
+const _wSeenRead = (k) => { try { return ((JSON.parse(localStorage.getItem(k) || 'null') || {}).since) || 0; } catch (e) { return 0; } };
+function _widgetSeen(cp, since) {
+  try {
+    const P = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.Plugins;
+    const W = P && P.TrinityWidget;
+    if (!W || typeof W.clearMessageCount !== 'function') return;                      // native only
+    if (!cp || !window.Fellowship || window.Fellowship.churchPub !== cp) return;      // the count is the ACTIVE church's
+    const persisted = Math.max(_wSeenRead(DOCSHUB_KEY + cp), _wSeenRead(MEMHUB_KEY + cp), _wSeenRead(DMSEEN_KEY + cp));
+    let st = _wSeenSt.get(cp);
+    if (!st) { st = { base: persisted, clearedAt: 0 }; _wSeenSt.set(cp, st); }        // seeded pre-write: the launch cursor
+    const cand = Math.max(persisted, since || 0);
+    if (!(cand > st.base)) return;                                                    // nothing newer than launch/last clear
+    const now = Date.now();
+    if (now - st.clearedAt < _WSEEN_GAP_MS) return;                                   // throttle; a later save re-tries
+    st.clearedAt = now; st.base = cand;
+    try { Promise.resolve(W.clearMessageCount()).catch(() => {}); } catch (e) {}
+  } catch (e) {}
+}
+// ── B6 THE DM-SEEN MARKER (PLAN-FIX-B6, part 1c) ─────────────────────────────────────────────────────────
+// Kind-4 DMs advance NEITHER hub cursor, so without this record a DM-only count could never clear on seen
+// AND any clear was resurrected at the next 15-minute poll (the reader re-counts the same DMs). Written at
+// the foreground DM ingest chokepoints — subscribeThread's deliver (incoming only) and subscribeDMs' handle
+// (incoming only); those two subscriptions have ONE caller each (DMThread in app/screens-chat.jsx and the
+// inbox wiring in app/app.jsx). Same discipline as _hubCursor: monotonic, never past now+FUTURE_SKEW; the
+// persist is debounced like the hubs' saveSoon; _mayCache() gates it exactly like the hub saves so a locked
+// session never recreates the record the lock purge removed. The background reader only READS this key.
+const _dmSeenSt = new Map();   // churchPubHex -> { since, t }
+function _dmSeenNote(e) {
+  try {
+    if (!_mayCache()) return;
+    const cp = typeof window !== 'undefined' && window.Fellowship && window.Fellowship.churchPub;
+    if (!cp) return;
+    const t = (e && e.created_at) || 0;
+    let st = _dmSeenSt.get(cp);
+    if (!st) { st = { since: _wSeenRead(DMSEEN_KEY + cp), t: null }; _dmSeenSt.set(cp, st); }
+    if (!(t > st.since) || t > Math.floor(Date.now() / 1000) + FUTURE_SKEW) return;   // monotonic + skew clamp, as _hubCursor
+    st.since = t;
+    if (!st.t) st.t = setTimeout(() => {
+      st.t = null;
+      if (!_mayCache()) return;
+      _widgetSeen(cp, st.since);                                                      // pre-write, like the hub saves
+      try { localStorage.setItem(DMSEEN_KEY + cp, JSON.stringify({ since: st.since })); } catch (e2) {}
+    }, 800);
+  } catch (e) {}
+}
 function _docsHubSaveNow(hub) {
   if (!_mayCache()) return;
   if (hub.saveT) { clearTimeout(hub.saveT); hub.saveT = null; }
@@ -3453,6 +3517,7 @@ function _docsHubSaveNow(hub) {
   try {
     const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, events: [...hub.buf.values()] });
     if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }   // too big to trust a cursor over
+    _widgetSeen(hub.cp, hub.since);   // B6 clear-on-seen — BEFORE the write lands (see _widgetSeen); never on the cap path above
     localStorage.setItem(key, s);
   } catch { try { localStorage.removeItem(key); } catch {} }
 }
@@ -3693,6 +3758,7 @@ function _memHubSaveNow(hub) {
   try {
     const s = JSON.stringify({ v: 2, since: hub.since, fullAt: hub.fullAt, members: [...hub.byPub.values()].slice(0, 500) });
     if (s.length > HUB_SAVE_CAP) { localStorage.removeItem(key); return; }
+    _widgetSeen(hub.cp, hub.since);   // B6 clear-on-seen — BEFORE the write lands (see _widgetSeen); never on the cap path above
     localStorage.setItem(key, s);
   } catch { try { localStorage.removeItem(key); } catch {} }
 }
@@ -5389,7 +5455,7 @@ window.Fellowship = {
     // goes, whether or not anyone remembered it, plus the prefixes for the caches that carry no id in the
     // name. A cache added tomorrow is covered by construction.
     const PREFIXES = ['trinityone.profile', 'trinityone.members.', 'trinityone.membercount.',
-      'trinityone.docshub.', 'trinityone.memhub.', 'trinityone.groups.', 'trinityone.cats.',
+      'trinityone.docshub.', 'trinityone.memhub.', 'trinityone.dmseen.', 'trinityone.groups.', 'trinityone.cats.',
       'trinityone.chatSeen', 'trinityone.family', 'trinityone.serv.', 'trinityone.care.'];
     const IDENTIFIER = /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i;   // an npub or a hex pubkey in the KEY
     // Kept on purpose. followedChurches/activeChurch: nothing rebuilds them on unlock, so wiping strands the
@@ -6484,6 +6550,11 @@ window.Fellowship = {
   // ciphertext like everything else here. Additive in the same way: `t` still carries the full words, so an older
   // build and the steward console's own unwrap show the text. The cleaner is inline (same reason as the care
   // offer) and is kept in step with _chatCardClean above.
+  // B6: the DM-seen marker writer (see _dmSeenNote), reachable from subscribeThread/subscribeDMs the same
+  // way _dmUnwrap is — through window.Fellowship. Tests lift those two subscriptions out of the bundle with
+  // a hand-stubbed window.Fellowship, and a bare module-name call inside them would throw there (the same
+  // trap the MEMHUB_KEY literal note records), so the call sites guard on the property existing.
+  _dmSeen: _dmSeenNote,
   _dmWrap(text, replyTo, meta) {
     const hasR = !!(replyTo && replyTo.id);
     const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : '';
@@ -6592,6 +6663,7 @@ window.Fellowship = {
     const deliver = async (e) => {
       if (seen.has(e.id)) return; seen.add(e.id);
       const mine = e.pubkey === pub;
+      if (!mine && window.Fellowship._dmSeen) window.Fellowship._dmSeen(e);   // B6: an incoming DM the foreground app now holds advances the DM-seen marker
       let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
       const un = window.Fellowship._dmUnwrap(content);
       const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, card: un.card || null, ts: e.created_at, pubkey: e.pubkey };
@@ -6626,6 +6698,7 @@ window.Fellowship = {
     const byPeer = new Map();
     const emit = _coalesce(() => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))));
     const handle = async (e) => {
+      if (e.pubkey !== pub && window.Fellowship._dmSeen) window.Fellowship._dmSeen(e);   // B6: an incoming DM the foreground app now holds advances the DM-seen marker
       const peer = e.pubkey === pub ? (e.tags.find(t => t[0] === 'p') || [])[1] : e.pubkey;
       if (!peer) return;
       const prev = byPeer.get(peer);

@@ -9100,6 +9100,7 @@
   var HUB_SAVE_CAP = 3e6;
   var DOCSHUB_KEY = "trinityone.docshub.";
   var MEMHUB_KEY = "trinityone.memhub.";
+  var DMSEEN_KEY = "trinityone.dmseen.";
   var _dtag = (e) => (e.tags.find((t) => t[0] === "d") || [])[1] || "";
   var _slimEvt = (e) => ({ id: e.id, pubkey: e.pubkey, created_at: e.created_at, kind: e.kind, tags: e.tags, content: e.content });
   var _hubCursor = (hub, e) => {
@@ -9496,6 +9497,67 @@
     }
     return n;
   }
+  var _WSEEN_GAP_MS = 1e4;
+  var _wSeenSt = /* @__PURE__ */ new Map();
+  var _wSeenRead = (k) => {
+    try {
+      return (JSON.parse(localStorage.getItem(k) || "null") || {}).since || 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+  function _widgetSeen(cp, since) {
+    try {
+      const P = typeof window !== "undefined" && window.Capacitor && window.Capacitor.Plugins;
+      const W = P && P.TrinityWidget;
+      if (!W || typeof W.clearMessageCount !== "function") return;
+      if (!cp || !window.Fellowship || window.Fellowship.churchPub !== cp) return;
+      const persisted = Math.max(_wSeenRead(DOCSHUB_KEY + cp), _wSeenRead(MEMHUB_KEY + cp), _wSeenRead(DMSEEN_KEY + cp));
+      let st = _wSeenSt.get(cp);
+      if (!st) {
+        st = { base: persisted, clearedAt: 0 };
+        _wSeenSt.set(cp, st);
+      }
+      const cand = Math.max(persisted, since || 0);
+      if (!(cand > st.base)) return;
+      const now = Date.now();
+      if (now - st.clearedAt < _WSEEN_GAP_MS) return;
+      st.clearedAt = now;
+      st.base = cand;
+      try {
+        Promise.resolve(W.clearMessageCount()).catch(() => {
+        });
+      } catch (e) {
+      }
+    } catch (e) {
+    }
+  }
+  var _dmSeenSt = /* @__PURE__ */ new Map();
+  function _dmSeenNote(e) {
+    try {
+      if (!_mayCache()) return;
+      const cp = typeof window !== "undefined" && window.Fellowship && window.Fellowship.churchPub;
+      if (!cp) return;
+      const t = e && e.created_at || 0;
+      let st = _dmSeenSt.get(cp);
+      if (!st) {
+        st = { since: _wSeenRead(DMSEEN_KEY + cp), t: null };
+        _dmSeenSt.set(cp, st);
+      }
+      if (!(t > st.since) || t > Math.floor(Date.now() / 1e3) + FUTURE_SKEW) return;
+      st.since = t;
+      if (!st.t) st.t = setTimeout(() => {
+        st.t = null;
+        if (!_mayCache()) return;
+        _widgetSeen(cp, st.since);
+        try {
+          localStorage.setItem(DMSEEN_KEY + cp, JSON.stringify({ since: st.since }));
+        } catch (e2) {
+        }
+      }, 800);
+    } catch (e2) {
+    }
+  }
   function _docsHubSaveNow(hub) {
     if (!_mayCache()) return;
     if (hub.saveT) {
@@ -9511,6 +9573,7 @@
         localStorage.removeItem(key);
         return;
       }
+      _widgetSeen(hub.cp, hub.since);
       localStorage.setItem(key, s);
     } catch {
       try {
@@ -9822,6 +9885,7 @@
         localStorage.removeItem(key);
         return;
       }
+      _widgetSeen(hub.cp, hub.since);
       localStorage.setItem(key, s);
     } catch {
       try {
@@ -11582,6 +11646,7 @@
         "trinityone.membercount.",
         "trinityone.docshub.",
         "trinityone.memhub.",
+        "trinityone.dmseen.",
         "trinityone.groups.",
         "trinityone.cats.",
         "trinityone.chatSeen",
@@ -12584,6 +12649,11 @@
     // ciphertext like everything else here. Additive in the same way: `t` still carries the full words, so an older
     // build and the steward console's own unwrap show the text. The cleaner is inline (same reason as the care
     // offer) and is kept in step with _chatCardClean above.
+    // B6: the DM-seen marker writer (see _dmSeenNote), reachable from subscribeThread/subscribeDMs the same
+    // way _dmUnwrap is — through window.Fellowship. Tests lift those two subscriptions out of the bundle with
+    // a hand-stubbed window.Fellowship, and a bare module-name call inside them would throw there (the same
+    // trap the MEMHUB_KEY literal note records), so the call sites guard on the property existing.
+    _dmSeen: _dmSeenNote,
     _dmWrap(text, replyTo, meta) {
       const hasR = !!(replyTo && replyTo.id);
       const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
@@ -12693,6 +12763,7 @@
         if (seen.has(e.id)) return;
         seen.add(e.id);
         const mine = e.pubkey === pub;
+        if (!mine && window.Fellowship._dmSeen) window.Fellowship._dmSeen(e);
         let content = "";
         try {
           content = await _dmDecrypt(sk, peerPub, e.content);
@@ -12760,6 +12831,7 @@
       const byPeer = /* @__PURE__ */ new Map();
       const emit = _coalesce(() => onConvos([...byPeer.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))));
       const handle = async (e) => {
+        if (e.pubkey !== pub && window.Fellowship._dmSeen) window.Fellowship._dmSeen(e);
         const peer = e.pubkey === pub ? (e.tags.find((t) => t[0] === "p") || [])[1] : e.pubkey;
         if (!peer) return;
         const prev = byPeer.get(peer);
