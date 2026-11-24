@@ -1660,6 +1660,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   };
   const [liveNow, setLiveNow] = useId(null);
   const [nRelays, setNRelays] = useId(() => relayCount(null));
+  // F1 (audit, owner-approved 2026-11-24): while the FIRST probe of a launch is still out (liveNow === null)
+  // the honest count is unknown, and painting "0 connected" for the probe's 2.5s reads as "my church is
+  // gone". Say "Checking" — the same pending word the Relays sheet uses — until the first answer lands.
+  // Only on a probing engine: without relayStatus the proof-only count is immediate and final, so "Checking"
+  // would never resolve there. liveNow stays a map once the first answer lands (later re-probes replace it,
+  // never null it), so the row keeps showing the last-known count between probes.
+  const relaysChecking = liveNow === null && !!(window.Fellowship && window.Fellowship.relayStatus);
   // Re-bound per probe answer so the event handler never counts against a stale liveness map.
   useIdE(() => {
     setNRelays(relayCount(liveNow));
@@ -1953,7 +1960,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         {/* relays + danger */}
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>NETWORK</div>
         <Group>
-          <Row icon="globe" label="Relays" sub={`${nRelays} connected`} onClick={() => ctx.openRelays()} />
+          <Row icon="globe" label="Relays" sub={relaysChecking ? 'Checking' : `${nRelays} connected`} onClick={() => ctx.openRelays()} />
         </Group>
         {/* "Start a new identity" hidden for the pilot — too easy to wipe a key by accident */}
         <AppVersion />

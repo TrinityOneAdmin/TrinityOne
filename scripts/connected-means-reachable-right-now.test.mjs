@@ -118,22 +118,26 @@ test('Remove keys off PROOF, never liveness: an offline proved box gets none, a 
 // ── the profile's "N connected" row ──────────────────────────────────────────────────────────────────────
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-function profile({ probe }) {
+// `probe` maps url -> 'on'|'off' (resolves at once); `probeFn` is a caller-controlled relayStatus override;
+// `noProbe` strips relayStatus entirely — the older-engine fallback.
+function profile({ probe, probeFn, noProbe }) {
   const { React, draw } = miniReact();
   const listeners = {};
   const verified = { [A1]: true, [A2]: true, [B]: true };
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
+  const FS = {
+    myPubkey: 'me', relays: [A1, A2, B],
+    relayDetail: (u) => ({ verified: !!verified[u], key: verified[u] ? (KEYS[u] || '') : '' }),
+    relayVerified: (u) => !!verified[u],
+    relayStatus: probeFn || (() => probe === null
+      ? new Promise(() => {})
+      : Promise.resolve(Object.keys(probe || {}).map(u => ({ url: u, status: probe[u] })))),
+  };
+  if (noProbe) delete FS.relayStatus;
   const globals = {
     React,
     window: {
-      Fellowship: {
-        myPubkey: 'me', relays: [A1, A2, B],
-        relayDetail: (u) => ({ verified: !!verified[u], key: verified[u] ? (KEYS[u] || '') : '' }),
-        relayVerified: (u) => !!verified[u],
-        relayStatus: () => probe === null
-          ? new Promise(() => {})
-          : Promise.resolve(Object.keys(probe).map(u => ({ url: u, status: probe[u] }))),
-      },
+      Fellowship: FS,
       TrinityIdentity: { qrSVG: () => '' }, TrinityData: {}, Capacitor: { isNativePlatform: () => false }, TrinityLN: { currency: () => null },
       addEventListener(n, fn) { (listeners[n] = listeners[n] || []).push(fn); },
       removeEventListener(n, fn) { listeners[n] = (listeners[n] || []).filter(f => f !== fn); },
@@ -187,4 +191,31 @@ test('"N connected" counts proved AND live BOXES, deduped per key', async () => 
   await tick();
   assert.equal(q.connected(q.render()), 1,
     'one box reached by two live addresses counted twice, or the unreachable box counted');
+});
+
+// F1: the row must not read "0 connected" during the first probe's ~2.5s window — a member reads that zero
+// as "my church is gone". While the first probe is out it says "Checking" (the sheet's pending word); the
+// moment it answers, the real count.
+test('the row says Checking while the FIRST probe is out, then the count once it answers', async () => {
+  let release;
+  const answer = { [A1]: 'on', [A2]: 'off', [B]: 'on' };
+  const p = profile({ probeFn: () => new Promise(r => { release = () => r(Object.keys(answer).map(u => ({ url: u, status: answer[u] }))); }) });
+  let t = p.render();         // mount: the probe fires and has NOT answered
+  assert.ok(reads(t).includes('Checking'), 'the row did not say Checking while the first probe was still out');
+  assert.equal(p.connected(t), null,
+    'the row painted "N connected" (a zero, on a launch) before the first probe answered');
+  release();                  // the probe answers
+  await tick();
+  t = p.render();
+  assert.equal(p.connected(t), 2, 'after the probe answered, the row did not settle to the live box count');
+  assert.ok(!reads(t).includes('Checking'), 'the row kept saying Checking after the probe had answered');
+});
+
+test('an engine without relayStatus shows the proof-only count at once — never Checking', () => {
+  const p = profile({ noProbe: true });
+  const t = p.render();
+  assert.equal(p.connected(t), 2,
+    'the fallback engine (no relayStatus) did not show the immediate proof-only box count');
+  assert.ok(!reads(t).includes('Checking'),
+    'the fallback engine shows "Checking" — with no probe to answer, it would never resolve');
 });
