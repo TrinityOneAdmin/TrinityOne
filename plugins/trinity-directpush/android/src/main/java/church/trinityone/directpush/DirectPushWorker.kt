@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -44,6 +45,8 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
     companion object {
         const val TAG = "DIRECTPUSH"
         const val CHANNEL_ID = "trinity_directpush"
+        // MUST MATCH WidgetStore.DIRECTPUSH_NOTIFY_ID (native/trinity-widget/.../WidgetStore.java), which
+        // cancels this notification from clearMessageCount; a repo test asserts the two constants are equal.
         const val NOTIFY_ID = 0x7d1
         const val KEY_SINCE = "sinceOverride"     // debug aid: force the count window (epoch seconds)
         const val KEY_DEBUG = "debug"            // debug aid: JSON of test switches, see bg-entry.js
@@ -201,6 +204,14 @@ class DirectPushWorker(appContext: Context, params: WorkerParameters) : Coroutin
         }
         val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
         val pi = launch?.let {
+            // B6 2a: the tap lands on the messages. Capacitor's AppPlugin fires appUrlOpen ONLY for
+            // ACTION_VIEW — with the default ACTION_MAIN a tap on a warm (backgrounded, singleTask) app
+            // never reaches JS at all. The URI is a static route token the app's URL machinery consumes
+            // (app.jsx, push=msgs): no count, no sender, no church ever rides the intent. The intent stays
+            // explicit (component set by getLaunchIntentForPackage), so no manifest filter is involved, and
+            // the null-launch fallback (no pi -> notification without a tap action) is unchanged.
+            it.action = Intent.ACTION_VIEW
+            it.data = Uri.parse("https://app.trinityone.church/?push=msgs")
             PendingIntent.getActivity(ctx, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
         val appIcon = try { ctx.packageManager.getApplicationIcon(ctx.packageName).toBitmap() } catch (e: Throwable) { null }

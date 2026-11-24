@@ -315,6 +315,13 @@ final class WidgetStore {
     // DirectPushWorker.WIDGET_*.
     static final String K_DM_COUNT = "dm.count";
     static final String K_DM_AT = "dm.at";
+    /** The status-bar notification the background reader posts alongside the count. MUST MATCH
+     *  DirectPushWorker.NOTIFY_ID (plugins/trinity-directpush/.../DirectPushWorker.kt) — duplicated as a
+     *  named constant rather than shared, this being a patch round; a repo test asserts the two are equal
+     *  (scripts/the-notify-id-matches-across-the-two-plugins.test.mjs). Cancelled in clearMessageCount so
+     *  EVERY clear path — the app's clear-on-seen hook, opt-out, lock, forget, church switch — removes the
+     *  notification together with the count, instead of leaving it until the next poll. */
+    static final int DIRECTPUSH_NOTIFY_ID = 0x7d1;
     /** A count older than this is not shown. The reader runs about every 15 minutes; if it stops (remember-me expired
      *  and the app was not opened, or the member locked / forgot the device without the app running) nothing is left
      *  to clear the number, so it must stop showing on its own. */
@@ -333,7 +340,12 @@ final class WidgetStore {
         return shownCount(p.getInt(K_DM_COUNT, 0), p.getLong(K_DM_AT, 0), now);
     }
 
-    static void clearMessageCount(Context c) { prefs(c).edit().remove(K_DM_COUNT).remove(K_DM_AT).apply(); }
+    static void clearMessageCount(Context c) {
+        prefs(c).edit().remove(K_DM_COUNT).remove(K_DM_AT).apply();
+        // B6 1b: one line here covers every caller (plugin method, forget(), and all JS paths). Never throws:
+        // the widget is a convenience, and a notification-manager hiccup must not break the clear itself.
+        try { androidx.core.app.NotificationManagerCompat.from(c).cancel(DIRECTPUSH_NOTIFY_ID); } catch (Throwable t) {}
+    }
 
     static ComponentName provider(Context c) { return new ComponentName(c, TrinityWidgetProvider.class); }
 
