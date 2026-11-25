@@ -125,6 +125,8 @@ class BackgroundReader: NSObject {
             webView.loadHTMLString("", baseURL: nil)
             // Remove the message handler to break the WKScriptMessageHandler → WKUserContentController retain cycle.
             config.userContentController.removeScriptMessageHandler(forName: "dpResult")
+            handler.onSummary = nil
+            handler.onFatal = nil
 
             completion(success)
         }
@@ -235,8 +237,10 @@ private class BGNavigationDelegate: NSObject, WKNavigationDelegate {
         // Hand the key to the page ONLY now, after the page's own gate-1 read has already run.
         // Quote the mnemonic as a JSON string for safe embedding in JS.
         let mnemonicQuoted = jsonQuote(mnemonic)
-        let opts = "{\"source\":\"\(keySource)\",\"recordPub\":\"\(recordPub)\"}"
-        let js = "window.__dpStart(\(mnemonicQuoted), \(opts));"
+        let optsDict: [String: String] = ["source": keySource, "recordPub": recordPub]
+        let optsJson = (try? JSONSerialization.data(withJSONObject: optsDict))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let js = "window.__dpStart(\(mnemonicQuoted), \(optsJson));"
         webView.evaluateJavaScript(js) { _, error in
             if let error = error {
                 NSLog("DIRECTPUSH __dpStart error: \(error.localizedDescription)")

@@ -71,18 +71,27 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     /// Called when the user taps a notification. Read userInfo["push"] and navigate to messages.
     /// This mirrors Android's ACTION_VIEW intent with `?push=msgs` — the app.jsx URL parameter
     /// handling consumes it.
+    ///
+    /// COLD-START CAVEAT (audit 2026-11-25): on a cold start (app killed, iOS relaunches for tap),
+    /// didReceive fires immediately after didFinishLaunchingWithOptions. The Capacitor WebView may
+    /// not be loaded yet, so evaluateJavaScript either runs on a half-loaded page or the optional
+    /// chain returns nil. The fix is to store the pending push intent and replay it once the WebView
+    /// reports ready. Verify on device which path Capacitor takes (cold vs warm).
+    static var pendingPushRoute: String?
+
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let userInfo = response.notification.request.content.userInfo
         if let push = userInfo["push"] as? String, push == "msgs" {
-            // Navigate to messages. Find the Capacitor bridge's WebView and evaluate JS to trigger
-            // the same ?push=msgs routing the app already handles.
-            if let rootVC = window?.rootViewController as? CAPBridgeViewController {
-                rootVC.bridge?.webView?.evaluateJavaScript(
+            if let rootVC = window?.rootViewController as? CAPBridgeViewController,
+               let webView = rootVC.bridge?.webView, !webView.isLoading {
+                webView.evaluateJavaScript(
                     "window.location.search = '?push=msgs';",
                     completionHandler: nil
                 )
+            } else {
+                AppDelegate.pendingPushRoute = "msgs"
             }
         }
         completionHandler()
