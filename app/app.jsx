@@ -554,7 +554,7 @@ function App() {
   // legacy-shaped projections the reader/screens already consume (keyed by "book.chap.verse")
   const highlights = Object.fromEntries(MD.list('highlights').map(h => [h.ref, h.color]));   // {ref: color}
   const notes = Object.fromEntries(MD.list('notes').map(n => [n.ref, n.text]));               // {ref: text}
-  const bookmarks = MD.list('bookmarks').map(b => b.ref);                                      // [ref]
+  const bookmarks = MD.list('bookmarks').flatMap(b => b.refs || [b.ref]);                        // [ref] — passage bookmarks expand to per-verse entries
   const planProgress = MD.settings.get('plans', {});                                           // planId -> [done days]
   const planLast = MD.settings.get('plansLast', {});                                           // planId -> ms timestamp of the last day marked done
   const devoProgress = MD.settings.get('devos', {});                                            // devoId -> [done days]
@@ -2619,6 +2619,9 @@ function App() {
       if (existing) MD.put('bookmarks', { ...existing, tags: tags.filter(Boolean) });
     },
     toggleBookmark: (k) => { if (MD.has('bookmarks', k)) { MD.remove('bookmarks', k); return false; } else { MD.put('bookmarks', { id: k, ref: k }); return true; } },
+    addPassageBookmark: (keys, rangeLabel) => { const id = 'p:' + keys.join('+'); MD.put('bookmarks', { id, ref: keys[0], refs: keys, rangeLabel }); return id; },
+    removePassageBookmark: (id) => { MD.remove('bookmarks', id); },
+    hasPassageBookmark: (keys) => { const id = 'p:' + keys.join('+'); return MD.has('bookmarks', id); },
     planProgress,
     planLast,
     planRead,
