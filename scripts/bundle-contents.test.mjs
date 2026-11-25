@@ -109,7 +109,13 @@ const BUNDLE_OK = (f) =>
   // the root NOTICE (the third-party list that names it) because licence texts ship deliberately, like LICENSE.
   || f === 'native/trinity-media-session/package.json'
   || f === 'native/trinity-media-session/LICENSE'
-  || f === 'NOTICE';
+  || f === 'NOTICE'
+  // Android App Links (QR round, 2026-11-24): the Cloudflare Pages deploy is assembled by git-archive
+  // (scripts/build-pages.sh), so the apex host's /.well-known/assetlinks.json must be TRACKED to ship.
+  // Public by design — a package name and the release cert's SHA-256, a checksum of a certificate every
+  // installed APK already carries. The gateway serves its own copy from code (ANDROID_CERT_SHA256);
+  // scripts/assetlinks-on-every-surface.test.mjs pins the two against each other.
+  || f === '.well-known/assetlinks.json';
 
 // Things that are never right ANYWHERE in the tarball, whatever else the rules say. Belt and braces: these
 // are also covered above, and pinning them separately means a widened allowlist cannot silently readmit them.

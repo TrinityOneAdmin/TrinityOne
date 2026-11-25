@@ -45,12 +45,16 @@ test('M1 — the tracked manifest: one VIEW filter, scheme content only, between
   assert.deepEqual([...new Set(schemes)], ['content'], 'schemes other than content: ' + schemes);
   const mimes = [...f.matchAll(/android:mimeType="([^"]+)"/g)].map(m => m[1]).sort();
   assert.deepEqual(mimes, ['application/octet-stream', 'application/vnd.sqlite3', 'application/x-sqlite3', 'application/x-zip-compressed', 'application/zip']);
-  // outside the block: exactly the two filters that were there before, unchanged
+  // outside the block: the launcher plus the two App Link filters (app host, marketing apex — QR round
+  // 2026-11-24; their coverage is proven by scripts/qr-links-open-the-app.test.mjs, this only counts them)
   const outside = filters([...lines.slice(0, b), ...lines.slice(e + 1)].join('\n'));
-  assert.equal(outside.length, 2, 'filters outside the marked block: ' + outside.length);
+  assert.equal(outside.length, 3, 'filters outside the marked block: ' + outside.length);
   assert.ok(outside.some(x => /android\.intent\.action\.MAIN/.test(x) && /category\.LAUNCHER/.test(x)), 'the MAIN/LAUNCHER filter is gone');
-  const join = outside.find(x => /autoVerify/.test(x) || /pathPrefix="\/join"/.test(x));
-  assert.ok(join && /android:autoVerify="true"/.test(xml) && /android:host="app\.trinityone\.church"/.test(join) && /android:scheme="https"/.test(join), 'the autoVerify /join filter changed');
+  const applinks = outside.filter(x => /autoVerify/.test(x) || /pathPrefix="\/join"/.test(x));
+  assert.equal(applinks.length, 2, 'expected the two autoVerify App Link filters');
+  assert.ok(applinks.every(x => /android:autoVerify="true"/.test(x) && /android:scheme="https"/.test(x)), 'an App Link filter lost autoVerify or https');
+  assert.ok(applinks.some(x => /android:host="app\.trinityone\.church"/.test(x)), 'the app-host App Link filter changed');
+  assert.ok(applinks.some(x => /android:host="trinityone\.church"/.test(x)), 'the apex App Link filter changed');
   assert.ok(!outside.some(x => /scheme="content"/.test(x)), 'a content filter exists OUTSIDE the markers, where the Console strip cannot reach it');
 });
 
@@ -91,7 +95,7 @@ test('M2 — THE REAL build-steward-apk.sh hands gradle a manifest with NO conte
   assert.doesNotMatch(built, /install-from-file/, 'the marker block (or part of it) reached the build');
   assert.match(built, /android\.intent\.action\.MAIN/, 'the strip took the launcher filter with it');
   assert.match(built, /android:autoVerify="true"/, 'the strip took the /join filter with it');
-  assert.equal(filters(built).length, 2, 'the Console manifest should keep exactly the launcher and /join filters');
+  assert.equal(filters(built).length, 3, 'the Console manifest should keep exactly the launcher and the two App Link filters');
   assert.equal(s.manifestNow(), original, 'the member manifest was not restored byte for byte');
   assert.ok(!existsSync(join(s.T, 'android/app/src/main/AndroidManifest.xml.member-bak')), 'a backup file was left behind');
 });
@@ -114,7 +118,7 @@ test('M3 — manifest-member-only.sh on its own: strip removes only the marked b
   sh('strip');
   const stripped = readFileSync(m, 'utf8');
   assert.doesNotMatch(stripped, /scheme="content"/);
-  assert.equal(filters(stripped).length, 2);
+  assert.equal(filters(stripped).length, 3);
   assert.ok(stripped.length < original.length);
   sh('strip');                                           // a second strip (a crashed earlier build) must not back up the stripped file
   sh('restore');

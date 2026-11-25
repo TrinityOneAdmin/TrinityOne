@@ -710,17 +710,23 @@ function App() {
     // each restart, so a printed invite's ?relay= goes stale and the stable name is the only recovery. Dropping
     // it made the app path strictly worse than the browser path it replaced (member joins, sees nothing, ever).
     const JOIN_KEYS = ['follow', 'name', 'relay', 'relayname', 'c'];
-    const APP_HOST = 'app.trinityone.church';
+    const APP_HOSTS = ['app.trinityone.church', 'trinityone.church'];   // must mirror the manifest's claimed hosts EXACTLY (scripts/qr-links-open-the-app.test.mjs runs both sides)
     const safeQuery = (url) => {
       let u; try { u = new URL(url); } catch (e) { return null; }
       // Scheme + host, not just path. MainActivity is exported and Capacitor hands us getData() from ANY launch
       // intent with no host check, so without this any installed app could fire a crafted intent at us with zero
       // permissions and no user interaction, and have it treated as a real invite.
-      if (u.protocol !== 'https:' || u.host !== APP_HOST) return null;
-      // The manifest claims pathPrefix="/join", which also matches the real assets /join.html and /join.js.
-      // Accept those too, or tapping a /join.html invite opens the app and silently discards the invite —
-      // the exact failure this feature exists to remove.
-      if (!/^\/join(\.html|\.js)?\/?$/.test(u.pathname)) return null;
+      if (u.protocol !== 'https:' || !APP_HOSTS.includes(u.host)) return null;
+      // The paths here mirror the manifest's claims, nothing more. pathPrefix="/join" also matches the real
+      // assets /join.html and /join.js — accept those too, or tapping a /join.html invite opens the app and
+      // silently discards the invite, the exact failure this feature exists to remove. The ROOT path is
+      // claimed (and so accepted) on the APP host only: every member-side QR — invite-a-friend (joinLinkFor),
+      // the guardian→child handoff and the Set up accounts slips (…#invite=) — encodes `/?follow=…` there.
+      // The marketing apex's root is NOT claimed, so it is NOT accepted: a crafted intent must get exactly
+      // what a real tapped link gets, which for trinityone.church/ is nothing.
+      const isJoin = /^\/join(\.html|\.js)?\/?$/.test(u.pathname);
+      const isRoot = u.pathname === '/' && u.host === 'app.trinityone.church';
+      if (!isJoin && !isRoot) return null;
       const out = new URLSearchParams();
       for (const k of JOIN_KEYS) {
         const v = u.searchParams.get(k);
@@ -728,7 +734,21 @@ function App() {
         if (k === 'relay' && !/^wss:\/\//i.test(v)) continue;   // encrypted transport only (NOT a trust check)
         out.set(k, v);
       }
-      return out.get('follow') ? out.toString() : null;
+      if (!out.get('follow')) return null;
+      // A handed-over account (guardian→child handoff, Set up accounts slip) carries its 12-word seed in the
+      // URL FRAGMENT — #invite=…, never the query (SECURITY-AUDIT-2026-07-18: a fragment never crosses the
+      // wire). Re-entering the app without it turned a scanned slip into a plain join and silently dropped
+      // the handed account — worse than the browser path this replaces. Carry it through REBUILT, not passed
+      // through: only the `invite` key, re-encoded, so a crafted fragment can smuggle nothing else. The query
+      // key `?invite=` stays refused (AUDIT 2026-07-25) — nothing in the product builds it. Adoption on the
+      // other side is NOT silent: app.jsx confirms with the member before importMnemonic (L4, 2026-07-06),
+      // same dialog a browser-opened slip gets.
+      let frag = '';
+      try {
+        const inv = new URLSearchParams((u.hash || '').replace(/^#/, '')).get('invite');
+        if (inv) frag = '#invite=' + encodeURIComponent(inv);
+      } catch (e) {}
+      return { q: out.toString(), frag };
     };
     // `replay` = this URL came from getLaunchUrl(), which keeps returning the SAME url after we navigate, so it
     // must be de-duplicated or the app reload-loops on a cold start. An appUrlOpen event is the opposite: it
@@ -737,8 +757,9 @@ function App() {
     // invite again — and nothing happened at all, because the dedupe had already consumed it. No message, no
     // wizard, no church. The member's only escape was to force-quit the app.
     const apply = (url, replay) => {
-      const q = safeQuery(url);
-      if (!q) return;
+      const r = safeQuery(url);
+      if (!r) return;
+      const q = r.q, frag = r.frag || '';
       // getLaunchUrl keeps returning the same URL after we reload, so remember what we've handled or the app
       // reload-loops forever on a cold start from a link. Store a HASH, never the URL: a link can carry
       // credential-grade material, and this slot is never cleared (SECURITY-AUDIT-2026-07-06 L3 moved the seed
@@ -750,8 +771,14 @@ function App() {
         if (replay && seen.includes(h)) return;   // only the launch-URL replay is de-duplicated
         if (!seen.includes(h)) sessionStorage.setItem('trinityone.handledLinks', [...seen, h].slice(-5).join(','));
       } catch (e) {}
-      if (location.search.replace(/^\?/, '') === q) return;   // already showing this invite
-      location.search = '?' + q;
+      const cur = location.search.replace(/^\?/, '');
+      if (cur === q && (location.hash || '') === frag) return;   // already showing this invite
+      // location.search assignment would drop (or mangle) the fragment, so navigate explicitly. Two slips can
+      // share every query param and differ only in #invite= — a hash-only change does NOT reload the page, so
+      // the mount-time invite reader would never see the second seed; force the reload in that one case.
+      const hashOnly = cur === q;
+      location.href = location.pathname + '?' + q + frag;
+      if (hashOnly) { try { location.reload(); } catch (e) {} }
     };
     let remove = null;
     try {

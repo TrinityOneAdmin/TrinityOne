@@ -5,7 +5,9 @@
 # (The 27MB APK exceeds Cloudflare's 25 MiB/file limit, so it's served from the gateway instead.)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT=pages-dist
+# PAGES_OUT lets a test build into scratch instead of clobbering pages-dist mid-release
+# (callers: scripts/release.sh uses the default; scripts/assetlinks-on-every-surface.test.mjs overrides).
+OUT="${PAGES_OUT:-pages-dist}"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 # committed files only — deploy what's in HEAD (commit your changes first)
