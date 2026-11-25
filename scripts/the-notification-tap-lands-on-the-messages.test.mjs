@@ -24,6 +24,10 @@ const NPUB = 'npub1' + '0'.repeat(58);
 const CP = 'ab'.repeat(32);
 const PEER = 'cd'.repeat(32);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// MERGE 2026-11-25: apply() now navigates via location.href (feat/qr-app-links carries the slip seed in the
+// fragment, and a location.search assignment would drop it). The harness location is a plain object, so read
+// the navigation target back out of href; an un-navigated boot still reads '' exactly as before.
+const navSearch = (w) => { try { return new URL(String(w.location.href), 'https://app.example').search; } catch (e) { return w.location.search; } };
 
 function fakeAppPlugin({ launchUrl = null } = {}) {
   const listeners = [];
@@ -59,7 +63,7 @@ test('COLD START: the exact URI the Kotlin poster sends navigates the app to ?pu
   assert.match(TAP_URI, /^https:\/\/app\.trinityone\.church\/\?push=msgs$/, 'the Kotlin URI drifted from the route the app consumes');
   const m = boot({ capApp: fakeAppPlugin({ launchUrl: TAP_URI }) });
   await settle(m);
-  assert.equal(m.window.location.search, '?push=msgs', 'the launch URL did not navigate to the push route');
+  assert.equal(navSearch(m.window), '?push=msgs', 'the launch URL did not navigate to the push route');
 });
 
 test('REPLAY-DEDUP: the remembered launch URL does not re-navigate on the next boot (no cold-start loop)', async () => {
@@ -69,7 +73,7 @@ test('REPLAY-DEDUP: the remembered launch URL does not re-navigate on the next b
   assert.ok(handled, 'the apply machinery no longer records handled links');
   const m2 = boot({ capApp: fakeAppPlugin({ launchUrl: TAP_URI }), seedLs: { 'trinityone.handledLinks': handled } });
   await settle(m2);
-  assert.equal(m2.window.location.search, '', 'the replayed launch URL navigated again — the app would reload-loop');
+  assert.equal(navSearch(m2.window), '', 'the replayed launch URL navigated again — the app would reload-loop');
 });
 
 test('WARM APP: an appUrlOpen tap (no launch URL) navigates too — the ACTION_VIEW path Capacitor actually fires', async () => {
@@ -77,16 +81,16 @@ test('WARM APP: an appUrlOpen tap (no launch URL) navigates too — the ACTION_V
   const m = boot({ capApp: cap });
   await settle(m);
   cap.fire('appUrlOpen', { url: TAP_URI });
-  assert.equal(m.window.location.search, '?push=msgs', 'a warm-app tap did not navigate');
+  assert.equal(navSearch(m.window), '?push=msgs', 'a warm-app tap did not navigate');
 });
 
 test('INERT ELSEWHERE: a ?follow invite is byte-unchanged, and a push token from a foreign host is refused', async () => {
   const m = boot({ capApp: fakeAppPlugin({ launchUrl: 'https://app.trinityone.church/join?follow=' + NPUB + '&name=St%20B' }) });
   await settle(m);
-  assert.equal(m.window.location.search, '?follow=' + NPUB + '&name=St+B', 'the join path no longer builds the same query');
+  assert.equal(navSearch(m.window), '?follow=' + NPUB + '&name=St+B', 'the join path no longer builds the same query');
   const bad = boot({ capApp: fakeAppPlugin({ launchUrl: 'https://evil.example/?push=msgs' }) });
   await settle(bad);
-  assert.equal(bad.window.location.search, '', 'a foreign host\'s push token was honoured');
+  assert.equal(navSearch(bad.window), '', 'a foreign host\'s push token was honoured');
 });
 
 test('THE SURFACE: booting on ?push=msgs opens the real DMInbox in App\'s tree and skips the splash (deepLinked)', async () => {
