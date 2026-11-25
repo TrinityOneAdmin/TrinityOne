@@ -376,10 +376,10 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
     const ID = window.TrinityIdentity || {};
     let until = 0; try { until = ID.rememberedUntil ? (await ID.rememberedUntil()) || 0 : 0; } catch (e) {}
     const plan = dpOnPlan(!!(ID.hasPin && ID.hasPin()), !!(ID.isLocked && ID.isLocked()), !!(ID.canRemember && ID.canRemember()), until);
-    if (!dpOptInSet(true)) { ctx.toast(‘Couldn’t save that on this phone’); return; }
+    if (!dpOptInSet(true)) { ctx.toast('Couldn’t save that on this phone'); return; }
     setDpOn(true);
     dpBgKeyWrite();   // copy the mnemonic to iOS AfterFirstUnlock Keychain entry (no-op on Android/web)
-    if (plan === ‘offer-remember’) setDpOffer(true);
+    if (plan === 'offer-remember') setDpOffer(true);
     else if (plan === 'unlock-first') ctx.toast('Unlock with your PIN, then choose “Stay open” here so alerts can arrive');
   };
   const acceptStayOpen = async () => {
