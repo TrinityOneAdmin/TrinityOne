@@ -2082,7 +2082,7 @@ function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
   // falls back to the wide layout rather than throwing. Default false = show all tabs (desktop).
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
   const pill = (active, onClick, label, key, extra) => (
-    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, minHeight: 44, boxSizing: 'border-box',
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, minHeight: 44, boxSizing: 'border-box',
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', ...(extra || {}) }}>{label}</button>
   );
   const activeMore = FIN_TABS_MORE.find(t => t.key === tab);
@@ -2098,14 +2098,14 @@ function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
   // DESKTOP / wide (>=760): all tabs inline, flex-wrap, no "More" button.
   if (!narrow) {
     return (
-      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
         {FIN_TABS.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
       </div>
     );
   }
   // NARROW / phone (<760): two primary pills + the More ▾ popover.
   return (
-    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
       {FIN_TABS_PRIMARY.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
       <div data-fin-more style={{ position: 'relative' }}>
         {pill(!!activeMore || moreOpen, () => setMoreOpen(o => !o), (activeMore ? 'More · ' + activeMore.label : 'More') + ' ▾', 'more', { display: 'inline-flex', alignItems: 'center' })}
@@ -2204,7 +2204,7 @@ function BillPaymentDialog({ book, bill, mode, amount0, date0, onConfirm, onClos
   );
 }
 
-function DashFinance() {
+function DashFinance({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}) {
   const F = window.FinanceLedger;
   const S = window.Steward;
   const [finKey, setFinKey] = React.useState(() => !!(S && S.financeKeyRing && S.financeKeyRing().length));
@@ -2220,7 +2220,7 @@ function DashFinance() {
   // ledger is the most misleading thing this screen can display: it reads as "your church has never recorded
   // anything", which is exactly what a treasurer must not be told by mistake.
   if (S && S.actingChurch && !finKey) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Waiting for the books to be shared with you</div>The church keeps its accounts under their own key. Whoever holds the church key needs to give you the <b>Finance</b> permission — once they do, the books open here on their own. If they already have, give it a moment to arrive.</div>;
-  return <DashFinanceBook />;
+  return <DashFinanceBook finTab={finTab} setFinTab={setFinTab} finMoreOpen={finMoreOpen} setFinMoreOpen={setFinMoreOpen} />;
 }
 
 // MAY THIS CONSOLE POST INTO A MEMBERS' CHANNEL AT ALL? (T1Finance step 0, 2026-11-17; S0-1 2026-11-17)
@@ -2247,7 +2247,7 @@ function financeMayPostToMembers(S, rosterKnown) {
   return caps.indexOf('content') >= 0;
 }
 
-function DashFinanceBook() {
+function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}) {
   const F = window.FinanceLedger;
   const S = window.Steward;
   const _bIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
@@ -2426,8 +2426,16 @@ function DashFinanceBook() {
   const [showRemovedBills, setShowRemovedBills] = React.useState(false);   // reveal voided bills in the list (audit trail)
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
-  const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors|insights (default Transactions)
-  const [moreOpen, setMoreOpen] = React.useState(false);  // the tab strip's "More ▾" popover (owner 2+More layout)
+  const [_localTab, _localSetTab] = React.useState('transactions');   // fallback when called without lifted tab state (full Steward console)
+  const [_localMoreOpen, _localSetMoreOpen] = React.useState(false);  // fallback: tab strip "More" popover
+  const tab = finTab !== undefined ? finTab : _localTab, setTab = setFinTab || _localSetTab, moreOpen = finMoreOpen !== undefined ? finMoreOpen : _localMoreOpen, setMoreOpen = setFinMoreOpen || _localSetMoreOpen;
+  const _tabStripLifted = finTab !== undefined;
+  const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
+  React.useEffect(() => {
+    const onRecord = () => { setTab('transactions'); setRecording(true); };
+    window.addEventListener('finance-record', onRecord);
+    return () => window.removeEventListener('finance-record', onRecord);
+  }, []);
   const [donorTab, setDonorTab] = React.useState('donors'); // Donors tab sub-tab: 'donors' (records) | 'giving' (giving-by-member + Gift Aid)
   const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
   const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y | custom
@@ -3342,7 +3350,7 @@ function DashFinanceBook() {
   // One pill in the tab strip (and in the Donors sub-tab strip). The label is a single string child, so the
   // point-of-use tests' button() helper (which matches a button's string kids) can select a tab by its label.
   const tabBtn = (active, onClick, label, key) => (
-    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, minHeight: 44, boxSizing: 'border-box',
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, minHeight: 44, boxSizing: 'border-box',
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
   );
 
@@ -3357,7 +3365,7 @@ function DashFinanceBook() {
     </div>
   );
   return (
-    <div style={{ padding: '4px 2px 40px' }}>
+    <div style={{ padding: '4px 2px 80px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
         <div>
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
@@ -3366,7 +3374,7 @@ function DashFinanceBook() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => setImporting(true)} title="Bring in transactions from a bank statement file" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
           <button onClick={() => setReconciling({})} title="Reconcile a bank statement against your ledger and check the closing balance" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
-          <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
+          {!_tabStripLifted && <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>}
           {/* Share statement lives HERE (header), not in the Transactions tab's card — it is a whole-screen
               action, reachable from any tab. Not disabled on bookErrors: it only reads + posts a summary. */}
           <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
@@ -3401,8 +3409,7 @@ function DashFinanceBook() {
         </div>
       </div>
 
-      {/* ── TAB STRIP (under the Funds card): 2 primary tabs + a "More ▾" menu; content below swaps to ONE panel ── */}
-      <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />
+      {!_tabStripLifted && <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />}
 
       {/* ── TRANSACTIONS tab (default): recent transactions, then the Recurring-payments collapsible ── */}
       {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
@@ -3467,7 +3474,7 @@ function DashFinanceBook() {
         {(() => {
           const m = rptModel;
           const chip = (active, onClick, label, key) => (
-            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, minHeight: 44, boxSizing: 'border-box',
+            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, minHeight: 44, boxSizing: 'border-box',
               border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', display: 'inline-flex', alignItems: 'center' }}>{label}</button>
           );
           const line = (label, val, bold) => (
@@ -3518,16 +3525,30 @@ function DashFinanceBook() {
             {m.fundMovements && m.fundMovements.length ? (
               <div style={{ marginBottom: 8 }}>
                 <div style={{ ...bkLbl, margin: '6px 0 4px' }}>Fund movements</div>
-                <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 3px' }}><span style={{ flex: 1 }} /><span style={{ width: 86, textAlign: 'right' }}>Opening</span><span style={{ width: 70, textAlign: 'right' }}>In</span><span style={{ width: 70, textAlign: 'right' }}>Out</span><span style={{ width: 86, textAlign: 'right' }}>Closing</span></div>
-                {m.fundMovements.map(r => (
-                  <div key={r.fund} style={{ display: 'flex', fontSize: 13, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
-                    <span style={{ flex: 1, minWidth: 0 }}>{r.name}{kindOf(r)}</span>
-                    <span style={{ width: 86, textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
-                    <span style={{ width: 70, textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
-                    <span style={{ width: 70, textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
-                    <span style={{ width: 86, textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
-                  </div>
-                ))}
+                {narrow ? (
+                  m.fundMovements.map(r => (
+                    <div key={r.fund} style={{ borderTop: '1px solid var(--line)', padding: '8px 0' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{r.name}{kindOf(r)}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 12px', fontSize: 12.5 }}>
+                        <span style={{ color: 'var(--ink-3)' }}>Opening</span><span style={{ textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
+                        <span style={{ color: 'var(--sage, #4f7a5e)' }}>In</span><span style={{ textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
+                        <span style={{ color: 'var(--clay-deep, #b4462f)' }}>Out</span><span style={{ textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
+                        <span style={{ color: 'var(--ink-3)' }}>Closing</span><span style={{ textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (<>
+                  <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 3px' }}><span style={{ flex: 1 }} /><span style={{ width: 86, textAlign: 'right' }}>Opening</span><span style={{ width: 70, textAlign: 'right' }}>In</span><span style={{ width: 70, textAlign: 'right' }}>Out</span><span style={{ width: 86, textAlign: 'right' }}>Closing</span></div>
+                  {m.fundMovements.map(r => (
+                    <div key={r.fund} style={{ display: 'flex', fontSize: 13, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+                      <span style={{ flex: 1, minWidth: 0 }}>{r.name}{kindOf(r)}</span>
+                      <span style={{ width: 86, textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
+                      <span style={{ width: 70, textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
+                      <span style={{ width: 70, textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
+                      <span style={{ width: 86, textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
+                    </div>
+                  ))}
+                </>)}
               </div>
             ) : null}
             {m.receipts ? (() => { const rp = m.receipts; return (

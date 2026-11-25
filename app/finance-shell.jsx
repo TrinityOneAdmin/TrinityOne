@@ -159,6 +159,8 @@ function FinanceShell() {
   // read of this church, this epoch" — the stamp subscribeStewards puts on the list it hands over.
   const rosterGenuine = !!(S.listIsFresh && S.listIsFresh(_roster));
   const [settings, setSettings] = React.useState(false);
+  const [finTab, setFinTab] = React.useState('transactions');
+  const [finMoreOpen, setFinMoreOpen] = React.useState(false);
   const view = financeShellView(S, church, rosterGenuine);
   const churchName = view === 'unlinked' ? 'Not linked yet' : (church.name || 'Your church');
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -183,11 +185,17 @@ function FinanceShell() {
         {view === 'books' && rosterGenuine && financeHasOtherCaps(S) ? (
           <div data-finance-other-caps="1" style={{ fontSize: 12, color: 'var(--ink-3)', margin: '0 0 10px', lineHeight: 1.45 }}>This key has other permissions in this church too. This app shows only the books.</div>
         ) : null}
-        {view === 'books' ? <DashFinance />
+        {view === 'books' ? <DashFinance finTab={finTab} setFinTab={setFinTab} finMoreOpen={finMoreOpen} setFinMoreOpen={setFinMoreOpen} />
           : view === 'blocked' ? <StewCapBlocked cap="finance" />
           : view === 'off' ? <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is turned off</div>This church has turned its Finance section off. Its owner can turn it back on from their own device.</div>
           : <FinanceUnlinked />}
       </main>
+      {view === 'books' ? <>
+        <button onClick={() => { const ev = new CustomEvent('finance-record'); window.dispatchEvent(ev); }} aria-label="Record a transaction" style={{ position: 'fixed', right: 'calc(16px + env(safe-area-inset-right, 0px))', bottom: 'calc(72px + env(safe-area-inset-bottom, 0px))', width: 56, height: 56, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay, #fff)', cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}><Icon name="plus" size={24} color="currentColor" /></button>
+        <nav style={{ flexShrink: 0, background: 'var(--surface)', borderTop: '1px solid var(--line)', padding: '6px calc(8px + env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) calc(8px + env(safe-area-inset-left, 0px))' }}>
+          <FinTabStrip tab={finTab} setTab={setFinTab} moreOpen={finMoreOpen} setMoreOpen={setFinMoreOpen} />
+        </nav>
+      </> : null}
     </div>
   );
 }
