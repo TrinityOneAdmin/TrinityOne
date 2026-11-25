@@ -13212,6 +13212,54 @@
       }
       return { ok: true, evt };
     },
+    // ── PUSH-NOTIFICATION DEVICE TOKEN (iOS/APNs; the "Prompt alerts" tier only). See reference/SCOPE-notifications.md §15.
+    // The member signs a REPLACEABLE kind-30078 doc that binds their own pubkey -> APNs device token. The relay-side
+    // registry (Linux) verifies the signature and that the author is the <pub> in the d-suffix, then the push hook at
+    // ingest (gateway.mjs) looks the token up and sends a CONTENTLESS "New message" push. An APNs token is a routing
+    // handle, not a secret, so the content is cleartext — nothing here encrypts and nothing reads the member's key.
+    //
+    // PUSH-ONLY, BY OWNER DECISION (2026-11-25): only the Prompt-alerts tier calls this. The On-device polling tier never
+    // does — it must not, because registering a token is unrelated to (and must not arm) the lock-readable "Stay open 30
+    // days" Keychain path that polling needs and push exists to remove. Keep the two code paths apart.
+    //
+    // CALLERS: publishPushToken — screens-extras.jsx dpSetTier() 'push' branch + the apnsToken listener (1 logical site).
+    //          deletePushToken  — screens-extras.jsx dpSetTier() leaving-'push' branch (1 site).
+    //          _buildPushTokenEvent — publishPushToken (here) + scripts/the-push-token-doc-binds-the-members-own-pubkey.test.mjs (lifted).
+    // MULTI-CHURCH NOTE: published to the ACTIVE church's gated relay set (churchRelays()); a member who follows several
+    // churches registers on the active one's relay. Per-church fan-out is a later concern (iOS pilot is single-church).
+    _buildPushTokenEvent({ pub: pub2, token, env, ts }) {
+      const t = ts || Math.floor(Date.now() / 1e3);
+      return {
+        kind: 30078,
+        created_at: t,
+        tags: [["d", "trinityone/pushtoken:" + pub2], ["t", NET], ["p", pub2]],
+        content: JSON.stringify({ token: String(token || "").toLowerCase(), platform: "ios", env: env === "sandbox" ? "sandbox" : "production", ts: t })
+      };
+    },
+    async publishPushToken(token, env) {
+      if (!sk) await window.Fellowship.ready;
+      const tok = String(token || "").toLowerCase();
+      if (!/^[0-9a-f]{8,}$/.test(tok)) return { ok: false, reason: "bad-token" };
+      const evt = finalizeEvent2(_monotonicF(window.Fellowship._buildPushTokenEvent({ pub, token: tok, env })), sk);
+      try {
+        await _publishBounded(churchRelays(), evt);
+      } catch (e) {
+        console.warn("[fellowship] publishPushToken failed", e);
+        return { ok: false, reason: _pubReason(e) };
+      }
+      return { ok: true, evt };
+    },
+    async deletePushToken() {
+      if (!sk) await window.Fellowship.ready;
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pushtoken:" + pub], ["t", NET], ["p", pub], ["deleted", "1"]], content: "" }), sk);
+      try {
+        await _publishBounded(churchRelays(), evt);
+      } catch (e) {
+        console.warn("[fellowship] deletePushToken failed", e);
+        return { ok: false, reason: _pubReason(e) };
+      }
+      return { ok: true, evt };
+    },
     // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
     // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
     subscribeChurchGroups(churchNpub, onGroups) {

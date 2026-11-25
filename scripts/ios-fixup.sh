@@ -112,8 +112,20 @@ else
   "$PB" -c "Add :UIBackgroundModes: string audio" "$PL"
   echo "  Info.plist: UIBackgroundModes += audio"
 fi
+# Remote notifications (APNs push, the "Prompt alerts" tier). Same merge-safe + idempotent pattern as audio.
+# This is the Background Modes -> "Remote notifications" capability. For GENERIC contentless push iOS draws the
+# alert itself with the app not running, so this mode is only strictly needed once rich/silent push wakes the app;
+# it is set now so the capability is in place and harmless. (The aps-environment ENTITLEMENT + the Push capability on
+# the App ID are a separate Apple-portal step, applied only once the App ID is provisioned for push — see
+# plugins/trinity-directpush/ios/Apns.README.md. Not auto-added here, so a simulator build never fails on signing.)
+if "$PB" -c "Print :UIBackgroundModes" "$PL" 2>/dev/null | grep -qE '^[[:space:]]*remote-notification[[:space:]]*$'; then
+  echo "  Info.plist: UIBackgroundModes already has remote-notification — skipped"
+else
+  "$PB" -c "Add :UIBackgroundModes: string remote-notification" "$PL"
+  echo "  Info.plist: UIBackgroundModes += remote-notification"
+fi
 plutil -lint "$PL" >/dev/null
-echo "  Info.plist: usage strings + export-compliance + UIScene manifest + background audio set"
+echo "  Info.plist: usage strings + export-compliance + UIScene manifest + background audio + remote-notification set"
 
 # ── 3. AppDelegate.swift: append SceneDelegate + BackupExclude plugin (idempotent) ──
 # Both are appended to AppDelegate.swift (already in the Sources build phase) rather
@@ -264,6 +276,85 @@ PY
   echo "  AppDelegate.swift: scene root VC -> BackupExcludeBridgeViewController"
 else
   echo "  AppDelegate.swift: scene root VC already registers the plugin — skipped"
+fi
+
+# 3d. ApnsBridge — APNs device-token registration for the "Prompt alerts" push tier (reference/SCOPE-notifications.md §15).
+# Appended inline for the same reason BackupExclude is (old-format pbxproj won't compile a loose .swift). The
+# device-token delegate methods go in an `extension AppDelegate`, so this stays append-only — no edit to the stock
+# AppDelegate body. GENERIC/contentless: nothing here decrypts; iOS draws a generic push with the app not running.
+if grep -q "class ApnsBridge" "$APPDELEGATE"; then
+  echo "  AppDelegate.swift: ApnsBridge already present — skipped"
+else
+  cat >> "$APPDELEGATE" <<'SWIFT'
+
+// ─── ios-fixup: ApnsBridge — APNs device-token registration for the "Prompt alerts" push tier ───
+// register() (from JS) asks for notification authorization, then registers for remote notifications. iOS hands the
+// device token to the AppDelegate callback below, which forwards it to JS as the 'apnsToken' event; screens-extras.jsx
+// turns that into a signed kind-30078 pushtoken doc the relay registry reads (reference/SCOPE-notifications.md §15).
+// An APNs token is a routing handle, not a secret. This tier is PUSH-ONLY and reads no identity key.
+import UserNotifications
+
+@objc(ApnsBridge)
+public class ApnsBridge: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "ApnsBridge"
+    public let jsName = "ApnsBridge"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "register", returnType: CAPPluginReturnPromise),
+    ]
+    // A shared reference so the AppDelegate's didRegister callback can reach the live plugin instance.
+    static weak var shared: ApnsBridge?
+    override public func load() { ApnsBridge.shared = self }
+
+    @objc func register(_ call: CAPPluginCall) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            DispatchQueue.main.async {
+                // Register regardless of `granted`: a token lets the relay REACH this device; whether a banner is
+                // shown is the user's notification setting, which they can change later without re-registering.
+                UIApplication.shared.registerForRemoteNotifications()
+                call.resolve(["granted": granted])
+            }
+        }
+    }
+
+    // Called by the AppDelegate extension when iOS hands us a token.
+    func deliver(token: String) {
+        var env = "production"
+        #if DEBUG
+        env = "sandbox"   // debug builds talk to the APNs sandbox; the relay must send via the matching environment
+        #endif
+        notifyListeners("apnsToken", data: ["token": token, "env": env])
+    }
+}
+
+// The device-token callbacks must live on the UIApplicationDelegate; an extension keeps this append-only. Hex-encode
+// the token exactly as APNs expects and hand it to the live plugin instance.
+extension AppDelegate {
+    public func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        NSLog("APNS registered device token (\(hex.count / 2) bytes)")
+        ApnsBridge.shared?.deliver(token: hex)
+    }
+    public func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NSLog("APNS registration failed: \(error.localizedDescription)")
+    }
+}
+SWIFT
+  echo "  AppDelegate.swift: ApnsBridge appended"
+fi
+# 3e. register the ApnsBridge instance in the bridge VC's capacitorDidLoad (idempotent).
+if grep -q "registerPluginInstance(ApnsBridge())" "$APPDELEGATE"; then
+  echo "  AppDelegate.swift: ApnsBridge already registered — skipped"
+else
+  python3 -I - "$APPDELEGATE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "bridge?.registerPluginInstance(BackupExcludePlugin())"
+assert anchor in s, "BackupExclude registration not found — ios-fixup step 3b must run first"
+s = s.replace(anchor, anchor + "\n        bridge?.registerPluginInstance(ApnsBridge())", 1)
+open(p, "w").write(s)
+PY
+  echo "  AppDelegate.swift: ApnsBridge registered in capacitorDidLoad"
 fi
 
 # ── 4. App icon + splash: replace the default Capacitor icon ─────────────────

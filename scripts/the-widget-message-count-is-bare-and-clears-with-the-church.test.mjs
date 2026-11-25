@@ -4,13 +4,13 @@
 // Everything here is lifted from the shipped source and EXECUTED (CLAUDE.md rule 3), not text-matched:
 //  - bg-entry.js widgetCountAction + finish: what the reader tells the worker to do to the count, and that finish()
 //    really attaches it to the summary the worker reads (release path, DP_DEBUG false).
-//  - screens-extras.jsx flipDirect's opt-out branch: really calls the clear (the point of USE, rule 1).
+//  - screens-extras.jsx dpSetTier's leaving-on-device branch: really calls the clear (the point of USE, rule 1).
 //  - identity.src.js widgetClearChurch (the lock / forget-device / remember-expiry / church-switch path): really
 //    calls TrinityWidget.clearMessageCount as well as clearPrompt.
 // The native half (WidgetStore.shownCount age/clock rule, the worker's prefs write) is Kotlin/Java: checked by compiling
 // and on the device, not here.
-// Callers of the lifted code: widgetCountAction/finish only __dpStart; dpWidgetCountClear only flipDirect;
-// widgetClearChurch only widgetForgetChurch and rememberClear.
+// Callers of the lifted code: widgetCountAction/finish only __dpStart; dpWidgetCountClear only dpSetTier
+// (leaving the on-device tier); widgetClearChurch only widgetForgetChurch and rememberClear.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -42,17 +42,19 @@ test('the summary the worker reads carries only the decision: a number, never a 
   assert.deepEqual(reports[1].widget, { op: 'clear' });
 });
 
-test('POINT OF USE: turning the message notifications OFF clears the widget count', async () => {
-  const src = EXT.slice(EXT.indexOf('const flipDirect = async () => {'));
-  const optOut = src.slice(src.indexOf('if (dpOn) {'), src.indexOf('const ID = window.TrinityIdentity'));
-  assert.ok(optOut.length > 20 && optOut.length < 600, 'sliced the opt-out branch');
+test('POINT OF USE: leaving the on-device tier clears the widget count', () => {
+  // The clear now lives in dpSetTier's "leaving a tier" cleanup: switching AWAY from on-device (to push or off)
+  // drops both the lock-readable key and the widget count. Slice that one branch and execute it — delete the
+  // dpWidgetCountClear() line and this fails.
+  const src = EXT.slice(EXT.indexOf('const dpSetTier = async (next) => {'));
+  const leave = src.slice(src.indexOf("if (prev === 'ondevice')"), src.indexOf("if (prev === 'push')"));
+  assert.ok(leave.length > 20 && leave.length < 400, 'sliced the leaving-on-device branch');
   const calls = [];
-  const clearFn = new Function('calls', fnBody(EXT, 'function dpWidgetCountClear(', 'dpWidgetCountClear') + '\nreturn dpWidgetCountClear;')(calls);
-  const run = new Function('dpOn', 'dpOptInSet', 'setDpOn', 'setDpOffer', 'dpWidgetCountClear', 'return (async () => {' + optOut + ' return "fell-through"; })();');
-  const r = await run(true, (v) => { calls.push('optin:' + v); return true; }, () => {}, () => {}, () => calls.push('clear-count'));
-  assert.notEqual(r, 'fell-through', 'opt-out returns');
-  assert.deepEqual(calls, ['optin:false', 'clear-count']);
+  const run = new Function('prev', 'dpBgKeyClear', 'dpWidgetCountClear', leave + '\n;');
+  run('ondevice', () => calls.push('bgkey-clear'), () => calls.push('clear-count'));
+  assert.deepEqual(calls, ['bgkey-clear', 'clear-count'], 'leaving on-device must clear both the lock-readable key and the widget count');
   // and the helper reaches the native plugin, tolerating an APK without the method
+  const clearFn = new Function('calls', fnBody(EXT, 'function dpWidgetCountClear(', 'dpWidgetCountClear') + '\nreturn dpWidgetCountClear;')(calls);
   const seen = [];
   globalThis.window = { Capacitor: { Plugins: { TrinityWidget: { clearMessageCount: () => { seen.push('native'); return Promise.resolve(); } } } } };
   clearFn(); assert.deepEqual(seen, ['native']);
