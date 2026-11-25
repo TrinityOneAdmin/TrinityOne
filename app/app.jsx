@@ -795,7 +795,7 @@ function App() {
     // static and NOTHING else is read off the URL — no count, no sender, no church.
     const pushQuery = (url) => {
       let u; try { u = new URL(url); } catch (e) { return null; }
-      if (u.protocol !== 'https:' || u.host !== APP_HOST) return null;
+      if (u.protocol !== 'https:' || !APP_HOSTS.includes(u.host)) return null;   // merge: App Links replaced APP_HOST with the claimed-hosts list
       return u.searchParams.get('push') === 'msgs' ? 'push=msgs' : null;
     };
     // `replay` = this URL came from getLaunchUrl(), which keeps returning the SAME url after we navigate, so it
