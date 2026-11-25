@@ -26,11 +26,12 @@ const read = (f) => readFileSync(join(ROOT, f), 'utf8');
 const FILES = ['app/help-illustrations.jsx', 'app/help-data.jsx', 'app/screens-help.jsx', 'app/stew-modal.jsx', 'app/stew-help.jsx', 'app/tour-kit.jsx', 'app/stew-tour.jsx', 'app/stew-dashboard.jsx'];
 const JS = FILES.map(compileScreen).join('\n;\n');
 const WANT = ['StewDashboard', 'StewSetupWizard', 'DelegateBrief', 'StewTourHost', 'stewNav', 'NAV',
-  'stewTourPlan', 'tourKitWalk', 'stewTourSectionTip', 'tourKitPlace', 'stewTourStart', 'STEW_TOUR_TIPS', 'STEW_TOUR_STEPS', 'stewTourStore', 'StewTourTip'];
+  'stewTourPlan', 'tourKitWalk', 'stewTourSectionTip', 'tourKitPlace', 'stewTourStart', 'STEW_TOUR_TIPS', 'STEW_TOUR_STEPS', 'stewTourStore', 'StewTourTip',
+  'STEW_TOUR_NAV', 'stewTourMarkTipsSeen'];
 
 // opts: { church, delegate, innerWidth, caps (bool: capabilities allowed), store (a Map to share across boots),
 //         helperCaps (a helper's capabilities, e.g. ['members']), failWrites (localStorage.setItem throws, as a full
-//         or blocked store does) }
+//         or blocked store does), win (extra window.* hooks), steward (extra window.Steward members) }
 function boot(opts = {}) {
   const { React, draw } = miniReact();
   const store = opts.store || new Map();
@@ -73,6 +74,7 @@ function boot(opts = {}) {
       relays: () => [], relayStatus: () => ({}), networks: () => [], publishProfile: () => {},
       npub: 'npub1grace', becomeStewardPayload: () => 'steward-invite-payload', qrSVG: () => '',
       joinUrl: () => 'https://app.example/join#x', inviteCode: () => 'ABC123', joinCode: () => 'ABC123',
+      ...(opts.steward || {}),
     },
     useStewardStats: () => ({}), useStewardActivity: () => [], useStewardRequests: () => [],
     addEventListener(t, f) { (winListeners[t] = winListeners[t] || []).push(f); },
@@ -80,6 +82,7 @@ function boot(opts = {}) {
     dispatchEvent(e) { (winListeners[e.type] || []).slice().forEach(f => f(e)); return true; },
     innerWidth: opts.innerWidth || 1200, innerHeight: 800,
     localStorage: ls,
+    ...(opts.win || {}),
   };
   const globals = {
     React, window: win, location: { hostname: 'app.example' }, navigator: { userAgent: '' }, document: doc,
@@ -129,7 +132,7 @@ const press = (node, want) => {
 function walk(h) {
   const seen = [];
   let tree = h.show();
-  for (let guard = 0; guard < 20; guard++) {
+  for (let guard = 0; guard < 40; guard++) {
     const b = bubble(tree);
     if (!b) return seen;
     seen.push(titleOf(b));
@@ -140,7 +143,10 @@ function walk(h) {
   }
   throw new Error('the tour never ended');
 }
-const OWNER_TITLES = ['Welcome', 'Your church’s name', 'Overview', 'Inviting people', 'Members', 'Groups', 'Settings and Help'];
+// Part 1 (the Overview's cards), then Part 2 (one step per section in the nav, in the nav's order). This church has
+// nobody waiting to join and no verse prompt, so "What needs you" and "Verse prompt" have nothing to point at.
+const OWNER_TITLES = ['Welcome', 'Your church’s name', 'Joining code', 'Recent activity',
+  'Overview', 'Groups', 'Rota', 'Calendar', 'Rooms', 'Resources', 'Members', 'Settings & Help'];
 
 // ── the premise ────────────────────────────────────────────────────────────────────────────────────────────
 test('CONTROL: the console compiles with stew-tour.jsx in its scope and mounts the tour host', () => {
@@ -152,7 +158,7 @@ test('CONTROL: the console compiles with stew-tour.jsx in its scope and mounts t
 });
 
 // ── the two automatic starts, at the point of use ──────────────────────────────────────────────────────────
-test('POINT OF USE: finishing the setup wizard starts the tour, and it walks all seven steps for an owner', () => {
+test('POINT OF USE: finishing the setup wizard starts the tour, and it walks the Overview cards then every section for an owner', () => {
   const h = boot({ church: { name: '' } });
   h.store.set('trinityone.steward.newchurch', '1');
   let tree = h.show();
@@ -170,8 +176,8 @@ test('POINT OF USE: finishing the setup wizard starts the tour, and it walks all
   const b = bubble(tree);
   assert.ok(b, 'finishing the wizard did not start the tour');
   assert.equal(titleOf(b), 'Welcome');
-  // the counter's kids are [1, ' of ', 7] — joined with '' they are exactly what the browser lays out
-  assert.ok(find(b, n => n.type === 'div' && (n.kids || []).join('') === '1 of 7').length === 1, 'the step counter does not read 1 of 7');
+  // the counter's kids are [1, ' of ', 12] — joined with '' they are exactly what the browser lays out
+  assert.ok(find(b, n => n.type === 'div' && (n.kids || []).join('') === '1 of 12').length === 1, 'the step counter does not read 1 of 12');
   assert.equal(h.store.get('trinityone.steward.tour.churchpub.tour'), '1', 'the tour was not recorded as seen for this church');
   assert.deepEqual(walk(h), OWNER_TITLES);
 });
@@ -186,8 +192,8 @@ test('POINT OF USE: a helper closing their welcome screen starts the tour, witho
   tree = h.show();
   assert.ok(bubble(tree), 'closing the helper welcome did not start the tour');
   const titles = walk(h);
-  // Members and Groups are locked for this helper (no capabilities), and a helper cannot rename the church.
-  assert.deepEqual(titles, ['Welcome', 'Overview', 'Inviting people', 'Settings and Help']);
+  // Every capability-gated section is locked for this helper (no capabilities), and a helper cannot rename the church.
+  assert.deepEqual(titles, ['Welcome', 'Joining code', 'Recent activity', 'Overview', 'Settings & Help']);
 });
 
 // ── L2 (audit 2026-11-19): the wizard's exits do not fight the tour ────────────────────────────────────────
@@ -343,16 +349,17 @@ test('POINT OF USE: Help → "Take the tour again" closes Help and replays the t
 });
 
 // ── the phone layout ───────────────────────────────────────────────────────────────────────────────────────
-test('narrow layout: nav steps point at the menu button and say "(in the menu)"', () => {
+test('POINT OF USE: narrow layout — the section steps point at the menu button and say "· in the menu"', () => {
   const h = boot({ innerWidth: 500 });
   h.mod.stewTourStart('replay');
   const titles = walk(h);
-  assert.deepEqual(titles, ['Welcome', 'Your church’s name', 'Overview (in the menu)', 'Inviting people', 'Members (in the menu)', 'Groups (in the menu)', 'Settings and Help (in the menu)']);
+  assert.deepEqual(titles, ['Welcome', 'Your church’s name', 'Joining code', 'Recent activity',
+    ...['Overview', 'Groups', 'Rota', 'Calendar', 'Rooms', 'Resources', 'Members', 'Settings & Help'].map(t => t + ' · in the menu')]);
   const plan = h.mod.stewTourPlan(h.mod.stewNav(h.mod.NAV, {}, { capState: () => ({ allowed: true }) }), { narrow: true });
-  assert.deepEqual(plan.find(s => s.id === 'overview').targets, ['menu']);
-  assert.deepEqual(plan.find(s => s.id === 'settings').targets, ['menu'], 'Settings and Help should both collapse onto the one menu button');
+  assert.deepEqual(plan.find(s => s.id === 'nav.overview').targets, ['menu']);
+  assert.deepEqual(plan.find(s => s.id === 'nav.settings').targets, ['menu'], 'Settings and Help should both collapse onto the one menu button');
   const wide = h.mod.stewTourPlan(h.mod.stewNav(h.mod.NAV, {}, { capState: () => ({ allowed: true }) }), { narrow: false });
-  assert.deepEqual(wide.find(s => s.id === 'settings').targets, ['nav-settings', 'help']);
+  assert.deepEqual(wide.find(s => s.id === 'nav.settings').targets, ['nav-settings', 'help']);
 });
 
 test('a step whose anchor is not on screen is skipped, never pointed at', () => {
@@ -424,8 +431,10 @@ test('POINT OF USE: a section the church switched off gets no tip (the console s
   // and the tour plan never names it
   const nav = h.mod.stewNav(h.mod.NAV, { features: { rota: false } }, { capState: () => ({ allowed: true }) });
   assert.ok(!nav.some(n => n.key === 'rota'), 'premise: stewNav no longer hides a switched-off section');
+  assert.ok(!h.mod.stewTourPlan(nav, {}).some(s => s.id === 'nav.rota'), 'a switched-off section kept its tour step');
+  assert.ok(h.mod.stewTourPlan(nav, {}).some(s => s.id === 'nav.groups'), 'premise: Groups has no tour step, so the next line proves nothing');
   const noGroups = nav.filter(n => n.key !== 'groups');
-  assert.ok(!h.mod.stewTourPlan(noGroups, {}).some(s => s.id === 'groups'), 'a section missing from the nav kept its tour step');
+  assert.ok(!h.mod.stewTourPlan(noGroups, {}).some(s => s.id === 'nav.groups'), 'a section missing from the nav kept its tour step');
 });
 
 test('POINT OF USE: a helper opening a locked section gets the locked tip, once', () => {
@@ -509,25 +518,26 @@ test('POINT OF USE: the tour\'s Settings and Help step tells a helper the helper
   const stepText = (h) => {
     h.mod.stewTourStart('replay');
     let tree = h.show();
-    for (let g = 0; g < 20; g++) {
+    for (let g = 0; g < 40; g++) {
       const b = bubble(tree);
       assert.ok(b, 'the tour ended before Settings and Help');
-      if (titleOf(b) === 'Settings and Help') return texts(find(b, n => n.type === 'p')[0].kids || []).join('');
+      if (titleOf(b) === 'Settings & Help') return texts(find(b, n => n.type === 'p')[0].kids || []).join('');
       press(b, 'Next');
       tree = h.show();
     }
     throw new Error('the tour never reached Settings and Help');
   };
-  const S = boot().mod.STEW_TOUR_STEPS.find(s => s.id === 'settings');
+  const S = boot().mod.STEW_TOUR_NAV.settings;
   assert.equal(stepText(helperBoot([])), 'Stuck? Help is here, and so is this tour.');
   assert.equal(stepText(boot()), S.text);
+  assert.notEqual(S.text, 'Stuck? Help is here, and so is this tour.', 'premise: the owner and helper words are the same');
 });
 
 test('POINT OF USE: the tour\'s Members step tells a helper holding Members only what they can do; an owner the owner words', () => {
   const stepText = (h) => {
     h.mod.stewTourStart('replay');
     let tree = h.show();
-    for (let g = 0; g < 20; g++) {
+    for (let g = 0; g < 40; g++) {
       const b = bubble(tree);
       assert.ok(b, 'the tour ended before Members');
       if (titleOf(b) === 'Members') return texts(find(b, n => n.type === 'p')[0].kids || []).join('');
@@ -536,7 +546,7 @@ test('POINT OF USE: the tour\'s Members step tells a helper holding Members only
     }
     throw new Error('the tour never reached Members');
   };
-  const S = boot().mod.STEW_TOUR_STEPS.find(s => s.id === 'members');
+  const S = boot().mod.STEW_TOUR_NAV.members;
   assert.equal(stepText(helperBoot(['members'])), 'Everyone who has joined.');
   assert.equal(stepText(boot()), S.text);
 });
@@ -637,6 +647,212 @@ test('POINT OF USE (P2, stage-4 audit): a tip never floats over the section\'s o
   tree = g.show();
   assert.equal(find(tree, n => n.props && n.props['data-stew-tour-float'] === '1').length, 0, 'stopping 50px from the top left the tip floating over the section\'s first cards');
   assert.equal(g.state.mainTop, 0, 'docking did not put <main> at its top');
+});
+
+// ── 2026-11-22: the detailed tour — Overview card by card, then every section ───────────────────────────────
+// A nav with every optional section on (Check-in, Finance, Manna, Care), built by the console's own stewNav.
+const fullNav = (h, capState) => h.mod.stewNav(h.mod.NAV, { features: { checkin: true } },
+  { finOn: true, mannaOn: true, mealsOn: true, checkinOn: true, capState: capState || (() => ({ allowed: true })) });
+const NAV_WORDS = {
+  overview: 'The page you just saw. Start here each time you open the console.',
+  members: 'Everyone who has joined. Mark who is a child, and which adults are cleared to work with them. The safety rules then apply on their own.',
+  groups: 'Chat rooms and announcement channels. Choose which are open, invite-only, or safe for children.',
+  rota: 'Build serving teams, then fill the dates. People get a “Can you serve?” request and answer from their phone.',
+  calendar: 'Services, events and socials. Members see them in their app and can say they’re coming.',
+  rooms: 'The rooms in your building. Add them, then book one when you add an event.',
+  resources: 'Reading plans, devotionals, sermons, and the verse prompt your members see.',
+  meals: 'Meal trains, lifts and errands. Set up a need, and members sign up to help.',
+  checkin: 'The children’s register. Sign children in and out at the door, and see who’s in the room.',
+  finance: 'Record giving and spending, import a bank statement, and share a summary with the church.',
+  settings: 'Switch sections on or off, back up the church, and choose where its data lives. Stuck? Help is here, and so is this tour.',
+};
+const PART1 = [
+  ['welcome', 'Welcome', [], 'Your church is ready. Here’s a proper look around — a couple of minutes, and you can stop any time.'],
+  ['identity', 'Your church’s name', ['identity'], 'This is your church. Tap the name to change it. If you also help run a network or another church, switch to it from here.'],
+  ['needs', 'What needs you', ['needs'], 'Anything waiting on you shows here first — new people asking to join, and clearances coming up for renewal. Clear this and you’re up to date.'],
+  ['verse', 'Verse prompt', ['verse'], 'A verse goes out to everyone’s phone each day. This shows what’s scheduled — change it under Resources.'],
+  ['invite', 'Joining code', ['joincode'], 'This is how people join. Share the code or QR: they scan it or type it into the TrinityOne app.'],
+  ['activity', 'Recent activity', ['activity'], 'A running list of what’s happened lately — who joined, what was posted, what changed across the church.'],
+];
+
+test('the plan (desktop): the Overview cards, then one step per section in the nav\'s order — Manna and locked sections dropped', () => {
+  const h = boot();
+  const nav = fullNav(h);
+  const keys = nav.map(n => n.key);
+  assert.deepEqual(keys, ['overview', 'groups', 'rota', 'calendar', 'rooms', 'resources', 'members', 'checkin', 'finance', 'manna', 'meals', 'settings'],
+    'premise: stewNav no longer builds this nav — re-anchor this test');
+  const plan = h.mod.stewTourPlan(nav, {});
+  const walked = keys.filter(k => k !== 'manna');
+  assert.deepEqual(plan.map(s => s.id), [...PART1.map(p => p[0]), ...walked.map(k => 'nav.' + k)]);
+  // Part 1: the approved words, each at its own anchor
+  PART1.forEach(([id, title, targets, text], i) => {
+    assert.equal(plan[i].title, title);
+    assert.deepEqual(plan[i].targets, targets, id + ' points at the wrong anchor');
+    assert.equal(plan[i].text, text, id + ' does not carry the approved words');
+  });
+  // Part 2: each section at its own sidebar row, named as the sidebar names it, with the approved words
+  const labelOf = Object.fromEntries(nav.map(n => [n.key, n.label]));
+  for (const k of walked) {
+    const s = plan.find(x => x.id === 'nav.' + k);
+    assert.equal(s.targets[0], 'nav-' + k, k + ' does not point at its sidebar row');
+    assert.equal(s.title, k === 'settings' ? 'Settings & Help' : labelOf[k]);
+    assert.equal(s.text, NAV_WORDS[k], k + ' does not carry the approved words');
+  }
+  assert.equal(plan.find(x => x.id === 'nav.meals').title, 'Care');
+  // a helper holding only Members: no church-name step, the helper words, and nothing for a section locked to them
+  const helperNav = fullNav(h, (cap) => ({ allowed: cap === 'members' }));
+  const lockedKeys = helperNav.filter(n => n.locked).map(n => n.key);
+  assert.deepEqual(lockedKeys, ['groups', 'rota', 'calendar', 'rooms', 'resources', 'checkin', 'meals'], 'premise: stewNav no longer locks these for a members-only helper');
+  const hp = h.mod.stewTourPlan(helperNav, { delegate: true });
+  assert.deepEqual(hp.map(s => s.id), ['welcome', 'needs', 'verse', 'invite', 'activity', 'nav.overview', 'nav.members', 'nav.finance', 'nav.settings']);
+  assert.equal(hp.find(s => s.id === 'nav.members').text, 'Everyone who has joined.');
+  assert.equal(hp.find(s => s.id === 'nav.settings').text, 'Stuck? Help is here, and so is this tour.');
+  assert.equal(hp.find(s => s.id === 'nav.overview').text, NAV_WORDS.overview);
+});
+
+test('the plan (narrow): every section step points at the menu button and says "· in the menu"; the card steps keep their Overview anchors', () => {
+  const h = boot();
+  const nav = fullNav(h);
+  const plan = h.mod.stewTourPlan(nav, { narrow: true });
+  const walked = nav.filter(n => n.key !== 'manna');
+  assert.deepEqual(plan.map(s => s.id), [...PART1.map(p => p[0]), ...walked.map(n => 'nav.' + n.key)]);
+  PART1.forEach(([id, title, targets], i) => {
+    assert.equal(plan[i].title, title, id + ' gained a menu suffix it should not have');
+    assert.deepEqual(plan[i].targets, targets, id + ' does not point at its Overview anchor on a phone');
+  });
+  for (const n of walked) {
+    const s = plan.find(x => x.id === 'nav.' + n.key);
+    assert.deepEqual(s.targets, ['menu'], n.key + ' does not point at the menu button on a phone');
+    assert.equal(s.title, (n.key === 'settings' ? 'Settings & Help' : n.label) + ' · in the menu');
+    assert.equal(s.text, NAV_WORDS[n.key]);
+  }
+});
+
+// A church with one person waiting to join (approval on, nobody admitted) and a verse prompt out.
+const busyBoot = (opts = {}) => boot({ globals: MEMBERS_STUBS, ...opts,
+  win: { useStewardJoinPolicy: () => true },
+  steward: { subscribeVersePrompt: (cb) => { cb({ ref: 'John 3:16' }); return () => {}; } } });
+const anchored = (tree, name) => find(tree, n => n.props && n.props['data-tour'] === name);
+
+test('POINT OF USE: the Overview draws the anchors the card steps point at — needs, verse, joincode, activity — each on its own card', () => {
+  const h = busyBoot();
+  const tree = h.show();
+  const said = (n) => texts(n.kids || []).join(' ');
+  const needs = anchored(tree, 'needs');
+  assert.equal(needs.length, 1, 'the "waiting to join" card has no data-tour="needs" anchor');
+  assert.ok(/1\s+person is\s+waiting to join/.test(said(needs[0])), 'data-tour="needs" is not on the waiting-to-join card: ' + said(needs[0]));
+  const verse = anchored(tree, 'verse');
+  assert.equal(verse.length, 1, 'the verse prompt card has no data-tour="verse" anchor');
+  assert.ok(said(verse[0]).includes('John 3:16'), 'data-tour="verse" is not on the verse prompt card');
+  const activity = anchored(tree, 'activity');
+  assert.equal(activity.length, 1, 'the Recent activity card has no data-tour="activity" anchor');
+  assert.deepEqual(find(activity[0], n => n.type === 'h2').map(said), ['Recent activity'], 'data-tour="activity" is not on the Recent activity card alone');
+  assert.equal(anchored(tree, 'joincode').length, 1, 'the Joining code card has no data-tour="joincode" anchor');
+  // decision B: the Groups & rooms card is not a tour stop, and a card that passes no anchor draws none
+  const groupsCard = find(tree, n => n.type === 'div' && n.props.className === 'sk-panel' && find(n, x => x.type === 'h2' && said(x) === 'Groups & rooms').length === 1);
+  assert.equal(groupsCard.length, 1, 'premise: the Groups & rooms card is not drawn — re-anchor this test');
+  assert.equal(groupsCard[0].props['data-tour'], undefined, 'the Groups & rooms card gained a tour anchor');
+  // the same four on a phone, where the Overview is laid out by a different branch
+  const phone = busyBoot({ innerWidth: 500 }).show();
+  for (const a of ['needs', 'verse', 'joincode', 'activity']) assert.equal(anchored(phone, a).length, 1, 'the phone Overview has no data-tour="' + a + '" anchor');
+});
+
+test('POINT OF USE: with someone waiting and a verse out, the tour stops at "What needs you" and "Verse prompt" too, in order', () => {
+  const h = busyBoot();
+  h.mod.stewTourStart('replay');
+  h.show();
+  // The host counts the steps whose anchor is in the tree drawn BEFORE this one (the stub document answers from the
+  // last finished draw), and the verse card only appears once its subscription has answered — so draw once more.
+  let tree = h.show();
+  assert.ok(find(bubble(tree), n => n.type === 'div' && (n.kids || []).join('') === '1 of 14').length === 1, 'the step counter does not read 1 of 14');
+  assert.deepEqual(walk(h), ['Welcome', 'Your church’s name', 'What needs you', 'Verse prompt', 'Joining code', 'Recent activity',
+    'Overview', 'Groups', 'Rota', 'Calendar', 'Rooms', 'Resources', 'Members', 'Settings & Help']);
+  // CONTROL: nobody waiting, no verse — those two cards are not drawn, so the tour neither counts nor shows them
+  const g = boot();
+  g.mod.stewTourStart('replay');
+  tree = g.show();
+  assert.equal(anchored(tree, 'needs').length + anchored(tree, 'verse').length, 0, 'premise: a quiet church drew a needs or verse card');
+  const titles = walk(g);
+  assert.ok(!titles.includes('What needs you') && !titles.includes('Verse prompt'), 'the tour pointed at a card that is not on screen');
+  assert.equal(titles.length, 12);
+});
+
+// ── decision A (owner, 2026-11-22): once the tour is FINISHED, the first-open section tips do not fire ───────
+const flagOf = (h, k) => h.store.get('trinityone.steward.tour.churchpub.' + k) === '1';
+const openSection = (h, key) => { find(h.state.tree, n => n.type === 'button' && n.props['data-tour'] === 'nav-' + key)[0].props.onClick(); return h.show(); };
+
+test('POINT OF USE: finishing the tour (Next to the end, then Done) spends every section tip; no "Got it" tip follows', () => {
+  const h = boot();
+  h.mod.stewTourStart('replay');
+  h.show();
+  assert.equal(flagOf(h, 'tip.overview'), false, 'premise: a tip was spent before the tour finished');
+  assert.equal(walk(h).length, 12, 'premise: the tour did not run to its end');
+  for (const k of ['overview', 'groups', 'rota', 'calendar', 'rooms', 'resources', 'members', 'settings']) assert.ok(flagOf(h, 'tip.' + k), 'finishing the tour left the ' + k + ' tip unspent');
+  assert.ok(flagOf(h, 'locked'), 'finishing the tour left the locked-section tip unspent');
+  assert.equal(tipOf(h.show()), null, 'the Overview tip showed after the tour was finished');
+  assert.equal(tipOf(openSection(h, 'groups')), null, 'the Groups tip showed after the tour was finished');
+  assert.equal(tipOf(openSection(h, 'rota')), null, 'the Rota tip showed after the tour was finished');
+  // CONTROL, same route with no tour: opening Groups for the first time does show its tip
+  const c = boot();
+  c.store.set('trinityone.steward.tour.churchpub.tip.overview', '1');
+  c.show();
+  assert.ok(tipOf(openSection(c, 'groups')), 'premise: with no tour taken, Groups opened with no tip');
+});
+
+test('POINT OF USE: SKIPPING the tour spends no section tip — they still show, whether skipped at the first step or the last', () => {
+  const h = boot();
+  h.mod.stewTourStart('replay');
+  press(bubble(h.show()), 'Skip tour');
+  let tree = h.show();
+  assert.equal(bubble(tree), null, 'premise: Skip tour did not close the tour');
+  assert.deepEqual([...h.store.keys()].filter(k => /\.tip\.|\.locked$/.test(k)), [], 'skipping the tour spent a section tip');
+  assert.ok(tipOf(tree), 'after skipping the tour, the Overview tip did not show');
+  // skipped on the very last step: still a skip
+  const g = boot();
+  g.mod.stewTourStart('replay');
+  tree = g.show();
+  for (let i = 0; i < 40; i++) { if (find(bubble(tree), n => n.type === 'button' && label(n) === 'Done').length) break; press(bubble(tree), 'Next'); tree = g.show(); }
+  assert.equal(titleOf(bubble(tree)), 'Settings & Help', 'premise: did not reach the last step');
+  press(bubble(tree), 'Skip tour');
+  assert.equal(bubble(g.show()), null);
+  assert.deepEqual([...g.store.keys()].filter(k => /\.tip\.|\.locked$/.test(k)), [], 'skipping at the last step spent the section tips');
+});
+
+// Audit L4 (2026-11-22): a section LOCKED to a helper gets no tour step, so the tour has not covered it.
+test('POINT OF USE (L4): a helper finishing the tour spends the tips of the sections they were walked through, and keeps the tip of a locked one', () => {
+  const h = helperBoot(['members']);
+  h.mod.stewTourStart('replay');
+  h.show();
+  const titles = walk(h);
+  assert.ok(titles.includes('Members'), 'premise: the helper was not walked through Members: ' + titles.join(', '));
+  assert.ok(!titles.includes('Groups'), 'premise: the helper was walked through Groups, which is locked to them');
+  assert.equal(titles[titles.length - 1], 'Settings & Help', 'premise: the tour did not run to its end');
+  assert.ok(flagOf(h, 'tip.members'), 'finishing the tour left the Members tip unspent');
+  assert.ok(flagOf(h, 'tip.overview'), 'finishing the tour left the Overview tip unspent');
+  for (const k of ['groups', 'rota', 'calendar', 'rooms', 'resources']) assert.equal(flagOf(h, 'tip.' + k), false, 'finishing the tour spent the tip of ' + k + ', a locked section the tour never showed');
+  assert.ok(flagOf(h, 'locked'), 'finishing the tour left the locked-section tip unspent');
+  // so a helper later given that section still gets its tip, once: the same store, now holding Content
+  const later = boot({ delegate: true, helperCaps: ['members', 'content'], globals: MEMBERS_STUBS, store: h.store });
+  const tip = tipOf(later.show({ initial: 'groups' }));
+  assert.ok(tip, 'a helper given Groups after finishing the tour opened it with no tip');
+  assert.ok(texts(tip).join(' ').includes(later.mod.STEW_TOUR_TIPS.groups.text), 'the tip shown is not the Groups tip');
+});
+
+test('stewTourMarkTipsSeen spends the tip of every section in the nav, and the locked tip — and of no section outside it', () => {
+  const h = boot({ delegate: true });
+  const seen = (k) => h.store.get('trinityone.steward.tour.churchpub.' + k) === '1';   // the flags as the store really holds them
+  const tip = h.mod.stewTourSectionTip;
+  const nav = fullNav(h).filter(n => n.key !== 'rota');   // a church with Rota switched off
+  const keys = nav.map(n => n.key).filter(k => k !== 'manna');
+  for (const k of keys) assert.ok(tip(k, { seen }), 'premise: ' + k + ' has no tip before the tour');
+  assert.ok(tip('groups', { locked: true, delegate: true, seen }), 'premise: no locked tip before the tour');
+  h.mod.stewTourMarkTipsSeen('churchpub', nav);
+  for (const k of keys) assert.equal(tip(k, { seen }), null, 'the ' + k + ' tip still shows after the tour');
+  assert.equal(tip('groups', { locked: true, delegate: true, seen }), null, 'the locked tip still shows after the tour');
+  // a section switched on AFTER the tour has no flag: its tip shows once (it is new to them)
+  assert.ok(tip('rota', { seen }), 'a section that was not in the nav had its tip spent');
+  // per church: another church's flags are untouched
+  assert.ok(![...h.store.keys()].some(k => !k.startsWith('trinityone.steward.tour.churchpub.')), 'marking wrote outside this church\'s flags');
 });
 
 // ── the shell ──────────────────────────────────────────────────────────────────────────────────────────────
