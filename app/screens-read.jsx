@@ -100,11 +100,11 @@ function VerseRow({ n, html, hl, note, bookmarked, bmIcon, selected, reading, on
           color: bookmarked ? 'var(--clay)' : 'var(--ink-3)', marginRight: 3, verticalAlign: 'super',
           position: 'relative', top: '-.1em',
         }}>{n}</sup>
+        {bmIcon ? <Icon name="bookmark" size={12} color="var(--clay)" fill style={{ verticalAlign: 'super', marginRight: 3, position: 'relative', top: '-.1em' }} /> : null}
         <span style={hl ? {
           background: hl, borderRadius: 3, padding: '1px 1px',
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
         } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(body) }} />
-        {bmIcon ? <Icon name="bookmark" size={12} color="var(--clay)" fill style={{ verticalAlign: 'middle', marginLeft: 3 }} /> : null}
         {note ? <Icon name="note" size={14} color="var(--gold)" style={{ verticalAlign: 'middle', marginLeft: 4 }} /> : null}
       </span>{' '}
     </span>
@@ -1970,7 +1970,7 @@ function ReadScreen({ ctx }) {
                       borderLeft: '2px solid var(--clay)',
                       paddingLeft: 6,
                       marginLeft: -8,
-                      borderRadius: '4px 0 0 4px',
+                      paddingTop: 4, paddingBottom: 4, marginTop: -4, marginBottom: -4,
                       WebkitBoxDecorationBreak: 'clone',
                       boxDecorationBreak: 'clone',
                     }}>
