@@ -72,16 +72,15 @@ test('M1b — the /join App Link and its comment are in their own member-only bl
   assert.equal(lines.filter(l => /BEGIN join-link/.test(l)).length, 1);
   assert.equal(lines.filter(l => /END join-link/.test(l)).length, 1);
   const block = lines.slice(b, e + 1).join('\n');
-  assert.match(block, /App link for church invites/, 'the explanatory comment is not inside the join-link block');
+  assert.match(block, /App links? for church invites/, 'the explanatory comment is not inside the join-link block');
   const inside = filters(block);
-  assert.equal(inside.length, 1, 'the join-link block must hold exactly one intent-filter');
-  const f = inside[0];
-  assert.match(f, /android:autoVerify="true"/);
-  assert.match(f, /android\.intent\.action\.VIEW/);
-  assert.match(f, /category\.BROWSABLE/);
-  assert.match(f, /<data android:scheme="https" android:host="app\.trinityone\.church" android:pathPrefix="\/join" \/>/);
-  // the member app (the manifest as tracked) has exactly one /join filter in total — in this block
-  assert.equal(filters(xml).filter(x => /pathPrefix="\/join"/.test(x)).length, 1);
+  assert.equal(inside.length, 2, 'the join-link block must hold exactly the two App Link intent-filters (app host + apex host)');
+  assert.ok(inside.every(f => /android:autoVerify="true"/.test(f)), 'every join-link filter must have autoVerify');
+  assert.ok(inside.every(f => /android\.intent\.action\.VIEW/.test(f)), 'every join-link filter must be a VIEW action');
+  assert.ok(inside.every(f => /category\.BROWSABLE/.test(f)), 'every join-link filter must be BROWSABLE');
+  assert.ok(inside.some(f => /android:host="app\.trinityone\.church"/.test(f) && /pathPrefix="\/join"/.test(f)), 'the app-host /join filter');
+  assert.ok(inside.some(f => /android:host="trinityone\.church"/.test(f) && /pathPrefix="\/join"/.test(f)), 'the apex /join filter');
+  assert.equal(filters(xml).filter(x => /pathPrefix="\/join"/.test(x)).length, 2, 'the two /join filters are in this block and nowhere else');
 });
 
 // ── a scratch tree to run the REAL build script in ───────────────────────────────────────────────────────────

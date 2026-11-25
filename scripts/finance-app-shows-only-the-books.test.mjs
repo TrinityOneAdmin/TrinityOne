@@ -280,11 +280,11 @@ function welcome(app, { native = false } = {}) {
   return { draw, buttons, press, typeInto, adopted, reqs, get tree() { return tree; } };
 }
 
-test('finance welcome: only "Help with a church\'s books" and "Restore my helper words" — no create, no hand-over', () => {
+test('finance welcome: only "Help with a church\'s books" and "Restore my helper words" — no create, no hand-over', async () => {
   for (const native of [false, true]) {
     const w = welcome('finance', { native });
     const b = w.buttons();
-    assert.ok(b.some(x => /Help with a church’s books/.test(x)), 'no "Help with a church\'s books"');
+    assert.ok(b.some(x => /Help with a church.s books/.test(x)), 'no "Help with a church\'s books"');
     assert.ok(b.some(x => /Restore my helper words/.test(x)), 'no "Restore my helper words" (M3)');
     for (const no of [/Start a new church/, /Restore a church/, /Help run a church/, /another device/]) assert.ok(!b.some(x => no.test(x)), 'the finance welcome offers ' + no + (native ? ' (native)' : ''));
     w.press('Restore my helper words');
@@ -292,6 +292,7 @@ test('finance welcome: only "Help with a church\'s books" and "Restore my helper
     assert.ok(!w.buttons().some(x => /handoff QR/i.test(x)), 'the finance restore step offers the hand-over QR scanner');
     w.typeInto('Your 12 helper words', 'one two three four five six seven eight nine ten eleven twelve');
     w.press('Restore');
+    await new Promise(r => setTimeout(r, 0));
     assert.deepEqual(w.adopted, ['one two three four five six seven eight nine ten eleven twelve'], 'Restore did not restore the words');
   }
 });
@@ -310,17 +311,18 @@ test('finance welcome: "Help with a church\'s books" is the existing invite → 
 test('CONTROL — the steward welcome is unchanged: create, restore and help-run are all still there', () => {
   const b = welcome('steward', { native: true }).buttons();
   for (const yes of [/Start a new church/, /Restore a church/, /Help run a church/, /My church is on another device/]) assert.ok(b.some(x => yes.test(x)), 'the steward welcome lost ' + yes);
-  assert.ok(!b.some(x => /Help with a church’s books|Restore my helper words/.test(x)), 'the steward welcome shows the finance doors');
+  assert.ok(!b.some(x => /Help with a church.s books|Restore my helper words/.test(x)), 'the steward welcome shows the finance doors');
 });
 
 // ── ?adopt= (plan §3.6) ────────────────────────────────────────────────────────────────────────────────────────────
-test('?adopt= is ignored in the finance app — and still adopts in the steward console', () => {
+test('?adopt= is ignored in the finance app — and still adopts in the steward console', async () => {
   for (const [app, want] of [['finance', 0], ['steward', 1]]) {
     const adopted = [];
     const replaced = [];
     load({ app, search: '?adopt=word%20word', steward: { hasKey: false, adoptChurch: (p) => { adopted.push(p); }, init() {} },
       beforeLoad: (w) => { w.history.replaceState = (a, b, u) => replaced.push(u); w.location.href = 'https://console.example/' + (app === 'finance' ? 'finance' : 'steward') + '.html?adopt=word%20word'; },
       expr: '1' });
+    await new Promise(r => setTimeout(r, 0));
     assert.equal(adopted.length, want, app + ': ?adopt= ' + (want ? 'did not adopt' : 'adopted a church key in the finance app'));
     assert.ok(replaced.length && !/adopt/.test(replaced[0]), app + ': the seed-bearing ?adopt= was not scrubbed from the address');
   }

@@ -21,7 +21,7 @@ async function bannerFor(variant, m, { snooze = {} } = {}) {
   const fr = fakeReact();
   const { window } = fakeBrowser({ Steward: fakeSteward({ hasKey: false }) });
   let answered; const ready = new Promise(r => { answered = r; });
-  window.Capacitor = { isNativePlatform: () => true, Plugins: { App: { getInfo: async () => ({ version: '0.9.50', build: '100' }) } } };
+  window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'android', Plugins: { App: { getInfo: async () => ({ version: '0.9.50', build: '100' }) } } };
   window.fetch = async () => { answered(); return { ok: true, json: async () => m }; };
   window.Icon = (props) => fr.React.createElement('span', props);
   for (const [k, v] of Object.entries(snooze)) window.localStorage.setItem(k, v);

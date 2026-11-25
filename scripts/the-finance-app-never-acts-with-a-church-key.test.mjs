@@ -113,7 +113,7 @@ test('F2: with a key loaded, the finance app neither self-registers it (/config)
   assert.equal(stw.calls.autoSync, 1, 'CONTROL: the steward console stopped its redundancy sync');
 });
 
-test('F2: "Restore my helper words" restores, and does not self-register — the console\'s restore still does', () => {
+test('F2: "Restore my helper words" restores, and does not self-register — the console\'s restore still does', async () => {
   for (const [app, open, want] of [['finance', 'Restore my helper words', 0], ['steward', 'Restore a church', 1]]) {
     const r = load({ app, steward: { hasKey: false }, expr: '{ StewardWelcome }' });
     let tree = null; const draw = () => { r.fr.reset(); tree = r.mods.StewardWelcome(); r.fr.flush(); };
@@ -121,6 +121,7 @@ test('F2: "Restore my helper words" restores, and does not self-register — the
     buttonsOf(tree).find(b => labelOf(b).includes(open)).props.onClick(); draw();
     nodes(tree).find(n => n.type === 'textarea').props.onChange({ target: { value: 'one two three four five six seven eight nine ten eleven twelve' } }); draw();
     buttonsOf(tree).find(b => /^Restore( church)?$/.test(labelOf(b))).props.onClick(); draw();
+    await new Promise(r2 => setTimeout(r2, 0));
     assert.equal(r.calls.adopt, 1, app + ': Restore did not restore');
     assert.equal(r.calls.selfRegister, want, app + ': restore self-registered ' + r.calls.selfRegister + ' time(s), expected ' + want);
   }
@@ -170,11 +171,11 @@ test('F5: StewardRoot\'s removal banner and resumed-key banner speak the finance
   assert.ok(banner, 're-anchor: no removal banner');
   assert.match(say(banner), /anything already copied off it can’t be taken back/);
   assert.doesNotMatch(say(banner), /console/i);
-  assert.doesNotMatch(say(ft), /Settings → Security/, 'the finance app points at a Settings page it does not have');
+  assert.doesNotMatch(say(ft), /Settings →/, 'the finance app points at a Settings page it does not have');
   const stw = load({ app: 'steward', steward, expr: '{ StewardRoot }' });
   stw.fr.reset(); stw.mods.StewardRoot(); stw.fr.flush();
   stw.fr.reset(); const st = stw.mods.StewardRoot(); stw.fr.flush();
-  assert.match(say(st), /Settings → Security/, 'CONTROL: the console\'s resumed-key banner changed');
+  assert.match(say(st), /Settings → Master key/, 'CONTROL: the console\'s resumed-key banner changed');
 });
 
 // ── the engine half of F1's signal: Steward.ownKeyBlank(), lifted from the shipped bundle ────────────────────────────

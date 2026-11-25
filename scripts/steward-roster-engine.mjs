@@ -30,6 +30,7 @@ export function rosterEngine({ actingChurch, pub, churchPub }) {
     const STEWARDS_D = ${JSON.stringify(STEWARDS_D)}, NET = 'trinityone';
     const _authFuture = () => false, _byChurch = (e) => e.pubkey === pub, _openChurchDoc = () => null;
     const _stewardRosterChanged = () => {}, _webQueueSync = () => {}, _keysReadSignal = () => {}, _isRelayAuthed = () => false;
+    const _justRemoved = new Map(), _dropJustRemoved = (list) => list;
     const relays = () => ['wss://relay.example'];
     const pool = { subscribeMany: (_r, _f, h) => { H.handlers = h; return { close() {} }; } };
     const _freshDocRead = (_cp, _ds, _onev, onFresh) => { H.onFresh = onFresh; return () => {}; };

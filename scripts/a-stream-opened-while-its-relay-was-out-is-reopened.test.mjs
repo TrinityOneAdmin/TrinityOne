@@ -34,7 +34,7 @@ function lift(steward) {
   const win = { Steward: steward, addEventListener: (ev, fn) => { (on[ev] = on[ev] || []).push(fn); }, removeEventListener() {} };
   const doc = { visibilityState: 'visible', addEventListener() {} };
   const api = new Function('React', 'window', 'document', 'Date', 'setTimeout', 'setInterval', 'clearTimeout',
-    src + '\nreturn { makeSub, useStewardConn, listeners: _connListeners };'
+    src + '\nreturn { makeSub, useStewardConn, noteOpen: _connNoteOpen, listeners: _connListeners };'
   )(React, win, doc, { now: () => steward.clock }, (fn, ms) => { timers.push(fn); return timers.length; }, () => 0, () => {});
   let bumps = 0;
   api.listeners.add(() => { bumps++; });
@@ -57,7 +57,8 @@ test('THE BUG: admitted, dropped, the roster stream opens over nothing, re-admit
   const S = engine();
   const t = lift(S);
   S.set = [BOX];
-  t.useStewardConn();                  // the first hook mounts: the ticker wires up and notes {box}
+  t.useStewardConn();                  // the first hook mounts: the ticker wires up
+  t.noteOpen();                        // the profile hook initialises the snapshot: {box}
   S.set = [];                          // the gate takes the box out again
   t.makeSub(() => S, 'subscribeStewards', () => [])();   // the dashboard's roster stream opens — over nothing
   assert.deepEqual(S.opened, [[]], 'staging: the roster stream did not open over an empty set');
@@ -72,6 +73,7 @@ test('CONTROL: streams that opened over the box are NOT re-opened when the gate 
   const t = lift(S);
   S.set = [BOX];
   t.useStewardConn();
+  t.noteOpen();                        // profile hook initialises the snapshot: {box}
   t.makeSub(() => S, 'subscribeStewards', () => [])();
   assert.deepEqual(S.opened, [[BOX]], 'staging: the roster stream did not open over the box');
   await t.fire('steward-relay-returned');
@@ -83,6 +85,7 @@ test('CONTROL: a brand-new church whose box is admitted only after the streams o
   const t = lift(S);
   S.set = [];
   t.useStewardConn();
+  t.noteOpen();                        // profile hook initialises the snapshot: {} (empty)
   t.makeSub(() => S, 'subscribeStewards', () => [])();
   S.set = [BOX];
   await t.fire('steward-relay-returned');
