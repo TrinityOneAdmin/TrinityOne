@@ -708,8 +708,8 @@ function StewardWelcome() {
     Promise.resolve().then(() => window.Steward.adoptChurch(payload)).then(() => {
       // a restored church already exists (name, groups) — don't run the new-church setup wizard
       try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {}
-      if (!stewIsFinanceApp() && window.Steward.selfRegister) window.Steward.selfRegister(‘’).catch(() => {});
-    }).catch((e) => { setMode(‘restore’); setErr((e && e.message) || ‘That code or phrase isn’t valid.’); });
+      if (!stewIsFinanceApp() && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+    }).catch((e) => { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); });
   };
   // A HEADLESS ?adopt= refusal (network words in a link) has no screen of its own: it lands here on the
   // normal landing. One-shot sessionStorage covers a refusal that resolved before this mounted; the event
