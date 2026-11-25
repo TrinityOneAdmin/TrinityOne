@@ -9345,22 +9345,39 @@ function DashMembers({ dmConvos: dmConvosProp }) {
     // parent, exactly as unlinkParent does per pair, so (a) the relay stops treating them as a minor on the strength of the link, and (b) the
     // parents' old requests do not come back as "Confirm" cards. Minors first, links second, so the protection is only ever lifted by the
     // second write; if that one is refused the child stays gated by the relay and the notice says exactly that.
-    let childUnlinkedFrom = [];
-    if (unmarking && (guardians[pk] || []).length) {
+    // …AND THE PENDING REQUESTS, NOT ONLY THE CONFIRMED LINKS (integration audit 2026-11-23, A2). The relay's
+    // rebuildEffectiveMinors counts a valid-ack guardreq in PENDING_REQ_BY as a vouch exactly like a `guardians:`
+    // link, so an unmark that closed only the linked pairs left a never-confirmed request standing — the child
+    // stayed relay-gated as a minor and the request sat there as a Confirm card. Closing the pair is the SAME
+    // operation the Decline card performs (declineGuardian): the same `closed` entry in the same setGuardians
+    // write, and the same notifyGuardianList so the parent's app withdraws its own request instead of reading
+    // "Waiting for steward to confirm" for ever. Pairs the church already declined are skipped (pendingReqs'
+    // own filter), and the filter is per-child, so no other child's vouch is ever touched.
+    let childUnlinkedFrom = [], childDeclinedReqFrom = [];
+    const pendingVouchers = unmarking
+      ? [...new Set(guardReqs.filter(q => q && q.child === pk && q.parent && !((guardians[pk] || []).includes(q.parent)) && !guardiansClosed[pk + '|' + q.parent]).map(q => q.parent))]
+      : [];
+    if (unmarking && ((guardians[pk] || []).length || pendingVouchers.length)) {
       const parentsOf = (guardians[pk] || []).slice();
       const nextG2 = { ...guardians }; delete nextG2[pk];
       const nextClosed2 = { ...guardiansClosed }; const at2 = Math.floor(Date.now() / 1000);
       parentsOf.forEach(pp => { nextClosed2[pk + '|' + pp] = at2; });
+      pendingVouchers.forEach(pp => { nextClosed2[pk + '|' + pp] = at2; });
       let okG2 = null;
       try { okG2 = await Promise.resolve(window.Steward.setGuardians(nextG2, nextClosed2)); } catch (e) { okG2 = null; }
       if (!okG2) {
-        setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is no longer marked as a child, but they are STILL linked to '
-          + parentsOf.map(pp => nameByPub[pp] || 'a parent').join(', ') + ' — the relay didn’t accept the removal, and while a link stands the relay still treats them as a child. Try again.' });
+        const stillBits = [
+          parentsOf.length ? 'they are STILL linked to ' + parentsOf.map(pp => nameByPub[pp] || 'a parent').join(', ') : '',
+          pendingVouchers.length ? 'the parent request from ' + pendingVouchers.map(pp => nameByPub[pp] || 'a parent').join(', ') + ' still stands' : '',
+        ].filter(Boolean).join(' and ');
+        setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is no longer marked as a child, but ' + stillBits
+          + ' — the relay didn’t accept the removal, and while a link or request stands the relay still treats them as a child. Try again.' });
         _reseal(next, nextApproved, [pk]);
         return r;
       }
       parentsOf.forEach(pp => { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pp, pk, nextG2, undefined, nextClosed2, noticeScope); } catch (e) {} });
-      childUnlinkedFrom = parentsOf; nextG = nextG2;
+      pendingVouchers.forEach(pp => { try { if (window.Steward.notifyGuardianList) window.Steward.notifyGuardianList(pp, nextG2, nextClosed2, noticeScope); } catch (e) {} });
+      childUnlinkedFrom = parentsOf; childDeclinedReqFrom = pendingVouchers; nextG = nextG2;
     }
     // A CHILD IS NEVER A CLEARED CHECK-IN WORKER EITHER — so marking somebody withdraws the check-in clearance
     // they hold, as unmarking withdraws the youth one below. Owner's decision 2026-09-11 (device finding D4's
@@ -9420,7 +9437,8 @@ function DashMembers({ dmConvos: dmConvosProp }) {
         if (landedN > 0 && M > landedN) outage = ' Their child protection reached ' + landedN + ' of your ' + M + ' relay machines — a machine that is off or away does not have it until it is back and in sync. The Relays page shows which.';
       } catch (e) {}
     }
-    const linkNote = childUnlinkedFrom.length ? ' Their parent link' + (childUnlinkedFrom.length > 1 ? 's were' : ' was') + ' removed too (' + childUnlinkedFrom.map(pp => nameByPub[pp] || 'a parent').join(', ') + '), so the church now treats them as an adult.' : '';
+    const linkNote = (childUnlinkedFrom.length ? ' Their parent link' + (childUnlinkedFrom.length > 1 ? 's were' : ' was') + ' removed too (' + childUnlinkedFrom.map(pp => nameByPub[pp] || 'a parent').join(', ') + '), so the church now treats them as an adult.' : '')
+      + (childDeclinedReqFrom.length ? ' The waiting parent request' + (childDeclinedReqFrom.length > 1 ? 's' : '') + ' from ' + childDeclinedReqFrom.map(pp => nameByPub[pp] || 'a parent').join(', ') + (childDeclinedReqFrom.length > 1 ? ' were' : ' was') + ' declined with it — while one stood, the church would still have treated them as a child.' : '');
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
       ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' + linkNote }
       : (unmarking && linkNote ? { pk, text: 'No longer marked as a child.' + linkNote }

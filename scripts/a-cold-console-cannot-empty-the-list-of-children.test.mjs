@@ -141,6 +141,7 @@ async function screen({ warm, row = 'join', marked = false, guardianOf = null })
     // toggleMinor's world
     sg, minorsSet: new Set(sg.minors), approvedSet: new Set(sg.approved), nophotoSet: new Set(sg.nophoto),
     parentSet, ckClearedSet: new Set(), guardians, guardiansClosed: {}, guardiansAt: 0,
+    guardReqs: [],   // no pending parent requests here; A2's close-on-unmark has its own point-of-use file
     kidPhotosAllowed: false,
     nameByPub: { [PK]: NAME, [KID_A]: 'Alice', [KID_B]: 'Ben' },
     setMinorNotice: (n) => calls.notice.push(n),

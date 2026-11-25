@@ -118,6 +118,7 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       _reseal: (...a) => calls.reseal.push(a),
       // the row's own furniture — none of it is the control under test
       nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, guardiansClosed: {}, guardiansAt: 0, parentSet, ckClearedSet: new Set(),
+      guardReqs: [],   // no pending parent requests here; A2's close-on-unmark has its own point-of-use file
       minorNotice: null, delegated: false, photosAllowed: false,
       SkBadge: Stub('SkBadge'), SkPill: Stub('SkPill'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },
