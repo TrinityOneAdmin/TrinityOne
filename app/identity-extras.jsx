@@ -596,25 +596,56 @@ window.InviteSheet = InviteSheet;
 function RelaysSheet({ open, onClose, ctx }) {
   const FS = window.Fellowship;
   // REAL source of truth: the live transport's configured relays (full ws/wss URLs)
-  // "Connected" now means the thing it always claimed to: this address is carrying your church's traffic.
-  // It used to be hard-coded 'on' for every entry in the list. Under the closed network a relay stays in the
-  // list, keeps being retried and keeps being re-checked, but nothing is published to it until it has proved
-  // it holds a key this church's network contains — so an address in the list is not evidence of anything on
-  // its own, and saying "Connected" over one would be the label lying about the control again.
+  // "Connected" now means the thing it always claimed to: this box is carrying your church's traffic, RIGHT
+  // NOW. It used to be hard-coded 'on' for every entry in the list; then it meant "proved once, green for
+  // ever". Under the closed network a relay stays in the list, keeps being retried and keeps being
+  // re-checked, but nothing is published to it until it has proved it holds a key this church's network
+  // contains — so an address in the list is not evidence of anything on its own, and a proof from last month
+  // is not evidence the box is answering today. Connected = PROVED and LIVE (owner decision 2026-11-24).
   //
   // C3: a row carries the PROVED KEY as well as verified/not, so one BOX reached by several addresses collapses
   // to one row below. `relayDetail` is the read-only per-url accessor (verified + the proved key); it falls
   // back to the boolean `relayVerified` on an older engine (key unknown → nothing dedupes, i.e. the old flat
-  // behaviour), and to 'on' before any gate exists.
+  // behaviour), and to verified before any gate exists.
   const detail = (u) => {
     if (FS && FS.relayDetail) { try { const d = FS.relayDetail(u) || {}; return { verified: !!d.verified, key: d.key || '' }; } catch (e) {} }
     if (FS && FS.relayVerified) { try { return { verified: !!FS.relayVerified(u), key: '' }; } catch (e) {} }
     return { verified: true, key: '' };
   };
+  // A list row carries only what the GATE knows: url, verified (proof), proved key. Liveness is layered on at
+  // render time from the probe state below, so a listener that re-seeds the list can never bake in a stale
+  // liveness answer.
   const fromReal = () => FS && FS.relays
-    ? FS.relays.map(u => { const d = detail(u); return { url: u, status: d.verified ? 'on' : 'checking', key: d.key }; })
-    : (window.TrinityData.RELAYS || []);
+    ? FS.relays.map(u => { const d = detail(u); return { url: u, verified: d.verified, key: d.key }; })
+    : (window.TrinityData.RELAYS || []).map(r => ({ url: r.url, verified: r.status === 'on', key: '' }));
   const [list, setList] = useIx(null);
+
+  // CONNECTED MEANS CONNECTED RIGHT NOW (owner decision 2026-11-24). Proof used to be the whole of "Connected"
+  // — proved once, green for ever, "otherwise the list grows for ever". So a proved row now also needs a LIVE
+  // answer from Fellowship.relayStatus() (throwaway WS probe, 2.5s timeout, per configured address) before it
+  // says Connected; a proved box the probe cannot reach reads "Not reachable", and while the probe is still
+  // out it reads "Checking" — never a flash of "Not reachable" over a box that is merely un-asked.
+  // PROOF STILL DECIDES EVERYTHING ELSE: which section a row sits in, and whether Remove exists, key off
+  // `verified` alone — a proved box that is briefly offline must never grow a Remove button.
+  // relayStatus() opens throwaway sockets OUTSIDE the pool (see the caution at app/app.jsx:816), so it runs
+  // only when the sheet is open: once on open, and debounced behind the same relay events the list follows.
+  // No free-running loop. `gone` stops a probe landing after close from setting state; `seq` makes
+  // overlapping probes latest-wins.
+  const [live, setLive] = useIx(null);
+  useIxE(() => {
+    if (!open) return;
+    if (!(FS && FS.relayStatus)) return;
+    let gone = false, seq = 0, timer = null;
+    const run = () => { const my = ++seq; Promise.resolve(FS.relayStatus()).then(arr => { if (gone || my !== seq) return; const m = {}; for (const r of (arr || [])) { if (r && r.url) m[r.url] = r.status; } setLive(m); }).catch(() => {}); };
+    const probe = () => { if (timer) clearTimeout(timer); timer = setTimeout(run, 250); };
+    run();
+    window.addEventListener('trinity-relays', probe);
+    window.addEventListener('trinity-relays-verified', probe);
+    return () => { gone = true; if (timer) clearTimeout(timer); window.removeEventListener('trinity-relays', probe); window.removeEventListener('trinity-relays-verified', probe); };
+  }, [open]);
+  // An engine without relayStatus (older bundle) cannot be probed: keep the old proof-only meaning rather
+  // than pinning every row on "Checking" for ever.
+  const liveOf = (u) => { if (!(FS && FS.relayStatus)) return 'on'; if (!live) return 'wait'; return live[u] === 'on' ? 'on' : 'off'; };
 
   // (re)seed each time the sheet opens, and follow live relay changes
   useIxE(() => {
@@ -626,19 +657,32 @@ function RelaysSheet({ open, onClose, ctx }) {
     return () => { window.removeEventListener('trinity-relays', refresh); window.removeEventListener('trinity-relays-verified', refresh); };
   }, [open]);
 
-  const rows = list || fromReal();
+  // Status is layered on HERE, at render, so the latest probe answer always wins over whatever the list
+  // listeners re-seeded: on = proved and live now, wait = proved, probe still out, off = proved but the
+  // probe could not reach it, checking = not proved (the old meaning, unchanged).
+  const rows = (list || fromReal()).map(r => ({ url: r.url, verified: !!r.verified, key: r.key || '', status: r.verified ? liveOf(r.url) : 'checking' }));
   const bare = (u) => (u || '').replace(/^wss?:\/\//, '');
 
   // ONE ROW PER BOX. A proved key means "this machine", so several addresses that proved the SAME key are one
   // box and show once (the first); rows with no proved key — every unproven address — are never collapsed, so a
-  // list of stranger addresses stays a list. Dedupe preserves order.
+  // list of stranger addresses stays a list. Dedupe preserves order. A box is as reachable as its BEST
+  // address: a self-hosting box whose tunnel name answers while its LAN address does not is connected.
+  const RANK = { on: 2, wait: 1, off: 0 };
   const oneRowPerBox = (arr) => {
-    const seen = new Set(), out = [];
-    for (const r of arr) { if (r.key) { if (seen.has(r.key)) continue; seen.add(r.key); } out.push(r); }
+    const seen = new Map(), out = [];
+    for (const r of arr) {
+      if (!r.key) { out.push(r); continue; }
+      const prev = seen.get(r.key);
+      if (prev) { if ((RANK[r.status] || 0) > (RANK[prev.status] || 0)) prev.status = r.status; continue; }
+      const own = { url: r.url, verified: r.verified, key: r.key, status: r.status };
+      seen.set(r.key, own); out.push(own);
+    }
     return out;
   };
-  const verifiedRows = oneRowPerBox(rows.filter(r => r.status === 'on'));
-  const checkingRows = rows.filter(r => r.status !== 'on');
+  // The SPLIT keys off PROOF, not liveness: a proved box that is briefly offline stays in the lead section
+  // (with its honest label) and never drops in among the strangers where Remove lives.
+  const verifiedRows = oneRowPerBox(rows.filter(r => r.verified));
+  const checkingRows = rows.filter(r => !r.verified);
 
   // REMOVE EXISTED AND WAS NEVER RENDERED. Audit 2026-09-02 #9.
   //
@@ -677,7 +721,10 @@ function RelaysSheet({ open, onClose, ctx }) {
     if (!r || !canRemove(r)) setConfirmDrop(null);
   }, [list, confirmDrop]);
   const CANON = (FS && FS.CANONICAL_RELAYS) || ((FS && FS.CANONICAL_RELAY) ? [FS.CANONICAL_RELAY] : []);
-  const canRemove = (r) => r.status !== 'on' && !CANON.includes(r.url);
+  // Remove keys off PROOF, never liveness. `r.status !== 'on'` was the same thing while status meant proof;
+  // now that 'on' also needs a live probe it would grow a Remove button on every proved box the moment its
+  // socket dropped — and a member who removes their church's briefly-offline relay has removed their church.
+  const canRemove = (r) => !r.verified && !CANON.includes(r.url);
   const remove = (u) => { setConfirmDrop(null); if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
 
   const relayRow = (r) => (
@@ -686,7 +733,7 @@ function RelaysSheet({ open, onClose, ctx }) {
       <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bare(r.url)}</span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }}>
         <span style={{ width: 7, height: 7, borderRadius: 999, background: r.status === 'on' ? 'var(--sage)' : 'var(--ink-3)' }} />
-        {r.status === 'on' ? 'Connected' : r.status === 'checking' ? 'Not in use' : 'Off'}</span>
+        {r.status === 'on' ? 'Connected' : r.status === 'wait' ? 'Checking' : r.status === 'checking' ? 'Not in use' : 'Not reachable'}</span>
       {canRemove(r) ? (confirmDrop === r.url
         ? <React.Fragment>
             <button onClick={() => remove(r.url)} aria-label={'Confirm: stop using ' + bare(r.url)} style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 8, padding: '5px 9px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 }}>Remove</button>
