@@ -1970,7 +1970,7 @@ function ReadScreen({ ctx }) {
                       borderLeft: '2px solid var(--clay)',
                       paddingLeft: 6,
                       marginLeft: -8,
-                      paddingTop: 4, paddingBottom: 4, marginTop: -4, marginBottom: -4,
+                      paddingTop: '0.3em', paddingBottom: '0.3em',
                       WebkitBoxDecorationBreak: 'clone',
                       boxDecorationBreak: 'clone',
                     }}>
