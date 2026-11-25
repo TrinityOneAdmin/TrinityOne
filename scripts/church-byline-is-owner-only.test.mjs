@@ -66,7 +66,10 @@ test('the branch sits ABOVE the member catch-all, or it never runs', () => {
   // decoration.
   const src = stripComments(GW);
   const branch = src.indexOf('d.startsWith(VOICE_D)');
-  const catchall = src.indexOf('store.countDocsByAuthor(e.pubkey');
+  // RE-ANCHORED 2026-11-24: the networks NETCONTENT_CAP check (gateway.mjs:5266) also calls
+  // countDocsByAuthor(e.pubkey, ...) and sits ABOVE the VOICE rule, so the bare prefix matched the wrong
+  // call. The member catch-all is the MEMBER_DOC_CAP_STEMS one (unique), still below the VOICE rule.
+  const catchall = src.indexOf('store.countDocsByAuthor(e.pubkey, MEMBER_DOC_CAP_STEMS');
   assert.ok(branch !== -1 && catchall !== -1, 're-anchor: one of the two landmarks has moved');
   assert.ok(branch < catchall, 'the by-line rule is below the member catch-all, so the catch-all answers first');
 });

@@ -208,6 +208,7 @@ const MOVED_OUT = ['Your name as a steward'];
 // addition, not an orphan — and it still has to be on exactly one page like every other.
 const ADDED_SINCE = [
   'Your website',   // feat/church-website-feeds, 2026-09-22: the public calendar feed's switch and address (owner-only)
+  'Community relays',   // e71c384b (relaySeek B1, 2026-11): public-pool auto-discovery switch, on Move or copy history — help-data.jsx:541 sends stewards there
 ];
 
 test('every panel that was on a tab is now on exactly one page, and nothing is left over', () => {
@@ -301,8 +302,10 @@ test('…and "Move or copy history" is gone too, because the relay refuses a del
   // …and the OWNER still has it, with both cards. Without this the row would pass over a page deleted for
   // everybody, which would take cross-relay sync and the clone away from the one console that can use them.
   assert.equal(catalogue().pages.some(p => p.k === 'history'), true, 'the owner console lost the page entirely');
-  assert.equal(cardsOn(settings('history').tree).length, 2,
-    'the owner’s Move or copy history page no longer renders both cards: ' + JSON.stringify(cardsOn(settings('history').tree)));
+  // 3 since e71c384b (relaySeek B1): "Community relays" joined the two split-out cards — help-data.jsx:541
+  // sends stewards to this page for it.
+  assert.equal(cardsOn(settings('history').tree).length, 3,
+    'the owner’s Move or copy history page no longer renders its cards: ' + JSON.stringify(cardsOn(settings('history').tree)));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -311,11 +314,13 @@ test('…and "Move or copy history" is gone too, because the relay refuses a del
 //    Nothing between them may decide where they sit.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('the cards on a page are its own direct children, in the order they are written', () => {
-  // "Move or copy history" is the only page with two cards, so it is the only one where an order exists to
-  // get wrong — and it is the one that came out of a split, which is when order gets lost.
+  // "Move or copy history" is the only page with several cards, so it is the only one where an order exists
+  // to get wrong — and it is the one that came out of a split, which is when order gets lost. "Community
+  // relays" (e71c384b, relaySeek B1) is authored LAST: the automatic discovery switch comes after the two
+  // deliberate, manual moves it supplements.
   assert.deepEqual(cardsOn(settings('history').tree),
-    ['Copy your history to relay.grace.example', 'Keep your relays in sync'],
-    'the two cards on Move or copy history are not in the authored order. Copying a history onto a relay ' +
+    ['Copy your history to relay.grace.example', 'Keep your relays in sync', 'Community relays'],
+    'the cards on Move or copy history are not in the authored order. Copying a history onto a relay ' +
     'comes before keeping two relays in step, because you cannot do the second until the first has happened');
   const r = region(settings('history').tree)[0];
   // React fragments create no DOM, so what the flex column actually receives is what boxes() returns.

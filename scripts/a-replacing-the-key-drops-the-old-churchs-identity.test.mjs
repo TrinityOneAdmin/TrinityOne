@@ -85,7 +85,9 @@ function build({ acting = true, relays = [] } = {}) {
     createKey: method('createKey() {', 'createKey'),
     createKeyQuiet: method('createKeyQuiet() {', 'createKeyQuiet'),
     removeKey: method('removeKey() {', 'removeKey'),
-    adoptChurch: method('adoptChurch(payload) {', 'adoptChurch'),
+    // ASYNC since df4140ce: the anchor keeps the `async` keyword so the object-literal method compiles
+    // (without it the body's `await window.Steward._phraseIsNetworkKey(m)` is a SyntaxError at new Function).
+    adoptChurch: method('async adoptChurch(payload) {', 'adoptChurch'),
     identities: method('identities() {', 'identities'),
     subscribe: method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches'),
     setActiveIdentity: method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity'),
@@ -93,6 +95,9 @@ function build({ acting = true, relays = [] } = {}) {
   for (const k of ['restoreKey', 'createKey', 'createKeyQuiet', 'removeKey', 'adoptChurch', 'identities']) Steward[k] = (...a) => api[k].apply(Steward, a);
   Steward.setActiveIdentity = (...a) => api.setActiveIdentity.apply(Steward, a);
   Steward.becomeStewardPayload = () => 'payload';
+  // adoptChurch's network-words refusal (df4140ce) awaits this over a RELAY PROBE (_networkKeyProbe).
+  // Stubbed "not a network" here: this file pins the key-change scope clear, not the probe.
+  Steward._phraseIsNetworkKey = async () => false;
   return { stubs, store, events, Steward, api, subs };
 }
 
@@ -111,11 +116,11 @@ for (const [name, run] of [
   ['createKeyQuiet ("Help run a church")', (h) => h.Steward.createKeyQuiet()],
   ['removeKey', (h) => h.Steward.removeKey()],
 ]) {
-  test(`replacing the key via ${name} drops church B from the helper scope`, () => {
+  test(`replacing the key via ${name} drops church B from the helper scope`, async () => {
     const h = build();
     assert.equal(h.stubs.stewardedChurches.has(B), true, 'CONTROL: the fixture does not start as a helper of B');
     assert.equal(h.stubs.actingChurch, B, 'CONTROL: the fixture does not start acting as B');
-    run(h);
+    await run(h);   // adoptChurch is async since df4140ce; awaiting the sync four is harmless
     assertScopeForgotten(h, name);
   });
 }

@@ -74,6 +74,7 @@ return {
   SkConfirm: { title: 'Sure?', body: 'Body.', onConfirm() {}, onCancel() {} },
   InvitePosterModal: { church, url: 'https://console.example/join#x', svg: '<svg></svg>', onClose },
   JoinModal: { onClose }, NewPostModal: { onClose },
+  NetworkHeaderPostModal: { onClose },   // 7ae89bf7: the network console's header post dialog (stew-dashboard.jsx)
   NewGroupModal: { open: true, onClose }, NewTeamModal: { open: true, onClose },
   EditGroupMembersModal: { group, onClose }, GroupLeadersModal: { group, onClose },
   CategoriesModal: { cats: [], groups: [], onClose },

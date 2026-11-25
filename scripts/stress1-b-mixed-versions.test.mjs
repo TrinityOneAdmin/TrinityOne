@@ -273,7 +273,16 @@ test('precondition: log whether origin/main and main are one relay build (and NE
 const RESULTS = {};
 for (const [sRev, bRev, name] of cases) {
   const mixed = !!sRev !== !!bRev;
-  test(`${name} [${label(sRev, bRev)}]: sync converges both ways and settles (no id refetched across passes 1-3)`, mixed ? { todo: 'OLD-CODE ISSUE (not fixable on the NEW side; G1 2026-10-27): the OLD relay files a member\'s first member:<church> join copy under label "" (the NEW one files it under the church by rule (a)), so the OLD side re-requests those ids from the NEW side EVERY pass (2 ids/pass here). The NEW side holds nothing under "" to adopt; letting it adopt a peer\'s label onto a "" row would let an OLD box\'s misfile widen where a DM syncs. Cure: upgrade the OLD side (ops note in RELAY-COMPAT-AND-AUTOUPDATE.md / docs/ops/RELEASES.md)' } : {}, async () => {
+  // TODO DIRECTIVES DROPPED 2026-11-24 (standing-reds chunk E). Both rows below were pinned todo while 'OLD'
+  // (extractOldBuild of main / origin/main) predated the G1 label fix: the mixed rows for the "" misfile
+  // refetch loop (OLD-CODE ISSUE, G1 2026-10-27, not fixable on the NEW side — cure is upgrading the OLD side,
+  // ops note in RELAY-COMPAT-AND-AUTOUPDATE.md / docs/ops/RELEASES.md), and the OLD-shared rows for an OLD
+  // server labelling a DM to church B under the sender's first church. Main has shipped the fix, so OLD==NEW
+  // for the pinned behaviour and the rows passed as '# TODO' in every run since (tap-tally: "look, then drop
+  // the todo"). They are ordinary coverage of current-main vs working-tree now. If mixed-version coverage
+  // against the deployed fleet is wanted again, re-pin OLD_REVS to a genuine older release
+  // (relay-network-harness.mjs DEFAULT_OLD_REV) — the directives come back with it if that release predates G1.
+  test(`${name} [${label(sRev, bRev)}]: sync converges both ways and settles (no id refetched across passes 1-3)`, {}, async () => {
     const r = await scenario(sRev, bRev);
     RESULTS[name + (sRev || bRev)] = r;
     console.log('MEASURE', name, label(sRev, bRev), J(r.passes), 'TA holds', r.onTA.length, 'S holds', r.onS.length);
@@ -284,7 +293,7 @@ for (const [sRev, bRev, name] of cases) {
     // a refetch loop shows as a pass that keeps importing something already held
     assert.equal(r.passes[1].importedTA + r.passes[2].importedTA + r.passes[1].importedS + r.passes[2].importedS, 0, 'sync keeps importing on passes 2 and 3: ' + J(r.passes));
   });
-  test(`${name} [${label(sRev, bRev)}]: church B's traffic is NOT on A's box (DM to B, B's join, B's notice)`, sRev ? { todo: 'FINDING: an OLD shared server labels a DM to church B under the sender\'s first church (A) and syncs it to A\'s box, new or old' } : {}, async () => {
+  test(`${name} [${label(sRev, bRev)}]: church B's traffic is NOT on A's box (DM to B, B's join, B's notice)`, {}, async () => {
     const r = RESULTS[name + (sRev || bRev)] || await scenario(sRev, bRev);
     const ids = new Set(r.onTA.map(e => e.id));
     assert.ok(r.onTA.some(e => e.id === r.ids.dm1.id) || true);

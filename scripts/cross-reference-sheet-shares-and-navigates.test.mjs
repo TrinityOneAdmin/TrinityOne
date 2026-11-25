@@ -93,7 +93,10 @@ test('tapping the share button calls openShareSheet with ref, text and version',
   assert.deepEqual(shareCalls[0], {
     ref: 'Genesis 1:1',
     text: 'In the beginning God created the heavens and the earth.',
-    version: 'BSB',
+    // 'KJV' DELIBERATELY, not ctx.version: e4951189 (audit F6, 2026-11-20) hardcoded the crossref share
+    // payload's version because the seeded crossref TEXT is KJV whatever the reader reads in. ctx.version
+    // stays 'BSB' above so this proves the payload ignores it.
+    version: 'KJV',
   }, 'openShareSheet was called with wrong payload');
 });
 
@@ -125,6 +128,6 @@ test('share button for the second row sends the correct payload', () => {
   assert.deepEqual(shareCalls[0], {
     ref: 'Proverbs 8:22',
     text: 'The LORD possessed me at the beginning of His work.',
-    version: 'BSB',
+    version: 'KJV',   // e4951189: seeded crossref text is KJV — see the note on the first payload test
   });
 });
