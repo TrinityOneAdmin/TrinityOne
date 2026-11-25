@@ -1256,7 +1256,9 @@ function StewardUnlock() {
     if (window.Steward.keyStoreStuck) {
       setBusy(false); setPin('');
       setLostKey(true);
-      setErr('This computer’s secure storage isn’t responding, so the console can’t tell whether a church key is stored here. Restart the console to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.');
+      setErr(stewIsFinanceApp()
+        ? 'This device’s secure storage isn’t responding, so the app can’t tell whether a church key is stored here. Restart the app to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.'
+        : 'This computer’s secure storage isn’t responding, so the console can’t tell whether a church key is stored here. Restart the console to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.');
       return;
     }
     if (window.Steward.unlockStoreMiss === true) {   // === true: only the engine’s own flag
