@@ -72,19 +72,12 @@ function splitVerseLead(html) {
   return sawHead ? [s.slice(0, i), s.slice(i)] : ['', s];
 }
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
-function VerseRow({ n, html, hl, note, bookmarked, bmFirst, bmLast, selected, reading, onSelect, onWord, tour }) {
+function VerseRow({ n, html, hl, note, bookmarked, bmIcon, selected, reading, onSelect, onWord, tour }) {
   // a heading the verse opens with is drawn BEFORE its number (see splitVerseLead), still inside this verse's row
   const [lead, body] = splitVerseLead(html);
   return (
     <span id={'rv-' + n} data-tour={tour} style={{
       position: 'relative',
-      ...(bookmarked ? {
-        borderLeft: '2px solid var(--clay)',
-        paddingLeft: 6,
-        marginLeft: -8,
-        borderTopLeftRadius: bmFirst ? 4 : 0,
-        borderBottomLeftRadius: bmLast ? 4 : 0,
-      } : {}),
     }}>
       <span
         onClick={(e) => {
@@ -111,7 +104,7 @@ function VerseRow({ n, html, hl, note, bookmarked, bmFirst, bmLast, selected, re
           background: hl, borderRadius: 3, padding: '1px 1px',
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
         } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(body) }} />
-        {bookmarked ? <Icon name="bookmark" size={12} color="var(--clay)" fill style={{ verticalAlign: 'middle', marginLeft: 3 }} /> : null}
+        {bmIcon ? <Icon name="bookmark" size={12} color="var(--clay)" fill style={{ verticalAlign: 'middle', marginLeft: 3 }} /> : null}
         {note ? <Icon name="note" size={14} color="var(--gold)" style={{ verticalAlign: 'middle', marginLeft: 4 }} /> : null}
       </span>{' '}
     </span>
@@ -1289,6 +1282,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
         const tags = [...new Set((tagsByKey[item.id] || []).concat(tagsByKey[item.ref] || []))];
         out.push({ raw: item.id, key: item.id, b: +m[1], c: +m[2], v: +m[3],
           label: item.rangeLabel || verseRefLabel(firstRef),
+          refs: item.refs,
           tags, isPassage: true });
       } else {
         // single-verse bookmark
@@ -1441,7 +1435,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
               {markTags.length ? <div style={{ marginBottom: 10 }}><TagFilterMenu tags={markTags} selected={markTicked} onChange={setMarkTagSel} /></div> : null}
               {shownMarks.map(bm => (
               <div key={bm.key} data-bookmark={bm.key} style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
-                <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
+                <button onClick={() => { onClose(); if (bm.isPassage && bm.refs && ctx.selectPassageBookmark) { ctx.selectPassageBookmark(bm.refs); } else { ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); } }} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Icon name="bookmark" size={15} color="var(--clay)" fill /> {bm.label}</span>
                   {bm.tags.length ? <span data-bookmark-tags style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxWidth: '100%' }}>
                     {bm.tags.map(t => <span key={String(t)} data-bookmark-tag={String(t)} style={{ padding: '2px 9px', borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(t)}</span>)}
@@ -1954,18 +1948,50 @@ function ReadScreen({ ctx }) {
           : !compare ? (
             <p className={cx('reader-body', !showStrongs && 'hide-strong')}
               style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
-              {verses.map((row, i) => {
-                const k = keyOf(row.v);
-                const bm = ctx.bookmarks.includes(k);
-                const prevBm = i > 0 && ctx.bookmarks.includes(keyOf(verses[i - 1].v));
-                const nextBm = i < verses.length - 1 && ctx.bookmarks.includes(keyOf(verses[i + 1].v));
-                return (
+              {(() => {
+                // Group contiguous bookmarked verses into wrapper spans with a continuous left bar.
+                // Non-bookmarked verses render individually as before.
+                const els = [];
+                let runStart = -1;
+                const renderVerse = (row, i, bm, isFirst) => (
                   <VerseRow key={row.v} n={row.v} html={row.html} tour={i === 0 ? 'verse' : undefined}
-                    hl={ctx.highlights[k]} note={notes[k]} bookmarked={bm}
-                    bmFirst={bm && !prevBm} bmLast={bm && !nextBm}
+                    hl={ctx.highlights[keyOf(row.v)]} note={notes[keyOf(row.v)]} bookmarked={bm}
+                    bmIcon={bm && isFirst}
                     selected={selSorted.some(v => String(v) === String(row.v))} reading={(narrateState !== 'idle' && String(narrateV) === String(row.v)) || inArrived(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );
-              })}
+                const flush = (upTo) => {
+                  if (runStart < 0) return;
+                  const runVerses = [];
+                  for (let j = runStart; j < upTo; j++) {
+                    runVerses.push(renderVerse(verses[j], j, true, j === runStart));
+                  }
+                  els.push(
+                    <span key={'bm-run-' + runStart} style={{
+                      borderLeft: '2px solid var(--clay)',
+                      paddingLeft: 6,
+                      marginLeft: -8,
+                      borderRadius: '4px 0 0 4px',
+                      WebkitBoxDecorationBreak: 'clone',
+                      boxDecorationBreak: 'clone',
+                    }}>
+                      {runVerses}
+                    </span>
+                  );
+                  runStart = -1;
+                };
+                verses.forEach((row, i) => {
+                  const k = keyOf(row.v);
+                  const bm = ctx.bookmarks.includes(k);
+                  if (bm) {
+                    if (runStart < 0) runStart = i;
+                  } else {
+                    flush(i);
+                    els.push(renderVerse(row, i, false, false));
+                  }
+                });
+                flush(verses.length);
+                return els;
+              })()}
             </p>
           ) : (
             <div>
@@ -2018,7 +2044,19 @@ function ReadScreen({ ctx }) {
         }} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
-      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={{...ctx, selectPassageBookmark: (refs) => {
+        const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(refs[0]);
+        if (!m) return;
+        ctx.gotoRef(+m[1], +m[2], +m[3]);
+        const chap = +m[2], book = +m[1];
+        const verseNums = refs
+          .map(r => { const rm = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return rm && +rm[1] === book && +rm[2] === chap ? +rm[3] : null; })
+          .filter(v => v != null);
+        setSel(verseNums);
+        setCarry([]);
+        setArrived(null);
+        setSheet('action');
+      }}} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />

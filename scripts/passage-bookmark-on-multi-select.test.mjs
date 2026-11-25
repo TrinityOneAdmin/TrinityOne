@@ -9,9 +9,12 @@
 //   app/app.jsx: bookmarks projection (line 557) now flatMaps refs; new ctx functions addPassageBookmark,
 //     removePassageBookmark, hasPassageBookmark. Callers: screens-read.jsx (ReadScreen _bm handler,
 //     ActionSheet bookmarked prop, CommentaryPanel remove button).
-//   app/screens-read.jsx: ActionSheet multi arm gained Bookmark action; VerseRow gained bmFirst/bmLast/
-//     bookmark icon; CommentaryPanel myMarks computation handles passage items; _bm handler branches on multi.
-//   app/screens-library.jsx: collection view search includes rangeLabel; display uses rangeLabel when present.
+//   app/screens-read.jsx: ActionSheet multi arm gained Bookmark action; VerseRow gained bmIcon prop
+//     (bookmark icon on first verse only); contiguous bookmarked verses wrapped in a continuous-bar span;
+//     CommentaryPanel myMarks computation handles passage items with refs; _bm handler branches on multi;
+//     CommentaryPanel click handler calls selectPassageBookmark for passage bookmarks.
+//   app/screens-library.jsx: collection view search includes rangeLabel; display uses rangeLabel when present;
+//     jump() calls selectPassageBookmark for passage bookmarks instead of plain openReader+toast.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, texts, reads } from './render-jsx-screen.mjs';
@@ -23,7 +26,7 @@ const BOOKS = { 1: 'Genesis', 19: 'Psalms', 43: 'John' };
 // Follows the same pattern as study-panel-lists-bookmarks.test.mjs.
 function panel(bookmarkRefs, items = []) {
   const { React, draw } = miniReact();
-  const calls = { goto: [], toggled: [], removedPassage: [], closed: 0 };
+  const calls = { goto: [], toggled: [], removedPassage: [], closed: 0, selectPassage: [] };
   const Bible = {
     parseRef: (s) => { const m = /^John (\d+):(\d+)$/.exec(String(s)); return m ? { book: 43, chap: +m[1], verse: +m[2] } : null; },
     refKey: (l, v) => l.book + '.' + l.chap + '.' + v,
@@ -49,6 +52,7 @@ function panel(bookmarkRefs, items = []) {
     toggleBookmark: (k) => calls.toggled.push(k),
     removePassageBookmark: (id) => calls.removedPassage.push(id),
     gotoRef: (b, c, v) => calls.goto.push([b, c, v]),
+    selectPassageBookmark: (refs) => calls.selectPassage.push(refs),
   };
   const props = { loc: { book: 43, chap: 3 }, label: 'John 3', open: true, onClose: () => { calls.closed++; }, ctx, docked: true };
   return { calls, redraw: () => draw(mod.CommentaryPanel, props) };
@@ -185,32 +189,36 @@ test('Per-verse bookmark indicator: a verse in a passage bookmark has bookmarked
   assert.ok(!bookmarks.includes('43.3.19'), 'verse 19 should NOT be in bookmarks');
 });
 
-test('VerseRow renders a small bookmark icon when bookmarked=true', () => {
-  const withBm = verseRow({ bookmarked: true, bmFirst: true, bmLast: true });
-  const bmIcons = find(withBm, n => n.props && n.props['data-icon'] === 'bookmark' && n.props['data-fill'] === 'true');
-  assert.ok(bmIcons.length > 0, 'no filled bookmark icon found on a bookmarked verse');
+test('VerseRow renders a small bookmark icon only when bmIcon=true', () => {
+  const withIcon = verseRow({ bookmarked: true, bmIcon: true });
+  const bmIcons = find(withIcon, n => n.props && n.props['data-icon'] === 'bookmark' && n.props['data-fill'] === 'true');
+  assert.ok(bmIcons.length > 0, 'no filled bookmark icon found on a verse with bmIcon=true');
+
+  // bookmarked but NOT bmIcon (a middle/last verse in a run) — no icon
+  const noIcon = verseRow({ bookmarked: true, bmIcon: false });
+  const noBmIcons = find(noIcon, n => n.props && n.props['data-icon'] === 'bookmark' && n.props['data-fill'] === 'true');
+  assert.equal(noBmIcons.length, 0, 'a bookmarked verse without bmIcon should not have a filled bookmark icon');
 
   const withoutBm = verseRow({ bookmarked: false });
-  const noBmIcons = find(withoutBm, n => n.props && n.props['data-icon'] === 'bookmark' && n.props['data-fill'] === 'true');
-  assert.equal(noBmIcons.length, 0, 'a non-bookmarked verse should not have a filled bookmark icon');
+  const noBmIcons2 = find(withoutBm, n => n.props && n.props['data-icon'] === 'bookmark' && n.props['data-fill'] === 'true');
+  assert.equal(noBmIcons2.length, 0, 'a non-bookmarked verse should not have a filled bookmark icon');
 });
 
-test('VerseRow has a left border when bookmarked, with rounded corners on first/last of a contiguous run', () => {
-  // First verse in a run: top-left rounded, bottom-left not
-  const first = verseRow({ bookmarked: true, bmFirst: true, bmLast: false });
-  const firstSpan = find(first, n => n.props && n.props.id === 'rv-16')[0];
-  assert.ok(firstSpan, 'could not find the outer span of the verse row');
-  assert.equal(firstSpan.props.style.borderLeft, '2px solid var(--clay)', 'bookmarked verse missing left border');
-  assert.equal(firstSpan.props.style.borderTopLeftRadius, 4, 'first verse in run should have top-left radius');
-  assert.equal(firstSpan.props.style.borderBottomLeftRadius, 0, 'first (not last) verse should have no bottom-left radius');
+test('VerseRow no longer carries its own left border — the continuous bar is on the wrapper span', () => {
+  // A bookmarked verse's outer span must NOT have borderLeft (the bar is now on the grouping wrapper in ReadScreen)
+  const bm = verseRow({ bookmarked: true, bmIcon: true });
+  const bmSpan = find(bm, n => n.props && n.props.id === 'rv-16')[0];
+  assert.ok(bmSpan, 'could not find the outer span of the verse row');
+  assert.equal(bmSpan.props.style.borderLeft, undefined, 'bookmarked VerseRow should NOT have its own borderLeft (bar is on wrapper)');
+  assert.equal(bmSpan.props.style.paddingLeft, undefined, 'bookmarked VerseRow should NOT have paddingLeft');
+  assert.equal(bmSpan.props.style.marginLeft, undefined, 'bookmarked VerseRow should NOT have marginLeft');
 
-  // Last verse in a run: bottom-left rounded, top-left not
-  const last = verseRow({ bookmarked: true, bmFirst: false, bmLast: true });
-  const lastSpan = find(last, n => n.props && n.props.id === 'rv-16')[0];
-  assert.equal(lastSpan.props.style.borderTopLeftRadius, 0, 'last (not first) verse should have no top-left radius');
-  assert.equal(lastSpan.props.style.borderBottomLeftRadius, 4, 'last verse in run should have bottom-left radius');
+  // The verse number still turns clay when bookmarked
+  const sup = find(bmSpan, n => n.type === 'sup')[0];
+  assert.ok(sup, 'could not find the verse number <sup>');
+  assert.equal(sup.props.style.color, 'var(--clay)', 'bookmarked verse number should be clay-coloured');
 
-  // Not bookmarked: no left border
+  // Non-bookmarked: same — no border
   const none = verseRow({ bookmarked: false });
   const noneSpan = find(none, n => n.props && n.props.id === 'rv-16')[0];
   assert.equal(noneSpan.props.style.borderLeft, undefined, 'non-bookmarked verse should have no left border');
@@ -233,4 +241,40 @@ test('Study panel: a passage bookmark and a single-verse bookmark coexist and so
   // Genesis 1:3 sorts before John 3:16-18
   assert.ok(reads(bmRows[0]).includes('Genesis 1:3'), 'first entry should be Genesis 1:3, got: ' + reads(bmRows[0]));
   assert.ok(reads(bmRows[1]).includes('John 3:16-18'), 'second entry should be John 3:16-18, got: ' + reads(bmRows[1]));
+});
+
+test('Tapping a passage bookmark in the Study panel calls selectPassageBookmark with the refs array', () => {
+  const passageItem = {
+    id: 'p:43.3.16+43.3.17+43.3.18', ref: '43.3.16',
+    refs: ['43.3.16', '43.3.17', '43.3.18'],
+    rangeLabel: 'John 3:16-18', tags: [],
+  };
+  const p = panel(
+    ['43.3.16', '43.3.17', '43.3.18'],
+    [passageItem],
+  );
+  const t = openMarks(p);
+  const bmRow = rows(t)[0];
+  // The main tap area is the button (not the X button)
+  const tapBtn = find(bmRow, n => n.type === 'button' && !/^Remove/.test(String(n.props['aria-label'] || '')))[0];
+  assert.ok(tapBtn, 'could not find the tap button on the passage bookmark row');
+  tapBtn.props.onClick();
+  assert.equal(p.calls.selectPassage.length, 1, 'selectPassageBookmark should be called once');
+  assert.deepEqual(p.calls.selectPassage[0], ['43.3.16', '43.3.17', '43.3.18'],
+    'selectPassageBookmark should receive the full refs array');
+  assert.deepEqual(p.calls.goto, [], 'gotoRef should NOT be called for a passage bookmark tap');
+});
+
+test('Tapping a single-verse bookmark in the Study panel still calls gotoRef, not selectPassageBookmark', () => {
+  const p = panel(
+    ['43.3.16'],
+    [{ id: '43.3.16', ref: '43.3.16', tags: [] }],
+  );
+  const t = openMarks(p);
+  const bmRow = rows(t)[0];
+  const tapBtn = find(bmRow, n => n.type === 'button' && !/^Remove/.test(String(n.props['aria-label'] || '')))[0];
+  tapBtn.props.onClick();
+  assert.equal(p.calls.goto.length, 1, 'gotoRef should be called for a single-verse bookmark');
+  assert.deepEqual(p.calls.goto[0], [43, 3, 16]);
+  assert.deepEqual(p.calls.selectPassage, [], 'selectPassageBookmark should NOT be called for a single-verse bookmark');
 });
