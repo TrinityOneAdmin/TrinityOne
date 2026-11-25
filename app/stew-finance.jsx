@@ -383,7 +383,7 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   // anyone who does not distinguish sage from clay.
   const seg = (v, label) => (
     <button onClick={() => setDir(v)} title={v === 'in' ? 'Record money coming in, such as a gift' : 'Record money going out, such as a bill'} aria-pressed={dir === v} aria-label={label + (dir === v ? ' (selected)' : '')}
-      style={{ flex: 1, height: 42, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
+      style={{ flex: 1, minHeight: 44, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
       background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{(v === 'in' ? '+ ' : '− ') + label}</button>
   );
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
@@ -405,13 +405,13 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
           <div style={{ border: '1px solid var(--line)', borderRadius: 11, padding: 8, marginBottom: 8 }}>
             {rows.map((r, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-                <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} aria-label={'Split category ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', flex: 1 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-                <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} aria-label={'Split fund ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', width: 112 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
-                <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" aria-label={'Split amount ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', width: 84 }} />
-                <button onClick={() => removeRow(i)} title="Remove this split row" aria-label={'Remove split row ' + (i + 1)} disabled={rows.length <= 1} style={{ border: 'none', background: 'transparent', cursor: rows.length <= 1 ? 'default' : 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 2, opacity: rows.length <= 1 ? 0.4 : 1 }}>×</button>
+                <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} aria-label={'Split category ' + (i + 1)} style={{ ...bkFld, height: 44, fontSize: 13, padding: '0 8px', flex: 1 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} aria-label={'Split fund ' + (i + 1)} style={{ ...bkFld, height: 44, fontSize: 13, padding: '0 8px', width: 112 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" aria-label={'Split amount ' + (i + 1)} style={{ ...bkFld, height: 44, fontSize: 13, padding: '0 8px', width: 84 }} />
+                <button onClick={() => removeRow(i)} title="Remove this split row" aria-label={'Remove split row ' + (i + 1)} disabled={rows.length <= 1} style={{ ...bkRowIconBtn, border: 'none', background: 'transparent', cursor: rows.length <= 1 ? 'default' : 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 2, opacity: rows.length <= 1 ? 0.4 : 1 }}>×</button>
               </div>
             ))}
-            <button onClick={addRow} style={{ border: '1px dashed var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add category</button>
+            <button onClick={addRow} style={{ border: '1px dashed var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add category</button>
           </div>
           <div style={{ fontSize: 12.5, marginBottom: 12, color: splitSum === total && total > 0 ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)', fontWeight: 600 }}>
             Split {booksFmt(splitSum, book)} of {booksFmt(total, book)}{total > 0 && splitSum !== total ? ' · ' + (splitSum < total ? booksFmt(total - splitSum, book) + ' left to assign' : booksFmt(splitSum - total, book) + ' over') : ''}
@@ -3333,16 +3333,16 @@ function DashFinanceBook() {
   };
 
   const stat = (label, val, tone) => (
-    <div style={{ ...bkCard, flex: 1, minWidth: 150 }}>
+    <div role="group" aria-label={label} style={{ ...bkCard, flex: 1, minWidth: 150 }}>
       <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</div>
-      <div style={{ fontSize: 25, fontWeight: 800, marginTop: 6, color: tone || 'var(--ink)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{val}</div>
+      <div style={{ fontSize: 25, fontWeight: 800, marginTop: 6, color: tone || 'var(--ink)', fontFamily: 'var(--font-display, var(--font-ui))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{val}</div>
     </div>
   );
 
   // One pill in the tab strip (and in the Donors sub-tab strip). The label is a single string child, so the
   // point-of-use tests' button() helper (which matches a button's string kids) can select a tab by its label.
   const tabBtn = (active, onClick, label, key) => (
-    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13,
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, minHeight: 44, boxSizing: 'border-box',
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
   );
 
@@ -3410,13 +3410,13 @@ function DashFinanceBook() {
           <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Recent transactions</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {/* Share statement moved to the Finance header (reachable from any tab); only Export CSV stays here. */}
-            <button onClick={exportCsv} title="Download all transactions as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
+            <button onClick={exportCsv} title="Download all transactions as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export CSV</button>
           </div>
         </div>
         {exported ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '-4px 0 10px' }}>{exported}</div> : null}
         {recent.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 14, padding: '10px 0' }}>No transactions yet — record your first with the button above.</div>}
         {recent.map(e => { const v = booksEntryView(book, e); return (
-          <div key={e.seq} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+          <div key={e.seq} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: '1px solid var(--line)', flexWrap: 'wrap' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.wasReversed ? 'line-through' : 'none', opacity: v.wasReversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}{v.wasReversed ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>reversed</span> : ''}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{v.date}{v.fund && v.fund !== 'general' ? ' · ' + ((book.funds.get(v.fund) || {}).name || v.fund) : ''}</div>
@@ -3439,7 +3439,7 @@ function DashFinanceBook() {
       {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button onClick={() => setRecurringOpen(r => !r)} title="Show or hide standing orders and other repeating payments" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{recurringOpen ? '▾' : '▸'} Recurring payments</button>
-          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add recurring</button>}
+          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add recurring</button>}
         </div>
         {recurringOpen && (
           <div style={{ marginTop: 12 }}>
@@ -3467,8 +3467,8 @@ function DashFinanceBook() {
         {(() => {
           const m = rptModel;
           const chip = (active, onClick, label, key) => (
-            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
-              border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
+            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, minHeight: 44, boxSizing: 'border-box',
+              border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', display: 'inline-flex', alignItems: 'center' }}>{label}</button>
           );
           const line = (label, val, bold) => (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', fontWeight: bold ? 800 : 400 }}>
@@ -3544,9 +3544,9 @@ function DashFinanceBook() {
             {m.balance ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Balance sheet</div>{line('Assets', m.balance.assets)}{line('Liabilities', m.balance.liabilities)}{line('Net funds', m.balance.funds, true)}</div> : null}
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-              <button onClick={exportReportPdf} title="Download this report as a PDF to print or share" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export PDF</button>
-              <button onClick={exportReportCsv} title="Download this report as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
-              <button onClick={exportReportHtml} title="Download this report as a printable web page" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export HTML</button>
+              <button onClick={exportReportPdf} title="Download this report as a PDF to print or share" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export PDF</button>
+              <button onClick={exportReportCsv} title="Download this report as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export CSV</button>
+              <button onClick={exportReportHtml} title="Download this report as a printable web page" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export HTML</button>
             </div>
             {rptFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', marginTop: 8 }}>{rptFlash}</div> : null}
           </div>
@@ -3610,8 +3610,8 @@ function DashFinanceBook() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '2px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Funds</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => setMoving(true)} disabled={bookErrors.length > 0} title="Move money from one fund to another" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Move between funds</button>
-                <button onClick={() => setFundEditing({})} title="Create a new fund" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add fund</button>
+                <button onClick={() => setMoving(true)} disabled={bookErrors.length > 0} title="Move money from one fund to another" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1, minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Move between funds</button>
+                <button onClick={() => setFundEditing({})} title="Create a new fund" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add fund</button>
               </div>
             </div>
             {[...book.funds.values()].map(f => (
@@ -3626,7 +3626,7 @@ function DashFinanceBook() {
             {/* ── Accounts, grouped by type (the reserved fund-transfer + accounts-receivable accounts are exempt and hidden) ── */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Accounts</div>
-              <button onClick={() => setAccEditing({})} title="Create a new account (category)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add account</button>
+              <button onClick={() => setAccEditing({})} title="Create a new account (category)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add account</button>
             </div>
             {ACCT_TYPES_ORDER.map(type => {
               const list = [...book.accounts.values()].filter(a => a.type === type && a.id !== 'fund-transfer' && a.id !== 'accounts-receivable');
@@ -3652,8 +3652,8 @@ function DashFinanceBook() {
             {/* ── Currencies (Phase 8, multi-currency) — OPT-IN, OFF by default (silent-£). Turning it on reveals
                 the currency + rate fields on the Record form and the Foreign balances / Revalue list below. ── */}
             <div style={{ margin: '18px 0 8px', fontWeight: 700, fontSize: 14 }}>Currencies</div>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderTop: '1px solid var(--line)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={!!book.multiCurrency} onChange={e => setMultiCurrencyOn(e.target.checked)} aria-label="Record transactions in other currencies" style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 0', borderTop: '1px solid var(--line)', cursor: 'pointer', minHeight: 44 }}>
+              <input type="checkbox" checked={!!book.multiCurrency} onChange={e => setMultiCurrencyOn(e.target.checked)} aria-label="Record transactions in other currencies" style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }} />
               <span style={{ fontSize: 13.5, color: 'var(--ink)' }}>Record transactions in other currencies
                 <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', fontWeight: 400, marginTop: 2 }}>Your books stay in {CCY_SYM[book.baseCurrency] || book.baseCurrency}. A foreign entry is converted at the rate you enter; the original amount is kept alongside it.</span>
               </span>
@@ -3680,7 +3680,7 @@ function DashFinanceBook() {
         </div>
         {donorTab === 'donors' && <div style={{ marginTop: 4 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-          <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>
+          <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add donor</button>
           </div>
             {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member{giftAidOn ? ' and (if your church uses it) Gift Aid' : ''}.</div>}
             {donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => (
@@ -3748,8 +3748,8 @@ function DashFinanceBook() {
       {/* ── INVOICES tab ── */}
       {tab === 'invoices' && <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginBottom: 12 }}>
-            <button onClick={() => setContactEditing({})} title="Add a customer / contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add contact</button>
-            <button onClick={() => setInvEditing({})} disabled={bookErrors.length > 0} title="Create and issue an invoice" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New invoice</button>
+            <button onClick={() => setContactEditing({})} title="Add a customer / contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add contact</button>
+            <button onClick={() => setInvEditing({})} disabled={bookErrors.length > 0} title="Create and issue an invoice" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1, minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ New invoice</button>
         </div>
         {(() => {
           const today = booksTodayISO();

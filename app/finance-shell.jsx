@@ -130,7 +130,7 @@ function FinanceUnlinked() {
     <div style={{ maxWidth: 520, margin: '0 auto' }}>
       <div style={{ padding: '6px 4px 16px' }}>
         <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, margin: '0 0 6px' }}>Not linked to a church yet</h2>
-        <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55 }}>The books open here once a church’s owner has approved you as a helper with <b>Finance</b>. Ask them for a helper invite, enter it below, and they approve you from their own console.</div>
+        <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55 }}>The books open here once a church’s owner has approved you as a helper with <b>Finance</b>. Ask them for a helper invite, enter it below, and they approve you from their own device.</div>
       </div>
       {ids.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
@@ -167,7 +167,7 @@ function FinanceShell() {
   return (
     <div data-finance-shell="1" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)', fontFamily: 'var(--font-ui)' }}>
       {settings ? <FinanceSettings onClose={() => setSettings(false)} /> : null}
-      <div style={{ flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)', padding: 'calc(6px + env(safe-area-inset-top, 0px)) calc(8px + env(safe-area-inset-right, 0px)) 6px calc(8px + env(safe-area-inset-left, 0px))', display: 'flex', alignItems: 'center', gap: 6 }}>
         <div style={{ ...tap, cursor: 'default' }}><Halo size={24} color="var(--ink)" spark="var(--clay)" /></div>
         <div style={{ flex: 1, minWidth: 0, position: 'relative', height: 44 }}>
           <h1 style={{ position: 'absolute', left: 0, right: 0, top: 3, margin: 0, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15.5, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none' }}>Finance</h1>
@@ -179,13 +179,13 @@ function FinanceShell() {
       {/* A REFUSED WRITE MUST BE SEEN (plan §3.4, audit F2). DashFinance reports every refusal through
           steward-write-blocked / steward-publish-error, and this banner is the only thing that listens. */}
       <PublishErrorBanner />
-      <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>
+      <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px calc(12px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) calc(12px + env(safe-area-inset-left, 0px))', background: 'var(--paper)' }}>
         {view === 'books' && rosterGenuine && financeHasOtherCaps(S) ? (
           <div data-finance-other-caps="1" style={{ fontSize: 12, color: 'var(--ink-3)', margin: '0 0 10px', lineHeight: 1.45 }}>This key has other permissions in this church too. This app shows only the books.</div>
         ) : null}
         {view === 'books' ? <DashFinance />
           : view === 'blocked' ? <StewCapBlocked cap="finance" />
-          : view === 'off' ? <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is turned off</div>This church has turned its Finance section off. Its owner can turn it back on in their console.</div>
+          : view === 'off' ? <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is turned off</div>This church has turned its Finance section off. Its owner can turn it back on from their own device.</div>
           : <FinanceUnlinked />}
       </main>
     </div>

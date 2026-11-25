@@ -1087,7 +1087,7 @@ function StewardForcedPin() {
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
       <div style={{ width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
-        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Set a console PIN</h1>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>{stewIsFinanceApp() ? 'Set a PIN' : 'Set a console PIN'}</h1>
         {/* ONE SENTENCE EACH (owner, 2026-09-10: less instructional copy on screen). The page it names is
             Settings → Church key — "Settings → Security" is the delegates' page, and this gate is the owner's.
             The fuller why lives in the help article "Your church’s recovery phrase". */}
@@ -1104,12 +1104,12 @@ function StewardForcedPin() {
           </div>
         </div>
         <div style={{ position: 'relative' }}>
-          <input type={pinVis ? 'text' : 'password'} aria-label="Choose a console PIN or passphrase" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          <input type={pinVis ? 'text' : 'password'} aria-label={stewIsFinanceApp() ? 'Choose a PIN or passphrase' : 'Choose a console PIN or passphrase'} value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
             placeholder="At least 8 — a generated password is best" autoComplete="new-password"
             style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', paddingRight: 44 }} />
           <button type="button" aria-label={pinVis ? 'Hide PIN' : 'Show PIN'} onClick={() => setPinVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={pinVis ? 'eyeOff' : 'eye'} size={18} /></button>
         </div>
-        <input type={pinVis ? 'text' : 'password'} aria-label="Repeat the console PIN or passphrase" value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+        <input type={pinVis ? 'text' : 'password'} aria-label={stewIsFinanceApp() ? 'Repeat the PIN or passphrase' : 'Repeat the console PIN or passphrase'} value={pin2} onChange={e => { setPin2(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
           placeholder="Type it again" autoComplete="new-password"
           style={{ width: '100%', boxSizing: 'border-box', height: 50, marginTop: 10, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', paddingRight: 44 }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
@@ -1284,10 +1284,10 @@ function StewardUnlock() {
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
       <div style={{ width: 'min(380px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
-        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Console locked</h1>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>{stewIsFinanceApp() ? 'Locked' : 'Console locked'}</h1>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 18 }}>Enter the PIN to unlock this church on this device.</div>
         <div style={{ position: 'relative' }}>
-          <input type={pinVis ? 'text' : 'password'} aria-label="Your console PIN or passphrase" value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
+          <input type={pinVis ? 'text' : 'password'} aria-label={stewIsFinanceApp() ? 'Your PIN or passphrase' : 'Your console PIN or passphrase'} value={pin} autoFocus disabled={blocked} onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && !blocked) submit(); }}
             placeholder="Your PIN or passphrase" autoComplete="off"
             style={{ width: '100%', boxSizing: 'border-box', height: 50, textAlign: 'center', letterSpacing: pinVis ? 'normal' : 6, fontSize: 20, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)', opacity: blocked ? .6 : 1, paddingRight: 44 }} />
           <button type="button" aria-label={pinVis ? 'Hide PIN' : 'Show PIN'} onClick={() => setPinVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={pinVis ? 'eyeOff' : 'eye'} size={18} /></button>
@@ -1298,7 +1298,7 @@ function StewardUnlock() {
             <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => { stayTouched.current = true; setStayOpen(e.target.checked); }} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
             <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
               Stay open for <b>30 days</b>.<br />
-              <span style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>Anyone who can unlock this phone can open this console and act as the church, even after it locks itself.</span>
+              <span style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>Anyone who can unlock this phone can open {stewIsFinanceApp() ? 'this app' : 'this console'} and act as the church, even after it locks itself.</span>
             </span>
           </label>
         ) : null}
