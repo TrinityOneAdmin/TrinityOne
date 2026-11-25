@@ -95,6 +95,7 @@ class BackgroundReader: NSObject {
         // ---- Step 4: Load bg.html and wait for the summary ----
         guard let bgURL = URL(string: "\(origin)\(ownPrefix)bg.html") else {
             NSLog("DIRECTPUSH fatal: could not construct bg.html URL")
+            config.userContentController.removeScriptMessageHandler(forName: "dpResult")
             completion(false)
             return
         }
@@ -102,7 +103,11 @@ class BackgroundReader: NSObject {
 
         // ---- Step 5: 25s hard timeout (audit RED 2 fix) ----
         var finished = false
-        let finishOnce: (Bool) -> Void = { success in
+        // IMPORTANT: navDelegate is captured here to prevent ARC deallocation. WKWebView holds its
+        // navigationDelegate as a WEAK reference; without a strong reference in a surviving closure,
+        // the delegate can be collected before didFinish fires, and the mnemonic is never injected.
+        let finishOnce: (Bool) -> Void = { [navDelegate] success in
+            _ = navDelegate  // prevent "unused capture" warning; the strong ref keeps it alive until cleanup
             guard !finished else { return }
             finished = true
 
@@ -118,7 +123,7 @@ class BackgroundReader: NSObject {
             // Destroy the WebView
             webView.stopLoading()
             webView.loadHTMLString("", baseURL: nil)
-            // Remove the message handler to break the reference cycle
+            // Remove the message handler to break the WKScriptMessageHandler → WKUserContentController retain cycle.
             config.userContentController.removeScriptMessageHandler(forName: "dpResult")
 
             completion(success)
