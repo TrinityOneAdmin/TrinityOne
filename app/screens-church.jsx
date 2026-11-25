@@ -58,7 +58,7 @@ function QRScanner({ onResult, onCancel, prompt, onManual, manualPrompt }) {
         {onManual ? (<React.Fragment>
           <textarea value={manual} onChange={e => setManual(e.target.value)} rows={3} autoCapitalize="none" autoCorrect="off" spellCheck={false}
             data-qr-manual="1" placeholder={manualPrompt || 'Paste the code here'}
-            style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--paper)', padding: '10px 12px', fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.5, marginBottom: 10 }} />
+            style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--paper)', padding: '10px 12px', fontSize: 16, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.5, marginBottom: 10 }} />
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onManual(manual.trim())} disabled={!manual.trim()} style={{ flex: 1, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 12, padding: '10px 16px', cursor: manual.trim() ? 'pointer' : 'not-allowed', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)', opacity: manual.trim() ? 1 : .5 }}>Use this code</button>
             <button onClick={onCancel} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 12, padding: '10px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>Back</button>
@@ -217,7 +217,7 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
           and resolve() both already do), never as the user types. */}
       <input value={code} onChange={e => { setCode(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter' && joinable && !busy) resolve(); }} autoFocus aria-label="Church name, code, or invite link" placeholder="church name, code, or invite link" style={{
         width: '100%', height: 58, border: '1px solid ' + (err ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 18px',
-        fontSize: 14, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
+        fontSize: 16, fontFamily: 'monospace', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', textAlign: 'center', textOverflow: 'ellipsis' }} />
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8, lineHeight: 1.4 }}>{err}</div> : null}
       <button onClick={() => resolve()} disabled={!joinable || busy} style={{
         width: '100%', marginTop: 16, padding: 16, borderRadius: 15, border: 'none', cursor: (joinable && !busy) ? 'pointer' : 'default',
