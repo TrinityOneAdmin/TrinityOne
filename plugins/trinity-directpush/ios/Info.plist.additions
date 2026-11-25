@@ -1,0 +1,15 @@
+<!-- Add these entries to ios/App/App/Info.plist (inside the top-level <dict>).
+     The Mac/Xcode session applies them — this file is a reference only. -->
+
+<!-- BGAppRefreshTask: the identifier must match BackgroundRefreshScheduler.taskIdentifier -->
+<key>BGTaskSchedulerPermittedIdentifiers</key>
+<array>
+    <string>church.trinityone.app.bgrefresh</string>
+</array>
+
+<!-- Background Modes: "fetch" enables BGAppRefreshTask scheduling.
+     (Xcode also adds this via the Background Modes capability toggle.) -->
+<key>UIBackgroundModes</key>
+<array>
+    <string>fetch</string>
+</array>
