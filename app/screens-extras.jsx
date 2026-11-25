@@ -312,6 +312,23 @@ function dpWidgetCountClear() {
     if (W && W.clearMessageCount) Promise.resolve(W.clearMessageCount()).catch(() => {});
   } catch (e) {}
 }
+// iOS Keychain bg-copy: the plugin's default accessibility (WhenUnlocked) blocks reads while the screen is locked,
+// so a BGAppRefreshTask that runs with the screen off gets nil. The bridge copies the mnemonic to a separate entry
+// with AfterFirstUnlock accessibility. Android doesn't need this (EncryptedSharedPreferences is always readable).
+// Callers: flipDirect opt-in (1). On Android/web the plugin is absent and these are no-ops.
+function dpBgKeyWrite() {
+  try {
+    const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge;
+    if (P && P.writeBgKey) Promise.resolve(P.writeBgKey()).catch(() => {});
+  } catch (e) {}
+}
+// Callers: flipDirect opt-out (1), widgetClearChurch in identity.src.js (1), widgetOffForNewAccount in identity.src.js (1).
+function dpBgKeyClear() {
+  try {
+    const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge;
+    if (P && P.deleteBgKey) Promise.resolve(P.deleteBgKey()).catch(() => {});
+  } catch (e) {}
+}
 // What turning ON must do, given the key source. The reader can only read the key if there is no PIN, or the PIN's
 // "stay open" record exists (the PIN encrypts the key otherwise). 'enable' = nothing more needed; 'offer-remember' = ask
 // for the existing 30-day "stay open" (TrinityIdentity.rememberDevice); 'unlock-first' = PIN-locked right now, so
@@ -353,14 +370,16 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
     if (dpOn) {   // opt-out: the reader no-ops from its next run
       dpOptInSet(false); setDpOn(false); setDpOffer(false);
       dpWidgetCountClear();   // the home-screen widget's count goes with the opt-in
+      dpBgKeyClear();         // remove the iOS AfterFirstUnlock Keychain copy (no-op on Android/web)
       return;
     }
     const ID = window.TrinityIdentity || {};
     let until = 0; try { until = ID.rememberedUntil ? (await ID.rememberedUntil()) || 0 : 0; } catch (e) {}
     const plan = dpOnPlan(!!(ID.hasPin && ID.hasPin()), !!(ID.isLocked && ID.isLocked()), !!(ID.canRemember && ID.canRemember()), until);
-    if (!dpOptInSet(true)) { ctx.toast('Couldn’t save that on this phone'); return; }
+    if (!dpOptInSet(true)) { ctx.toast(‘Couldn’t save that on this phone’); return; }
     setDpOn(true);
-    if (plan === 'offer-remember') setDpOffer(true);
+    dpBgKeyWrite();   // copy the mnemonic to iOS AfterFirstUnlock Keychain entry (no-op on Android/web)
+    if (plan === ‘offer-remember’) setDpOffer(true);
     else if (plan === 'unlock-first') ctx.toast('Unlock with your PIN, then choose “Stay open” here so alerts can arrive');
   };
   const acceptStayOpen = async () => {
