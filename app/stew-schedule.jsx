@@ -1885,17 +1885,25 @@ function DashCalendar() {
   // series doc now carries exceptions[from].date === to, or a one-off now simply has the new date — so the local
   // overlay never fights a confirmed relay state. `from` is the occurrence's CANONICAL date (recur.jsx occDate),
   // which is also the exceptions key, so a second drag of the same week replaces rather than stacks.
-  const [moves, setMoves] = useSch([]);   // { id, from, to, recurring }
+  const [moves, setMoves] = useSch([]);   // { id, from, to, recurring } — and kind:'service' for a service chip
   useSchE(() => {
     setMoves(ms => ms.filter(m => {
+      if (m.kind === 'service') { const s = services.find(x => x.id === m.id); return s ? s.date !== m.to : true; }   // kept until the rewritten doc echoes
       const s = rawEvents.find(x => x.id === m.id); if (!s) return true;   // keep until we can see the doc at all
       return m.recurring ? !(s.exceptions && s.exceptions[m.from] && s.exceptions[m.from].date === m.to) : (s.date !== m.to);
     }));
-  }, [rawEvents]);   // eslint-disable-line
+  }, [rawEvents, services]);   // eslint-disable-line
   const rawView = (!moves.length) ? rawEvents : rawEvents.map(ev => {
-    const mine = moves.filter(m => m.id === ev.id); if (!mine.length) return ev;
+    const mine = moves.filter(m => m.kind !== 'service' && m.id === ev.id); if (!mine.length) return ev;
     if (ev.recur) { const exceptions = { ...(ev.exceptions || {}) }; mine.forEach(m => { exceptions[m.from] = { date: m.to }; }); return { ...ev, exceptions }; }
     const m = mine.find(x => x.from === ev.date) || mine[mine.length - 1]; return { ...ev, date: m.to };
+  });
+  // The same pre-echo overlay for SERVICES. A service has no series and no exceptions (SchAddServiceModal's
+  // "repeat" writes N independent dated docs), so its pending move is simply "paint it on `to` until the
+  // rewritten doc echoes". Both the grid (dayItems) and the Upcoming panel read this view, so they agree.
+  const svcView = (!moves.length) ? services : services.map(s => {
+    const mine = moves.filter(m => m.kind === 'service' && m.id === s.id); if (!mine.length) return s;
+    return { ...s, date: mine[mine.length - 1].to };
   });
   const dragRef = useSchR(null);                  // the chip being dragged: { id, from, shown, recurring }
   const [dragOverKey, setDragOverKey] = useSch(null);
@@ -1949,7 +1957,7 @@ function DashCalendar() {
     return { total, filled, published: rota && rota.published };
   };
   const dayItems = (key) => ({
-    services: services.filter(s => s.date === key),
+    services: svcView.filter(s => s.date === key),
     events: events.filter(e => e.date === key),
     bookings: showBookings ? bookings.filter(b => b.date === key).sort((a, b) => (a.start || '').localeCompare(b.start || '')) : [],
   });
@@ -1958,7 +1966,7 @@ function DashCalendar() {
   const daysIn = new Date(view.y, view.m + 1, 0).getDate();
   const cells = []; for (let i = 0; i < startPad; i++) cells.push(null); for (let d = 1; d <= daysIn; d++) cells.push(d);
   const monKey = (d) => `${view.y}-${String(view.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  const upcoming = services.slice().filter(s => (s.date || '') >= schKey(today)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 6);
+  const upcoming = svcView.slice().filter(s => (s.date || '') >= schKey(today)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 6);
 
   // MOVE ONE OCCURRENCE TO ANOTHER DAY (item 2). A ONE-OFF event changes its own date, as the edit dialog does.
   // A RECURRING occurrence writes exceptions[canonicalDate] = { date:newDate } on the SERIES doc — the anchor is
@@ -1967,6 +1975,17 @@ function DashCalendar() {
   const onDropDay = (newDate) => {
     const d = dragRef.current; dragRef.current = null; setDragOverKey(null);
     if (!d || !newDate || !window.Steward || newDate === (d.shown || d.from)) return;
+    if (d.kind === 'service') {
+      // A SERVICE is a flat dated doc: publishService with its own id REPLACES the same document (d-tag
+      // SERVICE_D+id), so everything keyed by that id — the rota (rota.service), the run sheet
+      // (runsheet:<id>), serving requests/replies, check-in sessions — stays attached; only `date` changes.
+      const svc = services.find(x => x.id === d.id); if (!svc) return;
+      setMoves(ms => [...ms.filter(m => !(m.kind === 'service' && m.id === d.id)), { kind: 'service', id: d.id, from: d.from, to: newDate }]);
+      Promise.resolve(window.Steward.publishService({ id: svc.id, name: svc.name, date: newDate, time: svc.time }))
+        // null = NOT saved (no church key / locked / no relay): drop the overlay so the chip does not pretend.
+        .then(r => { if (r == null) setMoves(ms => ms.filter(m => !(m.kind === 'service' && m.id === d.id))); });
+      return;
+    }
     const series = rawEvents.find(x => x.id === d.id); if (!series) return;
     setMoves(ms => [...ms.filter(m => !(m.id === d.id && m.from === d.from)), { id: d.id, from: d.from, to: newDate, recurring: !!d.recurring }]);
     if (d.recurring) {
@@ -2004,7 +2023,11 @@ function DashCalendar() {
                 style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
                 border: dragOverKey === key ? '2px dashed var(--clay)' : pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: dragOverKey === key ? 'color-mix(in oklab, var(--clay) 11%, var(--surface))' : isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
-                {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
+                {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} draggable
+                  onDragStart={ev => { ev.stopPropagation(); dragRef.current = { kind: 'service', id: s.id, from: s.date, shown: s.date }; try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(s.id)); } catch (err) {} }}
+                  onDragEnd={() => { dragRef.current = null; setDragOverKey(null); }}
+                  title="Drag to move this service to another day — its rota moves with it"
+                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4, cursor: 'grab' }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
                 {it.events.map(e => <div key={e.id} draggable
                   onDragStart={ev => { ev.stopPropagation(); dragRef.current = { id: e.id, from: e.occDate || e.date, shown: e.date, recurring: !!e.recur }; try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(e.id)); } catch (err) {} }}
                   onDragEnd={() => { dragRef.current = null; setDragOverKey(null); }}
