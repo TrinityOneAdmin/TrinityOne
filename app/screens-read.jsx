@@ -72,11 +72,20 @@ function splitVerseLead(html) {
   return sawHead ? [s.slice(0, i), s.slice(i)] : ['', s];
 }
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
-function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, onWord, tour }) {
+function VerseRow({ n, html, hl, note, bookmarked, bmFirst, bmLast, selected, reading, onSelect, onWord, tour }) {
   // a heading the verse opens with is drawn BEFORE its number (see splitVerseLead), still inside this verse's row
   const [lead, body] = splitVerseLead(html);
   return (
-    <span id={'rv-' + n} data-tour={tour} style={{ position: 'relative' }}>
+    <span id={'rv-' + n} data-tour={tour} style={{
+      position: 'relative',
+      ...(bookmarked ? {
+        borderLeft: '2px solid var(--clay)',
+        paddingLeft: 6,
+        marginLeft: -8,
+        borderTopLeftRadius: bmFirst ? 4 : 0,
+        borderBottomLeftRadius: bmLast ? 4 : 0,
+      } : {}),
+    }}>
       <span
         onClick={(e) => {
           const sup = e.target.closest && e.target.closest('sup.st');
@@ -102,6 +111,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
           background: hl, borderRadius: 3, padding: '1px 1px',
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
         } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(body) }} />
+        {bookmarked ? <Icon name="bookmark" size={12} color="var(--clay)" fill style={{ verticalAlign: 'middle', marginLeft: 3 }} /> : null}
         {note ? <Icon name="note" size={14} color="var(--gold)" style={{ verticalAlign: 'middle', marginLeft: 4 }} /> : null}
       </span>{' '}
     </span>
@@ -152,6 +162,7 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
 function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onCross, onCommentary, bookmarked, hasNote, multi }) {
   const isMulti = (multi || 1) > 1;   // several verses selected → only Copy + Share apply (the rest are per-verse)
   const acts = isMulti ? [
+    { ic: 'bookmark', label: bookmarked ? 'Saved' : 'Bookmark', fn: ctx._bm, active: bookmarked },
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
     { ic: 'book', label: 'Define', fn: ctx._define },
@@ -1243,26 +1254,62 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   const myNotes = Object.keys(chapNotes).filter(k => k.indexOf(prefix) === 0 && /^\d+$/.test(k.slice(prefix.length)))
     .map(k => ({ ref: k, v: parseInt(k.slice(prefix.length), 10) || 0, text: chapNotes[k] }))
     .sort((a, b) => a.v - b.v);
-  // THE MEMBER'S BOOKMARKS (every chapter, not just this one), read from ctx.bookmarks — the same list the verse
-  // card's Bookmark button toggles (keys are "book.chap.verse"; an older spelling like "John 1:4" is folded in by
-  // noteKeyOf). Sorted in reading order. `raw` is the key as stored, so removing hands toggleBookmark exactly what
-  // was put there. A key that cannot be placed on a verse is left out (nothing to jump to).
+  // THE MEMBER'S BOOKMARKS (every chapter, not just this one), read from ctx.bookmarkItems — the item list the
+  // verse card's Bookmark button toggles. Single-verse keys are "book.chap.verse"; an older spelling like
+  // "John 1:4" is folded in by noteKeyOf. Passage bookmarks (id starts with "p:") appear as one entry with
+  // their rangeLabel. Sorted in reading order by first verse. `raw` is the key/id as stored, so removing hands
+  // toggleBookmark / removePassageBookmark exactly what was put there. A key that cannot be placed is left out.
   const myMarks = (() => {
     const seen = {}, out = [];
-    // Tags live on ctx.bookmarkItems (ctx.bookmarks is bare refs). Matched on `raw`, the stored key, so an
-    // old-spelling bookmark still finds its tags. Missing/odd data means no chips, never a crash.
-    const tagsByRef = {};
-    // Keyed on the canonical verse key and UNIONED, de-duplicated: one verse saved under two spellings shows the
-    // tags of both, and a tag repeated inside a record (sync/import) is shown once so React keys stay unique.
+    // Tags live on ctx.bookmarkItems. Matched on id/ref, the stored key, so an old-spelling bookmark still
+    // finds its tags. Missing/odd data means no chips, never a crash.
+    const tagsByKey = {};
     (ctx.bookmarkItems || []).forEach(it => {
-      if (!(it && it.ref && Array.isArray(it.tags))) return;
-      const k = noteKeyOf(it.ref), have = tagsByRef[k] || (tagsByRef[k] = []);
+      if (!(it && Array.isArray(it.tags))) return;
+      const k = it.id || it.ref;
+      if (!k) return;
+      const have = tagsByKey[k] || (tagsByKey[k] = []);
       it.tags.filter(Boolean).forEach(t => { if (have.indexOf(t) < 0) have.push(t); });
+      // Also index by canonical ref so an old-spelling single-verse bookmark can find its tags
+      if (it.ref) {
+        const ck = noteKeyOf(it.ref), have2 = tagsByKey[ck] || (tagsByKey[ck] = []);
+        it.tags.filter(Boolean).forEach(t => { if (have2.indexOf(t) < 0) have2.push(t); });
+      }
     });
+    (ctx.bookmarkItems || []).forEach(item => {
+      if (!item) return;
+      if (item.refs && item.refs.length > 1) {
+        // passage bookmark — one entry for the whole range
+        const firstRef = item.refs[0];
+        const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(firstRef));
+        if (!m || seen[item.id]) return;
+        seen[item.id] = 1;
+        // Mark each individual verse ref as seen so the fallback pass does not create separate entries
+        item.refs.forEach(r => { seen[noteKeyOf(r)] = 1; });
+        const tags = [...new Set((tagsByKey[item.id] || []).concat(tagsByKey[item.ref] || []))];
+        out.push({ raw: item.id, key: item.id, b: +m[1], c: +m[2], v: +m[3],
+          label: item.rangeLabel || verseRefLabel(firstRef),
+          tags, isPassage: true });
+      } else {
+        // single-verse bookmark
+        const raw = item.ref;
+        if (!raw) return;
+        const c = noteKeyOf(raw), m = /^(\d+)\.(\d+)\.(\d+)$/.exec(c);
+        if (!m || seen[c]) return;
+        seen[c] = 1;
+        const tags = [...new Set((tagsByKey[item.id || item.ref] || []).concat(tagsByKey[c] || []))];
+        out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3],
+          label: verseRefLabel(c),
+          tags, isPassage: false });
+      }
+    });
+    // Fallback: any ref in ctx.bookmarks not yet seen (backward compat when bookmarkItems is sparse/empty)
     (ctx.bookmarks || []).forEach(raw => {
       const c = noteKeyOf(raw), m = /^(\d+)\.(\d+)\.(\d+)$/.exec(c);
       if (!m || seen[c]) return;
-      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3], tags: tagsByRef[c] || [] });
+      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3],
+        label: verseRefLabel(c),
+        tags: tagsByKey[c] || [], isPassage: false });
     });
     return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
   })();
@@ -1395,12 +1442,12 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
               {shownMarks.map(bm => (
               <div key={bm.key} data-bookmark={bm.key} style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                 <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Icon name="bookmark" size={15} color="var(--clay)" fill /> {verseRefLabel(bm.key)}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Icon name="bookmark" size={15} color="var(--clay)" fill /> {bm.label}</span>
                   {bm.tags.length ? <span data-bookmark-tags style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxWidth: '100%' }}>
                     {bm.tags.map(t => <span key={String(t)} data-bookmark-tag={String(t)} style={{ padding: '2px 9px', borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(t)}</span>)}
                   </span> : null}
                 </button>
-                <button onClick={() => ctx.toggleBookmark(bm.raw)} aria-label={'Remove bookmark ' + verseRefLabel(bm.key)} title="Remove bookmark" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 8 }}><Icon name="x" size={16} /></button>
+                <button onClick={() => bm.isPassage ? ctx.removePassageBookmark(bm.raw) : ctx.toggleBookmark(bm.raw)} aria-label={'Remove bookmark ' + bm.label} title="Remove bookmark" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 8 }}><Icon name="x" size={16} /></button>
               </div>
               ))}
             </React.Fragment> : (
@@ -1705,16 +1752,30 @@ function ReadScreen({ ctx }) {
   const sheetCtx = {
     toast: ctx.toast,
     _bm: () => {
-      const k = keyOf(sel0);
-      const wasBookmarked = ctx.bookmarks.includes(k);
-      ctx.toggleBookmark(k);
-      if (wasBookmarked) { ctx.toast('Bookmark removed'); }
-      else {
-        // initialise tag picker with the bookmark's current tags (empty for a new bookmark)
-        const item = ctx.bookmarkItems.find(b => b.ref === k);
-        setPickTags(item && item.tags ? [...item.tags] : []);
-        setNewTag('');
-        setTagPick(k);
+      if (multi > 1) {
+        // passage bookmark
+        if (ctx.hasPassageBookmark(passageKeys)) {
+          ctx.removePassageBookmark('p:' + passageKeys.join('+'));
+          ctx.toast('Passage bookmark removed');
+        } else {
+          const id = ctx.addPassageBookmark(passageKeys, rangeRef);
+          const item = ctx.bookmarkItems.find(b => b.id === id);
+          setPickTags(item && item.tags ? [...item.tags] : []);
+          setNewTag('');
+          setTagPick(id);
+        }
+      } else {
+        const k = keyOf(sel0);
+        const wasBookmarked = ctx.bookmarks.includes(k);
+        ctx.toggleBookmark(k);
+        if (wasBookmarked) { ctx.toast('Bookmark removed'); }
+        else {
+          // initialise tag picker with the bookmark's current tags (empty for a new bookmark)
+          const item = ctx.bookmarkItems.find(b => b.ref === k);
+          setPickTags(item && item.tags ? [...item.tags] : []);
+          setNewTag('');
+          setTagPick(k);
+        }
       }
     },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
@@ -1895,9 +1956,13 @@ function ReadScreen({ ctx }) {
               style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
               {verses.map((row, i) => {
                 const k = keyOf(row.v);
+                const bm = ctx.bookmarks.includes(k);
+                const prevBm = i > 0 && ctx.bookmarks.includes(keyOf(verses[i - 1].v));
+                const nextBm = i < verses.length - 1 && ctx.bookmarks.includes(keyOf(verses[i + 1].v));
                 return (
                   <VerseRow key={row.v} n={row.v} html={row.html} tour={i === 0 ? 'verse' : undefined}
-                    hl={ctx.highlights[k]} note={notes[k]} bookmarked={ctx.bookmarks.includes(k)}
+                    hl={ctx.highlights[k]} note={notes[k]} bookmarked={bm}
+                    bmFirst={bm && !prevBm} bmLast={bm && !nextBm}
                     selected={selSorted.some(v => String(v) === String(row.v))} reading={(narrateState !== 'idle' && String(narrateV) === String(row.v)) || inArrived(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );
               })}
@@ -1939,7 +2004,7 @@ function ReadScreen({ ctx }) {
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={dismiss}
         curColor={passageKeys.length && passageKeys.every(k => ctx.highlights[k] === ctx.highlights[passageKeys[0]]) ? ctx.highlights[passageKeys[0]] : null}
         onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setArrived(null); setSheet(null); }}
-        bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
+        bookmarked={multi > 1 ? ctx.hasPassageBookmark(passageKeys) : ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : close} onWord={pushWord} canBack={wordStack.length > 1 || (wordVerse && wordVerse.from === 'define')} onBack={wordStack.length > 1 ? backWord : wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : backWord} />
       <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} verses={sheet === 'define' ? passage.flatMap(p => p.verses.map(v => ({ book: p.book, chap: p.chap, v }))) : []} open={sheet === 'define'} onClose={() => setSheet('action')} onWord={(sid, sourceOrV) => {

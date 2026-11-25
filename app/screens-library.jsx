@@ -738,7 +738,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
   // ...and the tick is forgotten too, not just hidden, so it cannot reappear if that tag comes back later.
   if (ticked.length !== tagFilter.length) setTagFilter(ticked);
   const ql = q.trim().toLowerCase();
-  const preFilter = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
+  const preFilter = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.rangeLabel || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
   const items = isBookmarks && ticked.length ? preFilter.filter(it => tagsOf(it).some(t => ticked.indexOf(t) >= 0)) : preFilter;
   const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin',
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
@@ -827,7 +827,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
                     {isXref ? <Icon name="link" size={14} color="var(--clay)" /> : null}
                     {coll.id === 'bookmarks' ? <Icon name="bookmark" size={13} color="var(--clay)" fill /> : null}
                     {isPrayer ? <Icon name="pray" size={14} color="var(--clay)" /> : null}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPrayer ? it.who : (window.verseRefLabel ? window.verseRefLabel(it.ref) : it.ref)}{isPrayer && it.answered ? ' · answered 🙏' : ''}</span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPrayer ? it.who : (it.rangeLabel || (window.verseRefLabel ? window.verseRefLabel(it.ref) : it.ref))}{isPrayer && it.answered ? ' · answered 🙏' : ''}</span>
                   </span>
                   {isNotes || isPrayer ? <span style={{ fontSize: 12, color: 'var(--ink-3)', flexShrink: 0 }}>{it.date}</span> : (!owned ? <Icon name="chevR" size={16} color="var(--ink-3)" /> : null)}
                 </div>
