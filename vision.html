@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision — TrinityOne</title>
+<meta name="description" content="The vision behind TrinityOne: free churches, joined together, carrying the Word wherever they gather.">
+<style>
+  :root {
+    --paper: #F4EEE2;
+    --surface: #FFFDF8;
+    --ink: #221C16;
+    --ink-2: #6B6052;
+    --ink-3: #736958;
+    --line: rgba(34,28,22,0.10);
+    --clay: #C25A38;
+    --clay-ink: #A8462A;
+    --gold-soft: #E0B860;
+    --midnight: #17120B;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #16120C;
+      --surface: #211B13;
+      --ink: #F3ECDC;
+      --ink-2: #B6AB96;
+      --ink-3: #968C7B;
+      --line: rgba(243,236,220,0.11);
+      --clay: #E68A66;
+      --clay-ink: #EE9E7E;
+      --gold-soft: #D9AE5A;
+      --midnight: #0E0B07;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #16120C;
+    --surface: #211B13;
+    --ink: #F3ECDC;
+    --ink-2: #B6AB96;
+    --ink-3: #968C7B;
+    --line: rgba(243,236,220,0.11);
+    --clay: #E68A66;
+    --clay-ink: #EE9E7E;
+    --gold-soft: #D9AE5A;
+    --midnight: #0E0B07;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--gold-soft); color: var(--ink); }
+  a { color: var(--clay-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  }
+
+  header {
+    padding: 28px 16px 0;
+    text-align: center;
+  }
+  header .wordmark {
+    font-weight: 800;
+    font-size: 22px;
+    letter-spacing: -0.3px;
+    color: var(--ink);
+    text-decoration: none;
+    display: inline-block;
+  }
+  header .wordmark:hover { text-decoration: none; }
+  header .wordmark .one { color: var(--clay); }
+  header .back {
+    display: block;
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+  header .back:hover { color: var(--clay-ink); text-decoration: none; }
+
+  main {
+    max-width: 650px;
+    margin: 0 auto;
+    padding: 48px 16px 80px;
+  }
+  h1 {
+    font-size: 1.75rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin: 0 0 36px;
+    text-align: center;
+    color: var(--ink);
+  }
+  main p {
+    font-size: 17px;
+    line-height: 1.72;
+    margin: 0 0 22px;
+  }
+  blockquote {
+    margin: 40px 0 0;
+    padding: 0;
+    border: none;
+  }
+  blockquote p {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--ink-2);
+    text-align: center;
+    margin: 0;
+  }
+  blockquote .ref {
+    font-style: normal;
+    font-weight: 600;
+    font-size: inherit;
+    color: var(--ink-3);
+  }
+
+  footer {
+    text-align: center;
+    padding: 0 16px 40px;
+    font-size: 12.5px;
+    color: var(--ink-3);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="https://trinityone.church/" class="wordmark">Trinity<span class="one">One</span></a>
+  <a href="https://trinityone.church/" class="back">&larr; Back to trinityone.church</a>
+</header>
+
+<main>
+  <h1>Vision</h1>
+
+  <p>Picture a church that answers to no one but Christ. It meets in a living room, a hall, or even a field. Its Scripture is open, its table is set, its purse is its own. Its people know each other by name. When one of them is in need, the congregation hears, and help arrives quietly, before shame can.</p>
+
+  <p>Now picture a thousand of them. There is no head office and no centre. Each church is free, and yet joined to the others the way the first churches were: by letters carried, gifts sent and burdens shared across towns, borders and cultures.</p>
+
+  <p>A church under pressure is never alone, because another church, next door or on another continent, is already holding up its arms. This is the body of Christ, a sign of the Kingdom of God. It is not an organisation but a web of households and families, each whole in itself and all of them one.</p>
+
+  <p>TrinityOne exists to lay the ground that web can stand on: tools that belong to the churches that use them, that no one can switch off, carrying The Word, our fellowship and our provision wherever we gather. The tools are only servants. The church is the people.</p>
+
+  <blockquote>
+    <p>All that believed were together, and had all things common.&mdash;&thinsp;<span class="ref">Acts 2:44.</span></p>
+  </blockquote>
+</main>
+
+<footer>TrinityOne &middot; Made for the Church.</footer>
+
+</body>
+</html>
