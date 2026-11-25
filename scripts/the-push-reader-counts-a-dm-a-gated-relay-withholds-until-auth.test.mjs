@@ -45,6 +45,8 @@ const SRC = readFileSync(new URL('../plugins/trinity-directpush/js/bg-entry.js',
 const visibleGroupIds = new Function(fnBody(SRC, 'function visibleGroupIds(', 'visibleGroupIds') + '\nreturn visibleGroupIds;')();
 const watchAuthOutcome = new Function(fnBody(SRC, 'function watchAuthOutcome(', 'watchAuthOutcome') + '\nreturn watchAuthOutcome;')();
 const readerVerdict = new Function(fnBody(SRC, 'function readerVerdict(', 'readerVerdict') + '\nreturn readerVerdict;')();
+// MERGE 2026-11-25 (B6): the cursor read now goes through readerCursor(docs, mems, dmseen) — lift it too.
+const readerCursor = new Function(fnBody(SRC, 'function readerCursor(', 'readerCursor') + '\nreturn readerCursor;')();
 const widgetCountAction = new Function(fnBody(SRC, 'function widgetCountAction(', 'widgetCountAction') + '\nreturn widgetCountAction;')();
 const parseBlocked = new Function(fnBody(SRC, 'function parseBlocked(', 'parseBlocked') + '\nreturn parseBlocked;')();
 const isBlockDoc = new Function(SRC.match(/const isBlockDoc = [^\n]+;\n/)[0] + 'return isBlockDoc;')();
@@ -61,7 +63,7 @@ assert.equal(fn.indexOf(endAnchor), fn.lastIndexOf(endAnchor), 'the finish state
 const G3 = fn.slice(g3at, fn.indexOf(endAnchor) + endAnchor.length);
 const runGate3 = new Function(
   'F', 'cp', 'np', 'pub', 'sk', 'opts', 'set', 'rep', 'finish', 'setTimeout',
-  'SimplePool', 'finalizeEvent', 'lsJson', 'visibleGroupIds', 'watchAuthOutcome', 'readerVerdict',
+  'SimplePool', 'finalizeEvent', 'lsJson', 'visibleGroupIds', 'watchAuthOutcome', 'readerVerdict', 'readerCursor',
   'isBlockDoc', 'parseBlocked', 'DP_DEBUG', 'DM_KIND', 'GROUP_KIND', 'SINCE_SLOP',
   'return (async () => {\n' + G3 + '\n})();'
 );
@@ -106,7 +108,7 @@ async function runReader(cursor) {
     assumeMinor: async () => true,                          // the reader's fail-closed default before the authed REQ
   };
   return runGate3(F, cp, np, member.pub, member.sk, {}, [relay.wsUrl], () => {}, (o) => o, trackingSetTimeout,
-    SimplePool, finalizeEvent, lsJson, visibleGroupIds, watchAuthOutcome, readerVerdict,
+    SimplePool, finalizeEvent, lsJson, visibleGroupIds, watchAuthOutcome, readerVerdict, readerCursor,
     isBlockDoc, parseBlocked, false, DM_KIND, GROUP_KIND, SINCE_SLOP);
 }
 
