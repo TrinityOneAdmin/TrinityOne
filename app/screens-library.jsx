@@ -743,7 +743,16 @@ function CollectionView({ coll, open, onClose, ctx }) {
   const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin',
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
-  const jump = (it) => { if (!it.ref) return; onClose(); setTimeout(() => ctx.openReader(), 200); ctx.toast('Jumping to ' + it.ref); };
+  const jump = (it) => {
+    if (!it.ref) return;
+    onClose();
+    if (it.refs && it.refs.length > 1 && ctx.selectPassageBookmark) {
+      setTimeout(() => ctx.selectPassageBookmark(it.refs), 200);
+    } else {
+      setTimeout(() => ctx.openReader(), 200);
+      ctx.toast('Jumping to ' + (it.rangeLabel || it.ref));
+    }
+  };
   // Tapping a NOTE opens an editor (the reader's verse card no longer has a Note tile, so this is the way
   // back to an existing note). Highlights and bookmarks still jump to the reader.
   const tap = (it) => { if (isNotes) { setEditNote(it); setNoteText(it.text || ''); } else jump(it); };
