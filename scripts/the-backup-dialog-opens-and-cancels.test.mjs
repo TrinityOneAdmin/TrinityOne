@@ -9,7 +9,7 @@
 // boundary on every build for 27 days. A steward could not back up the church key from the phone.
 //
 // No test mounted the modal, so no test saw it. This one mounts it the way the phone does — the whole console
-// compiled with esbuild `jsx: 'transform'` (build-steward-apk.sh's `--jsx=transform`) into ONE scope, see
+// compiled with esbuild `jsx: 'transform'` (scripts/collect-app-page.sh's `--jsx=transform`) into ONE scope, see
 // scripts/console-screens.mjs — and drives the real Cancel, the real Escape listener from stew-modal.jsx and
 // the real backdrop onClick. Nothing that decides "close or not" is stubbed: the only stand-ins are the
 // browser, window.Steward, and TrinityBackup's file writer (a save that never finishes, to hold `busy`).

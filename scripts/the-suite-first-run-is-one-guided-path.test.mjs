@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { freePort } from './relay-network-harness.mjs';
+import { fnBody } from './test-slice.mjs';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 import { npubEncode } from 'nostr-tools/nip19';
 
@@ -881,8 +882,13 @@ function lastStep({ hostname, capacitor }) {
   const store = new Map();
   const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
   const win = { Steward: { exportMnemonic: () => '', npub: 'npub1x', hasPinLock: () => true, needsPin: false }, addEventListener() {}, removeEventListener() {}, innerWidth: 900, localStorage, ...(capacitor ? { Capacitor: capacitor } : {}) };
+  // stewOnSuite() also asks window.Steward.packagedOrigin() (an APK / Tauri program is never the Suite). The REAL one,
+  // lifted from the shipped bundle and run against THIS window and location — never a stubbed answer.
+  const loc = { hostname, host: hostname, protocol: hostname === 'app.trinityone.church' ? 'https:' : 'http:' };
+  win.Steward.packagedOrigin = new Function('window', 'location',
+    fnBody(readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8'), 'function _packagedOrigin()', '_packagedOrigin') + '\nreturn _packagedOrigin;')(win, loc);
   const mod = loadScreen('app/stew-dashboard.jsx', ['StewSetupWizard'], {
-    React, window: win, location: { hostname, host: hostname }, localStorage, document: { addEventListener() {}, removeEventListener() {} },
+    React, window: win, location: loc, localStorage, document: { addEventListener() {}, removeEventListener() {} },
     navigator: { userAgent: '' }, setTimeout, clearTimeout, console, fetch: async () => ({ ok: false, json: async () => ({}) }),
     Icon: function Icon() { return null; }, WizMeetings: function WizMeetings() { return null; }, _wizMeetingId: () => 'evt1',
     useStewDialog: () => ({ current: null }), useStewModalOpen: () => {}, stewCapState: () => ({ allowed: false }),

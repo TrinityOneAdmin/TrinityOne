@@ -2223,6 +2223,30 @@ function DashFinance() {
   return <DashFinanceBook />;
 }
 
+// MAY THIS CONSOLE POST INTO A MEMBERS' CHANNEL AT ALL? (T1Finance step 0, 2026-11-17; S0-1 2026-11-17)
+// The relay accepts a post into a broadcast, invite-only or team group from the church key, or from a delegate
+// whose capabilities include `content` (scripts/gateway.mjs, stewardCan(…, 'content')). "Post to members" used to
+// be offered whenever a broadcast group existed, so a finance-only helper pressed it and was refused with a
+// "check your connection" message that was not true.
+//   not delegated (no actingChurch)        → the church key: may post;
+//   delegated, roster NOT yet known        → may NOT (S0-1). myStewardCaps() is null until the church's steward
+//                                            roster arrives, and is reset on every church switch — reading that
+//                                            null as "unscoped" offered Post to a finance-only helper for the
+//                                            seconds before the roster landed, and the relay refused it;
+//   delegated, roster known, caps null     → a delegate with no capabilities recorded is a full steward at the
+//                                            relay (stewardCan's no-caps compat branch): may post;
+//   delegated, roster known, caps an array → may post only if it carries 'content'.
+// `rosterKnown` is the caller's Steward.listIsFresh(<the roster list from useStewardStewards()>) — a GENUINE settled read
+// of the roster for this church and epoch (audit F3: stewardStreamLoaded, used before, also flipped on an empty
+// end-of-stored-events delivery while the caps were still unknown). The same signal FinanceShell uses (app/finance-shell.jsx).
+function financeMayPostToMembers(S, rosterKnown) {
+  if (!(S && S.actingChurch)) return true;
+  if (!rosterKnown) return false;
+  const caps = (typeof S.myStewardCaps === 'function') ? S.myStewardCaps() : null;
+  if (!Array.isArray(caps)) return true;
+  return caps.indexOf('content') >= 0;
+}
+
 function DashFinanceBook() {
   const F = window.FinanceLedger;
   const S = window.Steward;
@@ -2441,7 +2465,11 @@ function DashFinanceBook() {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const broadcastGroup = groups.find(g => g.kind === 'broadcast');
-  const canPost = !!(useRelay && S && S.publishPost && broadcastGroup);
+  // THE ROSTER, so a delegate's capabilities are KNOWN before Post is offered (S0-1). The same shared stream the
+  // console's other screens and FinanceShell hold; holding it here is also what re-renders this screen when it lands.
+  const _finRoster = window.useStewardStewards ? window.useStewardStewards() : [];
+  const _rosterKnown = !!(S && S.listIsFresh && S.listIsFresh(_finRoster));
+  const canPost = !!(useRelay && S && S.publishPost && broadcastGroup && financeMayPostToMembers(S, _rosterKnown));
   const postStatementToMembers = async (model, text, targetId, opts) => {
     // TARGET (2026-10-30): the treasurer chooses where the statement goes — whole-church announcements (the
     // default) OR a particular group — via the "Send to" picker in FinanceShareStatement. `targetId` is that

@@ -237,6 +237,38 @@ test('the steward console mounts its DASHBOARD without throwing', { skip: !CHROM
     `Screen text: ${JSON.stringify(r.text)}`);
 });
 
+// THE FINANCE APP, IN THE REAL PAGE (T1Finance, 2026-11-17). finance.html loads a SHORTER script list than steward.html
+// (no manna, meals, relay, extension, phone, custody, schedule, templates) — a name one of the dropped files defined
+// and a kept file still reads is a ReferenceError only a real browser running the real list can show. So: boot it,
+// walk the real "Help with a church's books" path to a helper key with a PIN, land on FinanceShell's "not linked"
+// screen, then put the console in the delegated shape the engine reports for an approved helper and watch it render
+// DashFinance ("Waiting for the books" — no books key has been shared with this throwaway key). The delegation is
+// SIMULATED in the page (isDelegated/actingChurch/myStewardCaps set on window.Steward): this case proves the screens
+// render in this script list, not that a relay approved anyone — scripts/finance-app-shows-only-the-books.test.mjs
+// proves the gate, and the approval path has its own tests.
+test('the finance app boots, reaches "not linked", then renders the books screen, throwing nothing', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  const seen = {};
+  const r = await boot('/finance.html', { ms: 9000, tag: 'fin-', drive: async ({ evalIn }) => {
+    seen.flag = await evalIn(`window.TRINITY_APP`);
+    seen.welcome = await settles(() => evalIn(click('/Help with a church’s books/')), v => v === 'ok');
+    seen.noCreate = await evalIn(`![...document.querySelectorAll('button')].some(x=>/Start a new church/.test(x.textContent||''))`);
+    await settles(() => evalIn(click('/Set a PIN & continue/')), v => v === 'ok');
+    await settles(() => evalIn(type('At least 8', 'cedar-harbour-lamp-42')), v => v === 'ok');
+    await evalIn(click('/Set PIN & enter/'));
+    seen.unlinked = await settles(() => evalIn(`!!document.querySelector('[data-finance-shell]') && /Not linked to a church yet/.test(document.body.innerText)`), v => v === true, 60000);
+    await evalIn(`(() => { const S = window.Steward; S.actingChurch = 'ab'.repeat(32); S.isDelegated = () => true; S.myStewardCaps = () => ['finance'];
+      window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub: S.actingChurch, actingChurch: S.actingChurch } })); return 1; })()`);
+    seen.books = await settles(() => evalIn(`/Waiting for the books to be shared with you/.test(document.body.innerText) && !/Not linked to a church yet/.test(document.body.innerText)`), v => v === true, 30000);
+    seen.text = await evalIn(`(document.body.innerText||'').trim().slice(0,300)`);
+  } });
+  assert.deepEqual(r.errors, [], `the finance app threw:\n  ${r.errors.join('\n  ')}`);
+  assert.equal(seen.flag, 'finance', 'finance-mode.js did not set the app flag in the real page');
+  assert.equal(seen.welcome, 'ok', 'the finance welcome has no "Help with a church\'s books"');
+  assert.equal(seen.noCreate, true, 'the finance welcome offers "Start a new church"');
+  assert.equal(seen.unlinked, true, 'a fresh helper key did not land on "Not linked to a church yet". Screen: ' + JSON.stringify(seen.text));
+  assert.equal(seen.books, true, 'the delegated console did not render the books screen. Screen: ' + JSON.stringify(seen.text));
+});
+
 // THE CONSOLE'S HELP, IN THE REAL PAGE. scripts/steward-help.test.mjs proves the dialog through a miniature
 // React; this one presses the same control in Chromium with every script steward.html loads sharing one real
 // global scope — which is where a duplicate top-level name, a missing <script> tag, or a help file that

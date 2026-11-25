@@ -352,7 +352,10 @@ function _expiryIsoDay(untilSec) {
 // header's middle column, sits under the section heading, and is still the WHOLE column as a tap target
 // (44px tall — the heading over it lets taps through). Same onClick, same popover, same rename route; the
 // pencil that sat on the card is the small glyph at the end of the line.
-function IdentitySwitcher({ church, churchName, initials, onEditName, compact = false }) {
+// `noNameEdit` (T1Finance M5): no "Set church name" anywhere in this control — naming the church is the owner's job,
+// and the finance app's header (FinanceShell, app/finance-shell.jsx) is the only caller that passes it. CALLERS (rule 2):
+// StewDashboard (phone header, compact; desktop sidebar) — unchanged, no prop; FinanceShell — noNameEdit.
+function IdentitySwitcher({ church, churchName, initials, onEditName, compact = false, noNameEdit = false }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
   // The phone header lays these out with its own `gap`, so the sidebar's bottom margin is pure waste
   // there — measured at 18px of a 730px screen, below a header block already 309px tall.
@@ -384,6 +387,15 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
   const compactName = { flexShrink: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   // no other identities (no owned networks, no stewarded churches) → original behaviour (tap to set/rename the church)
   if (!networks.length && !stewarded.length) {
+    if (noNameEdit) {
+      // the same face, as a label: nothing to switch to and nothing this console may rename
+      return (
+        <div style={compact ? { ...compactBtn, cursor: 'default' } : { display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', marginBottom: narrow ? 0 : 18, textAlign: 'left' }}>
+          {compact ? null : <SkBadge initials={initials} picture={church.picture} size={34} radius={999} />}
+          <span style={compact ? { ...compactName, color: 'var(--ink-2)' } : { fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{churchName}</span>
+        </div>
+      );
+    }
     if (compact) {
       return (
         <button onClick={onEditName} title="Set church name" style={compactBtn}>
@@ -453,7 +465,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
             );
           })}
           {pickErr ? <div role="alert" data-pick-err="1" style={{ fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45, padding: '6px 10px' }}>{pickErr}</div> : null}
-          {!delegated ? <React.Fragment>
+          {!delegated && !noNameEdit ? <React.Fragment>
           <div style={{ height: 1, background: 'var(--line)', margin: '5px 4px' }} />
           <button onClick={() => { setOpen(false); onEditName(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}><Icon name="pen" size={13} color="var(--ink-3)" /> Rename {viewingNetwork ? 'network' : 'church'}</button>
           </React.Fragment> : null}
@@ -1504,14 +1516,17 @@ function KeyDistributor() {
 }
 
 // IS THIS CONSOLE THE SUITE'S? — the desktop app, where the launcher (relay-app/home.html) is one page away.
-// The sidebar's "Relay & Suite home" link gates on a loopback hostname alone. That is TRUE inside the steward
+// The sidebar's "Relay & Suite home" link used to gate on a loopback hostname alone. That is TRUE inside the steward
 // APK as well (Capacitor serves it from https://localhost — measured 2026-09-22, REPORT-suite-B3 §4), where
 // there is no launcher to go back to; the APK hides that link only by accident of its narrow layout. So the
 // wizard's "Back to the Suite" asks both: loopback, AND no Capacitor bridge on the page. (`window.Capacitor`
 // is absent on the web console and on the Suite — a plain WebKitGTK webview — and present on every APK.)
+// A PACKAGED APP (Tauri program, Capacitor APK) is never the Suite: tauri://localhost has hostname "localhost"
+// too, and has no launcher and no relay pages. window.Steward.packagedOrigin reads location/Capacitor only.
 function stewOnSuite() {
   try {
     if (typeof location === 'undefined' || !['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname)) return false;
+    if (window.Steward.packagedOrigin()) return false;   // throws if missing -> catch -> false (fails closed)
     return !(typeof window !== 'undefined' && window.Capacitor);
   } catch (e) { return false; }
 }
@@ -2897,8 +2912,9 @@ function StewDashboard({ initial = 'overview' }) {
             );
           })()}
           {/* In the desktop Suite (served from loopback), this box IS the relay — give a one-click door back to the
-              relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8). */}
-          {typeof location !== 'undefined' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname) && (
+              relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8),
+              and in a packaged app (APK, Tauri program) — stewOnSuite() decides, the same gate as "Back to the Suite". */}
+          {stewOnSuite() && (
             <a href="/relay-app/home.html" onClick={e => stewOpenRelayPanel(e, '/relay-app/home.html')} title="Relay & Suite controls" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 12px', marginTop: 10, borderRadius: 11, border: '1px solid var(--line)', textDecoration: 'none', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
               <Icon name="grid2" size={18} color="var(--ink-3)" /> Relay &amp; Suite home
             </a>
@@ -3881,9 +3897,16 @@ function Panel({ title, action, children, style = {}, scroll = false, collapsibl
 
 // lets the steward put join alerts on their phone (web-push, PWA). Silently re-registers if permission
 // is already granted; otherwise a tap prompts for it. Hidden on native (uses local notifs) / unsupported.
+//
+// NOT IN A PACKAGED APP (Tauri program, Capacitor APK — window.Steward.packagedOrigin, read off location): registerPush()
+// answers 'unsupported' there anyway, since the push endpoints live on the page's own box and a packaged app has none.
+// Decided before the first render so the button never flashes. Fails closed if the export is ever missing.
 function PushEnabler() {
-  const [state, setState] = React.useState('off');   // off | working | on | denied | hide
+  const S = window.Steward;
+  const packaged = !S || typeof S.packagedOrigin !== 'function' || !!S.packagedOrigin();
+  const [state, setState] = React.useState(packaged ? 'hide' : 'off');   // off | working | on | denied | hide
   React.useEffect(() => {
+    if (packaged) { setState('hide'); return; }
     if (typeof Notification === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) { setState('hide'); return; }
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) { setState('hide'); return; }
     if (Notification.permission === 'granted') { window.Steward.registerPush().then(r => setState(r === 'on' ? 'on' : (r === 'native' || r === 'unsupported' ? 'hide' : 'off'))); }
@@ -12750,11 +12773,16 @@ function DashStewardsPanel({ church }) {
   // then grants the preset's capabilities — never add(pk) with no name and no caps, which left the helper with
   // [] (nothing) and an invented name. `claimedName` prefills from what the requester typed, as a starting
   // point the owner can correct. The default preset is the conservative 'general'.
-  const startApprove = (pk, claimedName) => {
+  // `appHint` (T1Finance M6): a request sent from the finance app carries app:'finance' inside its sealed body
+  // (Steward.subscribeStewardRequests). EXACTLY 'finance' pre-selects the Finance helper preset — the owner still
+  // sees the sheet and can pick another; any other value is ignored. The hint only chooses which existing preset
+  // is ticked first; the grant is always presetCaps() of what the owner confirms.
+  const startApprove = (pk, claimedName, appHint) => {
+    const preset = appHint === 'finance' ? 'finance' : 'general';
     setApproving(pk); setApprovePin(''); setApproveErr('');
     setApproveName((claimedName || '').trim());
-    setApprovePreset('general');
-    setApproveCaps((window.Steward.presetCaps && window.Steward.presetCaps('general')) || ['care', 'content', 'members']);
+    setApprovePreset(preset);
+    setApproveCaps((window.Steward.presetCaps && window.Steward.presetCaps(preset)) || ['care', 'content', 'members']);
   };
   // The caps the chosen preset grants: a fixed bundle, or — for 'custom' — whatever is ticked in approveCaps.
   // presetCaps() never returns [] for a known preset and falls back to 'general' for an unknown id, so this
@@ -12945,7 +12973,7 @@ function DashStewardsPanel({ church }) {
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to help</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
-                <button onClick={() => startApprove(r.pubkey, r.name)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>Approve…</button>
+                <button onClick={() => startApprove(r.pubkey, r.name, r.app)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>Approve…</button>
                 <button onClick={() => markHandled(r.pubkey, answeredAt(r.pubkey, r.ts))} title="Decline" aria-label="Decline this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
               </React.Fragment>}
             </div>
@@ -16024,12 +16052,19 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
 // small build/version line at the foot of Settings. On the APK it reads the real native version
 // (versionName + build) via the Capacitor App plugin; on the web it reads the live service-worker
 // cache version (trinity-shell-vNN) so it always reflects what's actually running.
-function StewVersion() {
+// `name` (T1Finance): the app's own name on this line. CALLERS (rule 2): DashSettings (no prop → "TrinityOne Steward",
+// unchanged) and FinanceSettings in app/finance-shell.jsx ("TrinityOne Finance").
+// The DESKTOP finance program (no Capacitor, no service worker) shows its build stamp instead: window.TRINITY_BUILD
+// (scripts/build-finance-desktop.sh) → "v0.1.0 (8c30bf1)" — the version and the short commit. Display only.
+function StewVersion({ name = 'TrinityOne Steward' } = {}) {
   const [v, setV] = React.useState('');
   React.useEffect(() => {
     let alive = true;
     const P = window.Capacitor && window.Capacitor.Plugins;
-    if (P && P.App && P.App.getInfo) {
+    const B = window.TRINITY_BUILD;
+    if (B && typeof B.version === 'string' && B.version) {
+      setV('v' + B.version + (typeof B.sha === 'string' && /^[0-9a-f]{7,40}$/.test(B.sha) ? ' (' + B.sha.slice(0, 7) + ')' : ''));
+    } else if (P && P.App && P.App.getInfo) {
       P.App.getInfo().then(i => { if (alive && i) setV('v' + i.version + ' (' + i.build + ')'); }).catch(() => {});
     } else if (typeof caches !== 'undefined' && caches.keys) {
       caches.keys().then(keys => {
@@ -16041,7 +16076,7 @@ function StewVersion() {
   }, []);
   return (
     <div style={{ textAlign: 'center', fontSize: 11.5, color: 'var(--ink-3)', marginTop: 20, fontFamily: 'var(--font-ui)' }}>
-      TrinityOne Steward{v ? ' · ' + v : ''}
+      {name}{v ? ' · ' + v : ''}
     </div>
   );
 }

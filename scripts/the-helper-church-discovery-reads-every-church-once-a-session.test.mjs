@@ -31,6 +31,10 @@ const REVOKE_D = 'trinityone/stewardrevoke:';
 const SK = new Uint8Array(32).fill(7);
 const REQ_KEY = 'trinityone.steward.requested.' + ME;
 const CACHE_KEY = 'trinityone.steward.stewarded.' + ME;
+// The REAL key prefix of a church's sealed books copy, read from the bundle (not retyped), so the lifted
+// _finBookDrop below removes exactly the key the console writes (T1Finance M4, 08b9cf92).
+const FINBOOK_LS = (VENDOR.match(/\bvar FINBOOK_LS = "([^"]+)";/) || [])[1];
+if (!FINBOOK_LS) throw new Error('vendor/steward.js no longer declares FINBOOK_LS — the books-copy lift below cannot run');
 
 function proxyOf(stubs) {
   return new Proxy(stubs, {
@@ -70,7 +74,7 @@ function harness({ proven = [BOX, CANON], up = [] } = {}) {
     _ownKeyBlank: () => false, netKeys: () => [], npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     privateKeyFromSeedWords: () => { throw new Error('not a network key'); }, getPublicKey: () => '',
-    NET: 'trinityone', STEWARDS_D, STEWARDREQ_D, STEWARDREVOKE_D: REVOKE_D, ACTIVE_ID_KEY: 'active', PENDING_CHURCH_KEY: 'pending',
+    NET: 'trinityone', STEWARDS_D, STEWARDREQ_D, STEWARDREVOKE_D: REVOKE_D, ACTIVE_ID_KEY: 'active', PENDING_CHURCH_KEY: 'pending', FINBOOK_LS,
     ENC_LS: 'enc', _stay: { rearm() {} },
     _stewardedBroad: null,
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
@@ -105,11 +109,16 @@ function harness({ proven = [BOX, CANON], up = [] } = {}) {
   };
   const scope = proxyOf(stubs);
   const lift = (anchor, name) => new Function('scope', `with (scope) { return (${fnBody(VENDOR, anchor, name)}); }`)(scope);
+  // THE REAL _packagedOrigin (APK / Tauri program -> shared pool), lifted, never stubbed: ownRelay() consults it first.
+  stubs._packagedOrigin = lift('function _packagedOrigin() {', '_packagedOrigin');
   stubs.ownRelay = lift('function ownRelay() {', 'ownRelay');
   stubs.relaysRaw = lift('function relaysRaw() {', 'relaysRaw');
   stubs._boxHostsKey = lift('function _boxHostsKey() {', '_boxHostsKey');
   stubs._loadBoxHosts = lift('function _loadBoxHosts() {', '_loadBoxHosts');
   stubs._keyReadAuthedOn = lift('function _keyReadAuthedOn(', '_keyReadAuthedOn');
+  // the removal purge of ONE church's books copy (08b9cf92) — the REAL function, never a stub; it reads FINBOOK_LS
+  // and the fake localStorage above, so the eviction branches really drop that key in the store
+  stubs._finBookDrop = lift('function _finBookDrop(cp) {', '_finBookDrop');
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');
   const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
@@ -265,10 +274,16 @@ test('a revocation still lands on a reconnect (narrow read), and a roster droppi
   off = await h.bump(off);
   const s = h.discovery()[0];
   assert.ok(!h.isBroad(s), 'staging: expected the narrow read on a reconnect');
+  // a sealed books copy for each church about to remove us, and one for a church that does not
+  h.store.set(FINBOOK_LS + STEWARDED, 'sealed-a'); h.store.set(FINBOOK_LS + DIRECT, 'sealed-d'); h.store.set(FINBOOK_LS + ASKED, 'sealed-b');
   h.revoke(s, STEWARDED);
   assert.ok(!h.stewardedChurches.has(STEWARDED), 'a revocation notice on the reconnect read did not remove the church');
+  assert.ok(!h.store.has(FINBOOK_LS + STEWARDED), 'a revocation notice left that church\'s sealed books copy on the device');
+  assert.equal(h.store.get(FINBOOK_LS + DIRECT), 'sealed-d', 'a revocation from one church dropped ANOTHER church\'s books copy');
   h.roster(s, DIRECT, []);   // the church's roster no longer lists us
   assert.ok(!h.stewardedChurches.has(DIRECT), 'a roster without us on the reconnect read did not remove the church');
+  assert.ok(!h.store.has(FINBOOK_LS + DIRECT), 'a roster without us left that church\'s sealed books copy on the device');
+  assert.equal(h.store.get(FINBOOK_LS + ASKED), 'sealed-b', 'the removals dropped a books copy for a church that did not remove us');
 });
 
 test('a request made while the read is open re-asks with that church named, so its grant is seen without a bump', async () => {

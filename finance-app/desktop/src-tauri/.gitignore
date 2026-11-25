@@ -1,0 +1,7 @@
+# Rust / Tauri build output
+/target/
+/gen/schemas/
+# The bundled frontend, built by scripts/build-finance-desktop.sh (also covered by the root dist/ rule)
+/dist/
+# Icon set generated at build time from assets/finance-desktop-icon.png by `tauri icon`
+/icons/

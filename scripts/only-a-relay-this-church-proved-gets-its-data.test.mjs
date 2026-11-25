@@ -164,6 +164,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     // Round 9: addRelay (and refreshNamedRelays) refuse a spelling of a shared relay through this helper.
     fnBody(src, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
     fnBody(src, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
+    // THE REAL _packagedOrigin, never stubbed: ownRelay() / _ownOrigin() consult it first (APK, Tauri program -> shared pool).
+    fnBody(src, 'function _packagedOrigin', '_packagedOrigin'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),

@@ -3,6 +3,14 @@
 // Phase B: wired to window.Steward (real church key + Nostr publishing on the self-hosted relay).
 const { useState: useSt, useEffect: useStE } = React;
 
+// WHICH APP THIS PAGE IS. finance.html loads finance-mode.js first, which sets window.TRINITY_APP = 'finance';
+// steward.html sets nothing, so every reader below falls back to the steward console exactly as before.
+// READERS (rule 2): initChurch (?adopt= ignored), StewardWelcome (the finance welcome), StewardRoot (last slot →
+// FinanceShell, UpdateBanner variant, no ?showcase). It is a choice of SCREEN only — what a key may do is the
+// relay's decision (stewardCan, scripts/gateway.mjs), never this flag's.
+function stewIsFinanceApp() { return typeof window !== 'undefined' && window.TRINITY_APP === 'finance'; }
+window.stewIsFinanceApp = stewIsFinanceApp;
+
 // bumps whenever the console's active identity switches (church <-> a network), so every data hook
 // below re-subscribes against the now-active pubkey. (The header toggle calls setActiveIdentity.)
 function useStewardIdv() {
@@ -561,14 +569,21 @@ function initChurch() {
   // localStorage. Ungated, a crafted same-origin link ("tap to restore your church") could load an attacker
   // seed and — via the forced PIN step — overwrite the real encrypted key, permanently destroying an
   // un-backed-up church identity. Gate to localhost, and never overwrite an existing key (mirrors ?adopt).
-  const isDevHost = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  // NOT in a packaged app (Capacitor APK, Tauri program): its hostname is also "localhost" (tauri://localhost,
+  // https://localhost), but it is a release build, not a dev box. Fails closed if the export is ever missing.
+  const packaged = (typeof window.Steward.packagedOrigin !== 'function') || !!window.Steward.packagedOrigin();
+  // NOR IN THE FINANCE APP (desktop plan §10): it is for helpers only, so it must never be a door a church key walks in
+  // by — not even on a dev box, where finance.html is served from localhost exactly like the Steward console.
+  const isDevHost = !packaged && !stewIsFinanceApp() && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
   const inject = params.get('churchkey');                 // test hook: load a known church key (dev only)
   if (inject && isDevHost && !window.Steward.hasKey) { window.Steward.init(inject); return; }
   const adopt = params.get('adopt');                      // QR/link handoff: adopt a church on launch
+  // NOT IN THE FINANCE APP (T1Finance plan §3.6 / M1). A hand-over link carries a CHURCH key, and the finance app is
+  // for helpers only — it must never be the door a church key walks in by. The param is still scrubbed below.
   // adoptChurch is ASYNC since 2026-11-20 (network-words refusal reads the relays first). This door is
   // HEADLESS — a refusal here lands on the normal landing as a message (sessionStorage for a pre-mount
   // resolution, the event for a late one); any other failure stays silent exactly as before.
-  if (adopt && !window.Steward.hasKey) {
+  if (adopt && !stewIsFinanceApp() && !window.Steward.hasKey) {
     Promise.resolve().then(() => window.Steward.adoptChurch(adopt)).then(() => {
       try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {}
     }).catch((e) => {
@@ -584,10 +599,15 @@ function initChurch() {
     try { const u = new URL(location.href); ['churchkey', 'adopt', 'church'].forEach(k => u.searchParams.delete(k)); history.replaceState(null, '', u.pathname + (u.search || '') + u.hash); } catch (e) {}
   }
   window.Steward.init();                                  // load the saved key if there is one (no auto-create)
-  if (window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
+  // NOT IN THE FINANCE APP (T1Finance audit F2). These two ACT with whatever key is loaded — selfRegister registers the
+  // own key with the relay (/config), autoSyncIfRedundant publishes the church's relay list — and on the web
+  // finance.html shares storage with steward.html, so that key can be a CHURCH key. The finance app only ever acts as
+  // a helper; registering or re-syncing a church is the Steward console's job.
+  const finApp = stewIsFinanceApp();
+  if (!finApp && window.Steward.hasKey && window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
   // D2: once the console is up with a key, if the church already runs >=2 separate relay boxes, turn on cross-relay
   // sync automatically (deferred so it never competes with boot). Single-box churches are left alone + nudged.
-  if (window.Steward.hasKey && window.Steward.autoSyncIfRedundant) setTimeout(() => { try { window.Steward.autoSyncIfRedundant(); } catch {} }, 5000);
+  if (!finApp && window.Steward.hasKey && window.Steward.autoSyncIfRedundant) setTimeout(() => { try { window.Steward.autoSyncIfRedundant(); } catch {} }, 5000);
 }
 
 // "Start a new church": mint a fresh key, register it, and seed the sample chat groups once (real
@@ -673,8 +693,8 @@ function StewardWelcome() {
     Promise.resolve().then(() => window.Steward.adoptChurch(payload)).then(() => {
       // a restored church already exists (name, groups) — don't run the new-church setup wizard
       try { localStorage.setItem('trinityone.steward.wizard.done', '1'); } catch {}
-      if (window.Steward.selfRegister) window.Steward.selfRegister('').catch(() => {});
-    }).catch((e) => { setMode('restore'); setErr((e && e.message) || 'That code or phrase isn’t valid.'); });
+      if (!stewIsFinanceApp() && window.Steward.selfRegister) window.Steward.selfRegister(‘’).catch(() => {});
+    }).catch((e) => { setMode(‘restore’); setErr((e && e.message) || ‘That code or phrase isn’t valid.’); });
   };
   // A HEADLESS ?adopt= refusal (network words in a link) has no screen of its own: it lands here on the
   // normal landing. One-shot sessionStorage covers a refusal that resolved before this mounted; the event
@@ -706,17 +726,36 @@ function StewardWelcome() {
     window.Steward.enterConsole();
   };
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());   // camera scan is app-only; the webapp uses the paste/code paths
+  // THE FINANCE APP'S WELCOME (T1Finance plan §3.5 + M3). Two doors and no others: "Help with a church's books" — the
+  // SAME invite → name → request path as "Help run a church" below — and "Restore my helper words", the same 12-word
+  // restore (adopt) this screen already has. No "Start a new church", no hand-over QR: the finance app is for helpers.
+  // A restored key that turns out to be a CHURCH key is NOT harmless — it is that church's key on this device — but
+  // the finance app does not act with it: FinanceShell opens the books only for a delegated identity
+  // (Steward.isDelegated()) and shows "not linked to a church yet" otherwise; this restore, initChurch and the waiting
+  // screen do not self-register it or re-sync its relays in this app (audit F2); and the finance Settings sheet can
+  // neither remove the key nor take its PIN off (audit F1). It still sits on the device, behind its PIN, as it would in
+  // the Steward console.
+  const fin = stewIsFinanceApp();
+  const view = (fin && mode === 'scanning') ? 'restore' : mode;   // the hand-over scanner is never a finance door
   const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
       <div style={card}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 18, textAlign: 'center' }}>
           <Halo size={40} color="var(--ink)" spark="var(--clay)" />
-          <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, letterSpacing: '-.3px', margin: 0 }}>Steward console</h1>
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{mode === 'choose' ? 'Set up a new church, take over an existing one, or help run one.' : (mode === 'steward' || mode === 'steward-pin') ? 'Helping run an existing church.' : 'Restore a church from another steward.'}</div>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, letterSpacing: '-.3px', margin: 0 }}>{fin ? 'TrinityOne Finance' : 'Steward console'}</h1>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{fin
+            ? (view === 'choose' ? 'Keep a church’s books. The church’s owner invites you and approves you.' : (view === 'steward' || view === 'steward-pin') ? 'Helping with a church’s books.' : 'Restore your helper sign-in from its 12 words.')
+            : (view === 'choose' ? 'Set up a new church, take over an existing one, or help run one.' : (view === 'steward' || view === 'steward-pin') ? 'Helping run an existing church.' : 'Restore a church from another steward.')}</div>
         </div>
 
-        {mode === 'choose' ? (
+        {view === 'choose' && fin ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+            <button onClick={becomeSteward} className="sk-btn sk-btn--clay" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="shield" size={17} color="var(--on-clay)" /> Help with a church’s books</button>
+            <button onClick={() => { setErr(''); setMode('restore'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="refresh" size={17} color="currentColor" /> Restore my helper words</button>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>Enter the invite the church’s owner gives you, and they approve you. No key is shared.</div>
+          </div>
+        ) : view === 'choose' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             <button onClick={seedNewChurch} className="sk-btn sk-btn--clay" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="plus" size={17} color="var(--on-clay)" /> Start a new church</button>
             {/* First-class, not buried under "Restore a church". "How do I add the church from my workstation
@@ -728,7 +767,7 @@ function StewardWelcome() {
             <button onClick={becomeSteward} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="shield" size={17} color="currentColor" /> Help run a church</button>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>“Help run a church” — scan or enter the invite the church’s owner shows you, and they approve you. No key is shared.</div>
           </div>
-        ) : mode === 'steward' ? (
+        ) : view === 'steward' ? (
           scanInvite ? (
             <div>
               <StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} />
@@ -781,10 +820,10 @@ function StewardWelcome() {
                 {showQR && window.Steward.qrSVG ? <div role="img" aria-label="Your steward code QR" style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(code) }} /> : null}
               </div> : null}
               <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--ghost" style={{ padding: '11px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 14 }}>Set a PIN & continue <Icon name="chevR" size={15} color="currentColor" /></button>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find the invite box again anytime under Settings → Helpers → Help run a church.</div>
+              {fin ? null : <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find the invite box again anytime under Settings → Helpers → Help run a church.</div>}
             </div>
           )
-        ) : mode === 'steward-pin' ? (
+        ) : view === 'steward-pin' ? (
           <div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Set a PIN to protect this device. Your steward key can act for a church, so it’s <b>encrypted on this device</b> and this unlocks it — a lost or shared phone can’t act as a church without it. Use at least 8 characters: a generated password from a password manager is best, or four random words you can picture together.</div>
             <div style={{ position: 'relative' }}>
@@ -802,19 +841,19 @@ function StewardWelcome() {
                 protection is that nothing on the restore paths reloads, plus lock()'s needsPin guard. */}
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can change this later under Settings → Master key → Church key → Console lock.</div>
           </div>
-        ) : mode === 'scanning' ? (
+        ) : view === 'scanning' ? (
           <div>
             <StewQRScanner onResult={adopt} onCancel={() => setMode('restore')} />
             <button onClick={() => setMode('restore')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, marginTop: 12, width: '100%', justifyContent: 'center' }}>Enter the phrase instead</button>
           </div>
         ) : (
           <div>
-            {isNative ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the handoff QR</button> : null}
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{isNative ? 'OR PASTE THE 12-WORD PHRASE' : 'PASTE THE 12-WORD PHRASE'}</div>
-            <textarea value={phrase} onChange={e => setPhrase(e.target.value)} rows={3} aria-label="Your church's 12-word recovery phrase" placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
+            {isNative && !fin ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 14 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the handoff QR</button> : null}
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{fin ? 'YOUR 12 HELPER WORDS' : isNative ? 'OR PASTE THE 12-WORD PHRASE' : 'PASTE THE 12-WORD PHRASE'}</div>
+            <textarea value={phrase} onChange={e => setPhrase(e.target.value)} rows={3} aria-label={fin ? 'Your 12 helper words' : "Your church's 12-word recovery phrase"} placeholder="word one  word two  word three …" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
             {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 6 }}>{err}</div> : null}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button onClick={() => adopt(phrase)} disabled={!phrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14, opacity: phrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={15} color="var(--on-clay)" /> Restore church</button>
+              <button onClick={() => adopt(phrase)} disabled={!phrase.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14, opacity: phrase.trim() ? 1 : 0.5 }}><Icon name="refresh" size={15} color="var(--on-clay)" /> {fin ? 'Restore' : 'Restore church'}</button>
               <button onClick={() => { setErr(''); setMode('choose'); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 14px', fontSize: 14 }}>Back</button>
             </div>
           </div>
@@ -856,9 +895,11 @@ function StewardAwaitingApproval({ church }) {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
           <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={26} color="currentColor" /></div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: '-.3px' }}>{'Waiting for ' + (name || 'the church') + ' to approve you'}</h1>
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your request to help has been sent. The moment the church’s owner approves you, this console opens on that church — it’ll also appear in your switcher (top-left). You can close the app and come back; nothing is lost.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>{stewIsFinanceApp()
+            ? 'Your request to help has been sent. The moment the church’s owner approves you, its books open here. You can close the app and come back; nothing is lost.'
+            : 'Your request to help has been sent. The moment the church’s owner approves you, this console opens on that church — it’ll also appear in your switcher (top-left). You can close the app and come back; nothing is lost.'}</div>
         </div>
-        <button onClick={() => { try { if (window.Steward.selfRegister) window.Steward.selfRegister(''); } catch (e) {} try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 16 }}><Icon name="refresh" size={15} color="currentColor" /> Check again</button>
+        <button onClick={() => { try { if (!stewIsFinanceApp() && window.Steward.selfRegister) window.Steward.selfRegister(''); } catch (e) {} try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 16 }}><Icon name="refresh" size={15} color="currentColor" /> Check again</button>
         <button onClick={withdraw} disabled={withdrawing} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 10, color: 'var(--danger, #b4232a)' }}><Icon name="x" size={15} color="currentColor" /> {withdrawing ? 'Withdrawing…' : 'Withdraw request'}</button>
         {withdrawErr ? <div style={{ fontSize: 12.5, color: 'var(--danger, #b4232a)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>{withdrawErr}</div> : null}
       </div>
@@ -887,6 +928,9 @@ function StewardRemoved({ notes }) {
   // key — one from before that mark existed, or a real church that has not loaded here yet — is kept, and the words say so.
   const discards = !!(window.Steward.removedDiscardsKey && window.Steward.removedDiscardsKey());
   const [busy, setBusy] = useSt(false);
+  // THE FINANCE APP'S OWN WORDS (audit F5). Its removal notice says what is true there: the books leave this device
+  // (_finBookDrop / _finBookClear in the engine), and what was already copied off it cannot be called back.
+  const fin = stewIsFinanceApp();
   const go = () => {
     setBusy(true);
     Promise.resolve(window.Steward.acknowledgeRemoval && window.Steward.acknowledgeRemoval()).catch(() => {}).then(() => setBusy(false));
@@ -898,10 +942,16 @@ function StewardRemoved({ notes }) {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
           <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={26} color="currentColor" /></div>
           <h1 id="stew-removed-title" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: '-.3px' }}>{name ? 'You’ve been removed from ' + name : 'You’ve been removed as a helper'}</h1>
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>{(name ? 'The owner of ' + name : 'The church’s owner') + ' has removed you as a helper, so this console can no longer open that church. What you did while helping stays with the church.'}</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55 }}>{discards
-            ? 'This console has no church of its own, so it goes back to the start, where you can start a church or ask to help run one. Continuing clears this helper sign-in from this device; if the church wants you back, ask again with Help run a church.'
-            : 'Continuing keeps this console’s sign-in on this device, so nothing stored here is lost.'}</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>{fin
+            ? (name ? 'The owner of ' + name : 'The church’s owner') + ' has removed you as a helper, so this app can no longer open that church’s books. Its books have been taken off this device — but anything already copied off it can’t be taken back. What you recorded while helping stays with the church.'
+            : (name ? 'The owner of ' + name : 'The church’s owner') + ' has removed you as a helper, so this console can no longer open that church. What you did while helping stays with the church.'}</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55 }}>{fin
+            ? (discards
+              ? 'Continuing clears this helper sign-in from this device and goes back to the start. If the church wants you back, ask again with Help with a church’s books.'
+              : 'Continuing keeps this app’s sign-in on this device.')
+            : (discards
+              ? 'This console has no church of its own, so it goes back to the start, where you can start a church or ask to help run one. Continuing clears this helper sign-in from this device; if the church wants you back, ask again with Help run a church.'
+              : 'Continuing keeps this console’s sign-in on this device, so nothing stored here is lost.')}</div>
         </div>
         <button onClick={go} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 18, opacity: busy ? .6 : 1 }}>{busy ? 'One moment…' : 'Continue'}</button>
       </div>
@@ -1264,9 +1314,21 @@ function StewardUnlock() {
   );
 }
 
+// Which update check this page runs (app/update-check.jsx UPDATE_VARIANTS). 'finance-desktop' — the desktop finance
+// program's own manifest and download-page banner — ONLY when the page is packaged (window.Steward.packagedOrigin,
+// read off location) AND carries the desktop build stamp; the stamp alone is never enough (it is a plain global).
+// Users: StewardRoot only.
+function stewUpdateVariant(fin) {
+  const S = window.Steward;
+  const packaged = !!(S && typeof S.packagedOrigin === 'function' && S.packagedOrigin());
+  if (packaged && window.TRINITY_BUILD && window.TRINITY_BUILD.app === 'finance-desktop') return 'finance-desktop';
+  return fin ? 'finance' : 'steward';
+}
+
 function StewardRoot() {
   const params = new URLSearchParams(location.search);
-  const showcase = params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference)
+  const fin = stewIsFinanceApp();                    // finance.html: the last slot is the books (FinanceShell), see below
+  const showcase = !fin && params.get('showcase') === '1';   // ?showcase=1 = the design gallery (reference); never in the finance app, which does not load its surfaces
   const [surface, setSurface] = useSt(SURFACES.some(s => s.key === params.get('surface')) ? params.get('surface') : 'console');
   // There is ONE setup wizard: the first-run flow inside StewDashboard, gated on
   // `trinityone.steward.wizard.done`. A second, divergent wizard (StewWizard, reachable only via ?setup=1 with
@@ -1341,17 +1403,22 @@ function StewardRoot() {
         {resumed && ks.has && !ks.locked && !needsPin ? (
           <div role="status" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 32%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <span style={{ flex: 1 }}>
+              {fin ? <React.Fragment>
+                This device finished an interrupted change to its stored key, and cannot tell which change it was.
+                <b> If you meant to remove it from this device</b>, do that in the Steward console, or uninstall this app. Otherwise nothing is wrong and you can dismiss this.
+              </React.Fragment> : <React.Fragment>
               This device finished an interrupted change to its stored church key, and cannot tell which change it was.
               <b> If you meant to remove this church from this device, do it again</b> — Settings → Master key → Hand over the church → Remove this church from this device. Otherwise nothing is wrong and you can dismiss this.
+              </React.Fragment>}
             </span>
             <button onClick={() => { try { window.Steward.keyResumedUnknown = false; } catch (e) {} setResumed(false); }}
               style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
           </div>
         ) : null}
-        {window.UpdateBanner ? <UpdateBanner variant="steward" /> : null}
+        {window.UpdateBanner ? <UpdateBanner variant={stewUpdateVariant(fin)} /> : null}
         {removedOpen && !removedFull ? (
           <div role="status" data-stew-removed-banner="1" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <span style={{ flex: 1 }}><b>{removedNames(removedNotes) ? 'You’ve been removed from ' + removedNames(removedNotes) + '.' : 'You’ve been removed as a helper from a church.'}</b> Its owner removed you as a helper, so this console can no longer open it.</span>
+            <span style={{ flex: 1 }}><b>{removedNames(removedNotes) ? 'You’ve been removed from ' + removedNames(removedNotes) + '.' : 'You’ve been removed as a helper from a church.'}</b> {fin ? 'Its owner removed you as a helper, so this app can no longer open its books. Its books have been taken off this device — but anything already copied off it can’t be taken back.' : 'Its owner removed you as a helper, so this console can no longer open it.'}</span>
             <button onClick={() => { try { if (window.Steward.dismissRemovalNotice) window.Steward.dismissRemovalNotice(); } catch (e) {} }}
               style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
           </div>
@@ -1361,6 +1428,10 @@ function StewardRoot() {
           : needsPin ? <StewardForcedPin />
           : removedFull ? <StewardRemoved notes={removedNotes} />
           : awaitingReq ? <StewardAwaitingApproval church={awaitingReq} />
+          // ONE GATE CHAIN, TWO LAST SLOTS (T1Finance plan §3.3). Everything above — unlock, welcome, forced PIN, the
+          // removal screen, waiting for approval — is the same for both apps; only the console itself differs. The
+          // finance app NEVER falls back to the full console: with its shell missing it says so and shows nothing else.
+          : fin ? (window.FinanceShell ? <window.FinanceShell /> : <div role="alert" style={{ padding: 28, color: 'var(--ink-2)' }}>The finance screen did not load. Close the app and open it again.</div>)
           : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );

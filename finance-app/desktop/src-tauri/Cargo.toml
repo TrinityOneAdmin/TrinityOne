@@ -1,0 +1,26 @@
+# TrinityOne Finance — the desktop program (Tauri 2). T1Finance desktop plan §2 (TrinityOne-internal).
+# A small shell around the BUNDLED finance.html files (scripts/build-finance-desktop.sh -> dist/).
+# DELIBERATELY ABSENT, pinned by scripts/finance-desktop-program-carries-no-relay-code.test.mjs: tauri-plugin-shell,
+# trinityone-launcher (relay code), sidecars/externalBin/resources, and the `devtools` feature.
+# Cargo.lock is COMMITTED: the webview origin and storage path must not shift under a floating tauri = "2".
+[package]
+name = "trinityone-finance"
+version = "0.1.0"
+edition = "2021"
+description = "TrinityOne Finance - the church books, for finance helpers"
+publish = false
+
+[[bin]]
+name = "trinityone-finance"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+[profile.release]
+strip = true
+lto = true

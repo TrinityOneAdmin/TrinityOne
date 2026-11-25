@@ -46,7 +46,9 @@ done
 # 3. rewrite the app shells: remove the Babel runtime <script>, point script tags at the transpiled .js.
 #    Portable, no `sed -i` — BSD sed (macOS CI runner) parses `-i -e` differently from GNU sed and breaks;
 #    write to a temp file and move it back so this works identically on Linux + macOS.
-for html in index.html steward.html; do
+#    finance.html (T1Finance, 2026-11-17) too: step 2 deletes EVERY .jsx, so a shell left out of this list is a dead
+#    page on every relay — and scripts/gateway.mjs (shellsAreStrict) would then serve the box's whole site a lax CSP.
+for html in index.html steward.html finance.html; do
   [ -f "$TMP/$html" ] || continue
   sed \
     -e '/vendor\/babel\.min\.js/d' \

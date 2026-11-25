@@ -36,7 +36,7 @@ Everything goes through **`scripts/release.sh`** (commit your code first — the
 ```sh
 # bump the versionName by hand first if this is a new pilot build:
 #   android/app/build.gradle:  versionName "0.9.1"
-scripts/release.sh            # web (Pages, production) + BOTH APKs + restart gateway
+scripts/release.sh            # web (Pages, production) + all three APKs + restart gateway
 scripts/release.sh --web      # web only (fast)
 scripts/release.sh --apk      # APKs only
 scripts/release.sh --dry      # show steps, change nothing
@@ -46,6 +46,21 @@ git tag v0.9.1 && git push --tags
 Artifacts (repo root, served by the gateway at `/apks.html`; the steward one also ships on Pages):
 - `trinityone.apk` — member
 - `trinityone-steward.apk` — steward console
+- `trinityone-finance.apk` — TrinityOne Finance, for a church's treasurer or finance helper (`scripts/build-finance-apk.sh`;
+  `apk-latest.json` carries `financeVersionCode`/`financeUrl`, the signed `apk-manifest.json` a `trinityone-finance.apk`
+  entry — a box offers the finance app only once a signed manifest lists it)
+
+**After a release that includes the finance APK — boxes do NOT pick it up by themselves.** A relay's code update
+(`scripts/relay-update.sh`) re-fetches only `trinityone.apk` and `trinityone-steward.apk`; that script is frozen under
+its own security plan and is deliberately not changed for this. So, on EACH box that hands out installers (a8 first):
+- [ ] open the relay control panel and press **"Update the installer now"** (the "fetch latest APK" action, `POST /relay-app/fetch-apk`) — or confirm
+      "Keep the installer up to date automatically"
+      (`keepApkCurrent`) is on, which fetches finance once the box sees the origin offering it (HEAD + signed manifest;
+      checked at most every 6 hours, immediately when the setting is switched on);
+- [ ] the fetch result shows `trinityone-finance` with a size and no ✗ (a ✗ "HTTP 404" / "too small" means the origin
+      lists finance in its signed manifest but does not serve the file — fix the origin, not the box);
+- [ ] open `https://<box>/install` and check it lists **TrinityOne Finance** with a version and a sha256;
+- [ ] `curl -sI https://<box>/trinityone-finance.apk` answers 200 with `Content-Disposition: … trinityone-finance-<version>.apk`.
 
 **Never hand-run `gradlew` without `sync-web.sh` first.** A bare gradle build packages the *last-synced* web assets and silently ships stale code (`sync-web.sh` ends with `npx cap sync`, which copies `www/` into the native project). This is what `release.sh` does for you.
 
