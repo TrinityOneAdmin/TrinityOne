@@ -2452,6 +2452,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
   const [reconciling, setReconciling] = React.useState(null);// reconcile modal: null closed · {} new · {id,…} reopen a saved reconciliation
   const [recurringOpen, setRecurringOpen] = React.useState(false); // collapsible "Recurring payments" panel
   const [actionsOpen, setActionsOpen] = React.useState(false);    // "Actions" pill dropdown (Import/Reconcile/Share)
+  const [summaryOpen, setSummaryOpen] = React.useState(false);    // "Summary" pill toggle (stats + funds, finance app only)
   const [tplEditing, setTplEditing] = React.useState(null);  // template modal: null closed · {} add · {id,…} edit
   const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
   const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
@@ -3400,24 +3401,46 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your books are incomplete — {bookErrors[0]}. Don't re-enter anything; new entries can't be saved until it arrives. If this persists, check your connection.</div>
       </div>}
 
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-        {stat('In the bank', booksFmt(cash, book))}
-        {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
-        {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
-        {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
-      </div>
-
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Funds</div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {funds.map(f => (
-            <div key={f.fund} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 14px', minWidth: 150 }}>
-              <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>{f.name}{f.kind === 'restricted' ? ' · restricted' : f.kind === 'designated' ? ' · designated' : ''}</div>
-              <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{booksFmt(f.balance, book)}</div>
+      {_tabStripLifted ? <>
+        <button onClick={() => setSummaryOpen(o => !o)} style={{ border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '8px 14px', borderRadius: 13, boxShadow: '0 4px 14px rgba(34,28,16,.18)', display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '0.5px', fontFamily: 'var(--font-ui)', textTransform: 'uppercase', marginBottom: summaryOpen ? 12 : 16 }}><Icon name={summaryOpen ? 'chevron-up' : 'chevron-down'} size={16} color="currentColor" /> Summary</button>
+        {summaryOpen ? <>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+            {stat('In the bank', booksFmt(cash, book))}
+            {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
+            {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
+            {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
+          </div>
+          <div style={{ ...bkCard, marginBottom: 16 }}>
+            <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Funds</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {funds.map(f => (
+                <div key={f.fund} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 14px', minWidth: 150 }}>
+                  <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>{f.name}{f.kind === 'restricted' ? ' · restricted' : f.kind === 'designated' ? ' · designated' : ''}</div>
+                  <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{booksFmt(f.balance, book)}</div>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
+        </> : null}
+      </> : <>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+          {stat('In the bank', booksFmt(cash, book))}
+          {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
+          {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
+          {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
         </div>
-      </div>
+        <div style={{ ...bkCard, marginBottom: 16 }}>
+          <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Funds</div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {funds.map(f => (
+              <div key={f.fund} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 14px', minWidth: 150 }}>
+                <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>{f.name}{f.kind === 'restricted' ? ' · restricted' : f.kind === 'designated' ? ' · designated' : ''}</div>
+                <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{booksFmt(f.balance, book)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>}
 
       {!_tabStripLifted && <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />}
 
