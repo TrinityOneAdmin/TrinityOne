@@ -622,7 +622,7 @@ function App() {
   );
   // identity surfaces (ProfileSheet hub + the focused sheets)
   const [profile, setProfile] = useA(idParam === 'profile');
-  const [member, setMember] = useA(idParam === 'member' ? window.TrinityData.MEMBERS.River : null);
+  const [member, setMember] = useA(null);   // the pubkey of the member whose card is open (was a dev-only MEMBERS.River object; ?id=member no longer seeds one)
   const [idSheet, setIdSheet] = useA(['recovery', 'invite', 'relays'].includes(idParam) ? idParam : null);
   const [newId, setNewId] = useA(idParam === 'newid');
   const [walletSheet, setWalletSheet] = useA(false);   // member wallet hub (balance + add + withdraw)
@@ -2570,7 +2570,7 @@ function App() {
     openAudioBiblesWith: (stream) => { setAudioIncoming(stream); setAudioBibles(true); },   // "Open with" handed us an audio Bible
     // identity surfaces
     openProfile: () => setProfile(true),
-    openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
+    openMember: (pk) => { const me = window.Fellowship && window.Fellowship.myPubkey; if (typeof pk === 'string' && pk && pk !== me) setMember(pk); },
     openRecovery: () => setIdSheet('recovery'),
     // optional community PIN
     openCommunitySecurity: () => setCommSec(true),
@@ -3122,7 +3122,7 @@ function App() {
             <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />
             {/* identity: hub + focused sheets (designer layout, real backend) */}
             <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />
-            <MemberCard member={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />
+            <MemberCard pubkey={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />
             <RecoverySheet open={idSheet === 'recovery'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <CommunitySecuritySheet open={commSec} onClose={() => setCommSec(false)} ctx={ctx} />
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />

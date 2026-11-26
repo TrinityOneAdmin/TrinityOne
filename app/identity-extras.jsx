@@ -17,53 +17,46 @@ function MiniQR({ seed = 'npub', size = 150 }) {
 }
 
 // ════════ View a member ════════
-function MemberCard({ member, open, onClose, ctx }) {
-  if (!member) return null;
+// `pubkey` is the member's key; everything shown comes from the engine's displayFor(pubkey) at render time
+// (name, avatar, one-line bio, and a pinned verse once one exists). Nothing is shown that the engine did not
+// hand back, and no role is shown. The Message button exists only when ctx.canDMPeer(pubkey) says this member may
+// message them (the same gate the chat row and the people list use).
+function MemberCard({ pubkey, open, onClose, ctx }) {
+  if (!pubkey) return null;
+  const FS = window.Fellowship;
+  const d = (FS && FS.displayFor) ? (FS.displayFor(pubkey) || {}) : {};
+  const name = d.handle || 'Member';
+  const av = d.av || { kind: 'monogram', color: d.color || '#5E8C6A' };
+  const about = typeof d.about === 'string' ? d.about.trim() : '';
+  const pv = d.pinnedVerse && typeof d.pinnedVerse.text === 'string' && d.pinnedVerse.text ? d.pinnedVerse : null;
+  const canDM = !!(ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(pubkey)));
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="80%" z={60}>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: -8 }}>
         <IconBtn name="x" onClick={onClose} />
       </div>
-      <div style={{ textAlign: 'center', padding: '0 0 8px' }}>
+      <div data-member-card={pubkey} style={{ textAlign: 'center', padding: '0 0 8px' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
-          <UserAvatar av={member.avatar} name={member.name} size={92} />
+          <UserAvatar av={av} name={name} size={80} />
         </div>
-        <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700 }}>{member.name}</h1>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, color: 'var(--ink-3)', fontSize: 13, fontWeight: 600 }}>
-          <Icon name="shield" size={13} /> Anonymous · TrinityOne member</div>
-
-        {member.bio ? (
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.55, color: 'var(--ink)', margin: '16px 10px 0', textWrap: 'pretty' }}>
-            “{member.bio}”</p>
-        ) : (
-          <p style={{ fontSize: 14, color: 'var(--ink-3)', margin: '16px 0 0', fontStyle: 'italic' }}>No bio shared yet.</p>
-        )}
+        <h1 data-member-name="1" style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 25, fontWeight: 700 }}>{name}</h1>
+        {about ? (
+          <p data-member-bio="1" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.55, color: 'var(--ink)', margin: '16px 10px 0', textWrap: 'pretty' }}>{about}</p>
+        ) : null}
+        {pv ? (
+          <blockquote data-member-pinned="1" style={{ margin: '16px 10px 0', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+            {pv.text}{pv.ref ? <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)' }}>{pv.ref}</div> : null}
+          </blockquote>
+        ) : null}
       </div>
 
-      {member.verses && member.verses.length ? (
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>RECENTLY SHARED</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {member.verses.map((v, i) => (
-              <button key={i} onClick={() => { onClose(); ctx.openReader(); }} style={{
-                display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', borderRadius: 14, width: '100%',
-                background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left' }}>
-                <Icon name="read" size={18} color="var(--clay)" />
-                <span style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{v}</span>
-                <Icon name="chevR" size={16} color="var(--ink-3)" />
-              </button>
-            ))}
-          </div>
-        </div>
+      {canDM ? (
+        <button data-member-message="1" onClick={() => { onClose(); ctx.openDM(pubkey); }} style={{
+          width: '100%', marginTop: 22, padding: 14, borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)',
+          color: 'var(--ink)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <Icon name="chat" size={18} /> Message {name}</button>
       ) : null}
-
-      {/* was: a primary-styled button that only toasted "coming soon" — while ctx.openDM has worked all
-          along. A live-looking control that does nothing is worse than no control. */}
-      <button onClick={() => { onClose(); if (ctx.openDM && member && member.pubkey) ctx.openDM(member.pubkey); }} style={{
-        width: '100%', marginTop: 22, padding: 14, borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)',
-        color: 'var(--ink)', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-        <Icon name="chat" size={18} /> Message {member.name}</button>
     </BottomSheet>
   );
 }

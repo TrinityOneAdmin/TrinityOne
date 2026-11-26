@@ -1412,7 +1412,7 @@ function Row({ me, m, children, ctx, mod }) {
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
-        <UserAvatar av={avOf(d)} name={d.handle} size={22} />
+        <UserAvatar av={avOf(d)} name={d.handle} size={22} onTap={m.pubkey && !(window.Fellowship && m.pubkey === window.Fellowship.myPubkey) && ctx && ctx.openMember ? () => ctx.openMember(m.pubkey) : undefined} />
         {/* A PARISH LETTER: the church's name on the letterhead, the person's underneath. Round 6 had a vicar's
             welcome to her whole congregation arrive attributed to "Member", which a member called a
             noticeboard "signed by nobody". `signedBy` is only ever set from the church-signed steward roster,
@@ -3223,7 +3223,7 @@ function DMInbox({ open, onClose, ctx, docked }) {
           const d = FS.displayFor(c.peer);
           return (
             <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
-              <UserAvatar av={avOf(d)} name={d.handle} size={44} />
+              <UserAvatar av={avOf(d)} name={d.handle} size={44} onTap={c.peer && c.peer !== (FS && FS.myPubkey) && ctx.openMember ? () => ctx.openMember(c.peer) : undefined} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{d.handle}</span>
@@ -3359,7 +3359,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
           const allowDM = !ctx.canDMPeer || ctx.canDMPeer(m.pubkey);   // safeguarding: a child↔non-cleared-adult DM is blocked
           return (
             <div key={m.pubkey} onClick={() => { if (isMe || !allowDM) return; onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: allowDM ? 'pointer' : 'default', opacity: allowDM ? 1 : 0.65 }}>
-              <UserAvatar av={avOf(d)} name={name} size={44} />
+              <UserAvatar av={avOf(d)} name={name} size={44} onTap={!isMe && ctx.openMember ? () => ctx.openMember(m.pubkey) : undefined} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {name}
