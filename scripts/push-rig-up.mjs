@@ -32,7 +32,7 @@
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -168,6 +168,23 @@ async function main() {
   await publish('ws://127.0.0.1:' + port + '/relay', relayNetEvent);
   log('published the church-signed relay-net doc to the rig.');
 
+  // 4b. the church's OPEN join-policy doc — checkChurch() (fellowship.src.js) confirms a church EXISTS via this
+  //     doc; without it the member app's follow gets "No church found". Open-join (approval:false) so the sim
+  //     self-joins with no steward approval. church-signed (owner-only at the relay door).
+  const joinPolicyEvent = finalizeEvent(
+    { kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/joinpolicy:' + church.pub]], content: JSON.stringify({ approval: false }) },
+    church.sk);
+  await publish('ws://127.0.0.1:' + port + '/relay', joinPolicyEvent);
+  // 4c. a kind-0 profile so the church shows a name rather than "Church".
+  const profileEvent = finalizeEvent(
+    { kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify({ name: 'Push Test Church' }) },
+    church.sk);
+  await publish('ws://127.0.0.1:' + port + '/relay', profileEvent);
+  // persist the church key (hex, 0600) to the scratch dir so further church-signed docs can be published without a relaunch.
+  const keyFile = join(scratchDir, 'church-key.json');
+  writeFileSync(keyFile, JSON.stringify({ sk: Buffer.from(church.sk).toString('hex'), pub: church.pub, npub: church.npub }), { mode: 0o600 });
+  log('published joinpolicy (open-join) + kind-0 name; church key saved to', keyFile);
+
   // 5. the three handoff artifacts
   const invite = tunnelUrl + '/?follow=' + church.npub + '&relay=' + encodeURIComponent(rigWss);
   const line = '─'.repeat(78);
@@ -183,6 +200,7 @@ async function main() {
   console.log('      rig relayPub: ' + rigRelayPub);
   console.log('      doc content : ' + JSON.stringify(relayNetContent));
   console.log('      doc event   : ' + JSON.stringify(relayNetEvent));
+  console.log('      joinpolicy  : open-join (approval:false) + kind-0 name "Push Test Church" published ✓');
   console.log('\n  APNs: real contentless sender wired from ' + APNS.TRINITY_APNS_KEY_FILE);
   console.log('        (key ' + APNS.TRINITY_APNS_KEY_ID + ', team ' + APNS.TRINITY_APNS_TEAM_ID + ', topic ' + APNS.TRINITY_APNS_TOPIC + ')');
   console.log('\n  NEXT: on the sim, open invite (2); once joined, register the sim member and send it a DM —');
