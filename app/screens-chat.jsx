@@ -51,9 +51,9 @@ function myAvatar(id) {
 function avOf(d) { return d.av || { kind: 'monogram', color: d.color || '#5E8C6A' }; }
 // THE TAP THAT OPENS A MEMBER'S CARD: a function only for another member's real pubkey (never your own, never a
 // blank), and only when the app supplied ctx.openMember. Undefined means the avatar is NOT a tap target.
-function memberTapFor(ctx, pk) {
+function memberTapFor(ctx, pk, opts) {
   const me = window.Fellowship && window.Fellowship.myPubkey;
-  return (typeof pk === 'string' && pk && pk !== me && ctx && typeof ctx.openMember === 'function') ? () => ctx.openMember(pk) : undefined;
+  return (typeof pk === 'string' && pk && pk !== me && ctx && typeof ctx.openMember === 'function') ? (opts ? () => ctx.openMember(pk, opts) : () => ctx.openMember(pk)) : undefined;
 }
 
 // avatar = profile picture if set, else a colored circle with the name's initial
@@ -794,11 +794,11 @@ function ChatScreen({ ctx }) {
               const d = (F && F.displayFor) ? F.displayFor(c.peer) : { handle: '' };
               const nm = (d && (d.name || d.handle)) || 'Someone in your church';
               return (
-                <div key={c.peer} style={{ display: 'flex', alignItems: 'center', gap: 0, width: '100%', textAlign: 'left', padding: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
+                <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 0, width: '100%', textAlign: 'left', padding: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
                   {/* the avatar is a SIBLING of the row's button (a button may not contain another control). The padding the
                       old single button had moved onto the two halves, so the row looks and measures the same */}
                   <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 13 }}><UserAvatar av={d && d.av} name={nm} size={38} onTap={memberTapFor(ctx, c.peer)} /></div>
-                  <button onClick={() => ctx.openDM(c.peer)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px 13px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'inherit' }}>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.openDM(c.peer); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px 13px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'inherit' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div>
                       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preview || 'Private message'}</div>
@@ -1893,10 +1893,10 @@ function GroupInfo({ group, open, onClose, ctx }) {
                       {!roster.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one to show here.</div> : null}
                       {roster.length && !shown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
                       {shown.map(r => (
-                        <div key={r.pubkey} style={{ ...rowStyle, padding: 0, gap: 0 }}>
+                        <div key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={{ ...rowStyle, padding: 0, gap: 0, cursor: 'pointer' }}>
                           {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
                           <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 12 }}><Avatar handle={r.name} color={r.color} src={r.picture} size={40} onTap={memberTapFor(ctx, r.pubkey)} /></div>
-                          <button onClick={() => setSelected(r.pubkey)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px 10px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                          <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setSelected(r.pubkey); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px 10px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
                               {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
@@ -2816,10 +2816,10 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
             {peopleShown.map(m => {
               const d = (FS && FS.displayFor) ? FS.displayFor(m.pubkey) : { handle: m.name || 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
               return (
-                <div key={m.pubkey} style={{ ...rowStyle, padding: 0, gap: 0 }}>
+                <div key={m.pubkey} onClick={() => sendToPerson(m)} style={{ ...rowStyle, padding: 0, gap: 0, cursor: 'pointer' }}>
                   {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
                   <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 13 }}><UserAvatar av={avOf(d)} name={m.name || d.handle} size={38} onTap={memberTapFor(ctx, m.pubkey)} /></div>
-                  <button onClick={() => sendToPerson(m)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px 11px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); sendToPerson(m); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px 11px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || d.handle}</div>
                       <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Direct message</div></div>
@@ -3118,7 +3118,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
       <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} />
-          <UserAvatar av={avOf(d)} name={d.handle} size={38} onTap={memberTapFor(ctx, peer)} />
+          <UserAvatar av={avOf(d)} name={d.handle} size={38} onTap={memberTapFor(ctx, peer, { inDMWith: peer })} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>
             {/* A PARISH LETTER, in a private thread: the church-signed steward title under the name — the group

@@ -320,10 +320,10 @@ function SwapSheet({ open, item, onClose, ctx }) {
             {mates.map(p => {
               const on = pick && pick.pub === p.pub;
               return (
-                <div key={p.pub || p.name} style={{ display: 'flex', alignItems: 'center', gap: 0, padding: 0, borderRadius: 14, textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
+                <div key={p.pub || p.name} onClick={() => setPick(p)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0, padding: 0, borderRadius: 14, textAlign: 'left', fontFamily: 'var(--font-ui)', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', boxShadow: 'var(--shadow)' }}>
                   {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
                   <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 12 }}><ServAvatar name={p.name} size={40} accent={item.accent || 'var(--clay)'} onTap={svMemberTap(ctx, p.pub)} /></div>
-                  <button onClick={() => setPick(p)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 12px 12px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setPick(p); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 12px 12px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
                   {/* A teammate with no pubkey is a NAME the steward typed, not an account. The swap reply
                       carries swapTo:'' for them — byte-identical to "ask my leader" — so they are never
                       contacted. Saying so here is the difference between a choice and a false promise. */}
@@ -1714,14 +1714,14 @@ function ServingScreen({ open, onClose, ctx, docked }) {
 
                   {nextRoster.length ? (
                     <React.Fragment>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, padding: 0, width: '100%' }}>
+                      <div onClick={() => setRosterOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, padding: 0, width: '100%', cursor: 'pointer' }}>
                         <div style={{ display: 'flex' }}>
                           {nextRoster.slice(0, 5).map((p, i) => (
                             <div key={i} style={{ marginLeft: i ? -10 : 0, borderRadius: 999, boxShadow: '0 0 0 2px #4a7a5c' }}><ServAvatar name={p.name} size={30} me={p.me} accent={next.accent || 'var(--clay)'} onTap={svMemberTap(ctx, p.pub)} /></div>
                           ))}
                         </div>
                         {/* the stacked avatars are SIBLINGS of the toggle button (no control inside a button) */}
-                        <button onClick={() => setRosterOpen(o => !o)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'inherit', fontFamily: 'inherit', textAlign: 'left' }}>
+                        <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setRosterOpen(o => !o); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'inherit', fontFamily: 'inherit', textAlign: 'left' }}>
                           <span style={{ fontSize: 13, fontWeight: 600, color: '#fff', opacity: .95 }}>{nextRoster.length} on the team today</span>
                           <Icon name={rosterOpen ? 'chevU' : 'chevD'} size={16} color="#fff" style={{ marginLeft: 'auto', opacity: .9 }} />
                         </button>

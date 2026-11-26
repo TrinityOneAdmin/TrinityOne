@@ -216,11 +216,11 @@ test('POINT OF USE, people list: avatar opens the card, not the DM; own row has 
 // ── openMember in app.jsx ────────────────────────────────────────────────────────────────────────────────────
 test('openMember (the real line from app.jsx) stores a pubkey, ignores yourself and junk', () => {
   const APP = readFileSync(join(ROOT, 'app/app.jsx'), 'utf8');
-  const i = APP.indexOf('openMember: (pk) =>');
-  assert.ok(i > 0 && APP.indexOf('openMember: (pk) =>', i + 1) === -1, 'openMember definition not found exactly once');
+  const i = APP.indexOf('openMember: (pk, opts) =>');
+  assert.ok(i > 0 && APP.indexOf('openMember: (pk, opts) =>', i + 1) === -1, 'openMember definition not found exactly once');
   const line = APP.slice(i, APP.indexOf('\n', i)).replace(/,\s*$/, '');
   const set = [];
-  const ctx = new Function('window', 'setMember', 'return { ' + line + ' };')({ Fellowship: { myPubkey: ME } }, (v) => set.push(v));
+  const ctx = new Function('window', 'setMember', 'setMemberInDM', 'return { ' + line + ' };')({ Fellowship: { myPubkey: ME } }, (v) => set.push(v), () => {});
   ctx.openMember(ANNA); ctx.openMember(ME); ctx.openMember(''); ctx.openMember(undefined); ctx.openMember({ pubkey: ANNA });
   assert.deepEqual(set, [ANNA]);
 });
@@ -246,7 +246,7 @@ function appMount(member, setMember, opened) {
     Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
   }).MemberCard;
   const ctx = { openDM: (pk) => opened.push(pk), canDMPeer: () => true };
-  const Mount = new Function('React', 'MemberCard', 'member', 'setMember', 'ctx', js + '\nreturn Mount;')(React, MemberCard, member, setMember, ctx);
+  const Mount = new Function('React', 'MemberCard', 'member', 'setMember', 'ctx', 'memberInDM', js + '\nreturn Mount;')(React, MemberCard, member, setMember, ctx, false);
   return draw(Mount, {});
 }
 test('App mounts the member card: a pubkey in `member` shows that member, null shows nothing, and closing clears it', () => {

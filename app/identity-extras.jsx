@@ -21,7 +21,7 @@ function MiniQR({ seed = 'npub', size = 150 }) {
 // (name, avatar, one-line bio, and a pinned verse once one exists). Nothing is shown that the engine did not
 // hand back, and no role is shown. The Message button exists only when ctx.canDMPeer(pubkey) says this member may
 // message them (the same gate the chat row and the people list use).
-function MemberCard({ pubkey, open, onClose, ctx }) {
+function MemberCard({ pubkey, open, onClose, ctx, inDMWithThem }) {
   if (!pubkey) return null;
   const FS = window.Fellowship;
   const d = (FS && FS.displayFor) ? (FS.displayFor(pubkey) || {}) : {};
@@ -29,7 +29,9 @@ function MemberCard({ pubkey, open, onClose, ctx }) {
   const av = d.av || { kind: 'monogram', color: d.color || '#5E8C6A' };
   const about = typeof d.about === 'string' ? d.about.trim() : '';
   const pv = d.pinnedVerse && typeof d.pinnedVerse.text === 'string' && d.pinnedVerse.text ? d.pinnedVerse : null;
-  const canDM = !!(ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(pubkey)));
+  // ctx.minorState 'maybe' = this viewer's child status is not yet known; canDMPeer fails open then, so the card must not.
+  // Also no button when the card was opened from the DM thread with this same person: you are already in it.
+  const canDM = !!(ctx && ctx.openDM && !inDMWithThem && ctx.minorState !== 'maybe' && (!ctx.canDMPeer || ctx.canDMPeer(pubkey)));
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="80%" z={60}>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: -8 }}>
