@@ -3260,6 +3260,22 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
   const fyYear = fyStart.slice(0, 4);   // the fiscal year the Budget panel plans/compares against
   const budgetForFy = budgets.find(b => b.year === fyYear) || budgets[0] || null;   // one budget per year; fall back to any saved budget
   const ie = React.useMemo(() => F.incomeExpenditure(book, { from: fyStart }), [tick, fyStart]);
+  const monthlyIE = React.useMemo(() => {
+    const months = [];
+    const fy = fyStart.slice(0, 7);
+    const now = todayISO().slice(0, 7);
+    let cur = fy;
+    while (cur <= now && months.length < 12) {
+      const from = cur + '-01';
+      const [y, m] = cur.split('-').map(Number);
+      const nm = m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0');
+      const to = nm + '-00';
+      const r = F.incomeExpenditure(book, { from, to });
+      months.push({ month: cur, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1], income: r.income, spending: r.expenditure });
+      cur = nm;
+    }
+    return months;
+  }, [tick, fyStart]);
   const bank = React.useMemo(() => F.trialBalance(book), [tick]).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
   const recent = React.useMemo(() => book.journal.slice(-16).reverse(), [tick]);
@@ -3420,6 +3436,36 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
             ))}
           </div>
         </div>
+        {monthlyIE.length > 0 && (() => {
+          const max = Math.max(1, ...monthlyIE.map(m => Math.max(m.income, m.spending)));
+          const W = 320, H = 200, padL = 8, padR = 8, padT = 24, padB = 32;
+          const cw = (W - padL - padR) / monthlyIE.length;
+          const bw = Math.min(cw * 0.35, 18);
+          const ch = H - padT - padB;
+          return (
+            <div style={{ ...bkCard, marginBottom: 16 }}>
+              <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Income vs Spending</div>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, marginBottom: 8 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--sage, #4f7a5e)', flexShrink: 0 }} /> Income</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--clay-deep, #b4462f)', flexShrink: 0 }} /> Spending</span>
+              </div>
+              <svg viewBox={'0 0 ' + W + ' ' + H} style={{ width: '100%', height: 'auto' }} role="img" aria-label="Monthly income vs spending bar chart">
+                {monthlyIE.map((m, i) => {
+                  const x = padL + i * cw + cw / 2;
+                  const ih = (m.income / max) * ch;
+                  const sh = (m.spending / max) * ch;
+                  return React.createElement('g', { key: m.month },
+                    React.createElement('rect', { x: x - bw - 1, y: padT + ch - ih, width: bw, height: ih, rx: 3, fill: 'var(--sage, #4f7a5e)' }),
+                    React.createElement('rect', { x: x + 1, y: padT + ch - sh, width: bw, height: sh, rx: 3, fill: 'var(--clay-deep, #b4462f)' }),
+                    React.createElement('text', { x: x, y: H - 8, textAnchor: 'middle', style: { fontSize: 10, fill: 'var(--ink-3)', fontFamily: 'var(--font-ui)' } }, m.label)
+                  );
+                })}
+                <line x1={padL} y1={padT + ch} x2={W - padR} y2={padT + ch} stroke="var(--line)" strokeWidth="1" />
+                <text x={padL} y={padT - 6} style={{ fontSize: 9, fill: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{booksFmt(max, book)}</text>
+              </svg>
+            </div>
+          );
+        })()}
       </> : null}
 
       {!_tabStripLifted && <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />}
