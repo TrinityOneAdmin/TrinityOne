@@ -860,18 +860,53 @@ function ChatScreen({ ctx }) {
 // single source: a second literal list is how the two drifted apart in the first place.
 const REACT_EMOJIS = ['👍', '❤️', '😂', '🙏', '🔥', '🙌'];
 
+// who-reacted popover: shows up to 20 names for one emoji, positioned above the pill
+function ReactionWho({ emoji, reactors, onClose, me }) {
+  if (!reactors) return null;
+  // resolve pubkeys -> display names for everyone who reacted with this emoji
+  const names = [];
+  for (const pk in reactors) {
+    if (!reactors[pk] || reactors[pk].content !== emoji || reactors[pk].content === '-') continue;
+    const d = (window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(pk) : null;
+    names.push(d && d.handle ? d.handle : (pk || '').slice(0, 8) + '…');
+  }
+  if (!names.length) return null;
+  const shown = names.slice(0, 20);
+  return (
+    <div onClick={e => { e.stopPropagation(); onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 10, background: 'transparent' }}>
+      <div data-reaction-who="1" onClick={e => e.stopPropagation()} style={{
+        position: 'absolute', bottom: 36, [me ? 'right' : 'left']: 0, zIndex: 11, minWidth: 120, maxWidth: 220,
+        padding: '8px 12px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)',
+        boxShadow: 'var(--shadow-lg)', fontSize: 13, lineHeight: 1.6, color: 'var(--ink)' }}>
+        <div style={{ fontWeight: 700, marginBottom: 2 }}>{emoji}</div>
+        {shown.map((n, i) => <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>)}
+        {names.length > 20 ? <div style={{ color: 'var(--ink-3)', fontSize: 11.5, marginTop: 2 }}>+{names.length - 20} more</div> : null}
+      </div>
+    </div>
+  );
+}
+
 // reaction pills + a small react button (with emoji picker), shown under each bubble
-function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) {
+function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me, reactors }) {
+  const [whoEmoji, setWhoEmoji] = useC(null);   // which emoji's who-reacted popover is showing
+  const lpRef = useCR(null);                     // long-press timer ref
   if (!live) return null;
+  const startLP = (emoji) => { clearTimeout(lpRef.current); lpRef.current = setTimeout(() => setWhoEmoji(emoji), 300); };
+  const cancelLP = () => clearTimeout(lpRef.current);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap', justifyContent: me ? 'flex-end' : 'flex-start' }}>
       {summary.map(r => (
-        <button key={r.emoji} onClick={() => onReact(r.emoji)} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
-          border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)',
-          background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
-          <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
-        </button>
+        <div key={r.emoji} style={{ position: 'relative' }}>
+          <button onClick={() => { cancelLP(); onReact(r.emoji); }}
+            onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
+            style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
+            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)',
+            background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
+            <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
+          </button>
+          {whoEmoji === r.emoji ? <ReactionWho emoji={r.emoji} reactors={reactors} onClose={() => setWhoEmoji(null)} me={me} /> : null}
+        </div>
       ))}
       <div data-rx-pop="1" style={{ position: 'relative' }}>
         <button onClick={onOpenPicker} title="React" style={{
@@ -1111,12 +1146,12 @@ function ChatCardThoughts({ text, me }) {
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash, reactors }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
   const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash };
-  const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
+  const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} reactors={reactors} />;
 
   if (m.kind === 'verse') {
     return (
@@ -2247,7 +2282,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       </div>
     ) : null}
     <Bubble key={m.id} m={m} ctx={ctx}
-    summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
+    summary={summaryFor(m.id)} reactors={reactions[m.id]} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
     pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
     live={!!window.Fellowship}
     canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
