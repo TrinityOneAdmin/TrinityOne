@@ -1,12 +1,13 @@
 // Bundles js/bg-entry.js (+ the app's real src/fellowship.src.js and nostr-tools) into
-// android/src/main/assets/directpush/bg-bundle.js. Run from the repo root:  node plugins/trinity-directpush/build-bg.mjs
+// android/src/main/assets/directpush/bg-bundle.js AND ios/assets/directpush/bg-bundle.js.
+// Run from the repo root:  node plugins/trinity-directpush/build-bg.mjs
 //
 // One build-only tweak, and it is NOT a change to shipped source: relaysForChurch() is module-private in
 // fellowship.src.js, and the plan wants the EXISTING function, never a copy. This esbuild plugin appends one line to
 // the bundler's in-memory copy of fellowship.src.js so the background bundle can reach it as window.__dpRelaysForChurch.
 // src/fellowship.src.js and vendor/fellowship.js (what the app runs) are untouched.
 import { build } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { readFileSync, copyFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -36,3 +37,12 @@ await build({
   }],
   logLevel: 'info',
 });
+
+// Copy the bundle + bg.html to the iOS assets directory too.
+// The Xcode build phase must include these in the app bundle under a `directpush/` directory.
+const androidAssets = resolve(here, 'android/src/main/assets/directpush');
+const iosAssets = resolve(here, 'ios/assets/directpush');
+mkdirSync(iosAssets, { recursive: true });
+copyFileSync(resolve(androidAssets, 'bg-bundle.js'), resolve(iosAssets, 'bg-bundle.js'));
+copyFileSync(resolve(androidAssets, 'bg.html'), resolve(iosAssets, 'bg.html'));
+console.log(`  ios/assets/directpush/bg-bundle.js  (copied from android)`);
