@@ -42,8 +42,7 @@ import { readHelperGrant, readCheckinPermission, isDeclaredSource, isPermissionS
          KEY_LEAD_SECONDS } from './checkin-role-source.mjs';
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
-import { randomBytes, timingSafeEqual, createHash, createPublicKey, createPrivateKey, sign as cryptoSign, verify as cryptoVerify } from 'crypto';
-import { connect as http2Connect } from 'node:http2';   // PHASE 3: contentless APNs send path (Node built-in; no new npm dep)
+import { randomBytes, timingSafeEqual, createHash, createPublicKey, verify as cryptoVerify } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 
 // A church's relay must NOT die from a background hiccup (a dropped cloudflared pipe, a stray rejected fetch).
@@ -7414,176 +7413,84 @@ function maybePushNotify(e) {
     if (pub === e.pubkey) continue;        // never push the SENDER to their own phone (canRead(e, author) is true)
     if (!canRead(e, pub)) continue;        // THE single visibility authority — never push what this pub can't read
     const rec = TOKENS_BY_PUB.get(pub);
-    if (rec) sendContentlessPush(pub, rec, e);   // → THE SEAM (Phase 3 sends the contentless APNs here)
+    if (rec) sendContentlessPush(pub, rec, e);   // → THE SEAM (forwards the contentless wake to the push service)
   }
 }
 // ── THE SEAM. maybePushNotify calls this once per eligible recipient. _pushSender is null (a pure no-op) UNLESS
-// something downstream wires it: the test file-spy (TRINITY_PUSH_SPY_FILE) OR the Phase-3 real APNs sender (only
-// when APNs config is fully present and the .p8 is readable). The wiring is at the bottom of this block and the
-// two are mutually exclusive. A failed send must NEVER break ingest, so the call is wrapped and swallows.
+// something downstream wires it: the test file-spy (TRINITY_PUSH_SPY_FILE) OR the real push FORWARDER (only when
+// TRINITY_PUSH_SERVICE_URL is set). The wiring is at the bottom of this block and the two are mutually exclusive.
+// A failed send must NEVER break ingest, so the call is wrapped and swallows.
 let _pushSender = null;
 function sendContentlessPush(pub, tokenRec, e) {
   const f = _pushSender;
   if (f) { try { f(pub, tokenRec, e); } catch {} }   // else: pure no-op (unconfigured — the current production reality)
 }
 
-// ── PHASE 3: the REAL contentless APNs send path. Node built-ins only (http2 + crypto); no new npm dependency.
-// Built as a chain of PURE, unit-testable pieces (buildPayload / apnsUrl / buildHeaders / buildJwt) plus a sender
-// that injects its HTTP/2 transport (_apnsH2Connect) and its logger (_apnsLog), so a test asserts exactly what
-// WOULD go to Apple with no network call and no weakening of production behaviour.
+// ── PHASE 2 (push-service redesign): the relay no longer holds the Apple .p8 or talks to Apple directly. The seam
+// now FORWARDS each eligible recipient to the central, key-holding push service (scripts/push-service.mjs), which
+// performs the real contentless APNs send. The .p8 is an UNSCOPEABLE master key: no relay — especially a
+// self-hosted one — may hold it, so ONE key-holder sends on every relay's behalf. gateway.mjs references no Apple
+// key, no JWT and no APNs endpoint any more.
+//
+// The forward authenticates with THIS relay's OWN identity key (RELAY_SK — the same key relayProof() /
+// relayNameClaimEvent() / relayIdentityUrl() sign with; NOT a new key), so the service can attribute and
+// rate-limit per relay. The body stays §15.2-CONTENTLESS — { token, env } and NOTHING ELSE — so no sender, church,
+// room or message ever crosses to the service and it structurally cannot build a communication graph.
 
-// §15.2 CONTRACT — CONTENTLESS. No message body, no sender, no church name, no content-available. Literal title/body
-// (owner decision 2026-11-26: pilot app is English-only with no Localizable.strings, so loc-key would render the raw
-// key "NEW_MESSAGE"); the wire carries no church data. collapse-id coalesces a burst into ONE "New message", so
-// thread-id groups them under one conversation bucket on the phone.
-function buildPayload() {
-  return { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } };
-}
-// production vs sandbox is the TOKEN's environment, never the relay's — a dev build registers a sandbox token.
-function apnsUrl(token, env) {
-  const host = env === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
-  return 'https://' + host + '/3/device/' + token;
-}
-function _b64url(buf) { return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
-// ES256 (ECDSA P-256) JWT signed with the .p8. Apple requires a JOSE r||s signature, NOT DER — dsaEncoding
-// 'ieee-p1363'. iat is unix SECONDS. kid is the key id in the HEADER; iss is the team id in the CLAIMS.
-function buildJwt(keyPem, keyId, teamId, iat) {
-  const signingInput = _b64url(JSON.stringify({ alg: 'ES256', kid: keyId })) + '.' + _b64url(JSON.stringify({ iss: teamId, iat }));
-  const sig = cryptoSign('sha256', Buffer.from(signingInput), { key: createPrivateKey(keyPem), dsaEncoding: 'ieee-p1363' });
-  return signingInput + '.' + _b64url(sig);
-}
-function buildHeaders(jwt, topic) {
-  return {
-    'authorization': 'bearer ' + jwt,
-    'apns-topic': topic,
-    'apns-push-type': 'alert',
-    'apns-priority': '10',
-    'apns-collapse-id': 'trinityone-msgs',
-  };
-}
+// FORWARD TIMEOUT. The push service (a8) being unreachable or slow is the COMMON case, not an exception. A refused
+// connection or a silent hang must NEVER throw into ingest nor leave an unhandled promise rejection — a stray
+// rejection reaching the process-wide handler would make an a8 blip look like an error on EVERY church's relay.
+// Bounded and unref'd (a test may shorten it); it is a safety deadline, not an operator knob.
+let _pushForwardTimeoutMs = 8 * 1000;
+function _pushNote(msg) { try { console.log(msg); } catch {} }   // COARSE only — never a token, never a pubkey
 
-// CONFIG read once at startup. Absent or unreadable key => null => the sender is never wired (graceful no-op). The
-// .p8 / key id / team id / Push entitlement do NOT exist yet (owner's Apple-portal step is pending), so in today's
-// production this returns null and nothing is sent.
-function readApnsConfig(env = process.env) {
-  const keyFile = env.TRINITY_APNS_KEY_FILE, keyId = env.TRINITY_APNS_KEY_ID, teamId = env.TRINITY_APNS_TEAM_ID;
-  const topic = env.TRINITY_APNS_TOPIC || 'com.trinityone.app';
-  if (!keyFile || !keyId || !teamId) return null;
-  let keyPem; try { keyPem = readFileSync(keyFile, 'utf8'); } catch { return null; }
-  if (!keyPem || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(keyPem)) return null;
-  // Prove the key actually parses as a private key NOW, so a malformed .p8 is a startup no-op, not a per-push throw.
-  try { createPrivateKey(keyPem); } catch { return null; }
-  return { keyPem, keyId, teamId, topic };
-}
-
-// JWT CACHE. Apple rejects a token older than 60 min AND rejects regenerating one too often, so reuse it and
-// refresh only past ~50 min. Keyed on nothing (one config, one token).
-let _apnsJwt = null, _apnsJwtAt = 0;
-function _apnsJwtCached(cfg, nowMs = Date.now()) {
-  if (_apnsJwt && (nowMs - _apnsJwtAt) < 50 * 60 * 1000) return _apnsJwt;
-  _apnsJwt = buildJwt(cfg.keyPem, cfg.keyId, cfg.teamId, Math.floor(nowMs / 1000));
-  _apnsJwtAt = nowMs;
-  return _apnsJwt;
-}
-
-// INJECTABLE SEAMS for the sender (both default to production; a unit test replaces them to observe without Apple):
-let _apnsH2Connect = null;   // default null => node:http2 connect; a test installs a mock transport
-let _apnsLog = null;         // default null => console.log; a test installs a capture to assert F2 (no pubkey pairs)
-const _apnsCounters = { sent: 0, ok: 0, err: 0, timeout: 0 };   // COARSE only — never per-recipient (communication-graph metadata)
-function _apnsNote(msg) { try { (_apnsLog || console.log)(msg); } catch {} }
-
-// TIMEOUTS (the safety fix). A silent-but-established Apple connection must never leak a session on a relay that
-// runs for weeks. A few seconds per request tears down a request that gets no response; a long idle timeout lets a
-// pooled-but-unused session close itself so no permanent idle socket is held. Overridable by a test for a fast,
-// deterministic deadline (never from env — these are not operator knobs).
-let _apnsReqTimeoutMs = 8 * 1000;        // per-request deadline — a response must arrive within this or we tear down
-let _apnsIdleTimeoutMs = 5 * 60 * 1000;  // a pooled session with no traffic for this long closes itself
-
-// CONNECTION POOL. One HTTP/2 session PER ORIGIN (production and sandbox are DIFFERENT origins => separate
-// sessions), reused across recipients and messages instead of one-connect-per-send. A session is dropped from the
-// cache on 'error'/'close'/'goaway'/idle/timeout, so the next send reconnects; correctness over cleverness.
-const _apnsSessions = new Map();   // origin => { session, origin }
-function _apnsDropSession(origin, entry) {
-  const cur = _apnsSessions.get(origin);
-  const e = entry || cur;
-  if (!e) return;
-  if (cur === e) _apnsSessions.delete(origin);   // never evict a newer session than the one that failed
-  try { e.session.close(); } catch {}
-  try { e.session.destroy && e.session.destroy(); } catch {}
-}
-function _apnsGetSession(origin) {
-  const cached = _apnsSessions.get(origin);
-  if (cached && !cached.session.destroyed && !cached.session.closed) return cached;   // reuse a live session
-  const session = (_apnsH2Connect || http2Connect)(origin);
-  const entry = { session, origin };
-  _apnsSessions.set(origin, entry);
-  const drop = () => _apnsDropSession(origin, entry);
-  session.on('error', () => { _apnsCounters.err++; _apnsNote('apns push transport error'); drop(); });
-  session.on('close', drop);
-  session.on('goaway', drop);
-  // IDLE SELF-CLOSE: real http2 resets this inactivity timer on every request, so a pooled session only closes
-  // after it has sat unused. (A mock transport has no setTimeout — the guard skips it.)
-  if (typeof session.setTimeout === 'function') { try { session.setTimeout(_apnsIdleTimeoutMs, drop); } catch {} }
-  return entry;
-}
-
-// THE REAL SENDER. One contentless HTTP/2 POST per recipient, fire-and-forget, over a POOLED session. F2: it uses
-// tokenRec.token as the URL path and NOTHING ELSE from pub/e — no pubkey, no ['p'] target, no {from,to} pair is
-// ever logged or sent, so the wire and the log carry no communication-graph metadata. It never throws out of the
-// hook (every stage is guarded, including the timeout) — a failed push must not break ingest. Response status is
-// COUNTED/logged coarsely; dead-token cleanup on a 410 is a FUTURE item (it would mutate TOKENS_BY_PUB / the store
-// — out of scope for this phase).
-function makeApnsSender(cfg) {
-  return function apnsSend(_pub, tokenRec, _e) {
-    const token = tokenRec && tokenRec.token;
-    if (!token) return;
-    const env = tokenRec.env === 'sandbox' ? 'sandbox' : 'production';
-    _apnsCounters.sent++;
-    let origin = null, entry = null;
+// Build the fire-and-forget forwarder wired as _pushSender. `serviceBase` is TRINITY_PUSH_SERVICE_URL (trailing
+// slash trimmed). The returned function NEVER throws and NEVER leaves an unhandled rejection: every async failure
+// (connection refused, DNS, timeout/abort, non-2xx) is swallowed and coarse-logged, so an a8 outage cannot touch
+// the ingest path that called it. The '/wake' path and the kind-27235 envelope shape MUST match push-service.mjs's
+// WAKE_PATH + verifyEnvelope (pinned by the forward test, not by importing the service into the relay).
+function makePushForward(serviceBase) {
+  const wakeUrl = String(serviceBase).replace(/\/+$/, '') + '/wake';
+  return function pushForward(_pub, tokenRec, _e) {
     try {
-      const u = new URL(apnsUrl(token, env));
-      origin = u.origin;
-      const headers = { ':method': 'POST', ':path': u.pathname, ...buildHeaders(_apnsJwtCached(cfg), cfg.topic) };
-      const body = JSON.stringify(buildPayload());
-      entry = _apnsGetSession(origin);
-      const req = entry.session.request(headers);
-      let status = 0, done = false;
-      // PER-REQUEST TIMEOUT: a session that connects but never answers is the exact leak we are closing. The timer
-      // tears down THIS request and drops the (silent) session from the pool so the next send reconnects. It never
-      // throws; unref'd so this guard alone cannot keep the relay process alive.
-      const timer = setTimeout(() => {
-        if (done) return; done = true;
-        _apnsCounters.err++; _apnsCounters.timeout++; _apnsNote('apns push timeout');
-        try { (req.destroy ? req.destroy() : req.close && req.close()); } catch {}
-        _apnsDropSession(origin, entry);
-      }, _apnsReqTimeoutMs);
+      const token = tokenRec && tokenRec.token;
+      if (!token) return;
+      const env = tokenRec.env === 'sandbox' ? 'sandbox' : 'production';   // the TOKEN's environment, never the relay's
+      const rawBody = JSON.stringify({ token, env });                      // CONTENTLESS: recipient token + env ONLY
+      // A relay-identity-signed NIP-98 envelope bound to method + url + sha256(body) — the EXACT shape the service
+      // verifies (verifyEnvelope in push-service.mjs). Signed with RELAY_SK, the relay's own identity key.
+      const auth = 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({
+        kind: 27235, created_at: Math.floor(Date.now() / 1000),
+        tags: [['u', wakeUrl], ['method', 'POST'], ['payload', createHash('sha256').update(rawBody).digest('hex')]],
+        content: '',
+      }, RELAY_SK))).toString('base64');
+      // BOUNDED, FIRE-AND-FORGET. Own AbortController deadline, own .catch so a reject never escapes, own .finally
+      // to clear the (unref'd) timer. The whole chain is detached — the caller (ingest) does not await it.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, _pushForwardTimeoutMs);
       if (timer && timer.unref) timer.unref();
-      const settle = () => { if (done) return false; done = true; try { clearTimeout(timer); } catch {} return true; };
-      req.on('error', () => { if (!settle()) return; _apnsCounters.err++; _apnsNote('apns push request error'); _apnsDropSession(origin, entry); });
-      req.on('response', (h) => { status = h[':status'] || 0; });
-      req.on('data', () => {});   // drain the (ignored) error body so the stream can end
-      req.on('end', () => {
-        if (!settle()) return;   // POOLED: a clean end leaves the session OPEN for the next recipient — no close here.
-        if (status === 200) { _apnsCounters.ok++; _apnsNote('apns push ok'); }
-        else { _apnsCounters.err++; _apnsNote('apns push status ' + status); }   // 400/403/410 etc. — code only, no token, no pub
-      });
-      req.end(body);
-    } catch { _apnsCounters.err++; _apnsNote('apns push send failed'); if (origin) _apnsDropSession(origin, entry); }
+      Promise.resolve()
+        .then(() => fetch(wakeUrl, { method: 'POST', headers: { 'content-type': 'application/json', authorization: auth }, body: rawBody, signal: ctrl.signal }))
+        .then((resp) => { _pushNote('push forward status ' + (resp && resp.status)); })   // non-2xx is just a status — swallowed
+        .catch(() => { _pushNote('push forward failed'); })                               // refused / DNS / timeout / abort — swallowed
+        .finally(() => { try { clearTimeout(timer); } catch {} });
+    } catch { _pushNote('push forward error'); }   // any synchronous slip — never into ingest
   };
 }
 
-// ── WIRING. Mutually exclusive, in priority order; NEVER both in production (a deploy sets neither spy nor a key
-// it does not have). The test file-spy wins when present (so the Phase-1/2 spawned tests keep observing recipients
-// and send nothing); otherwise the real sender is wired ONLY when config is fully present and the .p8 is readable;
-// otherwise it stays a pure no-op and we log ONCE that notifications are disabled (NO pubkeys, NO config values).
+// ── WIRING. Mutually exclusive, in priority order; NEVER two at once in production. The test file-spy wins when
+// present (so the hook tests keep observing recipients and forward nothing). Otherwise the forwarder is wired ONLY
+// when TRINITY_PUSH_SERVICE_URL is set; otherwise the seam stays a pure no-op — the relay simply does not notify,
+// the same graceful nothing as a box with no push configured today. No Apple key / .p8 is read here any more.
 if (process.env.TRINITY_PUSH_SPY_FILE) {
   // TEST OBSERVABILITY ONLY, inert in the field (set by no deploy, like TRINITY_DATA_DIR / TRINITY_TAILSCALE_BIN).
   const _spy = process.env.TRINITY_PUSH_SPY_FILE;
   _pushSender = (pub, _rec, e) => { try { appendFileSync(_spy, JSON.stringify({ to: pub, id: e.id, kind: e.kind, from: e.pubkey }) + '\n'); } catch {} };
+} else if (process.env.TRINITY_PUSH_SERVICE_URL) {
+  _pushSender = makePushForward(process.env.TRINITY_PUSH_SERVICE_URL);
+  console.log('push forwarding enabled — contentless wakes POST to the push service');   // no URL/token logged
 } else {
-  const _apnsCfg = readApnsConfig();
-  if (_apnsCfg) { _pushSender = makeApnsSender(_apnsCfg); console.log('APNs push configured — contentless notifications enabled'); }
-  else { console.log('APNs push not configured — notifications disabled'); }   // the current production reality (no .p8 / entitlement yet)
+  console.log('push forwarding not configured — notifications disabled');   // graceful no-op (no TRINITY_PUSH_SERVICE_URL)
 }
 
 // ---- static file serving ----

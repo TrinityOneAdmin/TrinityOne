@@ -1,43 +1,29 @@
 // scripts/apns-cli-lib.test.mjs — the STANDALONE APNs CLI lib. Run:
 //   node --test scripts/apns-cli-lib.test.mjs
 //
-// apns-cli-lib.mjs REPLICATES the §15.2 contract (buildPayload / apnsUrl / buildHeaders) rather than importing the
-// gateway (importing gateway.mjs boots the relay). These tests make sure the replica cannot silently drift from the
-// SHIPPED sender, and that the JWT the lib mints is a real, verifiable ES256 token.
+// apns-cli-lib.mjs is the SINGLE home of the §15.2 APNs contract (buildPayload / apnsUrl / buildHeaders / buildJwt).
+// Since the Phase-2 push-service redesign (2026-11-26) the gateway no longer holds an APNs sender — the sender moved
+// to scripts/push-service.mjs, which IMPORTS this lib, and push-service.test.mjs pins service-vs-lib (the payload
+// drift guard there deep-equals contentlessPayload() to this lib's buildPayload()). So this file no longer lifts the
+// gateway (those functions are gone); it pins the lib against the §15.2 LITERAL and proves the JWT is a real ES256.
 //
 // WHAT EACH CASE PINS, and each FAILS if its feature regresses (sabotage-verified 2026-11-26, scoped):
-//   drift: payload  — lib buildPayload() deep-equals the gateway's shipped buildPayload() (lifted + run), AND equals
-//                     the literal §15.2 contract. SABOTAGE: add a field to the lib payload -> red.
-//   drift: url      — lib apnsUrl() matches the gateway's for production + sandbox. SABOTAGE: swap hosts -> red.
-//   drift: headers  — lib buildHeaders() deep-equals the gateway's. SABOTAGE: drop apns-collapse-id -> red.
-//   jwt shape       — buildJwt mints an ES256 JWT verifiable with a GENERATED P-256 public key; header.kid,
-//                     claims.iss/iat. SABOTAGE: alg 'HS256' / wrong iss -> red.
+//   payload  — lib buildPayload() equals the literal §15.2 contract and carries no content/graph metadata.
+//              SABOTAGE: add a field to the lib payload -> red.
+//   url      — lib apnsUrl() routes production + sandbox to the right Apple host. SABOTAGE: swap hosts -> red.
+//   headers  — lib buildHeaders() carries bearer auth, topic, alert push-type, priority 10, collapse id.
+//              SABOTAGE: drop apns-collapse-id -> red.
+//   jwt shape — buildJwt mints an ES256 JWT verifiable with a GENERATED P-256 public key; header.kid, claims.iss/iat.
+//              SABOTAGE: alg 'HS256' / wrong iss -> red.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { generateKeyPairSync, verify as nodeVerify } from 'node:crypto';
 import { buildPayload, apnsUrl, buildHeaders, buildJwt } from './apns-cli-lib.mjs';
-import { fnBody } from './test-slice.mjs';
 
-const GW = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
 const now = () => Math.floor(Date.now() / 1000);
 
-// Lift the gateway's OWN contract functions out of the shipped source and run them — never a mirror, never a
-// text-match. If the gateway's payload/url/headers change, these return the new value and the deepEqual goes red.
-function liftGateway() {
-  const src = [
-    fnBody(GW, 'function buildPayload() {', 'buildPayload'),
-    fnBody(GW, 'function apnsUrl(token, env) {', 'apnsUrl'),
-    fnBody(GW, 'function buildHeaders(jwt, topic) {', 'buildHeaders'),
-  ].join('\n');
-  return new Function(src + '\nreturn { buildPayload, apnsUrl, buildHeaders };')();
-}
-
-// ── DRIFT GUARD: payload ──────────────────────────────────────────────────────────────────────────────────────
-test('drift: the lib contentless payload deep-equals the gateway\'s shipped payload AND the §15.2 literal', () => {
-  const gw = liftGateway();
-  assert.deepEqual(buildPayload(), gw.buildPayload(),
-    'the CLI lib payload drifted from the shipped gateway buildPayload() — they must stay identical');
+// ── §15.2 CONTRACT: payload ─────────────────────────────────────────────────────────────────────────────────────
+test('the lib contentless payload equals the §15.2 literal and carries no content/graph metadata', () => {
   assert.deepEqual(buildPayload(), { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
     'the CLI lib payload drifted from the §15.2 contract literal');
   // And it carries no content / graph metadata. ("body" is a legitimate STATIC alert field now ("New message",
@@ -48,21 +34,15 @@ test('drift: the lib contentless payload deep-equals the gateway\'s shipped payl
   }
 });
 
-// ── DRIFT GUARD: url ──────────────────────────────────────────────────────────────────────────────────────────
-test('drift: the lib apnsUrl matches the gateway\'s for production and sandbox', () => {
-  const gw = liftGateway();
-  for (const env of ['production', 'sandbox', '']) {
-    assert.equal(apnsUrl('TOK', env), gw.apnsUrl('TOK', env), 'apnsUrl drifted for env=' + JSON.stringify(env));
-  }
+// ── §15.2 CONTRACT: url ─────────────────────────────────────────────────────────────────────────────────────────
+test('the lib apnsUrl routes production and sandbox to the right Apple host', () => {
   assert.equal(apnsUrl('TOK', 'production'), 'https://api.push.apple.com/3/device/TOK');
   assert.equal(apnsUrl('TOK', 'sandbox'), 'https://api.sandbox.push.apple.com/3/device/TOK');
+  assert.equal(apnsUrl('TOK', ''), 'https://api.push.apple.com/3/device/TOK', 'an empty env must default to production');
 });
 
-// ── DRIFT GUARD: headers ──────────────────────────────────────────────────────────────────────────────────────
-test('drift: the lib buildHeaders deep-equals the gateway\'s', () => {
-  const gw = liftGateway();
-  assert.deepEqual(buildHeaders('JWT', 'com.trinityone.app'), gw.buildHeaders('JWT', 'com.trinityone.app'),
-    'the CLI lib headers drifted from the shipped gateway buildHeaders()');
+// ── §15.2 CONTRACT: headers ─────────────────────────────────────────────────────────────────────────────────────
+test('the lib buildHeaders carries bearer auth, topic, alert push-type, priority 10 and the collapse id', () => {
   const h = buildHeaders('JWTVALUE', 'com.trinityone.app');
   assert.equal(h['authorization'], 'bearer JWTVALUE');
   assert.equal(h['apns-push-type'], 'alert');
