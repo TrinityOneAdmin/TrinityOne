@@ -374,6 +374,11 @@ extension AppDelegate {
     public func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         NSLog("APNS registered device token (\(hex.count / 2) bytes)")
+        #if DEBUG
+        // Debug/sim only: the full hex, so a device test can read the token and fire a contentless push at it.
+        // An APNs token is a routing handle, not a secret; a Release build never logs it.
+        NSLog("APNS token hex: \(hex)")
+        #endif
         ApnsBridge.shared?.deliver(token: hex)
     }
     public func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
