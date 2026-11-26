@@ -107,7 +107,7 @@ test('FINANCE: the real finance.html is packaged complete, under com.trinityone.
   assert.ok(existsSync(join(s.T, 'at-build/www/finance-mode.js')), 'finance-mode.js was not packaged');
   assert.match(s.read('at-build/build.gradle'), /applicationId "com\.trinityone\.finance"/);
   assert.match(s.read('at-build/strings.xml'), /<string name="app_name">TrinityOne Finance<\/string>/);
-  assert.match(s.read('at-build/strings.xml'), /<string name="title_activity_main">TrinityOne<\/string>/, 'the swap touched more than app_name');
+  assert.match(s.read('at-build/strings.xml'), /<string name="title_activity_main">TrinityOne Finance<\/string>/, 'the launcher activity label must say TrinityOne Finance');
   assert.deepEqual(s.icons('at-build/res'), s.icons('assets/finance-icons'), 'gradle was not handed the finance launcher icons');
   const m = s.read('at-build/AndroidManifest.xml');
   assert.doesNotMatch(m, /scheme="content"|pathPrefix="\/join"|autoVerify/, 'a member-only filter reached the finance build');
