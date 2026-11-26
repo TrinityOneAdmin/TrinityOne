@@ -2452,6 +2452,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
   const [reconciling, setReconciling] = React.useState(null);// reconcile modal: null closed · {} new · {id,…} reopen a saved reconciliation
   const [recurringOpen, setRecurringOpen] = React.useState(false); // collapsible "Recurring payments" panel
   const [actionsOpen, setActionsOpen] = React.useState(false);    // "Actions" edge tab dropdown (Import/Reconcile/Share)
+  React.useEffect(() => { if (!actionsOpen) return; const h = e => { if (e.key === 'Escape') setActionsOpen(false); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [actionsOpen]);
   const [tplEditing, setTplEditing] = React.useState(null);  // template modal: null closed · {} add · {id,…} edit
   const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
   const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
@@ -3398,7 +3399,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
       </div>}
       {_tabStripLifted && !actionsOpen && <button onClick={() => setActionsOpen(true)} aria-label="Open actions" style={{
         position: 'fixed', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
-        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
+        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '13px 12px 13px 14px', minWidth: 44, borderRadius: '13px 0 0 13px',
         boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
       }}>
         <Icon name="more-horizontal" size={17} color="#fff" />
@@ -3407,9 +3408,9 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
       {_tabStripLifted && actionsOpen ? <>
         <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
         <div style={{ position: 'fixed', right: 0, top: '40%', zIndex: 40, minWidth: 200, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '12px 0 0 12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', padding: '4px 0', animation: 'finDrawerFade .15s ease' }}>
-          <button onClick={() => { setActionsOpen(false); setImporting(true); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
-          <button onClick={() => { setActionsOpen(false); setReconciling({}); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
-          <button onClick={() => { setActionsOpen(false); setSharing(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
+          <button onClick={() => { setActionsOpen(false); setImporting(true); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', minHeight: 44, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => { setActionsOpen(false); setReconciling({}); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', minHeight: 44, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
+          <button onClick={() => { setActionsOpen(false); setSharing(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', minHeight: 44, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
         </div>
       </> : null}
 
