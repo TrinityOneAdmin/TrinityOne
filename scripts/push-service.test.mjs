@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { EventEmitter } from 'node:events';
-import { createPushService, contentlessPayload, WAKE_PATH, NIP98_KIND } from './push-service.mjs';
+import { createPushService, makePooledSender, contentlessPayload, WAKE_PATH, NIP98_KIND } from './push-service.mjs';
 import { buildPayload as libBuildPayload } from './apns-cli-lib.mjs';
 
 const sha256hex = (buf) => createHash('sha256').update(buf).digest('hex');
@@ -218,4 +218,131 @@ test('the service log never contains a device token or a 64-hex pubkey', async (
   assert.ok(!text.includes(RELAY.pub), 'the relay pubkey leaked into the log');
   assert.equal(/[0-9a-f]{64}/i.test(text), false, 'a 64-hex token/pubkey leaked into the log');
   await svc.close();
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// CONNECTION POOL + PER-SEND TIMEOUT for the SERVICE's makePooledSender (scripts/push-service.mjs).
+//
+// These five cases were the whole of scripts/apns-sender-pooling.test.mjs, which covered the pool/timeout on the
+// RELAY's old makeApnsSender. When the APNs sender moved to the central key-holding service (commit cc890548) that
+// file was deleted and its coverage was NOT re-created against the service's port — so the pool/timeout behaviour on
+// the ONE box that now holds the .p8 was left untested. This restores it, driving the SERVICE's makePooledSender
+// directly through its injectable `connect` transport (the same mock mechanism apnsMock uses above):
+//   makePooledSender(cfg, { connect, log, reqTimeoutMs, idleTimeoutMs }) -> { send(token, env), counters, sessionCount() }.
+//
+// SABOTAGE-VERIFIED 2026-11-26 (scoped to makePooledSender in push-service.mjs, reverted after):
+//   neuter the per-send setTimeout teardown           -> §8 (timeout) goes red (request/session never torn down).
+//   make getSession always connect (drop reuse)       -> §9 (reuse) goes red (2 connects, not 1).
+//   drop the session.on('close', drop) wiring         -> §11 (reconnect) goes red (a dead session is reused).
+const flush = () => new Promise(r => setImmediate(r));
+
+// A pooled-transport mock: counts connects / requests / closes / destroys per session and records the dialled
+// authority. `answer:false` yields a session that connects and accepts the request but NEVER responds — the silent
+// connection the per-send timeout must tear down. The shape (EventEmitter session with request()/close()/destroy(),
+// EventEmitter req with end()/destroy()) matches what makePooledSender.send drives.
+function poolMock(record, { answer = true, status = 200 } = {}) {
+  record.connects = 0; record.requests = 0; record.closed = 0; record.destroyed = 0; record.reqDestroyed = 0;
+  record.authorities = []; record.lastSession = null;
+  return (authority) => {
+    record.connects++;
+    record.authorities.push(authority);
+    const session = new EventEmitter();
+    session.close = () => { record.closed++; };
+    session.destroy = () => { record.destroyed++; };
+    record.lastSession = session;
+    session.request = () => {
+      record.requests++;
+      const req = new EventEmitter();
+      req.destroy = () => { record.reqDestroyed++; };
+      req.end = () => {
+        if (!answer) return;   // SILENT: connects, accepts the request, never answers.
+        setImmediate(() => { req.emit('response', { ':status': status }); req.emit('data', Buffer.from('')); req.emit('end'); });
+      };
+      return req;
+    };
+    return session;
+  };
+}
+
+const HEXTOK_A = 'ab'.repeat(32), HEXTOK_B = 'cd'.repeat(32), HEXTOK_C = 'ef'.repeat(32);
+
+// ── 8. TIMEOUT CLEANUP: a silent session (connects, never answers) is torn down by the per-send timeout — the request
+// is destroyed, the session closed and dropped from the pool, the timeout counted, and nothing throws out of send().
+test('makePooledSender: a silent APNs connection is torn down by the per-send timeout (request destroyed, session dropped, no throw)', async () => {
+  const rec = {};
+  const sender = makePooledSender(CFG, { connect: poolMock(rec, { answer: false }), reqTimeoutMs: 40 });
+  assert.doesNotThrow(() => sender.send(HEXTOK_A, 'production'), 'a silent send threw out of makePooledSender');
+  // Our OWN deadline (far shorter than any real hang) — a MISSING timeout fails deterministically instead of hanging.
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline && !(rec.reqDestroyed && rec.closed)) { await flush(); await new Promise(r => setTimeout(r, 10)); }
+  assert.ok(rec.reqDestroyed >= 1, 'the timeout did not destroy the stalled request (the leak is not closed)');
+  assert.ok(rec.closed >= 1, 'the timeout did not close the silent session (the session would leak)');
+  assert.equal(sender.sessionCount(), 0, 'the silent session was not dropped from the pool after timeout');
+  assert.equal(sender.counters.timeout, 1, 'the timeout was not counted');
+  assert.equal(sender.counters.ok, 0, 'a silent send must not count as ok');
+});
+
+// ── 9. REUSE SAME ORIGIN: two sends to the same environment reuse ONE pooled session (connect once, request twice).
+test('makePooledSender: two sends to the same origin reuse a single pooled session (one connect, two requests)', async () => {
+  const rec = {};
+  const sender = makePooledSender(CFG, { connect: poolMock(rec, { answer: true }) });
+  sender.send(HEXTOK_A, 'production');
+  await flush(); await flush();
+  sender.send(HEXTOK_B, 'production');
+  await flush(); await flush();
+  assert.equal(rec.connects, 1, 'the second same-origin send opened a NEW session instead of reusing the pooled one');
+  assert.equal(rec.requests, 2, 'both sends should have been dispatched on the pooled session');
+  assert.equal(sender.sessionCount(), 1, 'the pool should hold exactly one session for the origin');
+});
+
+// ── 10. SEPARATE ORIGINS: a production send and a sandbox send use SEPARATE pooled sessions (two connects, two hosts).
+test('makePooledSender: production and sandbox tokens use separate pooled sessions (different Apple hosts)', async () => {
+  const rec = {};
+  const sender = makePooledSender(CFG, { connect: poolMock(rec, { answer: true }) });
+  sender.send(HEXTOK_A, 'production');
+  await flush(); await flush();
+  sender.send(HEXTOK_A, 'sandbox');
+  await flush(); await flush();
+  assert.equal(rec.connects, 2, 'prod and sandbox must not share a session — they are different Apple hosts');
+  assert.deepEqual(new Set(rec.authorities), new Set(['https://api.push.apple.com', 'https://api.sandbox.push.apple.com']),
+    'the two sessions did not go to the prod and sandbox hosts');
+  assert.equal(sender.sessionCount(), 2, 'the pool should hold one session per origin');
+});
+
+// ── 11. RECONNECT AFTER CLOSE: once a cached session emits 'close' the pool evicts it and the next send reconnects.
+test('makePooledSender: after a pooled session closes, the next send reconnects with a new session', async () => {
+  const rec = {};
+  const sender = makePooledSender(CFG, { connect: poolMock(rec, { answer: true }) });
+  sender.send(HEXTOK_A, 'production');
+  await flush(); await flush();
+  assert.equal(rec.connects, 1, 'the first send should open one session');
+  rec.lastSession.emit('close');   // Apple drops the connection (the real 'close'/'goaway'/'error' the pool drops on)
+  assert.equal(sender.sessionCount(), 0, 'a closed session was not evicted from the pool');
+  sender.send(HEXTOK_A, 'production');
+  await flush(); await flush();
+  assert.equal(rec.connects, 2, 'the send after a close did not reconnect (it reused a dead session)');
+  assert.equal(sender.sessionCount(), 1, 'the pool should hold the reconnected session');
+});
+
+// ── 12. NEVER THROWS INTO INGEST / STILL CONTENTLESS: an erroring transport does not throw out of send(), the error
+// is counted, the session is dropped, and the body put on the wire is still the exact §15.2 contentless payload.
+test('makePooledSender: a transport that errors mid-send never throws out of send() and the body stays contentless', async () => {
+  let sentBody = null;
+  const errTransport = () => {
+    const session = new EventEmitter();
+    session.close = () => {}; session.destroy = () => {};
+    session.request = () => {
+      const req = new EventEmitter();
+      req.destroy = () => {};
+      req.end = (body) => { sentBody = body; setImmediate(() => req.emit('error', new Error('mid-send reset'))); };
+      return req;
+    };
+    return session;
+  };
+  const sender = makePooledSender(CFG, { connect: errTransport });
+  assert.doesNotThrow(() => sender.send(HEXTOK_A, 'production'), 'a mid-send error threw out of makePooledSender');
+  await flush(); await flush();
+  assert.deepEqual(JSON.parse(sentBody), libBuildPayload(), 'the body on the wire drifted from the contentless §15.2 payload');
+  assert.ok(sender.counters.err >= 1, 'the mid-send error was not counted');
+  assert.equal(sender.sessionCount(), 0, 'the errored session was not dropped from the pool');
 });

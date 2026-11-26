@@ -7440,8 +7440,10 @@ function sendContentlessPush(pub, tokenRec, e) {
 // FORWARD TIMEOUT. The push service (a8) being unreachable or slow is the COMMON case, not an exception. A refused
 // connection or a silent hang must NEVER throw into ingest nor leave an unhandled promise rejection — a stray
 // rejection reaching the process-wide handler would make an a8 blip look like an error on EVERY church's relay.
-// Bounded and unref'd (a test may shorten it); it is a safety deadline, not an operator knob.
-let _pushForwardTimeoutMs = 8 * 1000;
+// Bounded and unref'd; it is a safety deadline, not an operator knob. A TEST may shorten it via
+// TRINITY_PUSH_FORWARD_TIMEOUT_MS so it can drive the abort path in bounded time — that env is set by NO deploy
+// (like TRINITY_DATA_DIR / TRINITY_TAILSCALE_BIN); unset or non-numeric leaves the production 8s default untouched.
+let _pushForwardTimeoutMs = Number(process.env.TRINITY_PUSH_FORWARD_TIMEOUT_MS) || 8 * 1000;
 function _pushNote(msg) { try { console.log(msg); } catch {} }   // COARSE only — never a token, never a pubkey
 
 // Build the fire-and-forget forwarder wired as _pushSender. `serviceBase` is TRINITY_PUSH_SERVICE_URL (trailing

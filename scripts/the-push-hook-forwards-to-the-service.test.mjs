@@ -68,11 +68,12 @@ const tokOf = (who) => 'apns-' + who.pub.slice(0, 6);
 const dm = (from, toPub, ts = now()) => finalizeEvent({ kind: 4, created_at: ts, tags: [['p', toPub], ['t', NET]], content: 'ciphertext' }, from.sk);
 const roomMsg = (from, church, gid, ts = now()) => finalizeEvent({ kind: 1, created_at: ts, tags: [['t', gid], ['t', NET], ['p', church.pub]], content: 'hello room' }, from.sk);
 
-function spawnRelay(port, dataDir, church, extraEnv, stderrSink) {
+function spawnRelay(port, dataDir, church, extraEnv, stderrSink, stdoutSink) {
   const r = spawn(process.execPath, ['scripts/gateway.mjs', String(port)], {
-    cwd: ROOT, stdio: ['ignore', 'ignore', stderrSink ? 'pipe' : 'ignore'],
+    cwd: ROOT, stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', stderrSink ? 'pipe' : 'ignore'],
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(church.pub), TRINITY_TAILSCALE_BIN: '/nonexistent', ...extraEnv },
   });
+  if (stdoutSink) r.stdout.on('data', d => stdoutSink.buf += d.toString());
   if (stderrSink) r.stderr.on('data', d => stderrSink.buf += d.toString());
   return r;
 }
@@ -214,24 +215,33 @@ test('A8 REFUSED: a live DM to a refused push service keeps the relay serving wi
   } finally { try { r.kill('SIGKILL'); } catch {} try { rmSync(dd, { recursive: true, force: true }); } catch {} }
 });
 
-test('A8 HUNG: a live DM to a never-answering push service returns immediately and the relay keeps serving', async () => {
+test('A8 HUNG: a live DM to a never-answering push service aborts the forward with NO unhandled rejection and keeps serving', async () => {
   const P = 8932, HUNG = 8933;
   await requireFreePort(P, 'a8-hung gateway');
   await requireFreePort(HUNG, 'a8-hung target server');
   const hung = http.createServer(() => { /* accept the socket, NEVER respond */ });
   await new Promise(r => hung.listen(HUNG, '127.0.0.1', r));
   const dd = mkdtempSync(join(tmpdir(), 'trin-a8hung-'));
-  const sink = { buf: '' };
+  const errSink = { buf: '' }, outSink = { buf: '' };
   const ch = K();
-  const r = spawnRelay(P, dd, ch, { TRINITY_PUSH_SERVICE_URL: `http://127.0.0.1:${HUNG}` }, sink);
+  // TRINITY_PUSH_FORWARD_TIMEOUT_MS shrinks the forward's 8s abort deadline to 300ms (a test-only env — no deploy sets
+  // it) so this run GENUINELY reaches the abort path in bounded time. A hung server never answers, so the ONLY way the
+  // forward's promise can ever settle is the AbortController firing — which must be swallowed by the forward's .catch.
+  const r = spawnRelay(P, dd, ch, { TRINITY_PUSH_SERVICE_URL: `http://127.0.0.1:${HUNG}`, TRINITY_PUSH_FORWARD_TIMEOUT_MS: '300' }, errSink, outSink);
   try {
     assert.ok(await waitReady(P), 'a8-hung relay did not come up');
     await seedDM(P, ch);
     const t0 = Date.now();
     assert.equal((await publishAs(P, A, dm(A, B.pub)))[2], true, 'the DM was refused at the frame');
     assert.ok(Date.now() - t0 < 4000, 'the DM took too long — ingest awaited the hung forward');   // forward is fire-and-forget
-    await sleep(500);
+    // WAIT PAST the 300ms deadline so the abort actually fires. The old 500ms window could not exercise it: the real
+    // abort was 8s away, so the forward's promise was still pending and a broken .catch stayed green.
+    await sleep(1500);
+    // POSITIVE proof the abort path executed: the forward's .catch logged its coarse line on the AbortError. Removing
+    // the forward's error handling removes THIS line AND surfaces the unhandled-rejection assertion below.
+    assert.ok(outSink.buf.includes('push forward failed'), 'the forward did not reach its abort/error handler within the deadline:\n' + outSink.buf);
     assert.ok((await fetch(`http://127.0.0.1:${P}/status`)).ok, 'the relay stopped serving while a forward hung');
-    assert.ok(!sink.buf.includes('[unhandledRejection]'), 'the forward left an unhandled rejection while hung:\n' + sink.buf);
+    assert.ok(!errSink.buf.includes('[unhandledRejection]'), 'the aborted forward left an UNHANDLED REJECTION:\n' + errSink.buf);
+    assert.ok(!errSink.buf.includes('[uncaughtException]'), 'the aborted forward threw an uncaught exception:\n' + errSink.buf);
   } finally { try { r.kill('SIGKILL'); } catch {} try { await new Promise(res => hung.close(res)); } catch {} try { rmSync(dd, { recursive: true, force: true }); } catch {} }
 });
