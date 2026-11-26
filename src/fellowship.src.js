@@ -1062,7 +1062,20 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // background verifier works from, what the Relays sheet shows, and what the membership document is READ over
 // (see churchRelayNet): a reader built on the FILTERED list could never learn about the box that would admit
 // itself, which is the §6-bis deadlock one level down from enrolment. Nothing publishes over this.
-function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
+// ⚠ COMPILE-TIME TEST-RELAY OVERRIDE (live-sim isolation, "option B"). A build made with
+// TRINITY_TEST_RELAY=wss://… (esbuild --define:__TEST_RELAY__, see scripts/build-fellowship.sh) replaces the
+// SHARED CANONICAL POOL — and ONLY the canonical pool — with that one relay, so the sim talks to the isolated
+// test relay and NOT app.trinityone.church. In every normal/Release build __TEST_RELAY__ is "" and this line is
+// byte-for-byte the old behaviour. ADMISSION IS UNTOUCHED: _netRelays / churchRelays() still require the relay to
+// PROVE its identity key downstream, and CANONICAL_RELAYS / CANONICAL_RELAY_PUBS / the pin list are not edited —
+// an unpinned test relay is admitted the ordinary way (it proves our key, root 2), never as a pinned canonical.
+// The trap-3 ungated-bootstrap property is preserved (the union stays unfiltered; only which canonical address is
+// in it changes, under a compile flag). ⚠ RELAY SESSION: review against reference/RELAY-ADMISSION.md before merge.
+// `typeof` guards the define so a test that lifts this function with __TEST_RELAY__ absent keeps the prod path.
+function churchRelaysRaw() {
+  const _canon = (typeof __TEST_RELAY__ !== 'undefined' && /^wss:\/\//i.test(__TEST_RELAY__)) ? [__TEST_RELAY__] : CANONICAL_RELAYS;
+  return [...new Set([...(window.Fellowship.relays || []), ..._canon])];
+}
 // THE PUBLISH SET — the same list with the C4 gate applied, AFTER the never-empty guards above. May be
 // empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
 // the outbox; a care request comes back not-sent. See src/relay-net.src.js for why the order is this way

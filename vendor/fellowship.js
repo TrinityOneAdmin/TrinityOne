@@ -7588,7 +7588,8 @@
   ];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelaysRaw() {
-    return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
+    const _canon = /^wss:\/\//i.test("") ? [""] : CANONICAL_RELAYS;
+    return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ..._canon])];
   }
   function churchRelays() {
     const foreign = _otherChurchesNetDocRows(window.Fellowship.churchPub);
