@@ -9221,8 +9221,9 @@
       changed = true;
     }
     for (const k of ["about", "picture"]) {
-      if (!cur[k] && typeof m[k] === "string" && m[k]) {
-        next[k] = m[k];
+      const v = k === "about" && typeof m[k] === "string" ? m[k].slice(0, 160).replace(/[\uD800-\uDBFF]$/, "") : m[k];
+      if (!cur[k] && typeof v === "string" && v) {
+        next[k] = v;
         changed = true;
       }
     }
@@ -12358,7 +12359,9 @@
       const prev = profiles[pub] || {};
       const p = {
         name: (meta.name != null ? meta.name : prev.name || "").trim(),
-        about: (meta.about != null ? meta.about : prev.about || "").trim(),
+        // missing `about` keeps the stored one, '' clears it; either way capped to 160 - _profileAbout's rule,
+        // inline for the reason given in _recoverOwnProfile
+        about: (meta.about != null ? meta.about : prev.about || "").trim().slice(0, 160).replace(/[\uD800-\uDBFF]$/, ""),
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;

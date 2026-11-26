@@ -2399,13 +2399,17 @@ function App() {
     const FS = window.Fellowship;
     const name = (FS && FS.myProfile && FS.myProfile.name) || '';
     let avatar = { kind: 'monogram', color: cur.color || '#5E8C6A' };
-    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; }
+    // displayFor reads profiles[myPubkey], which every kind-0 reader replaces as our own profile lands, so it is
+    // the FRESHEST copy of the bio. myProfile can lag it (a restored phone, before our kind-0 arrives) - an
+    // empty seed there used to let a name-only Save wipe the real bio. myProfile is only the fallback.
+    let freshAbout = '';
+    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; if (d && typeof d.about === 'string') freshAbout = d.about; }
     // stewards run their church from the separate Steward console — ordinary members aren't stewards,
     // so the member app hides steward-only tools (e.g. the invite generator).
     // handle '' = the member has chosen NO name (2026-07-30). It used to fall back to 'Anonymous', which
     // handed them a name they never picked; displayFor() now supplies 'Member' at the display layer.
     // about = the member's own one-line bio, from the same stored profile as the name ('' when none)
-    const about = (FS && FS.myProfile && typeof FS.myProfile.about === 'string') ? FS.myProfile.about : '';
+    const about = freshAbout || ((FS && FS.myProfile && typeof FS.myProfile.about === 'string') ? FS.myProfile.about : '');
     return { name, about, avatar, npub: cur.npub || '', handle: cur.handle || '', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', hidden: !!(FS && FS.myProfile && FS.myProfile.hidden), steward: false };
   })();
   // saving a profile publishes name + mark to the user's key (kind-0). Patch only the fields supplied, so

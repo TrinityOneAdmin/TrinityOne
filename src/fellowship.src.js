@@ -3159,7 +3159,11 @@ function _recoverOwnProfile(e) {
   // OUT visible again, and the Settings toggle then agreed with the wrong answer. AUDIT-2026-07-28.
   if (cur.hidden === undefined && m.hidden !== undefined) { next.hidden = !!m.hidden; changed = true; }
   for (const k of ['about', 'picture']) {
-    if (!cur[k] && typeof m[k] === 'string' && m[k]) { next[k] = m[k]; changed = true; }
+    // the bio is capped like everyone else's: our own event is still read off a relay. Same rule as
+    // _profileAbout, written inline ON PURPOSE - six test harnesses lift this function (and setProfile) with a
+    // fixed set of globals, and a new helper dependency is a ReferenceError in every one of them.
+    const v = (k === 'about' && typeof m[k] === 'string') ? m[k].slice(0, 160).replace(/[\uD800-\uDBFF]$/, '') : m[k];
+    if (!cur[k] && typeof v === 'string' && v) { next[k] = v; changed = true; }
   }
   if (!cur.av && m.av && typeof m.av === 'object') { next.av = m.av; changed = true; }
   if (!changed) return false;
@@ -6211,7 +6215,9 @@ window.Fellowship = {
     const prev = profiles[pub] || {};
     const p = {
       name: (meta.name != null ? meta.name : (prev.name || '')).trim(),
-      about: (meta.about != null ? meta.about : (prev.about || '')).trim(),
+      // missing `about` keeps the stored one, '' clears it; either way capped to 160 - _profileAbout's rule,
+      // inline for the reason given in _recoverOwnProfile
+      about: (meta.about != null ? meta.about : (prev.about || '')).trim().slice(0, 160).replace(/[\uD800-\uDBFF]$/, ''),
       picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
     };
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar

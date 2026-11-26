@@ -116,6 +116,59 @@ test('SCREEN: a bio that arrives while the sheet is open (relay echo, another de
     'a bio that reached this device after the sheet opened is not in the edit box, so Save would wipe it');
 });
 
+// ── the wipe (audit 2026-11-26, AMBER): an Edit opened before our own kind-0 arrived ──────────────────────
+const nameBox = (tree) => {
+  const ins = find(tree, n => n.type === 'input');
+  assert.ok(ins.length >= 1, 'no display-name input - re-anchor this test');
+  return ins[0];
+};
+const pressSave = (tree) => {
+  const save = find(tree, n => n.type === 'button' && texts(n).join('') === 'Save');
+  assert.equal(save.length, 1, 'no Save button - re-anchor this test');
+  save[0].props.onClick();
+};
+
+test('SCREEN: changing only the name does not send a bio (an empty seed must not clear the stored one)', async () => {
+  const m = await intoEdit({ ...MIA, about: '' });   // our kind-0 has not arrived yet
+  nameBox(m.tree).props.onChange({ target: { value: 'Mia W' } });
+  pressSave(m.draw());
+  assert.equal(m.saves.length, 1);
+  assert.equal(m.saves[0].name, 'Mia W', 'CONTROL: the name change was not saved');
+  assert.ok(!('about' in m.saves[0]),
+    'a name-only Save sent `about` (' + JSON.stringify(m.saves[0].about) + '): setProfile reads "" as clear, so ' +
+    'the member\'s real bio is wiped because the box was seeded before their profile arrived');
+});
+
+test('SCREEN: a bio that lands WHILE editing fills an untouched box, and a name-only Save still sends no bio', async () => {
+  const m = await intoEdit({ ...MIA, about: '' });
+  m.props.identity = { ...MIA, about: 'Arrived mid-edit' };   // the kind-0 lands; App re-renders the sheet
+  m.draw();   // the reseed effect runs after this draw; React re-renders on its setState, the harness needs a 2nd draw
+  let tree = m.draw();
+  assert.equal(bioBox(tree).props.value, 'Arrived mid-edit', 'an untouched bio box does not show the bio that just arrived');
+  nameBox(tree).props.onChange({ target: { value: 'Mia W' } });
+  pressSave(m.draw());
+  assert.ok(!('about' in m.saves[0]), 'the bio that arrived mid-edit was re-sent (or blanked) by a name-only Save');
+});
+
+test('SCREEN: once the member has typed in the box, an arriving bio does not overwrite it, and theirs is sent', async () => {
+  const m = await intoEdit({ ...MIA, about: '' });
+  bioBox(m.tree).props.onChange({ target: { value: 'Mine' } });
+  m.draw();
+  m.props.identity = { ...MIA, about: 'Arrived later' };
+  m.draw();
+  const tree = m.draw();
+  assert.equal(bioBox(tree).props.value, 'Mine', 'a bio arriving mid-edit overwrote what the member was typing');
+  pressSave(tree);
+  assert.equal(m.saves[0].about, 'Mine');
+});
+
+test('SCREEN: the 160 cut in the box never leaves half an emoji', async () => {
+  const m = await intoEdit({ ...MIA, about: '' });
+  bioBox(m.tree).props.onChange({ target: { value: 'a'.repeat(159) + '\u{1F600}' } });   // 161 UTF-16 units
+  const v = bioBox(m.draw()).props.value;
+  assert.equal(v, 'a'.repeat(159), 'the cut left a lone high surrogate: ' + JSON.stringify(v.slice(-2)));
+});
+
 test('SCREEN: view mode shows the bio under the name', async () => {
   const withBio = await mountProfileSheet({ ...MIA, about: 'Welcome team, 9:30' });
   assert.ok(hasText(withBio.draw(), 'Welcome team, 9:30'), 'a member who has a bio cannot see it on their own profile');
@@ -155,11 +208,16 @@ test('SAVE PATH: the identity App hands ProfileSheet carries the member\'s own s
   const arrow = fnBody(APP, at + anchor.indexOf('() =>'), 'identity');
   const build = (myProfile) => new Function('window', 'return (' + arrow + ')();')({
     TrinityIdentity: { current: { npub: 'npub1x', color: '#123456' } }, TrinityData: {},
-    Fellowship: { myProfile, myPubkey: 'ab'.repeat(32), displayFor: () => ({}) },
+    Fellowship: { myProfile, myPubkey: 'ab'.repeat(32), displayFor: () => (fresh == null ? {} : { about: fresh }) },
   });
+  let fresh = null;
   assert.equal(build({ name: 'Mia', about: 'Welcome team, 9:30' }).about, 'Welcome team, 9:30',
     'the member\'s stored bio never reaches the profile screen, so the edit box opens empty');
   assert.equal(build({ name: 'Mia' }).about, '', 'a member with no bio got something other than an empty one');
+  // myProfile can lag our own kind-0 (it lands in profiles[pub], which displayFor reads): the fresh copy wins.
+  fresh = 'From the relay';
+  assert.equal(build({ name: 'Mia', about: '' }).about, 'From the relay',
+    'the bio is seeded from a stale myProfile instead of the copy displayFor has, so Edit opens with it empty');
 });
 
 // ── 3. the engine (shipped bundle) ──────────────────────────────────────────────────────────────────────────
@@ -239,4 +297,32 @@ test('ENGINE: the published wire copy carries the bio and never the name', () =>
   const wire = new Function('p', set + '\nreturn wire;')(p);
   assert.equal(wire.about, 'Sings alto');
   assert.ok(!('name' in wire), 'the member\'s name is on the kind-0 wire again (Stage 2 sealed it)');
+});
+
+// ── own bio in the engine is capped too (audit nit) ────────────────────────────────────────────────────────
+function aboutPieces() {
+  const cap = BUNDLE.match(/var ABOUT_MAX = \d+;/g);
+  assert.equal(cap && cap.length, 1);
+  return cap[0] + '\n' + fnBody(BUNDLE, 'function _profileAbout(', '_profileAbout');
+}
+
+test('ENGINE: setProfile caps the bio it stores and sends, and keeps missing = keep, "" = clear', () => {
+  const sp = once(BUNDLE, 'async setProfile(meta) {');
+  const from = BUNDLE.indexOf('const prev = profiles[pub] || {};', sp);
+  const to = BUNDLE.indexOf('};', BUNDLE.indexOf('const p = {', from)) + 2;
+  assert.ok(from > sp && to > from && to - from < 600, 're-anchor: setProfile\'s profile record moved');
+  const build = (meta, prev) => new Function('meta', 'profiles', 'pub', aboutPieces() + '\n' + BUNDLE.slice(from, to) + '\nreturn p;')(meta, { me: prev }, 'me');
+  assert.equal(build({ about: 'x'.repeat(500) }, {}).about.length, 160, 'setProfile publishes an uncapped bio');
+  assert.equal(build({ name: 'Mia' }, { about: 'Kept' }).about, 'Kept', 'a save without `about` dropped the stored bio');
+  assert.equal(build({ about: '' }, { about: 'Kept' }).about, '', 'about: "" no longer clears the bio');
+});
+
+test('ENGINE: _recoverOwnProfile caps a recovered bio', () => {
+  const body = fnBody(BUNDLE, 'function _recoverOwnProfile(', '_recoverOwnProfile');
+  once(BUNDLE, 'function _recoverOwnProfile(');
+  const win = { Fellowship: { myProfile: {} }, dispatchEvent() {} };
+  const fn = new Function('pub', 'window', 'localStorage', 'PROFILE_KEY', 'CustomEvent',
+    aboutPieces() + '\n' + body + '\nreturn _recoverOwnProfile;')('me', win, { setItem() {} }, 'k', class { constructor() {} });
+  assert.equal(fn({ pubkey: 'me', content: JSON.stringify({ about: 'y'.repeat(400) }) }), true);
+  assert.equal(win.Fellowship.myProfile.about.length, 160, 'a recovered own bio is stored uncapped');
 });

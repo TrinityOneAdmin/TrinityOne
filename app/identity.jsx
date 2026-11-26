@@ -1606,11 +1606,18 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const [name, setName] = useId(identity.name || '');
   const [av, setAv] = useId(identity.avatar);
   const [about, setAbout] = useId(identity.about || '');   // one-line bio, max 160 (kind-0 `about`)
+  // THE BIO IS SENT ONLY IF THE MEMBER CHANGED IT. setProfile reads '' as "clear", and the seed can be empty only
+  // because our own kind-0 has not arrived yet (restored phone, Edit tapped early) - so sending the box on every
+  // Save wiped a real bio when the member changed only their name. aboutSeed is what the box was seeded with;
+  // until the member touches the box it keeps following identity.about, even mid-edit.
+  const [aboutSeed, setAboutSeed] = useId(identity.about || '');
+  const [aboutTouched, setAboutTouched] = useId(false);
   // seed the form when the sheet OPENS, and refresh it if the profile changes while NOT editing — but never
   // re-seed mid-edit: an identity update echoing back (relay round-trip / another device / a parent re-render)
   // would otherwise wipe the name/mark you're in the middle of picking and bounce you back to the profile view.
   useIdE(() => { if (open) setEdit(false); }, [open]);
-  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); setAbout(identity.about || ''); } }, [open, identity, edit]);
+  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); setAbout(identity.about || ''); setAboutSeed(identity.about || ''); setAboutTouched(false); } }, [open, identity, edit]);
+  useIdE(() => { if (open && edit && !aboutTouched) { setAbout(identity.about || ''); setAboutSeed(identity.about || ''); } }, [open, identity.about, edit, aboutTouched]);
 
   const named = !!(identity.name && identity.name.trim());
   // steward rule: this church asks for a real first + last name (two words)
@@ -1704,7 +1711,9 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             <button onClick={() => {
               if (needFull && !twoWords(name)) return;
               setEdit(false);
-              Promise.resolve(onSave({ name: name.trim(), avatar: av, about: about.trim() }))
+              const patch = { name: name.trim(), avatar: av };
+              if (about.trim() !== aboutSeed.trim()) patch.about = about.trim();   // absent = keep the stored bio
+              Promise.resolve(onSave(patch))
                 .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting (setProfile) */ : ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
                 .catch(() => ctx.toast('Couldn’t save your profile — try again.', { error: true }));
             }} disabled={needFull && !twoWords(name)} style={{
@@ -1718,7 +1727,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
           {needFull ? <div style={{ fontSize: 12.5, color: name.trim() && !twoWords(name) ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '8px 2px 0', lineHeight: 1.45 }}>{(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real <b>first and last name</b> so people can recognise you.</div> : null}
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 8px' }}>BIO</label>
-          <textarea value={about} onChange={e => setAbout(e.target.value.replace(/[\r\n]+/g, ' ').slice(0, 160))} maxLength={160} rows={3} placeholder="A short line about you (optional)" style={{
+          <textarea value={about} onChange={e => { setAboutTouched(true); setAbout(e.target.value.replace(/[\r\n]+/g, ' ').slice(0, 160).replace(/[\uD800-\uDBFF]$/, '')); }} maxLength={160} rows={3} placeholder="A short line about you (optional)" style={{
             width: '100%', border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '12px 16px', fontSize: 15,
             fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', resize: 'none', lineHeight: 1.45 }} />
           <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '6px 2px 0', textAlign: 'right' }}>{`${about.length}/160`}</div>
