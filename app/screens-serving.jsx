@@ -1957,7 +1957,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   Your church’s key hasn’t reached this phone. They’ll appear once it does — nothing is missing.
                 </div>
               ) : null}
-              {events.slice().filter(e => !(e && e._locked)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
+              {events.slice().filter(e => !(e && e._locked)).filter(e => (e.date || '') >= svTodayIso()).sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
                 <div key={(e._networkPub || '') + e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
                   {e.image ? <div style={{ width: '100%', height: 150, overflow: 'hidden' }}><img src={e.image} alt="" style={{ width: '100%', height: '100%', display: 'block', ...(window.eventImgStyle ? window.eventImgStyle(e.imgPos, e.imgZoom) : { objectFit: 'cover' }) }} /></div> : null}
                   <div onClick={() => ctx.openEvent && ctx.openEvent(e)} style={{ display: 'flex', gap: 13, padding: 16, cursor: 'pointer' }}>
