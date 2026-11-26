@@ -2451,8 +2451,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
   const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
   const [reconciling, setReconciling] = React.useState(null);// reconcile modal: null closed · {} new · {id,…} reopen a saved reconciliation
   const [recurringOpen, setRecurringOpen] = React.useState(false); // collapsible "Recurring payments" panel
-  const [actionsOpen, setActionsOpen] = React.useState(false);    // "Actions" pill dropdown (Import/Reconcile/Share)
-  const [summaryOpen, setSummaryOpen] = React.useState(false);    // "Summary" pill toggle (stats + funds, finance app only)
+  const [actionsOpen, setActionsOpen] = React.useState(false);    // "Actions" edge tab dropdown (Import/Reconcile/Share)
   const [tplEditing, setTplEditing] = React.useState(null);  // template modal: null closed · {} add · {id,…} edit
   const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
   const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
@@ -3367,62 +3366,43 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
     </div>
   );
   return (
-    <div style={{ padding: '4px 2px 80px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: _tabStripLifted ? 'flex-end' : 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: _tabStripLifted ? 8 : 16 }}>
-        {!_tabStripLifted && <div>
+    <div style={{ padding: '4px 2px 80px', position: 'relative' }}>
+      {!_tabStripLifted && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+        <div>
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
           <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
-        </div>}
-        {_tabStripLifted ? (
-          <div style={{ position: 'relative' }}>
-            <button onClick={() => setActionsOpen(o => !o)} style={{ border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '8px 14px', borderRadius: 13, boxShadow: '0 4px 14px rgba(34,28,16,.18)', display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '0.5px', fontFamily: 'var(--font-ui)', textTransform: 'uppercase' }}><Icon name="more-horizontal" size={16} color="currentColor" /> Actions</button>
-            {actionsOpen ? <>
-              <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
-              <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, minWidth: 200, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,.15)', zIndex: 40, padding: '4px 0', animation: 'finDrawerFade .15s ease' }}>
-                <button onClick={() => { setActionsOpen(false); setImporting(true); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
-                <button onClick={() => { setActionsOpen(false); setReconciling({}); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
-                <button onClick={() => { setActionsOpen(false); setSharing(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
-              </div>
-            </> : null}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => setImporting(true)} title="Bring in transactions from a bank statement file" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
-            <button onClick={() => setReconciling({})} title="Reconcile a bank statement against your ledger and check the closing balance" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
-            <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
-            <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
-            {DONATE_ON && <button onClick={() => setDonate(true)} title="Support TrinityOne — a gift helps cover the shared relays" className="sk-btn" style={{ padding: '10px 14px', fontSize: 13, border: '1px solid var(--line)', background: 'transparent', color: 'var(--ink-3)' }}><Icon name="gift" size={15} color="var(--clay)" /> Support the project</button>}
-          </div>
-        )}
-      </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => setImporting(true)} title="Bring in transactions from a bank statement file" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => setReconciling({})} title="Reconcile a bank statement against your ledger and check the closing balance" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
+          <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
+          <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
+          {DONATE_ON && <button onClick={() => setDonate(true)} title="Support TrinityOne — a gift helps cover the shared relays" className="sk-btn" style={{ padding: '10px 14px', fontSize: 13, border: '1px solid var(--line)', background: 'transparent', color: 'var(--ink-3)' }}><Icon name="gift" size={15} color="var(--clay)" /> Support the project</button>}
+        </div>
+      </div>}
+      {_tabStripLifted && !actionsOpen && <button onClick={() => setActionsOpen(true)} aria-label="Open actions" style={{
+        position: 'fixed', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
+        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
+        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
+      }}>
+        <Icon name="more-horizontal" size={17} color="#fff" />
+        <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>ACTIONS</span>
+      </button>}
+      {_tabStripLifted && actionsOpen ? <>
+        <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
+        <div style={{ position: 'fixed', right: 0, top: '40%', zIndex: 40, minWidth: 200, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '12px 0 0 12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', padding: '4px 0', animation: 'finDrawerFade .15s ease' }}>
+          <button onClick={() => { setActionsOpen(false); setImporting(true); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => { setActionsOpen(false); setReconciling({}); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
+          <button onClick={() => { setActionsOpen(false); setSharing(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
+        </div>
+      </> : null}
 
       {bookErrors.length > 0 && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, marginBottom: 16, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
         <Icon name="alert" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your books are incomplete — {bookErrors[0]}. Don't re-enter anything; new entries can't be saved until it arrives. If this persists, check your connection.</div>
       </div>}
 
-      {_tabStripLifted ? <>
-        <button onClick={() => setSummaryOpen(o => !o)} style={{ border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '8px 14px', borderRadius: 13, boxShadow: '0 4px 14px rgba(34,28,16,.18)', display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '0.5px', fontFamily: 'var(--font-ui)', textTransform: 'uppercase', marginBottom: summaryOpen ? 12 : 16 }}><Icon name={summaryOpen ? 'chevron-up' : 'chevron-down'} size={16} color="currentColor" /> Summary</button>
-        {summaryOpen ? <>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-            {stat('In the bank', booksFmt(cash, book))}
-            {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
-            {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
-            {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
-          </div>
-          <div style={{ ...bkCard, marginBottom: 16 }}>
-            <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Funds</div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {funds.map(f => (
-                <div key={f.fund} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 14px', minWidth: 150 }}>
-                  <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>{f.name}{f.kind === 'restricted' ? ' · restricted' : f.kind === 'designated' ? ' · designated' : ''}</div>
-                  <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{booksFmt(f.balance, book)}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </> : null}
-      </> : <>
+      {(!_tabStripLifted || tab === 'summary') ? <>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           {stat('In the bank', booksFmt(cash, book))}
           {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
@@ -3440,7 +3420,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
             ))}
           </div>
         </div>
-      </>}
+      </> : null}
 
       {!_tabStripLifted && <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />}
 

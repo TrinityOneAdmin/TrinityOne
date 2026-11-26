@@ -145,6 +145,7 @@ function FinanceUnlinked() {
 }
 
 const FIN_NAV = [
+  { key: 'summary', label: 'Summary' },
   { key: 'transactions', label: 'Transactions' },
   { key: 'reports', label: 'Reports' },
   { key: 'invoices', label: 'Invoices' },
@@ -170,7 +171,7 @@ function FinanceShell() {
   // read of this church, this epoch" — the stamp subscribeStewards puts on the list it hands over.
   const rosterGenuine = !!(S.listIsFresh && S.listIsFresh(_roster));
   const [settings, setSettings] = React.useState(false);
-  const [finTab, setFinTab] = React.useState('transactions');
+  const [finTab, setFinTab] = React.useState('summary');
   const [finMoreOpen, setFinMoreOpen] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   React.useEffect(() => {
