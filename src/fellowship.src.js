@@ -1044,15 +1044,23 @@ const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static 
 // down. Also the fallback when a church is joined by bare npub (no relay in the link) and we have none
 // yet (e.g. the CDN-hosted app), so its name + groups resolve. Add a host's wss URL here once it joins
 // the pool — these relays don't sync to each other, so clients write to all of them.
-const CANONICAL_RELAYS = [
-  'wss://app.trinityone.church/relay',                    // a8 / master-01 via Cloudflare — primary (own domain)
-  // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
-  // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
-  // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
-  // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
-  // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
-  // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
-];
+// ⚠ COMPILE-TIME TEST-RELAY OVERRIDE (live-sim isolation, "option B"). A build made with
+// TRINITY_TEST_RELAY=wss://… (esbuild --define:__TEST_RELAY__, see scripts/build-fellowship.sh) makes the WHOLE
+// shared canonical pool that ONE relay — so EVERY consumer (the export window.Fellowship.CANONICAL_RELAYS, the
+// follow path app/app.jsx:~1105 which addRelay()s F.CANONICAL_RELAYS, churchRelaysRaw, and each
+// `CANONICAL_RELAYS.includes` shared-pool check) routes to the isolated test relay and NOT app.trinityone.church.
+// In every normal/Release build __TEST_RELAY__ is "" so this is byte-for-byte the old value. ADMISSION IS
+// UNTOUCHED: _netRelays / churchRelays() still require the relay to PROVE its identity key, and the pin list
+// (CANONICAL_RELAY_PUBS) is not edited — an unpinned test relay is admitted the ordinary way (it proves our key,
+// root 2), never as a pinned canonical. The `'wss://app.trinityone.church/relay'` literal stays inline so the
+// is-this-relay-one-of-ours pin guardian still reads the shipped canonical URL. `typeof` guards the define so a
+// test that evaluates this with __TEST_RELAY__ absent keeps the production path.
+// ⚠ RELAY SESSION: review against reference/RELAY-ADMISSION.md before merge.
+// (History, now in git: a dead ts.net path to the same box was removed 2026-11-10 (D0); dev-box 2026-06-25; NAS 2026-06-17.)
+// The regex lives in its own statement so the CANONICAL_RELAYS line stays a clean, regex-free literal the
+// is-this-relay-one-of-ours pin guardian can parse (it reads the quoted canonical URL out of that statement).
+const _TEST_RELAY_OVERRIDE = (typeof __TEST_RELAY__ !== 'undefined' && /^wss:\/\//i.test(__TEST_RELAY__)) ? __TEST_RELAY__ : '';
+const CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE ? [_TEST_RELAY_OVERRIDE] : ['wss://app.trinityone.church/relay'];   // a8 / master-01 via Cloudflare — primary (own domain, pinned)
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 // Church content (members, groups, plans, devotionals) must stay reachable on the church's SHARED relays
 // even when the member also runs a private/home relay — otherwise a relay split (groups on one relay,
@@ -1062,20 +1070,9 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // background verifier works from, what the Relays sheet shows, and what the membership document is READ over
 // (see churchRelayNet): a reader built on the FILTERED list could never learn about the box that would admit
 // itself, which is the §6-bis deadlock one level down from enrolment. Nothing publishes over this.
-// ⚠ COMPILE-TIME TEST-RELAY OVERRIDE (live-sim isolation, "option B"). A build made with
-// TRINITY_TEST_RELAY=wss://… (esbuild --define:__TEST_RELAY__, see scripts/build-fellowship.sh) replaces the
-// SHARED CANONICAL POOL — and ONLY the canonical pool — with that one relay, so the sim talks to the isolated
-// test relay and NOT app.trinityone.church. In every normal/Release build __TEST_RELAY__ is "" and this line is
-// byte-for-byte the old behaviour. ADMISSION IS UNTOUCHED: _netRelays / churchRelays() still require the relay to
-// PROVE its identity key downstream, and CANONICAL_RELAYS / CANONICAL_RELAY_PUBS / the pin list are not edited —
-// an unpinned test relay is admitted the ordinary way (it proves our key, root 2), never as a pinned canonical.
-// The trap-3 ungated-bootstrap property is preserved (the union stays unfiltered; only which canonical address is
-// in it changes, under a compile flag). ⚠ RELAY SESSION: review against reference/RELAY-ADMISSION.md before merge.
-// `typeof` guards the define so a test that lifts this function with __TEST_RELAY__ absent keeps the prod path.
-function churchRelaysRaw() {
-  const _canon = (typeof __TEST_RELAY__ !== 'undefined' && /^wss:\/\//i.test(__TEST_RELAY__)) ? [__TEST_RELAY__] : CANONICAL_RELAYS;
-  return [...new Set([...(window.Fellowship.relays || []), ..._canon])];
-}
+// (The test-relay override now lives in the CANONICAL_RELAYS const above, so this stays the original one-liner —
+// it, and every other consumer of CANONICAL_RELAYS, picks up the isolated pool automatically.)
+function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 // THE PUBLISH SET — the same list with the C4 gate applied, AFTER the never-empty guards above. May be
 // empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
 // the outbox; a care request comes back not-sent. See src/relay-net.src.js for why the order is this way

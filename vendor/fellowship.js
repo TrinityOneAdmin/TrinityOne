@@ -7576,20 +7576,11 @@
   var _staticHost = !!(_loc && _loc.host && /\.(github\.io|pages\.dev|netlify\.app)$/i.test(_loc.host));
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
-  var CANONICAL_RELAYS = [
-    "wss://app.trinityone.church/relay"
-    // a8 / master-01 via Cloudflare — primary (own domain)
-    // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
-    // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
-    // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
-    // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
-    // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
-    // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
-  ];
+  var _TEST_RELAY_OVERRIDE = /^wss:\/\//i.test("") ? "" : "";
+  var CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE ? [_TEST_RELAY_OVERRIDE] : ["wss://app.trinityone.church/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelaysRaw() {
-    const _canon = /^wss:\/\//i.test("") ? [""] : CANONICAL_RELAYS;
-    return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ..._canon])];
+    return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
   function churchRelays() {
     const foreign = _otherChurchesNetDocRows(window.Fellowship.churchPub);
