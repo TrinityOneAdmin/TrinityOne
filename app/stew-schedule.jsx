@@ -1827,8 +1827,8 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" list="sch-event-names" style={schFld} />
-      <datalist id="sch-event-names">{history.names.map(n => <option key={n} value={n} />)}</datalist>
+      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" list={window.Capacitor ? undefined : "sch-event-names"} style={schFld} />
+      {window.Capacitor ? null : <datalist id="sch-event-names">{history.names.map(n => <option key={n} value={n} />)}</datalist>}
       <div style={{ display: 'flex', gap: 10 }}>
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
@@ -1841,8 +1841,8 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" list="sch-event-wheres" style={schFld} />
-      <datalist id="sch-event-wheres">{history.wheres.map(w => <option key={w} value={w} />)}</datalist>
+      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" list={window.Capacitor ? undefined : "sch-event-wheres"} style={schFld} />
+      {window.Capacitor ? null : <datalist id="sch-event-wheres">{history.wheres.map(w => <option key={w} value={w} />)}</datalist>}
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
@@ -2021,7 +2021,7 @@ function DashCalendar() {
         <div className="no-scrollbar" style={{ flex: narrow ? 'none' : 1, minHeight: 0, overflow: narrow ? 'visible' : 'auto', display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: narrow ? 'minmax(52px, auto)' : 'minmax(74px, 1fr)', gap: 5 }}>
           {cells.map((d, i) => {
             if (!d) return <div key={i} />;
-            const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
+            const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today); const isPast = key < schKey(today);
             const has = it.services.length || it.events.length;
             return (
               <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day"
@@ -2029,6 +2029,7 @@ function DashCalendar() {
                 onDragLeave={() => { if (dragOverKey === key) setDragOverKey(null); }}
                 onDrop={ev => { ev.preventDefault(); onDropDay(key); }}
                 style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
+                opacity: isPast ? 0.4 : 1,
                 border: dragOverKey === key ? '2px dashed var(--clay)' : pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: dragOverKey === key ? 'color-mix(in oklab, var(--clay) 11%, var(--surface))' : isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} draggable
