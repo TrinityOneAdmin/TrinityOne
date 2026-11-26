@@ -1654,6 +1654,7 @@ const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — 
 const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S key, wrapped to whoever the church's PERMISSIONS admit — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
 const CHECKINPERM_D = D.CHECKINPERM;   // A PERSON IS CLEARED for children's check-in — d=checkinperm:<personPub>. Owner-only, cleartext, and CARRIES NO KEY. The half of the old grant that says WHO, split out 2026-09-09 so a church can clear its volunteers once a year as it actually does, rather than once a service.
 const CHECKINARRIVAL_D = D.CHECKINARRIVAL; // A PARENT SAYS “WE ARE HERE” — d=checkinarrival:<sid>:<authorpubhex>, authored by the parent. NOT a register row and never convertible into one: a parent never authors a trinityone/checkin:. See arrivalIdOk for the whole reason.
+const PUSHTOKEN_D = D.PUSHTOKEN; // A MEMBER'S OWN iOS push token — d=pushtoken:<memberpubhex>, the suffix IS the author. Self-bound by pushtokenIdOk (a stateless mirror of arrivalIdOk) at all four store doors, so member A cannot register under member B's key; recorded into TOKENS_BY_PUB by note(). Phase 1: registry + admission only, no sender yet.
 const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
@@ -2526,6 +2527,7 @@ let _wsBytesIn = 0, _wsBytesOut = 0;
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
 const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church authorised as trusted infra — may pull the FULL corpus)
+const TOKENS_BY_PUB = new Map();  // AUTHOR pubkey -> { token, platform, env, ts } — a member's iOS push token (phase 1 of contentless APNs). Keyed by e.pubkey (the author), NEVER the d-suffix, though pushtokenIdOk has already proved them equal on any stored event. Derived by note()/notePushtoken, so it REBUILDS from the store on every sync/replay/boot, exactly like TRUSTED_RELAYS; nothing reads it yet (the sender is a later phase).
 const PEER_URLS = new Map();      // churchpub -> Map(relay URL -> that relay's pubkey), from the same church-signed doc; the pubkey lets syncAllChurches skip our OWN entry by identity key
 const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
@@ -3420,6 +3422,26 @@ function arrivalIdOk(e, d) {
   const a = arrivalAddrOf(d);
   if (!a) return false;                                  // ONE RULE: an address that names nobody names nobody
   return String(e.pubkey || '').toLowerCase() === a.who; // the address names them, so only they may write here
+}
+// -- A PUSH TOKEN'S ADDRESS NAMES ITS AUTHOR, AND THAT HOLDS AT EVERY DOOR ---------------------------------
+//
+// THE STATELESS HALF of the pushtoken rule, in the exact shape arrivalIdOk has and for the identical reason:
+// the generic kind-30078 member catch-all (memberDocTypeOk) binds a d-tag to a member but NOT the d-suffix to
+// the author, so without this member A could register an iOS push token under member B's key — d=pushtoken:<B>
+// signed by A — and a future sender would then wake A's phone for B, or silence B by overwriting their token.
+// This check holds NO STATE and consults NO MAP: it is a property of the event, true at every door, on every
+// relay, after every restart, so it is applied at the websocket door AND at all three ingest sites that call
+// store.put() with no accept() pass (the /import loop, syncChurchFromPeer, reconcileChurchWithPeer) — exactly
+// where arrivalIdOk and carereqIdOk sit, for exactly the same reason. The suffix is a BARE 64-hex pubkey (no
+// sessionId, unlike an arrival), so there is nothing to split: slice it, validate it, require it to equal the
+// signer. An address that names nobody is REFUSED outright, not waved through — carereqIdOk's "ONE RULE". It is
+// inert for every other document (the prefix guard returns true). The relay-wide MEMBERS.has() membership check
+// is accept()'s ALONE (it consults a hydrated map), mirroring how churchWriter stays out of arrivalIdOk.
+function pushtokenIdOk(e, d) {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(PUSHTOKEN_D)) return true;
+  const who = String(d).slice(PUSHTOKEN_D.length);
+  if (!/^[0-9a-f]{64}$/.test(who)) return false;         // ONE RULE: an address that names nobody names nobody
+  return String(e.pubkey || '').toLowerCase() === who;   // the address names them, so only they may write here
 }
 // The session an arrival's ADDRESS names -- the identity half of `<sessionId>:<authorpubhex>`. Read from the
 // address rather than from the ['session'] tag, because the address is what the store keys on and the tag is
@@ -4552,6 +4574,18 @@ function persistChurches() { try {
   const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), ...(MEDIA_HOSTS.has(h) && !envMedia.has(h) ? { media: true } : {}), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
+// RECORD or DROP a member's iOS push token. Keyed by the AUTHOR (e.pubkey) as a defence in depth — never the
+// d-suffix, though pushtokenIdOk has already proved them equal on any stored event this reaches. `removed` is
+// note()'s own (a ['deleted'] tag or empty content), so an empty-content republish drops the entry. Garbage or
+// non-object content also drops it rather than storing a half-record. Lifted and driven directly (with note()
+// around it) by scripts/a-push-token-is-remembered-and-forgotten.test.mjs.
+function notePushtoken(e, removed, map = TOKENS_BY_PUB) {
+  const pub = String(e.pubkey || '');
+  if (removed) { map.delete(pub); return; }
+  let v = null; try { v = JSON.parse(e.content); } catch {}
+  if (!v || typeof v !== 'object') { map.delete(pub); return; }
+  map.set(pub, { token: v.token, platform: v.platform, env: v.env, ts: v.ts });
+}
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size) return;
   // A CHURCH'S OWN PROFILE CARRIES ITS SAFEGUARDING SWITCHES, and until 2026-08-27 this relay never read them.
@@ -4600,6 +4634,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const cp = e.pubkey; const pubs = new Set(), peerMap = new Map();   // peerMap: url -> that relay's pubkey, so syncAllChurches can skip OUR OWN entry by identity key (not by ORIGIN)
     if (!removed) { let list = []; try { list = JSON.parse(e.content); } catch {} for (const r of (Array.isArray(list) ? list : [])) { if (r && r.pubkey) pubs.add(String(r.pubkey)); if (r && r.url) peerMap.set(String(r.url), r && r.pubkey ? String(r.pubkey) : ''); } }
     TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, peerMap);
+  }
+  else if (d.startsWith(PUSHTOKEN_D)) {   // a member's iOS push token (phase 1 of contentless APNs) — recorded by author pubkey, never gated on CHURCH_PUBS (member-authored, unlike RELAYS_D above)
+    notePushtoken(e, removed);
   }
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
   // EVERY CAPABILITY GATE BELOW ASKS 'any', NOT A SPECIFIC ROLE — pre-push audit, 2026-08-25.
@@ -6180,6 +6217,15 @@ function accept(e) {
     // STEWARDREVOKE_D branch (served to the subject alone). Writers of stewardrevoke:, enumerated: the owner console's
     // publishStewardRevoke / clearStewardRevoke (src/steward.src.js), both church-key-signed; nothing else writes it.
     if (d.startsWith(STEWARDREVOKE_D)) return CHURCH_PUBS.has(e.pubkey);
+    // A MEMBER'S OWN iOS PUSH TOKEN — d=pushtoken:<memberpubhex>. A DEDICATED branch, BEFORE the generic member
+    // catch-all below, because that catch-all binds the d-tag to a member but NOT the suffix to the author: it
+    // would let member A store d=pushtoken:<B> and so register a token under B's key. pushtokenIdOk (stateless,
+    // mirrors arrivalIdOk) binds the suffix to the signer, and MEMBERS.has(e.pubkey) requires an EFFECTIVE member
+    // — the relay-wide MEMBERS set is correct here, not a church-scoped check, because the document names no
+    // church to scope to (it is the member's own device, not a church's content). A non-member is refused; a
+    // member registering under anyone else's key is refused; a member registering their OWN key is admitted.
+    // RETURNS, with no fall-through to the catch-all.
+    if (d.startsWith(PUSHTOKEN_D)) return pushtokenIdOk(e, d) && MEMBERS.has(e.pubkey);
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     if (!isMember) return false;
@@ -8818,6 +8864,10 @@ function serveStatic(req, res) {
           // unlike the window half it is safe here: this loop runs before hydrateMaps(), and a check that
           // needed a hydrated map would refuse a church its own archive (9f17160).
           if (!arrivalIdOk(e, dtag(e))) { invalid++; continue; }
+          // …and never a PUSH TOKEN registered under another member's key. STATELESS (pushtokenIdOk consults no
+          // map), so like arrivalIdOk it is safe on this pre-hydrateMaps() loop; the relay-wide MEMBERS.has check
+          // stays in accept() ONLY, so a restore keeps a member's own archived token even before membership rehydrates.
+          if (!pushtokenIdOk(e, dtag(e))) { invalid++; continue; }
           // …AND A CHECK-IN RECORD BELONGS TO ONE SESSION, WHICH ALSO HOLDS AT EVERY DOOR. Same argument as
           // the line above, on the register instead of on care: this route writes straight to the store with
           // no accept() pass, so without this a helper's forgery at another session's address arrives by
@@ -10268,6 +10318,7 @@ async function syncChurchFromPeer(cp, peerBase) {
     if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
     if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
     if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
+    if (!pushtokenIdOk(e, dtag(e))) return;                // …and never a push token registered under another member's key (stateless, like arrivalIdOk)
     if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
     const put = store.put(e, cp);
     if (put === 'stored') { imported++; note(e); }
@@ -10352,7 +10403,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) { await _notePeer401(cp, peerBase, r); continue; } body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!pushtokenIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }

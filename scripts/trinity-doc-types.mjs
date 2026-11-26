@@ -184,6 +184,15 @@ export const DOC_TYPES = Object.freeze({
   // tombstone (empty content + ['deleted']) cancels it when the same helper is re-added.
   'trinityone/stewardrevoke:': { write: 'church',   read: 'subject', scope: 'author', note: 'church->removed-helper revocation notice; readable by the subject alone' },
   'trinityone/reseat:':       { write: 'steward',   read: 'members', scope: 'suffix', note: 'moves a member\'s seat onto a new key' },
+  // A MEMBER'S OWN PUSH TOKEN — phase 1 of contentless iOS APNs (relay side only; no push hook, no sender yet).
+  // d=pushtoken:<memberpubhex>, where the suffix is the AUTHOR's own pubkey. WRITE is an EFFECTIVE MEMBER for
+  // their OWN key alone: accept() has a dedicated branch (pushtokenIdOk, a stateless mirror of arrivalIdOk, at
+  // all FOUR store-writing doors) that requires suffix === author AND MEMBERS.has(author), so member A can never
+  // register a token under member B's key. content = cleartext JSON {token, platform, env, ts}; deregister = empty
+  // content OR a kind:5 delete. READ is the SUBJECT alone and needs no dedicated canRead branch: owningChurch()
+  // resolves '' for it (no church suffix, no church tag), so canRead's default-deny refuses everyone but the
+  // author (its authed === e.pubkey rule). note() records it into TOKENS_BY_PUB keyed by the author.
+  'trinityone/pushtoken:':    { write: 'member',    read: 'subject', scope: 'suffix', note: 'a member\'s own iOS push token for contentless APNs — d=pushtoken:<memberpubhex>, self-bound to the author (pushtokenIdOk, mirrors arrivalIdOk); content {token,platform,env,ts}; deregister = empty content or kind:5; note() records it into TOKENS_BY_PUB' },
 
   // ── identity: names sealed to the congregation ───────────────────────────────────────────────────────
   'trinityone/namekey:':      { write: 'steward',   read: 'members', scope: 'suffix', note: 'the congregation name key, wrapped per member' },
@@ -550,6 +559,7 @@ export const D = Object.freeze({
   UNAVAIL:        k('trinityone/unavail:'),
   NAMEKEY:        k('trinityone/namekey:'),
   NAME:           k('trinityone/name:'),
+  PUSHTOKEN:      k('trinityone/pushtoken:'),
   CAREKEY:        k('trinityone/carekey:'),
   GROUPKEY:       k('trinityone/groupkey:'),
   FINANCEKEY:     k('trinityone/financekey:'),
