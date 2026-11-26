@@ -42,7 +42,8 @@ import { readHelperGrant, readCheckinPermission, isDeclaredSource, isPermissionS
          KEY_LEAD_SECONDS } from './checkin-role-source.mjs';
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
-import { randomBytes, timingSafeEqual, createHash, createPublicKey, verify as cryptoVerify } from 'crypto';
+import { randomBytes, timingSafeEqual, createHash, createPublicKey, createPrivateKey, sign as cryptoSign, verify as cryptoVerify } from 'crypto';
+import { connect as http2Connect } from 'node:http2';   // PHASE 3: contentless APNs send path (Node built-in; no new npm dep)
 import { spawn, spawnSync } from 'child_process';
 
 // A church's relay must NOT die from a background hiccup (a dropped cloudflared pipe, a stray rejected fetch).
@@ -7416,20 +7417,125 @@ function maybePushNotify(e) {
     if (rec) sendContentlessPush(pub, rec, e);   // → THE SEAM (Phase 3 sends the contentless APNs here)
   }
 }
-// ── THE SEAM. maybePushNotify calls this once per eligible recipient. PHASE 2 SHIPS A NO-OP — nothing is sent.
-// Phase 3 implements the real contentless APNs send (JWT + HTTP/2 to Apple) behind _pushSender. Injectable so a
-// test can observe exactly which recipients would be pushed WITHOUT weakening production: unset => pure no-op.
+// ── THE SEAM. maybePushNotify calls this once per eligible recipient. _pushSender is null (a pure no-op) UNLESS
+// something downstream wires it: the test file-spy (TRINITY_PUSH_SPY_FILE) OR the Phase-3 real APNs sender (only
+// when APNs config is fully present and the .p8 is readable). The wiring is at the bottom of this block and the
+// two are mutually exclusive. A failed send must NEVER break ingest, so the call is wrapped and swallows.
 let _pushSender = null;
 function sendContentlessPush(pub, tokenRec, e) {
   const f = _pushSender;
-  if (f) { try { f(pub, tokenRec, e); } catch {} }   // else: no-op in phase 2 (and whenever Phase 3 is unconfigured)
+  if (f) { try { f(pub, tokenRec, e); } catch {} }   // else: pure no-op (unconfigured — the current production reality)
 }
-// TEST OBSERVABILITY ONLY, and inert in the field — the env var is set by no deploy, exactly like TRINITY_DATA_DIR
-// / TRINITY_TAILSCALE_BIN. A spawned-gateway test sets TRINITY_PUSH_SPY_FILE to read back which recipients the
-// seam fired for (the only way to observe a per-recipient hook across the process boundary). IT SENDS NOTHING.
+
+// ── PHASE 3: the REAL contentless APNs send path. Node built-ins only (http2 + crypto); no new npm dependency.
+// Built as a chain of PURE, unit-testable pieces (buildPayload / apnsUrl / buildHeaders / buildJwt) plus a sender
+// that injects its HTTP/2 transport (_apnsH2Connect) and its logger (_apnsLog), so a test asserts exactly what
+// WOULD go to Apple with no network call and no weakening of production behaviour.
+
+// §15.2 CONTRACT — CONTENTLESS. No message body, no sender, no church name, no content-available. loc-key form so
+// the DEVICE localises the literal "New message"; the wire carries no church data. collapse-id coalesces a burst
+// into ONE "New message", so thread-id groups them under one conversation bucket on the phone.
+function buildPayload() {
+  return { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } };
+}
+// production vs sandbox is the TOKEN's environment, never the relay's — a dev build registers a sandbox token.
+function apnsUrl(token, env) {
+  const host = env === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
+  return 'https://' + host + '/3/device/' + token;
+}
+function _b64url(buf) { return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+// ES256 (ECDSA P-256) JWT signed with the .p8. Apple requires a JOSE r||s signature, NOT DER — dsaEncoding
+// 'ieee-p1363'. iat is unix SECONDS. kid is the key id in the HEADER; iss is the team id in the CLAIMS.
+function buildJwt(keyPem, keyId, teamId, iat) {
+  const signingInput = _b64url(JSON.stringify({ alg: 'ES256', kid: keyId })) + '.' + _b64url(JSON.stringify({ iss: teamId, iat }));
+  const sig = cryptoSign('sha256', Buffer.from(signingInput), { key: createPrivateKey(keyPem), dsaEncoding: 'ieee-p1363' });
+  return signingInput + '.' + _b64url(sig);
+}
+function buildHeaders(jwt, topic) {
+  return {
+    'authorization': 'bearer ' + jwt,
+    'apns-topic': topic,
+    'apns-push-type': 'alert',
+    'apns-priority': '10',
+    'apns-collapse-id': 'trinityone-msgs',
+  };
+}
+
+// CONFIG read once at startup. Absent or unreadable key => null => the sender is never wired (graceful no-op). The
+// .p8 / key id / team id / Push entitlement do NOT exist yet (owner's Apple-portal step is pending), so in today's
+// production this returns null and nothing is sent.
+function readApnsConfig(env = process.env) {
+  const keyFile = env.TRINITY_APNS_KEY_FILE, keyId = env.TRINITY_APNS_KEY_ID, teamId = env.TRINITY_APNS_TEAM_ID;
+  const topic = env.TRINITY_APNS_TOPIC || 'com.trinityone.app';
+  if (!keyFile || !keyId || !teamId) return null;
+  let keyPem; try { keyPem = readFileSync(keyFile, 'utf8'); } catch { return null; }
+  if (!keyPem || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(keyPem)) return null;
+  // Prove the key actually parses as a private key NOW, so a malformed .p8 is a startup no-op, not a per-push throw.
+  try { createPrivateKey(keyPem); } catch { return null; }
+  return { keyPem, keyId, teamId, topic };
+}
+
+// JWT CACHE. Apple rejects a token older than 60 min AND rejects regenerating one too often, so reuse it and
+// refresh only past ~50 min. Keyed on nothing (one config, one token).
+let _apnsJwt = null, _apnsJwtAt = 0;
+function _apnsJwtCached(cfg, nowMs = Date.now()) {
+  if (_apnsJwt && (nowMs - _apnsJwtAt) < 50 * 60 * 1000) return _apnsJwt;
+  _apnsJwt = buildJwt(cfg.keyPem, cfg.keyId, cfg.teamId, Math.floor(nowMs / 1000));
+  _apnsJwtAt = nowMs;
+  return _apnsJwt;
+}
+
+// INJECTABLE SEAMS for the sender (both default to production; a unit test replaces them to observe without Apple):
+let _apnsH2Connect = null;   // default null => node:http2 connect; a test installs a mock transport
+let _apnsLog = null;         // default null => console.log; a test installs a capture to assert F2 (no pubkey pairs)
+const _apnsCounters = { sent: 0, ok: 0, err: 0 };   // COARSE only — never per-recipient (communication-graph metadata)
+function _apnsNote(msg) { try { (_apnsLog || console.log)(msg); } catch {} }
+
+// THE REAL SENDER. One contentless HTTP/2 POST per recipient, fire-and-forget. F2: it uses tokenRec.token as the
+// URL path and NOTHING ELSE from pub/e — no pubkey, no ['p'] target, no {from,to} pair is ever logged or sent, so
+// the wire and the log carry no communication-graph metadata. It never throws out of the hook (every stage is
+// guarded) — a failed push must not break ingest. Response status is COUNTED/logged coarsely; dead-token cleanup
+// on a 410 is a FUTURE item (it would mutate TOKENS_BY_PUB / the store — out of scope for this phase).
+function makeApnsSender(cfg) {
+  return function apnsSend(_pub, tokenRec, _e) {
+    const token = tokenRec && tokenRec.token;
+    if (!token) return;
+    const env = tokenRec.env === 'sandbox' ? 'sandbox' : 'production';
+    _apnsCounters.sent++;
+    let session = null;
+    try {
+      const u = new URL(apnsUrl(token, env));
+      const headers = { ':method': 'POST', ':path': u.pathname, ...buildHeaders(_apnsJwtCached(cfg), cfg.topic) };
+      const body = JSON.stringify(buildPayload());
+      session = (_apnsH2Connect || http2Connect)(u.origin);
+      session.on('error', () => { _apnsCounters.err++; _apnsNote('apns push transport error'); try { session.close(); } catch {} });
+      const req = session.request(headers);
+      let status = 0;
+      req.on('error', () => { _apnsCounters.err++; _apnsNote('apns push request error'); try { session.close(); } catch {} });
+      req.on('response', (h) => { status = h[':status'] || 0; });
+      req.on('data', () => {});   // drain the (ignored) error body so the stream can end
+      req.on('end', () => {
+        if (status === 200) { _apnsCounters.ok++; _apnsNote('apns push ok'); }
+        else { _apnsCounters.err++; _apnsNote('apns push status ' + status); }   // 400/403/410 etc. — code only, no token, no pub
+        try { session.close(); } catch {}
+      });
+      req.end(body);
+    } catch { _apnsCounters.err++; _apnsNote('apns push send failed'); try { session && session.close(); } catch {} }
+  };
+}
+
+// ── WIRING. Mutually exclusive, in priority order; NEVER both in production (a deploy sets neither spy nor a key
+// it does not have). The test file-spy wins when present (so the Phase-1/2 spawned tests keep observing recipients
+// and send nothing); otherwise the real sender is wired ONLY when config is fully present and the .p8 is readable;
+// otherwise it stays a pure no-op and we log ONCE that notifications are disabled (NO pubkeys, NO config values).
 if (process.env.TRINITY_PUSH_SPY_FILE) {
+  // TEST OBSERVABILITY ONLY, inert in the field (set by no deploy, like TRINITY_DATA_DIR / TRINITY_TAILSCALE_BIN).
   const _spy = process.env.TRINITY_PUSH_SPY_FILE;
   _pushSender = (pub, _rec, e) => { try { appendFileSync(_spy, JSON.stringify({ to: pub, id: e.id, kind: e.kind, from: e.pubkey }) + '\n'); } catch {} };
+} else {
+  const _apnsCfg = readApnsConfig();
+  if (_apnsCfg) { _pushSender = makeApnsSender(_apnsCfg); console.log('APNs push configured — contentless notifications enabled'); }
+  else { console.log('APNs push not configured — notifications disabled'); }   // the current production reality (no .p8 / entitlement yet)
 }
 
 // ---- static file serving ----
