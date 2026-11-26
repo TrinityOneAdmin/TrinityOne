@@ -4952,7 +4952,7 @@ function GroupChatModal({ group, onClose }) {
   const setGevOpen = (v) => { setGevOpenState(v); try { window.localStorage.setItem(gevKey, v ? '1' : '0'); } catch {} };
   React.useEffect(() => (window.Steward.subscribeGroupEvents ? window.Steward.subscribeGroupEvents(group.id, setGevents) : undefined), [group.id]);
   const [composeEvt, setComposeEvt] = React.useState(false);
-  const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '' });
+  const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '', noRsvp: false, recur: 'none' });
   const [evtBusy, setEvtBusy] = React.useState(false);
   const [evtErr, setEvtErr] = React.useState('');
   const [evDetail, setEvDetail] = React.useState(null);   // a tapped event → full details
@@ -4964,10 +4964,10 @@ function GroupChatModal({ group, onClose }) {
     // so the steward's typing went and no event existed. (Audit of 7a45d4d, finding 2: this call site was
     // named in that commit's caller list and then not changed.)
     let r = null;
-    try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
+    try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id, noRsvp: !!evt.noRsvp, recur: evt.recur !== 'none' ? evt.recur : undefined, day: evt.recur !== 'none' && evt.date ? new Date(evt.date + 'T12:00:00').getDay() : undefined, nth: evt.recur === 'monthly' && evt.date ? (new Date(evt.date + 'T12:00:00').getDate() >= 29 ? -1 : Math.ceil(new Date(evt.date + 'T12:00:00').getDate() / 7)) : undefined }); } catch (e) { r = null; }
     setEvtBusy(false);
     if (r == null) { let why = ''; try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) { setEvtErr('Setting up your church’s keys… try again in a moment.'); return; } why = (window.Steward.keyWaitNote && window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
-    setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
+    setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '', noRsvp: false, recur: 'none' });
   };
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
@@ -5007,6 +5007,23 @@ function GroupChatModal({ group, onClose }) {
               <input type="time" value={evt.time} onChange={e => setEvt(v => ({ ...v, time: e.target.value }))} style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             </div>
             <input value={evt.where} onChange={e => setEvt(v => ({ ...v, where: e.target.value }))} placeholder="Where (optional)" style={{ boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', cursor: 'pointer' }}>
+                <input type="checkbox" aria-label="No RSVP" checked={!!evt.noRsvp} onChange={e => setEvt(v => ({ ...v, noRsvp: e.target.checked }))} style={{ width: 16, height: 16, accentColor: 'var(--clay)' }} />
+                No RSVP
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', cursor: 'pointer' }}>
+                <input type="checkbox" aria-label="Recurring" checked={evt.recur !== 'none'} onChange={e => setEvt(v => ({ ...v, recur: e.target.checked ? 'weekly' : 'none' }))} style={{ width: 16, height: 16, accentColor: 'var(--clay)' }} />
+                Recurring
+              </label>
+              {evt.recur !== 'none' ? (
+                <select value={evt.recur} onChange={e => setEvt(v => ({ ...v, recur: e.target.value }))} aria-label="Repeat frequency" style={{ border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '6px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }}>
+                  <option value="weekly">Weekly</option>
+                  <option value="fortnightly">Fortnightly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              ) : null}
+            </div>
             <div style={{ display: 'flex', gap: 7 }}>
               <button onClick={postEvent} disabled={!evt.title.trim() || !evt.date || evtBusy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '8px', fontSize: 13, opacity: (evt.title.trim() && evt.date && !evtBusy) ? 1 : 0.5 }}>{evtBusy ? 'Posting…' : 'Post event'}</button>
               {evtErr ? <div role="alert" style={{ flexBasis: '100%', marginTop: 8, fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)' }}>{evtErr}</div> : null}

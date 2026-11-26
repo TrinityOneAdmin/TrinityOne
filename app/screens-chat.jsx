@@ -899,9 +899,10 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me, re
         <div key={r.emoji} style={{ position: 'relative' }}>
           <button onClick={() => { cancelLP(); onReact(r.emoji); }}
             onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
+            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
             style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
-            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)',
+            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)', userSelect: 'none', WebkitTouchCallout: 'none',
             background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
             <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
           </button>
@@ -1348,16 +1349,23 @@ function shareTextOf(m) {
 // there; it runs in a real browser and on device, which is where the clamp must be checked.
 function clampMenuIntoView(el) {
   if (!el || typeof el.getBoundingClientRect !== 'function' || typeof window === 'undefined') return;
-  el.style.transform = '';                                                   // measure the un-nudged CSS position
+  el.style.transform = '';
   var docEl = window.document && window.document.documentElement;
   var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
   var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
   if (!vw || !vh) return;
+  var clipTop = 0, clipBottom = vh;
+  var sc = el.parentElement;
+  while (sc && sc !== document.body) {
+    var ov = getComputedStyle(sc).overflowY;
+    if (ov === 'auto' || ov === 'scroll') { var scr = sc.getBoundingClientRect(); clipTop = Math.max(clipTop, scr.top); clipBottom = Math.min(clipBottom, scr.bottom); break; }
+    sc = sc.parentElement;
+  }
   var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
-  if (r.right > vw - pad) dx = (vw - pad) - r.right;                         // far edge past the right gutter → slide left
-  if (r.left + dx < pad) dx = pad - r.left;                                  // …but never past the left gutter
-  if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;                       // card runs off the bottom → slide up
-  if (r.top + dy < pad) dy = pad - r.top;                                    // …but never above the top edge
+  if (r.right > vw - pad) dx = (vw - pad) - r.right;
+  if (r.left + dx < pad) dx = pad - r.left;
+  if (r.bottom > clipBottom - pad) dy = (clipBottom - pad) - r.bottom;
+  if (r.top + dy < clipTop + pad) dy = (clipTop + pad) - r.top;
   if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
 }
 function Row({ me, m, children, ctx, mod }) {
@@ -1633,13 +1641,11 @@ function GroupEventComposer({ group, ctx, onClose }) {
   const [blurb, setBlurb] = useC('');
   const [busy, setBusy] = useC(false);
   const [err, setErr] = useC('');
-  const [noRsvp, setNoRsvp] = useC(false);
-  const [recur, setRecur] = useC('none');
   const accent = safeCssColor(group.accent);   // SECURITY-AUDIT-2026-07-06 L6: guard against url() beacon in the accent
   const save = async () => {
     if (!title.trim() || !date) return;
     setBusy(true); setErr('');
-    const r = await ctx.publishGroupEvent(group.id, { title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent, noRsvp, recur: recur !== 'none' ? recur : undefined });
+    const r = await ctx.publishGroupEvent(group.id, { title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent });
     setBusy(false);
     if (r) { ctx.toast('Event posted to ' + group.name); onClose(); return; }
     // WHY THIS DOES NOT NAME A REASON. The relay refuses for three different reasons and the member app is
@@ -1670,21 +1676,6 @@ function GroupEventComposer({ group, ctx, onClose }) {
         <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
         <div style={lbl}>Note (optional)</div>
         <textarea aria-label="Note" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 14, cursor: 'pointer', fontSize: 14, fontWeight: 600, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>
-          <input type="checkbox" aria-label="No RSVP" checked={noRsvp} onChange={e => setNoRsvp(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
-          No RSVP
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>
-          <input type="checkbox" aria-label="Recurring" checked={recur !== 'none'} onChange={e => setRecur(e.target.checked ? 'weekly' : 'none')} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
-          Repeats
-        </label>
-        {recur !== 'none' ? (
-          <select value={recur} onChange={e => setRecur(e.target.value)} aria-label="Repeat frequency" style={{ ...fld, marginTop: 6, height: 42 }}>
-            <option value="weekly">Weekly</option>
-            <option value="fortnightly">Fortnightly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-        ) : null}
         {err ? <div role="alert" style={{ marginTop: 16, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
@@ -1820,6 +1811,13 @@ function GroupInfo({ group, open, onClose, ctx }) {
   const chipStyle = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left' };
 
+  // UPCOMING EVENTS for this group — shown between indicators and members (2026-11-26).
+  // Same filter as the chat card but capped at 5 and uses the defensive todayISO pattern.
+  const giTodayIso = (typeof todayISO === 'function') ? todayISO() : '';
+  const giEvents = (ctx.churchEvents || [])
+    .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= giTodayIso)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 5);
+
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ padding: '10px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
@@ -1846,6 +1844,40 @@ function GroupInfo({ group, open, onClose, ctx }) {
             </div>
           ) : null}
         </div>
+
+        {/* UPCOMING EVENTS — the group's future events, same data as the chat card but shown here so a member
+            opening GroupInfo can see what is coming up without scrolling through the chat. Omitted entirely
+            when the group has no upcoming events (the "Nothing planned" message belongs in the chat card, not
+            here — this is an info panel, not a prompt to create). Tapping an event opens the same EventDetail
+            sheet the chat card opens. */}
+        {giEvents.length ? (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
+              <Icon name="calendar" size={14} color="var(--clay)" /> UPCOMING EVENTS
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {giEvents.map(e => {
+                const d = new Date(e.date + 'T00:00');
+                const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] || '';
+                const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()] || '';
+                return (
+                  <button key={e.id} onClick={() => ctx.openEvent ? ctx.openEvent(e) : (ctx.openServing && ctx.openServing())} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 8, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                    <div style={{ width: 42, flexShrink: 0, textAlign: 'center', borderRadius: 10, padding: '5px 0', background: `color-mix(in oklab, ${safeCssColor(e.accent)} 13%, var(--surface))` }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', color: safeCssColor(e.accent) }}>{dow}</div>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, lineHeight: 1 }}>{d.getDate()}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase' }}>{mon}</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[e.time, e.where].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <Icon name="chevR" size={16} color="var(--ink-3)" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {/* MEMBERS — only for a room with a real roster. An open room keeps silent absence: no count, no list.
             Owner 2026-10-19: the default screen is clean (identity + indicators + a "N members" button); the
@@ -2401,16 +2433,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           ))}
         </div>
       ) : null}
-      <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* THE STATE, AND NOTHING ELSE. This was a full sentence — "Church room · not end-to-end encrypted, so
-            the relay can read messages here" — shown over every room, every time. The owner removed it
-            (2026-08-13): a standing warning on a screen you open twenty times a day is not read, it is just
-            noise, and it made the room look like a place to be careful rather than a place to talk.
-            The pill still states the fact, which is the part that must not go: a room the relay can read says
-            "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
-            someone asking the question can find it, instead of being shouted at everyone who is not.
-            no-overclaims.test.mjs follows it there. */}
-        {calFeatOn && (groupEvents.length || canAddEvent) ? (
+      {/* UPCOMING EVENTS CARD — moved OUT of the scroll container (2026-11-26) so it stays visible at the top
+          of the room instead of scrolling away with messages. It sits in the same non-scrolling band as the
+          encryption pill, the pinned banner and the pod filter. The GroupEventComposer overlay (above, line ~2335)
+          is already outside the scroll container and stays where it is. */}
+      {calFeatOn && (groupEvents.length || canAddEvent) ? (
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
               <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
@@ -2421,7 +2449,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   costs someone the whole form before they find out. */}
               {canAddEvent ? <button onClick={() => setComposeEvt(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'var(--surface)', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}><Icon name="plus" size={12} color="var(--clay)" /> EVENT</button> : null}
             </div>
-            {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group’s next gathering so everyone sees it.</div> : null}
+            {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group's next gathering so everyone sees it.</div> : null}
             {!evShown ? <button onClick={() => setEvOpen(true)} data-ev-summary style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{evSummary}</button> : null}
             {evShown ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {groupEvents.map(e => {
@@ -2446,7 +2474,17 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
               })}
             </div> : null}
           </div>
-        ) : null}
+        </div>
+      ) : null}
+      <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* THE STATE, AND NOTHING ELSE. This was a full sentence — "Church room · not end-to-end encrypted, so
+            the relay can read messages here" — shown over every room, every time. The owner removed it
+            (2026-08-13): a standing warning on a screen you open twenty times a day is not read, it is just
+            noise, and it made the room look like a place to be careful rather than a place to talk.
+            The pill still states the fact, which is the part that must not go: a room the relay can read says
+            "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
+            someone asking the question can find it, instead of being shouted at everyone who is not.
+            no-overclaims.test.mjs follows it there. */}
         {/* AN EMPTY ROOM MUST EXPLAIN ITSELF. This rendered {bubbles} alone, so a room with no messages was a
             blank area between the header and the message box — and a member cannot tell "nobody has posted"
             from "it is broken" or "it has not loaded". The group list one screen earlier already says "No
