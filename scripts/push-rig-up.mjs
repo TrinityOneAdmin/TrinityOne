@@ -32,7 +32,7 @@
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,8 +72,7 @@ let tearingDown = false;
 function teardown(code = 0) {
   if (tearingDown) return; tearingDown = true;
   for (const c of children) { try { c.proc.kill('SIGKILL'); } catch {} }
-  if (scratchDir) { try { rmSync(scratchDir, { recursive: true, force: true }); } catch {} }
-  log('torn down (gateway + cloudflared killed, scratch removed).');
+  log('torn down (gateway + cloudflared killed; persistent data dir kept at ' + scratchDir + ').');
   process.exit(code);
 }
 process.on('SIGINT', () => { log('Ctrl-C — tearing down…'); teardown(0); });
@@ -129,8 +128,9 @@ async function main() {
   // 1. port + scratch
   const port = await freePort();
   if (port === 8000) throw new Error('refusing to use port 8000 (the live Living Word relay)');
-  scratchDir = mkdtempSync(join('/tmp', 'trin-pushrig-'));
-  log('port', port, '· data dir', scratchDir);
+  scratchDir = '/tmp/trin-pushrig-data';   // PERSISTENT: relay identity + church docs + member/token state survive relaunches and gateway auto-restarts
+  if (!existsSync(scratchDir)) mkdirSync(scratchDir, { recursive: true });
+  log('port', port, '· data dir (persistent)', scratchDir);
 
   // 2. ephemeral quick tunnel FIRST, so we can declare its host to the gateway
   log('bringing up an ephemeral cloudflared quick tunnel…');
@@ -140,8 +140,14 @@ async function main() {
   log('tunnel up:', tunnelUrl);
 
   // 3. the gateway, declaring the tunnel address and with the REAL APNs sender wired
-  const church = (() => { const sk = generateSecretKey(); const pub = getPublicKey(sk); return { sk, pub, npub: npubEncode(pub) }; })();
-  const gw = spawn(process.execPath, [GATEWAY, String(port)], {
+  const CHURCH_KEYFILE = join(scratchDir, 'church-key.json');
+  const church = (() => {
+    if (existsSync(CHURCH_KEYFILE)) { try { const j = JSON.parse(readFileSync(CHURCH_KEYFILE, 'utf8')); const sk = Uint8Array.from(Buffer.from(j.sk, 'hex')); const pub = getPublicKey(sk); return { sk, pub, npub: npubEncode(pub) }; } catch {} }
+    const sk = generateSecretKey(); const pub = getPublicKey(sk);
+    writeFileSync(CHURCH_KEYFILE, JSON.stringify({ sk: Buffer.from(sk).toString('hex'), pub, npub: npubEncode(pub) }), { mode: 0o600 });
+    return { sk, pub, npub: npubEncode(pub) };
+  })();   // PERSISTENT church identity → stable church pub/npub across relaunches
+  const spawnGateway = () => spawn(process.execPath, [GATEWAY, String(port)], {
     cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'],
     env: {
       ...process.env,
@@ -153,6 +159,7 @@ async function main() {
       ...APNS,                          // ← real contentless-APNs sender (NO spy here)
     },
   });
+  let gw = spawnGateway();
   children.push({ proc: gw, name: 'gateway' });
   const st = await waitForStatus(port, gw);
   const rigRelayPub = st.relayPub;
@@ -207,9 +214,22 @@ async function main() {
   console.log('        the rig sends a real contentless APNs push to the sim member\'s token.');
   console.log('\n' + line + '\n');
 
-  // 6. stay up; if either child dies, bring the whole rig down rather than advertise a dead address
-  gw.on('exit', (c) => { log('gateway exited (' + c + ')'); teardown(1); });
-  children.find(c => c.name === 'cloudflared').proc.on('exit', () => { log('cloudflared exited'); teardown(1); });
+  // 6. stay up. If the GATEWAY dies (e.g. a stray `pkill -f node/gateway` from another session — this box runs
+  //    many), RESTART it on the SAME port + persistent data dir, keeping cloudflared (and the tunnel URL) alive.
+  //    Because the data dir persists, the relay identity and ALL stored state (church docs, member docs, tokens)
+  //    reload, so an in-flight adoption/registration survives the restart. cloudflared dying loses the URL, so that
+  //    one is fatal (teardown → relaunch by hand).
+  const attachGwRestart = (proc) => proc.on('exit', (c) => {
+    if (tearingDown) return;
+    log('gateway exited (' + c + ') — restarting on the same port + persistent data dir in 2s…');
+    setTimeout(() => {
+      if (tearingDown) return;
+      gw = spawnGateway(); children.push({ proc: gw, name: 'gateway' }); attachGwRestart(gw);
+      waitForStatus(port, gw).then(() => log('gateway restarted · state reloaded from ' + scratchDir)).catch((e) => log('gateway restart problem: ' + (e && e.message || e)));
+    }, 2000);
+  });
+  attachGwRestart(gw);
+  children.find(c => c.name === 'cloudflared').proc.on('exit', () => { if (tearingDown) return; log('cloudflared exited — tunnel URL lost; tearing down (relaunch by hand).'); teardown(1); });
   await new Promise(() => {});   // forever, until a signal
 }
 
