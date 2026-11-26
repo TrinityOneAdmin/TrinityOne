@@ -2669,6 +2669,24 @@ if (typeof window !== 'undefined') {
 // names/handles show INSTANTLY on the next load (chat, the People directory) instead of resolving fresh.
 const profiles = {};
 const pendingProfiles = new Set();
+// A MEMBER'S BIO (kind-0 `about`) COMES FROM OTHER PEOPLE'S EVENTS, so it is checked on the way in: a string or
+// nothing, never more than 160 characters (the cap the profile screen enforces). Anything else -> ''. It is
+// rendered as text only. A cut that would split an emoji's surrogate pair drops the stranded half.
+const ABOUT_MAX = 160;
+function _profileAbout(v) {
+  if (typeof v !== 'string') return '';
+  return v.length > ABOUT_MAX ? v.slice(0, ABOUT_MAX).replace(/[\uD800-\uDBFF]$/, '') : v;
+}
+// A MEMBER'S PINNED VERSE ({ ref, text, version }) also comes from other people's events, so it is checked on the way
+// in: an object whose three fields are strings, ref 1-80, text 1-500 (cut, never leaving half an emoji), version <= 40.
+// Anything else -> null. Rendered as text only. (setProfile and _recoverOwnProfile carry the same rule INLINE, for
+// the lifted-harness reason given in _recoverOwnProfile.)
+function _profilePin(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  if (typeof v.ref !== 'string' || typeof v.text !== 'string' || typeof v.version !== 'string') return null;
+  if (!v.ref || v.ref.length > 80 || !v.text || v.version.length > 40) return null;
+  return { ref: v.ref, text: v.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''), version: v.version };
+}
 // P4: coalesce per-message profile lookups into ONE kind-0 sub. Firing a separate sub per unknown chat author
 // (as a 200-message backfill does) can approach the relay's 64-sub-per-connection cap — the "names blank" failure.
 const _profQueue = new Set();
@@ -2688,7 +2706,7 @@ function _flushProfiles() {
         // wipe the name back out and they would flip to "Anonymous" mid-session. Keep any name we have already
         // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
         const had = profiles[e.pubkey] || {};
-        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: _profileAbout(m.about), pinnedVerse: _profilePin(m.pinnedVerse), k0: true, nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
         _k0Seen.add(e.pubkey);
         _recoverOwnProfile(e);   // our OWN kind-0 also refills what a locked boot wiped (picture, avatar, about)
         saveProfiles();
@@ -3151,9 +3169,20 @@ function _recoverOwnProfile(e) {
   // OUT visible again, and the Settings toggle then agreed with the wrong answer. AUDIT-2026-07-28.
   if (cur.hidden === undefined && m.hidden !== undefined) { next.hidden = !!m.hidden; changed = true; }
   for (const k of ['about', 'picture']) {
-    if (!cur[k] && typeof m[k] === 'string' && m[k]) { next[k] = m[k]; changed = true; }
+    // the bio is capped like everyone else's: our own event is still read off a relay. Same rule as
+    // _profileAbout, written inline ON PURPOSE - six test harnesses lift this function (and setProfile) with a
+    // fixed set of globals, and a new helper dependency is a ReferenceError in every one of them.
+    const v = (k === 'about' && typeof m[k] === 'string') ? m[k].slice(0, 160).replace(/[\uD800-\uDBFF]$/, '') : m[k];
+    if (!cur[k] && typeof v === 'string' && v) { next[k] = v; changed = true; }
   }
   if (!cur.av && m.av && typeof m.av === 'object') { next.av = m.av; changed = true; }
+  // the pinned verse: same shape rule as _profilePin, inline for the same reason as the bio above.
+  if (!cur.pinnedVerse && m.pinnedVerse && typeof m.pinnedVerse === 'object' && !Array.isArray(m.pinnedVerse)) {
+    const pv = m.pinnedVerse;
+    if (typeof pv.ref === 'string' && typeof pv.text === 'string' && typeof pv.version === 'string' && pv.ref && pv.ref.length <= 80 && pv.text && pv.version.length <= 40) {
+      next.pinnedVerse = { ref: pv.ref, text: pv.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''), version: pv.version }; changed = true;
+    }
+  }
   if (!changed) return false;
   window.Fellowship.myProfile = next;
   try { localStorage.setItem(PROFILE_KEY, JSON.stringify(next)); } catch (x) {}
@@ -3914,6 +3943,13 @@ function displayFor(pubkey) {
   const chosen = (p && p.name) || (voice && voice.isChurch && (voice.churchName || '')) || (voice && voice.name) || '';
   const handle = chosen || (voice && voice.isChurch ? 'Your church' : (voice && voice.stewardFallback ? 'A church steward' : UNNAMED));
   return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '',
+    // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
+    about: _profileAbout(p && p.about),
+    // the member's pinned verse ({ ref, text, version }) or null; validated again here like `about`.
+    pinnedVerse: _profilePin(p && p.pinnedVerse),
+    // true only when this record came from a kind-0 EVENT (k0), so '' above means "they cleared it" and not "we have not heard yet".
+    // The record is replaced by setProfile and init (which copy myProfile) and those carry no k0, so a bio just saved here reads as unknown.
+    aboutKnown: !!(p && p.k0),
     // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
     signedBy: (voice && voice.name) ? voice.name : '', signedRole: (voice && voice.office) ? voice.office : '', isChurch: !!(voice && voice.isChurch) };
 }
@@ -5820,7 +5856,7 @@ window.Fellowship = {
         // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
         // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
         // this is the roster the member app actually renders.
-        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: _profileAbout(meta.about), pinnedVerse: _profilePin(meta.pinnedVerse), k0: true, nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
         oneose() {},
       });
     };
@@ -6201,10 +6237,21 @@ window.Fellowship = {
     const prev = profiles[pub] || {};
     const p = {
       name: (meta.name != null ? meta.name : (prev.name || '')).trim(),
-      about: (meta.about != null ? meta.about : (prev.about || '')).trim(),
+      // missing `about` keeps the stored one, '' clears it; either way capped to 160 - _profileAbout's rule,
+      // inline for the reason given in _recoverOwnProfile
+      about: (meta.about != null ? meta.about : (prev.about || '')).trim().slice(0, 160).replace(/[\uD800-\uDBFF]$/, ''),
       picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
     };
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
+    // PINNED VERSE: undefined keeps the previous one, null clears it, anything malformed is treated as null.
+    // The shape rule is _profilePin's, written inline ON PURPOSE (lifted harnesses, see _recoverOwnProfile).
+    {
+      const raw = meta.pinnedVerse !== undefined ? meta.pinnedVerse : prev.pinnedVerse;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.ref === 'string' && typeof raw.text === 'string' && typeof raw.version === 'string'
+          && raw.ref && raw.ref.length <= 80 && raw.text && raw.version.length <= 40) {
+        p.pinnedVerse = { ref: raw.ref, text: raw.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''), version: raw.version };
+      }
+    }
     // THE PUBLISH DOOR (see _churchPhotosOff above). Carrying the old photo forward is what made every later
     // edit unpublishable once a church switched member photos off — the relay refused the whole event, so the
     // name change or the directory opt-out that the member actually came here to make never landed either.
@@ -6240,6 +6287,7 @@ window.Fellowship = {
     const wire = { about: p.about, picture: p.picture };
     if (p.av) wire.av = p.av;
     if (p.hidden) wire.hidden = true;
+    if (p.pinnedVerse) wire.pinnedVerse = p.pinnedVerse;   // NEVER `name` here (Stage 2)
     const body = JSON.stringify(wire);
     // AN IDENTICAL WIRE COPY IS A REASON NOT TO PUBLISH. IT IS NOT A REASON TO DROP THE SAVE.
     // Audit 2026-09-04, and it was wrong in two ways at once.
@@ -6297,7 +6345,7 @@ window.Fellowship = {
         // this device. So the switch sat in its new position and the church went on seeing the old profile.
         // `hidden` is the one that matters: it is a privacy control, and a member told they are hidden from
         // the directory while still being listed has been misled about something they chose deliberately.
-        if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+        if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null) || (meta && meta.pinnedVerse !== undefined)) {
           // WHICH WAY THE SWITCH WAS MOVED DECIDES THE SENTENCE, and this branched on `meta.hidden != null`.
           // `false != null` is TRUE, and `hidden: false` is exactly what DirectoryToggle.flip sends when a
           // member asks to be listed again — so a member who tapped "show me in the directory", and whose
@@ -6344,7 +6392,7 @@ window.Fellowship = {
       // never reached the network, and nothing said so. Only speak up about a field that actually travels in
       // kind-0 — a name-only save has lost nothing, so saying "not saved" about it would be a lie.
       console.warn('[fellowship] profile publish withheld — our own kind-0 has not arrived, publishing now would blank it');
-      if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+      if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null) || (meta && meta.pinnedVerse !== undefined)) {
         lost = true;
         try { if (window.trinityToast) window.trinityToast('Your photo and profile details aren’t saved yet — this phone is still connecting to your church’s relay. Try again in a moment.'); } catch (x) {}
       }

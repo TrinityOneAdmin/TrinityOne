@@ -49,26 +49,41 @@ function myAvatar(id) {
   return { kind: 'monogram', color: (id && id.color) || '#5E8C6A' };
 }
 function avOf(d) { return d.av || { kind: 'monogram', color: d.color || '#5E8C6A' }; }
+// THE TAP THAT OPENS A MEMBER'S CARD: a function only for another member's real pubkey (never your own, never a
+// blank), and only when the app supplied ctx.openMember. Undefined means the avatar is NOT a tap target.
+function memberTapFor(ctx, pk, opts) {
+  const me = window.Fellowship && window.Fellowship.myPubkey;
+  return (typeof pk === 'string' && pk && pk !== me && ctx && typeof ctx.openMember === 'function') ? (opts ? () => ctx.openMember(pk, opts) : () => ctx.openMember(pk)) : undefined;
+}
 
 // avatar = profile picture if set, else a colored circle with the name's initial
-function Avatar({ handle, color, size = 38, src }) {
+function Avatar({ handle, color, size = 38, src, onTap }) {
   const [err, setErr] = useC(false);
   // SECURITY-AUDIT-2026-07-06 accent-mopup: handle/color/src come from an untrusted member profile.
   // src → data: image only (no remote beacon); color → hex/var() only (no url() smuggling into the gradient).
   const pic = safeImgUrl(src), col = safeCssColor(color);
+  let node;
   if (pic && !err) {
-    return <img src={pic} alt="" onError={() => setErr(true)}
+    node = <img src={pic} alt="" onError={() => setErr(true)}
       style={{ width: size, height: size, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }} />;
+  } else {
+    const word = (handle || 'Anonymous').split(' ').slice(-1)[0];
+    node = (
+      <div style={{
+        width: size, height: size, borderRadius: 999, flexShrink: 0,
+        background: `linear-gradient(150deg, ${col}, color-mix(in oklab, ${col} 60%, #16120c))`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: size * 0.4,
+      }}>{(word[0] || '?').toUpperCase()}</div>
+    );
   }
-  const word = (handle || 'Anonymous').split(' ').slice(-1)[0];
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: 999, flexShrink: 0,
-      background: `linear-gradient(150deg, ${col}, color-mix(in oklab, ${col} 60%, #16120c))`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: size * 0.4,
-    }}>{(word[0] || '?').toUpperCase()}</div>
-  );
+  if (typeof onTap !== 'function') return node;
+  // A TAPPABLE avatar (opens the member card), same contract as UserAvatar's onTap: stops the click so a row
+  // behind it does not also fire. Absent onTap, the output is exactly the disc it always was.
+  const go = (e) => { if (e && e.stopPropagation) e.stopPropagation(); onTap(e); };
+  return <span role="button" tabIndex={0} aria-label={'View ' + (handle || 'member') + '\'s profile'} onClick={go}
+    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); go(e); } }}
+    style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, borderRadius: 999, cursor: 'pointer' }}>{node}</span>;
 }
 
 // ── Identity manager sheet (anonymous Nostr key: recovery / restore / steward invite) ──
@@ -740,7 +755,7 @@ function ChatScreen({ ctx }) {
             return (
               <div key={i} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(group)} style={{ padding: 13, borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                  <UserAvatar av={avOf(d)} name={d.handle} size={20} />
+                  <UserAvatar av={avOf(d)} name={d.handle} size={20} onTap={memberTapFor(ctx, e.pubkey)} />
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{me ? 'You' : d.handle}</span>
                   <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>· {group.name}</span>
                 </div>
@@ -779,14 +794,18 @@ function ChatScreen({ ctx }) {
               const d = (F && F.displayFor) ? F.displayFor(c.peer) : { handle: '' };
               const nm = (d && (d.name || d.handle)) || 'Someone in your church';
               return (
-                <button key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', cursor: 'pointer', padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
-                  <UserAvatar av={d && d.av} name={nm} size={38} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div>
-                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preview || 'Private message'}</div>
-                  </div>
-                  {c.lastTs ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{relTime(c.lastTs)}</span> : null}
-                </button>
+                <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 0, width: '100%', textAlign: 'left', padding: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                  {/* the avatar is a SIBLING of the row's button (a button may not contain another control). The padding the
+                      old single button had moved onto the two halves, so the row looks and measures the same */}
+                  <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 13 }}><UserAvatar av={d && d.av} name={nm} size={38} onTap={memberTapFor(ctx, c.peer)} /></div>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.openDM(c.peer); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px 13px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'inherit' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preview || 'Private message'}</div>
+                    </div>
+                    {c.lastTs ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{relTime(c.lastTs)}</span> : null}
+                  </button>
+                </div>
               );
             })}
             {dmThreads.length > 3 ? <button onClick={() => ctx.openDMInbox()} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>All messages ({dmThreads.length})</button> : null}
@@ -1420,7 +1439,7 @@ function Row({ me, m, children, ctx, mod }) {
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
-        <UserAvatar av={avOf(d)} name={d.handle} size={22} />
+        <UserAvatar av={avOf(d)} name={d.handle} size={22} onTap={m.pubkey && !(window.Fellowship && m.pubkey === window.Fellowship.myPubkey) && ctx && ctx.openMember ? () => ctx.openMember(m.pubkey) : undefined} />
         {/* A PARISH LETTER: the church's name on the letterhead, the person's underneath. Round 6 had a vicar's
             welcome to her whole congregation arrive attributed to "Member", which a member called a
             noticeboard "signed by nobody". `signedBy` is only ever set from the church-signed steward roster,
@@ -1906,14 +1925,17 @@ function GroupInfo({ group, open, onClose, ctx }) {
                       {!roster.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one to show here.</div> : null}
                       {roster.length && !shown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
                       {shown.map(r => (
-                        <button key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={rowStyle}>
-                          <Avatar handle={r.name} color={r.color} src={r.picture} size={40} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                            {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
-                          </div>
-                          <Icon name="chevR" size={16} color="var(--ink-3)" />
-                        </button>
+                        <div key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={{ ...rowStyle, padding: 0, gap: 0, cursor: 'pointer' }}>
+                          {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
+                          <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 12 }}><Avatar handle={r.name} color={r.color} src={r.picture} size={40} onTap={memberTapFor(ctx, r.pubkey)} /></div>
+                          <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setSelected(r.pubkey); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px 10px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                              {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
+                            </div>
+                            <Icon name="chevR" size={16} color="var(--ink-3)" />
+                          </button>
+                        </div>
                       ))}
                     </div>
                     {/* READ-ONLY MEMBER CARD (phase 1). No actions — message / leader controls are phase 2. */}
@@ -1924,7 +1946,7 @@ function GroupInfo({ group, open, onClose, ctx }) {
                           <IconBtn name="x" onClick={() => setSelected(null)} title="Close" />
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-                          <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} />
+                          <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} onTap={memberTapFor(ctx, selectedRow.pubkey)} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{selectedRow.name}</div>
                             {selectedRow.nip05 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>@{String(selectedRow.nip05).split('@')[0]}</div> : null}
@@ -2729,6 +2751,28 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       .catch(() => ctx.toast('Couldn’t send — please try again.'));
     onClose();
   };
+  // PIN TO MY PROFILE. Offered only under the same condition that makes a verse card (verse type, string non-empty ref
+  // AND text), never for commentary/note/devotional or a cross-reference preview whose text is ''. The pin holds the
+  // words, so it needs no Bible module on the reader's phone. Children may pin (owner 2026-11-26).
+  // The SAME shape rule as the engine (setProfile / _profilePin): ref <= 80, version <= 40 (text is capped, not refused).
+  // Past either, the engine reads the pin as malformed = CLEAR, which would erase the old pin and still say "Pinned".
+  const canPin = type === 'verse' && typeof payload.ref === 'string' && !!payload.ref && payload.ref.length <= 80 && typeof payload.text === 'string' && !!payload.text && !(typeof payload.version === 'string' && payload.version.length > 40) && !!ctx.pinVerse;
+  const pinVal = canPin ? { ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' } : null;
+  const mine = (canPin && FS && FS.myPubkey && FS.displayFor) ? FS.displayFor(FS.myPubkey).pinnedVerse : null;
+  const alreadyPinned = !!(pinVal && mine && mine.ref === pinVal.ref && mine.version === pinVal.version && mine.text === pinVal.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''));
+  // A saved event carries what went on the wire: if it does not hold THIS pin, the save did not store it. `true` is the
+  // engine's "nothing on the wire changed" (already identical), which is a stored pin.
+  const pinStored = (ok) => {
+    if (ok === true || !ok || typeof ok.content !== 'string') return true;
+    try { const w = JSON.parse(ok.content); return !!(w && w.pinnedVerse && w.pinnedVerse.ref === pinVal.ref); } catch (e) { return false; }
+  };
+  const pinIt = () => {
+    if (!pinVal || alreadyPinned) return;
+    Promise.resolve(ctx.pinVerse(pinVal))
+      .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting */ : (ok && pinStored(ok)) ? ctx.toast('Pinned to your profile') : ctx.toast('Couldn’t pin it — your church still sees your old profile. Try again.')))
+      .catch(() => ctx.toast('Couldn’t pin it — please try again.'));
+    onClose();
+  };
   const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' };
   return (
@@ -2752,6 +2796,18 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
           <Icon name="chevR" size={17} color="var(--ink-3)" />
+        </button>
+      ) : null}
+
+      {canPin ? (
+        // Pin to my profile - shown only for a real verse card (verse type, non-empty ref AND text), so a commentary,
+        // note, devotional or a cross-reference preview with no text never offers it. Same save path as the profile screen.
+        <button type="button" aria-label="Pin to my profile" disabled={alreadyPinned} onClick={pinIt} style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+          border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: alreadyPinned ? 'default' : 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
+          <Icon name="bookmark" size={20} color="var(--clay)" />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{alreadyPinned ? 'Pinned to your profile' : 'Pin to my profile'}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{alreadyPinned ? 'Your church sees it on your card' : 'Show this verse on your card'}</div></div>
         </button>
       ) : null}
 
@@ -2798,13 +2854,16 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
             {peopleShown.map(m => {
               const d = (FS && FS.displayFor) ? FS.displayFor(m.pubkey) : { handle: m.name || 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
               return (
-                <button key={m.pubkey} onClick={() => sendToPerson(m)} style={rowStyle}>
-                  <UserAvatar av={avOf(d)} name={m.name || d.handle} size={38} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || d.handle}</div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Direct message</div></div>
-                  <Icon name="send" size={17} color="var(--clay)" />
-                </button>
+                <div key={m.pubkey} onClick={() => sendToPerson(m)} style={{ ...rowStyle, padding: 0, gap: 0, cursor: 'pointer' }}>
+                  {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
+                  <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 13 }}><UserAvatar av={avOf(d)} name={m.name || d.handle} size={38} onTap={memberTapFor(ctx, m.pubkey)} /></div>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); sendToPerson(m); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px 11px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || d.handle}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Direct message</div></div>
+                    <Icon name="send" size={17} color="var(--clay)" />
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -3097,7 +3156,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
       <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} />
-          <UserAvatar av={avOf(d)} name={d.handle} size={38} />
+          <UserAvatar av={avOf(d)} name={d.handle} size={38} onTap={memberTapFor(ctx, peer, { inDMWith: peer })} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>
             {/* A PARISH LETTER, in a private thread: the church-signed steward title under the name — the group
@@ -3261,7 +3320,7 @@ function DMInbox({ open, onClose, ctx, docked }) {
           const d = FS.displayFor(c.peer);
           return (
             <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
-              <UserAvatar av={avOf(d)} name={d.handle} size={44} />
+              <UserAvatar av={avOf(d)} name={d.handle} size={44} onTap={c.peer && c.peer !== (FS && FS.myPubkey) && ctx.openMember ? () => ctx.openMember(c.peer) : undefined} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{d.handle}</span>
@@ -3397,7 +3456,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
           const allowDM = !ctx.canDMPeer || ctx.canDMPeer(m.pubkey);   // safeguarding: a child↔non-cleared-adult DM is blocked
           return (
             <div key={m.pubkey} onClick={() => { if (isMe || !allowDM) return; onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: allowDM ? 'pointer' : 'default', opacity: allowDM ? 1 : 0.65 }}>
-              <UserAvatar av={avOf(d)} name={name} size={44} />
+              <UserAvatar av={avOf(d)} name={name} size={44} onTap={!isMe && ctx.openMember ? () => ctx.openMember(m.pubkey) : undefined} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {name}

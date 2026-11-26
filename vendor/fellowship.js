@@ -8874,6 +8874,17 @@
   }
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
+  var ABOUT_MAX = 160;
+  function _profileAbout(v) {
+    if (typeof v !== "string") return "";
+    return v.length > ABOUT_MAX ? v.slice(0, ABOUT_MAX).replace(/[\uD800-\uDBFF]$/, "") : v;
+  }
+  function _profilePin(v) {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    if (typeof v.ref !== "string" || typeof v.text !== "string" || typeof v.version !== "string") return null;
+    if (!v.ref || v.ref.length > 80 || !v.text || v.version.length > 40) return null;
+    return { ref: v.ref, text: v.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""), version: v.version };
+  }
   var _profQueue = /* @__PURE__ */ new Set();
   var _profTimer = null;
   function _flushProfiles() {
@@ -8886,7 +8897,7 @@
         try {
           const m = JSON.parse(e.content);
           const had = profiles[e.pubkey] || {};
-          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: _profileAbout(m.about), pinnedVerse: _profilePin(m.pinnedVerse), k0: true, nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
           _k0Seen.add(e.pubkey);
           _recoverOwnProfile(e);
           saveProfiles();
@@ -9216,14 +9227,22 @@
       changed = true;
     }
     for (const k of ["about", "picture"]) {
-      if (!cur[k] && typeof m[k] === "string" && m[k]) {
-        next[k] = m[k];
+      const v = k === "about" && typeof m[k] === "string" ? m[k].slice(0, 160).replace(/[\uD800-\uDBFF]$/, "") : m[k];
+      if (!cur[k] && typeof v === "string" && v) {
+        next[k] = v;
         changed = true;
       }
     }
     if (!cur.av && m.av && typeof m.av === "object") {
       next.av = m.av;
       changed = true;
+    }
+    if (!cur.pinnedVerse && m.pinnedVerse && typeof m.pinnedVerse === "object" && !Array.isArray(m.pinnedVerse)) {
+      const pv = m.pinnedVerse;
+      if (typeof pv.ref === "string" && typeof pv.text === "string" && typeof pv.version === "string" && pv.ref && pv.ref.length <= 80 && pv.text && pv.version.length <= 40) {
+        next.pinnedVerse = { ref: pv.ref, text: pv.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""), version: pv.version };
+        changed = true;
+      }
     }
     if (!changed) return false;
     window.Fellowship.myProfile = next;
@@ -10093,6 +10112,13 @@
       av,
       picture: p && p.picture,
       nip05: p && p.nip05 || "",
+      // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
+      about: _profileAbout(p && p.about),
+      // the member's pinned verse ({ ref, text, version }) or null; validated again here like `about`.
+      pinnedVerse: _profilePin(p && p.pinnedVerse),
+      // true only when this record came from a kind-0 EVENT (k0), so '' above means "they cleared it" and not "we have not heard yet".
+      // The record is replaced by setProfile and init (which copy myProfile) and those carry no k0, so a bio just saved here reads as unknown.
+      aboutKnown: !!(p && p.k0),
       // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
       signedBy: voice && voice.name ? voice.name : "",
       signedRole: voice && voice.office ? voice.office : "",
@@ -11936,7 +11962,7 @@
               const meta = JSON.parse(e.content);
               const had = profiles[e.pubkey] || {};
               const nm = meta.name || meta.display_name || had.name || "";
-              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: _profileAbout(meta.about), pinnedVerse: _profilePin(meta.pinnedVerse), k0: true, nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
               const m = hub.byPub.get(e.pubkey);
               if (m) {
@@ -12351,10 +12377,18 @@
       const prev = profiles[pub] || {};
       const p = {
         name: (meta.name != null ? meta.name : prev.name || "").trim(),
-        about: (meta.about != null ? meta.about : prev.about || "").trim(),
+        // missing `about` keeps the stored one, '' clears it; either way capped to 160 - _profileAbout's rule,
+        // inline for the reason given in _recoverOwnProfile
+        about: (meta.about != null ? meta.about : prev.about || "").trim().slice(0, 160).replace(/[\uD800-\uDBFF]$/, ""),
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;
+      {
+        const raw = meta.pinnedVerse !== void 0 ? meta.pinnedVerse : prev.pinnedVerse;
+        if (raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.ref === "string" && typeof raw.text === "string" && typeof raw.version === "string" && raw.ref && raw.ref.length <= 80 && raw.text && raw.version.length <= 40) {
+          p.pinnedVerse = { ref: raw.ref, text: raw.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""), version: raw.version };
+        }
+      }
       if (_churchPhotosOff() || _myPhotoReset()) {
         p.picture = "";
         if (p.av) p.av = _stripPhoto(pub, p.av);
@@ -12364,6 +12398,7 @@
       const wire = { about: p.about, picture: p.picture };
       if (p.av) wire.av = p.av;
       if (p.hidden) wire.hidden = true;
+      if (p.pinnedVerse) wire.pinnedVerse = p.pinnedVerse;
       const body = JSON.stringify(wire);
       const wireUnchanged = _profilePubFor === pub && _profilePubBody === body;
       let evt = null, sent = false, lost = false, queued = false;
@@ -12393,7 +12428,7 @@
               } catch (x) {
               }
             }
-          } else if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+          } else if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null) || meta && meta.pinnedVerse !== void 0) {
             let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
             const _why = _pubReason(e);
             const _advice = _why === "not-sent" ? "It didn\u2019t leave this phone \u2014 none of your church\u2019s relays could be confirmed. Ask a steward." : _why === "refused" ? "Your church\u2019s relay refused it, so trying again won\u2019t help. Ask a steward." : "Try again when you have a signal.";
@@ -12408,7 +12443,7 @@
         }
       } else {
         console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");
-        if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+        if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null) || meta && meta.pinnedVerse !== void 0) {
           lost = true;
           try {
             if (window.trinityToast) window.trinityToast("Your photo and profile details aren\u2019t saved yet \u2014 this phone is still connecting to your church\u2019s relay. Try again in a moment.");

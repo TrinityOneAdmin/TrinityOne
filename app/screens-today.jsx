@@ -294,9 +294,13 @@ function careOfferLabel(id) { const t = CARE_OFFER_TAGS.find(x => x[0] === id); 
 function CareAvailRow({ a, ctx, myPub }) {
   const nm = careName(a.pubkey, myPub);
   const canDM = !!(a.pubkey && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(a.pubkey)));
+  // the letter-circle opens this member's card: only for another member's real pubkey, never your own
+  const careMemberTap = (a.pubkey && a.pubkey !== myPub && typeof ctx.openMember === 'function') ? (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.openMember(a.pubkey); } : null;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 0', borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)' }}>
-      <div style={{ width: 34, height: 34, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13 }}>{(nm[0] || '?').toUpperCase()}</div>
+      {careMemberTap ? <span role="button" tabIndex={0} aria-label={'View ' + nm + '\'s profile'} onClick={careMemberTap} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); careMemberTap(e); } }} style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, borderRadius: 999, cursor: 'pointer' }}>
+        <div style={{ width: 34, height: 34, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13 }}>{(nm[0] || '?').toUpperCase()}</div>
+      </span> : <div style={{ width: 34, height: 34, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13 }}>{(nm[0] || '?').toUpperCase()}</div>}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{nm}</div>
         {a.tags && a.tags.length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage)', background: 'color-mix(in oklab, var(--sage) 13%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 28%, transparent)', borderRadius: 999, padding: '2px 8px' }}>{careOfferLabel(t)}</span>)}</div> : null}

