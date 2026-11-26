@@ -127,6 +127,48 @@ fi
 plutil -lint "$PL" >/dev/null
 echo "  Info.plist: usage strings + export-compliance + UIScene manifest + background audio + remote-notification set"
 
+# ── 2c. APNs entitlement (aps-environment) for the "Prompt alerts" push tier ──────────────────────
+# Push is enabled on the App ID (com.trinityone.app); the app needs the aps-environment entitlement to be
+# ISSUED a device token. 'development' = the APNs SANDBOX, which is what a debug/simulator/dev build must use
+# (the relay sender routes on the pushtoken doc's env field; see reference/SCOPE-notifications.md §15). A
+# Release/App Store/TestFlight build must sign with aps-environment='production' instead — that is a
+# CI/signing concern, not this local sim build. Written + wired idempotently so a signed sim build issues a
+# REAL sandbox token. (This is the §16-deferred entitlement, unblocked once Push was enabled on the App ID.)
+ENT="$APPDIR/App/App.entitlements"
+if [ -f "$ENT" ] && grep -q "aps-environment" "$ENT"; then
+  echo "  App.entitlements: present with aps-environment — kept"
+else
+  cat > "$ENT" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>
+PLIST
+  echo "  App.entitlements: written (aps-environment=development / APNs sandbox)"
+fi
+"$PB" -c "Print :aps-environment" "$ENT" >/dev/null 2>&1 || { echo "ios-fixup: ERROR — App.entitlements missing aps-environment" >&2; exit 1; }
+# Point the App target's build configs (Debug + Release) at the entitlements file. Idempotent: insert after the
+# App target's own PRODUCT_BUNDLE_IDENTIFIER (a line unique to the two App configs), only if not already set.
+if grep -q "CODE_SIGN_ENTITLEMENTS = App/App.entitlements;" "$PBX"; then
+  echo "  project.pbxproj: CODE_SIGN_ENTITLEMENTS already set — skipped"
+else
+  python3 -I - "$PBX" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "PRODUCT_BUNDLE_IDENTIFIER = com.trinityone.app;"
+n = s.count(anchor)
+assert n >= 1, "App target bundle-id anchor not found in pbxproj — re-check ios-fixup after a Capacitor upgrade"
+s = s.replace(anchor, anchor + "\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = App/App.entitlements;")
+open(p, "w").write(s)
+print("  project.pbxproj: CODE_SIGN_ENTITLEMENTS set on %d App config(s)" % n)
+PY
+fi
+
 # ── 3. AppDelegate.swift: append SceneDelegate + BackupExclude plugin (idempotent) ──
 # Both are appended to AppDelegate.swift (already in the Sources build phase) rather
 # than dropped in as a new file: the Capacitor 6 scaffold's project.pbxproj is the old
