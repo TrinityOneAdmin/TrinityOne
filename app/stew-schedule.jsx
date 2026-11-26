@@ -181,6 +181,35 @@ function eventHistory(events) {
     images: distinct(list.map(e => e && e.image)),
   };
 }
+function SchAutoInput({ value, onChange, suggestions, placeholder, label, autoFocus, style }) {
+  const [open, setOpen] = React.useState(false);
+  const skipFirst = React.useRef(!!autoFocus);
+  const lc = value.toLowerCase();
+  const filtered = (suggestions || []).filter(s => s !== value && (!lc || s.toLowerCase().includes(lc)));
+  return (
+    <div style={{ position: 'relative' }}>
+      <input aria-label={label} value={value} autoFocus={autoFocus}
+        onChange={e => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => { if (skipFirst.current) skipFirst.current = false; else setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
+        placeholder={placeholder} style={style} />
+      {open && filtered.length ? (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+          background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10,
+          boxShadow: 'var(--shadow-lg)', maxHeight: 160, overflowY: 'auto', marginTop: 2 }}>
+          {filtered.slice(0, 8).map(s => (
+            <button key={s}
+              onMouseDown={e => { e.preventDefault(); onChange(s); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                border: 'none', background: 'none', cursor: 'pointer', fontSize: 13.5,
+                fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>{s}</button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SchNotSaved({ msg }) {
   if (!msg) return null;
   return (
@@ -1827,8 +1856,7 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" list={window.Capacitor ? undefined : "sch-event-names"} style={schFld} />
-      {window.Capacitor ? null : <datalist id="sch-event-names">{history.names.map(n => <option key={n} value={n} />)}</datalist>}
+      <SchAutoInput label="Title" value={title} onChange={setTitle} autoFocus suggestions={history.names} placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
@@ -1841,8 +1869,7 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" list={window.Capacitor ? undefined : "sch-event-wheres"} style={schFld} />
-      {window.Capacitor ? null : <datalist id="sch-event-wheres">{history.wheres.map(w => <option key={w} value={w} />)}</datalist>}
+      <SchAutoInput label="Where" value={where} onChange={setWhere} suggestions={history.wheres} placeholder="e.g. Prayer chapel" style={schFld} />
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
