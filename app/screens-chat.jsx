@@ -3051,11 +3051,26 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
             {(m.noReply || m.eventId) ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />{dmAnnounceLabel(m, ctx && ctx.churchEvents)}</span> : null}
             {(chatShareCard(m.card) && chatCardThoughts(chatShareCard(m.card), m.content) !== null) ? (
-              // a shared verse/commentary arrives as its designed card, the sender's thoughts under it as text
-              // (the group bubble's ChatShareCardView + ChatCardThoughts). Tapping the thoughts opens reactions.
               <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', cursor: 'pointer' }}>
-                <ChatShareCardView card={chatShareCard(m.card)} ctx={ctx} />
+                <ChatShareCardView card={chatShareCard(m.card)} ctx={{...ctx, openShare: (v) => {
+                  var p = window.Bible && window.Bible.parseRef(v.ref);
+                  if (p && ctx.gotoRef) { ctx.gotoRef(p.book, p.chap, p.verse); onClose(); }
+                }}} />
                 <ChatCardThoughts text={chatCardThoughts(chatShareCard(m.card), m.content)} me={m.mine} />
+                <div data-dm-rx="1" style={{ position: 'relative', marginTop: 4, alignSelf: m.mine ? 'flex-end' : 'flex-start' }}>
+                  <button data-dm-rx="1" onClick={(e) => { e.stopPropagation(); setRxFor(v => v === m.id ? '' : m.id); }} title="React" style={{
+                    width: 28, height: 22, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)',
+                    cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .8 }}>
+                    <Icon name="heart" size={13} /></button>
+                  {rxFor === m.id ? (
+                    <div data-dm-rx="1" ref={el => el && el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })} style={{ position: 'absolute', bottom: 28, [m.mine ? 'right' : 'left']: 0, zIndex: 10, display: 'flex', gap: 2, padding: '6px 8px', borderRadius: 14,
+                      background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+                      {DM_EMOJI.map(emo => (
+                        <button key={emo} onClick={(e) => { e.stopPropagation(); react(m, emo); }} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
@@ -3093,7 +3108,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                 ))}
               </div>
             ) : null}
-            {rxFor === m.id ? (
+            {rxFor === m.id && !(chatShareCard(m.card) && chatCardThoughts(chatShareCard(m.card), m.content) !== null) ? (
               <div data-dm-rx="1" style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                 {DM_EMOJI.map(emo => (
                   <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
