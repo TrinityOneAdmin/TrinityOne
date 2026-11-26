@@ -7488,39 +7488,86 @@ function _apnsJwtCached(cfg, nowMs = Date.now()) {
 // INJECTABLE SEAMS for the sender (both default to production; a unit test replaces them to observe without Apple):
 let _apnsH2Connect = null;   // default null => node:http2 connect; a test installs a mock transport
 let _apnsLog = null;         // default null => console.log; a test installs a capture to assert F2 (no pubkey pairs)
-const _apnsCounters = { sent: 0, ok: 0, err: 0 };   // COARSE only — never per-recipient (communication-graph metadata)
+const _apnsCounters = { sent: 0, ok: 0, err: 0, timeout: 0 };   // COARSE only — never per-recipient (communication-graph metadata)
 function _apnsNote(msg) { try { (_apnsLog || console.log)(msg); } catch {} }
 
-// THE REAL SENDER. One contentless HTTP/2 POST per recipient, fire-and-forget. F2: it uses tokenRec.token as the
-// URL path and NOTHING ELSE from pub/e — no pubkey, no ['p'] target, no {from,to} pair is ever logged or sent, so
-// the wire and the log carry no communication-graph metadata. It never throws out of the hook (every stage is
-// guarded) — a failed push must not break ingest. Response status is COUNTED/logged coarsely; dead-token cleanup
-// on a 410 is a FUTURE item (it would mutate TOKENS_BY_PUB / the store — out of scope for this phase).
+// TIMEOUTS (the safety fix). A silent-but-established Apple connection must never leak a session on a relay that
+// runs for weeks. A few seconds per request tears down a request that gets no response; a long idle timeout lets a
+// pooled-but-unused session close itself so no permanent idle socket is held. Overridable by a test for a fast,
+// deterministic deadline (never from env — these are not operator knobs).
+let _apnsReqTimeoutMs = 8 * 1000;        // per-request deadline — a response must arrive within this or we tear down
+let _apnsIdleTimeoutMs = 5 * 60 * 1000;  // a pooled session with no traffic for this long closes itself
+
+// CONNECTION POOL. One HTTP/2 session PER ORIGIN (production and sandbox are DIFFERENT origins => separate
+// sessions), reused across recipients and messages instead of one-connect-per-send. A session is dropped from the
+// cache on 'error'/'close'/'goaway'/idle/timeout, so the next send reconnects; correctness over cleverness.
+const _apnsSessions = new Map();   // origin => { session, origin }
+function _apnsDropSession(origin, entry) {
+  const cur = _apnsSessions.get(origin);
+  const e = entry || cur;
+  if (!e) return;
+  if (cur === e) _apnsSessions.delete(origin);   // never evict a newer session than the one that failed
+  try { e.session.close(); } catch {}
+  try { e.session.destroy && e.session.destroy(); } catch {}
+}
+function _apnsGetSession(origin) {
+  const cached = _apnsSessions.get(origin);
+  if (cached && !cached.session.destroyed && !cached.session.closed) return cached;   // reuse a live session
+  const session = (_apnsH2Connect || http2Connect)(origin);
+  const entry = { session, origin };
+  _apnsSessions.set(origin, entry);
+  const drop = () => _apnsDropSession(origin, entry);
+  session.on('error', () => { _apnsCounters.err++; _apnsNote('apns push transport error'); drop(); });
+  session.on('close', drop);
+  session.on('goaway', drop);
+  // IDLE SELF-CLOSE: real http2 resets this inactivity timer on every request, so a pooled session only closes
+  // after it has sat unused. (A mock transport has no setTimeout — the guard skips it.)
+  if (typeof session.setTimeout === 'function') { try { session.setTimeout(_apnsIdleTimeoutMs, drop); } catch {} }
+  return entry;
+}
+
+// THE REAL SENDER. One contentless HTTP/2 POST per recipient, fire-and-forget, over a POOLED session. F2: it uses
+// tokenRec.token as the URL path and NOTHING ELSE from pub/e — no pubkey, no ['p'] target, no {from,to} pair is
+// ever logged or sent, so the wire and the log carry no communication-graph metadata. It never throws out of the
+// hook (every stage is guarded, including the timeout) — a failed push must not break ingest. Response status is
+// COUNTED/logged coarsely; dead-token cleanup on a 410 is a FUTURE item (it would mutate TOKENS_BY_PUB / the store
+// — out of scope for this phase).
 function makeApnsSender(cfg) {
   return function apnsSend(_pub, tokenRec, _e) {
     const token = tokenRec && tokenRec.token;
     if (!token) return;
     const env = tokenRec.env === 'sandbox' ? 'sandbox' : 'production';
     _apnsCounters.sent++;
-    let session = null;
+    let origin = null, entry = null;
     try {
       const u = new URL(apnsUrl(token, env));
+      origin = u.origin;
       const headers = { ':method': 'POST', ':path': u.pathname, ...buildHeaders(_apnsJwtCached(cfg), cfg.topic) };
       const body = JSON.stringify(buildPayload());
-      session = (_apnsH2Connect || http2Connect)(u.origin);
-      session.on('error', () => { _apnsCounters.err++; _apnsNote('apns push transport error'); try { session.close(); } catch {} });
-      const req = session.request(headers);
-      let status = 0;
-      req.on('error', () => { _apnsCounters.err++; _apnsNote('apns push request error'); try { session.close(); } catch {} });
+      entry = _apnsGetSession(origin);
+      const req = entry.session.request(headers);
+      let status = 0, done = false;
+      // PER-REQUEST TIMEOUT: a session that connects but never answers is the exact leak we are closing. The timer
+      // tears down THIS request and drops the (silent) session from the pool so the next send reconnects. It never
+      // throws; unref'd so this guard alone cannot keep the relay process alive.
+      const timer = setTimeout(() => {
+        if (done) return; done = true;
+        _apnsCounters.err++; _apnsCounters.timeout++; _apnsNote('apns push timeout');
+        try { (req.destroy ? req.destroy() : req.close && req.close()); } catch {}
+        _apnsDropSession(origin, entry);
+      }, _apnsReqTimeoutMs);
+      if (timer && timer.unref) timer.unref();
+      const settle = () => { if (done) return false; done = true; try { clearTimeout(timer); } catch {} return true; };
+      req.on('error', () => { if (!settle()) return; _apnsCounters.err++; _apnsNote('apns push request error'); _apnsDropSession(origin, entry); });
       req.on('response', (h) => { status = h[':status'] || 0; });
       req.on('data', () => {});   // drain the (ignored) error body so the stream can end
       req.on('end', () => {
+        if (!settle()) return;   // POOLED: a clean end leaves the session OPEN for the next recipient — no close here.
         if (status === 200) { _apnsCounters.ok++; _apnsNote('apns push ok'); }
         else { _apnsCounters.err++; _apnsNote('apns push status ' + status); }   // 400/403/410 etc. — code only, no token, no pub
-        try { session.close(); } catch {}
       });
       req.end(body);
-    } catch { _apnsCounters.err++; _apnsNote('apns push send failed'); try { session && session.close(); } catch {} }
+    } catch { _apnsCounters.err++; _apnsNote('apns push send failed'); if (origin) _apnsDropSession(origin, entry); }
   };
 }
 
