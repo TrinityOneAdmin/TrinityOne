@@ -1916,7 +1916,7 @@ function ReadScreen({ ctx }) {
     <div style={{ position: 'absolute', inset: 0 }}>
       <ReadHeader ctx={ctx} loc={{ book: bname, ch: loc.chap }} version={version}
         onBook={() => setSheet('book')} onChapter={(rect) => { setCvAnchor(rect); setSheet('cv'); }} onVersion={() => setSheet('version')}
-        onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
+        onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => { setCompare(c => c ? false : true); setCmpSide(null); }}
         cmpAbbr={compare && vlist.length > 1 ? cmpAbbr : null} onCompareVersion={() => setSheet('cmpVersion')}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
@@ -2005,14 +2005,15 @@ function ReadScreen({ ctx }) {
               {verses.map((row, i) => {
                 const isSel = selSorted.some(v => String(v) === String(row.v));
                 return (
-                <div key={row.v} id={'rv-' + row.v} style={{ display: 'flex', gap: 10, padding: '11px 0', borderBottom: '1px solid var(--line-2)', cursor: 'pointer', borderRadius: 6 }}>
-                  <div onClick={() => { const already = sel.some(x => String(x) === String(row.v)); setCmpSide('left'); if (already && cmpSide !== 'left') return; selectVerse(row.v); }} style={{ flex: 1, padding: '2px 4px', borderRadius: 4, transition: 'background .2s',
+                <div key={row.v} id={'rv-' + row.v} style={{ display: 'flex', gap: 0, padding: '11px 0', borderBottom: '1px solid var(--line-2)', cursor: 'pointer', borderRadius: 6 }}>
+                  <div onClick={() => { const already = sel.some(x => String(x) === String(row.v)); setCmpSide('left'); if (already && cmpSide !== 'left') return; selectVerse(row.v); }} style={{ flex: 1, padding: '2px 6px', borderRadius: 4, transition: 'background .15s',
                     background: isSel && (!cmpSide || cmpSide === 'left') ? 'color-mix(in oklab, var(--clay) 30%, transparent)' : 'transparent' }}>
-                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink)' }}><sup style={{ fontFamily: 'var(--font-ui)', fontSize: '.58em', fontWeight: 700, color: 'var(--ink-3)', marginRight: 3, verticalAlign: 'super', position: 'relative', top: '-.1em' }}>{row.v}</sup>{row.text}</p>
+                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink)' }}><sup style={{ fontFamily: 'var(--font-ui)', fontSize: '.65em', fontWeight: 700, color: 'var(--ink-3)', marginRight: 3, verticalAlign: 'super', position: 'relative', top: '-.1em' }}>{row.v}</sup>{row.text}</p>
                   </div>
-                  <div onClick={() => { const already = sel.some(x => String(x) === String(row.v)); setCmpSide('right'); if (already && cmpSide !== 'right') return; selectVerse(row.v); }} style={{ flex: 1, padding: '2px 4px', borderRadius: 4, transition: 'background .2s',
-                    background: isSel && cmpSide === 'right' ? 'color-mix(in oklab, var(--clay) 30%, transparent)' : 'transparent' }}>
-                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}>{cmpIdx[String(row.v)] ? cmpIdx[String(row.v)].text : ''}</p>
+                  <div style={{ width: 1, flexShrink: 0, background: 'var(--line-2)', margin: '2px 0' }} />
+                  <div onClick={() => { const already = sel.some(x => String(x) === String(row.v)); setCmpSide('right'); if (already && cmpSide !== 'right') return; selectVerse(row.v); }} style={{ flex: 1, padding: '2px 6px', borderRadius: 4, transition: 'background .15s',
+                    background: isSel && cmpSide === 'right' ? 'color-mix(in oklab, var(--sage) 30%, transparent)' : 'transparent' }}>
+                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}><sup style={{ fontFamily: 'var(--font-ui)', fontSize: '.65em', fontWeight: 700, color: 'var(--ink-3)', marginRight: 3, verticalAlign: 'super', position: 'relative', top: '-.1em' }}>{row.v}</sup>{cmpIdx[String(row.v)] ? cmpIdx[String(row.v)].text : ''}</p>
                   </div>
                 </div>
                 );
