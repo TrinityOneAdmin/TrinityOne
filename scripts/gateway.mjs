@@ -7386,6 +7386,52 @@ function canRead(e, authed) {
   const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(authed));
 }
 
+// ══ PHASE 2 of contentless APNs: THE INGEST PUSH HOOK ═══════════════════════════════════════════════════════
+// Decides WHO is woken by a contentless "New message" push when a NEW message is stored, and hands each chosen
+// recipient to the SEAM below. Phase 2 stops at the seam; the actual APNs send is Phase 3.
+//
+// FIRED FROM EXACTLY ONE SITE — the live websocket EVENT handler, right after `note(evt)`, gated on
+// putRes==='stored'. It is deliberately NOT inside note(). note() also runs on syncChurchFromPeer (cursor pull),
+// reconcileChurchWithPeer (negentropy), the /import restore loop and the boot rehydrate (hydrateMaps), and every
+// one of those REPLAYS old / back-dated events — a hook there would fire a push per event on a corpus resync (a
+// push storm). The live EVENT site is the only place a message is genuinely NEW.
+//
+// canRead IS THE SOLE VISIBILITY GATE (child-safety critical). Everything that decides who may SEE a message —
+// DM narrowing to the ['p'] recipient, invite-only / team room membership, the adults-only-room / minor
+// safeguarding bar, and blocks — lives in canRead, so a recipient is NEVER pushed for a message they could not
+// read. TOKENS_BY_PUB is NOT a membership proof (phase-1 audit N1: a token can linger for an ex-member); canRead
+// re-proves the right to read at hook time, so presence in TOKENS_BY_PUB is never treated as permission.
+function maybePushNotify(e) {
+  if (!e) return;
+  // 1. KIND ALLOWLIST. Push ONLY for a NIP-04 DM (kind 4) or a ROOM-addressed chat line (kind 1 WITH a group id).
+  //    Everything else returns here: reactions (7), deletions (5), MyData / admin docs (30078), and an ungrouped
+  //    kind-1. gidOf(e) is the house helper for the room id (the non-network 't' tag); require it truthy.
+  const eligible = e.kind === 4 || (e.kind === 1 && !!gidOf(e));
+  if (!eligible) return;
+  // 2. Iterate ONLY the members who registered an iOS token (bounds the work), and push to each one canRead admits.
+  for (const pub of TOKENS_BY_PUB.keys()) {
+    if (pub === e.pubkey) continue;        // never push the SENDER to their own phone (canRead(e, author) is true)
+    if (!canRead(e, pub)) continue;        // THE single visibility authority — never push what this pub can't read
+    const rec = TOKENS_BY_PUB.get(pub);
+    if (rec) sendContentlessPush(pub, rec, e);   // → THE SEAM (Phase 3 sends the contentless APNs here)
+  }
+}
+// ── THE SEAM. maybePushNotify calls this once per eligible recipient. PHASE 2 SHIPS A NO-OP — nothing is sent.
+// Phase 3 implements the real contentless APNs send (JWT + HTTP/2 to Apple) behind _pushSender. Injectable so a
+// test can observe exactly which recipients would be pushed WITHOUT weakening production: unset => pure no-op.
+let _pushSender = null;
+function sendContentlessPush(pub, tokenRec, e) {
+  const f = _pushSender;
+  if (f) { try { f(pub, tokenRec, e); } catch {} }   // else: no-op in phase 2 (and whenever Phase 3 is unconfigured)
+}
+// TEST OBSERVABILITY ONLY, and inert in the field — the env var is set by no deploy, exactly like TRINITY_DATA_DIR
+// / TRINITY_TAILSCALE_BIN. A spawned-gateway test sets TRINITY_PUSH_SPY_FILE to read back which recipients the
+// seam fired for (the only way to observe a per-recipient hook across the process boundary). IT SENDS NOTHING.
+if (process.env.TRINITY_PUSH_SPY_FILE) {
+  const _spy = process.env.TRINITY_PUSH_SPY_FILE;
+  _pushSender = (pub, _rec, e) => { try { appendFileSync(_spy, JSON.stringify({ to: pub, id: e.id, kind: e.kind, from: e.pubkey }) + '\n'); } catch {} };
+}
+
 // ---- static file serving ----
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -11081,7 +11127,7 @@ wss.on('connection', (ws, req) => {
       // revoked steward restoring their authority, a child's DM protections being stripped — and worst,
       // replaying a stale group doc put the attacker back in GROUP_MEMBERS, which canRead() consults, handing
       // them the READ history of an invite-only group. The store was always right; the running relay was not.
-      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events (a steward's approval is receipted inside — ADMITTED_RECEIPTS)
+      if (putRes === 'stored') { note(evt); maybePushNotify(evt); }   // a membership/broadcast change takes effect for subsequent events (a steward's approval is receipted inside — ADMITTED_RECEIPTS). PHASE-2 PUSH HOOK: the ONE live new-message site — maybePushNotify picks contentless-push recipients here and ONLY here (note() also runs on sync/reconcile/import/boot replays, which would storm).
       // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
       // the old code returned on that without ever applying the deletion — so the second and every later
       // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.
