@@ -2694,14 +2694,22 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   // PIN TO MY PROFILE. Offered only under the same condition that makes a verse card (verse type, string non-empty ref
   // AND text), never for commentary/note/devotional or a cross-reference preview whose text is ''. The pin holds the
   // words, so it needs no Bible module on the reader's phone. Children may pin (owner 2026-11-26).
-  const canPin = type === 'verse' && typeof payload.ref === 'string' && !!payload.ref && typeof payload.text === 'string' && !!payload.text && !!ctx.pinVerse;
+  // The SAME shape rule as the engine (setProfile / _profilePin): ref <= 80, version <= 40 (text is capped, not refused).
+  // Past either, the engine reads the pin as malformed = CLEAR, which would erase the old pin and still say "Pinned".
+  const canPin = type === 'verse' && typeof payload.ref === 'string' && !!payload.ref && payload.ref.length <= 80 && typeof payload.text === 'string' && !!payload.text && !(typeof payload.version === 'string' && payload.version.length > 40) && !!ctx.pinVerse;
   const pinVal = canPin ? { ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' } : null;
   const mine = (canPin && FS && FS.myPubkey && FS.displayFor) ? FS.displayFor(FS.myPubkey).pinnedVerse : null;
   const alreadyPinned = !!(pinVal && mine && mine.ref === pinVal.ref && mine.version === pinVal.version && mine.text === pinVal.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''));
+  // A saved event carries what went on the wire: if it does not hold THIS pin, the save did not store it. `true` is the
+  // engine's "nothing on the wire changed" (already identical), which is a stored pin.
+  const pinStored = (ok) => {
+    if (ok === true || !ok || typeof ok.content !== 'string') return true;
+    try { const w = JSON.parse(ok.content); return !!(w && w.pinnedVerse && w.pinnedVerse.ref === pinVal.ref); } catch (e) { return false; }
+  };
   const pinIt = () => {
     if (!pinVal || alreadyPinned) return;
     Promise.resolve(ctx.pinVerse(pinVal))
-      .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting */ : ok ? ctx.toast('Pinned to your profile') : ctx.toast('Couldn’t pin it — your church still sees your old profile. Try again.')))
+      .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting */ : (ok && pinStored(ok)) ? ctx.toast('Pinned to your profile') : ctx.toast('Couldn’t pin it — your church still sees your old profile. Try again.')))
       .catch(() => ctx.toast('Couldn’t pin it — please try again.'));
     onClose();
   };

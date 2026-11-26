@@ -91,6 +91,24 @@ test('SHEET: commentary, note, devotional and an empty-text cross-reference prev
   for (const [k, p] of Object.entries(cases)) assert.equal(sheet(p).pinBtn.length, 0, k + ' offers Pin');
   assert.equal(sheet({ ...VERSE }, { noPin: true }).pinBtn.length, 0, 'Pin shown with no save path behind it');
 });
+test('SHEET: a ref over 80 or a version over 40 offers no Pin (the engine would read it as malformed = CLEAR); the limits themselves do', () => {
+  assert.equal(sheet({ ...VERSE, ref: 'x'.repeat(81) }).pinBtn.length, 0, 'an 81-char ref (a long scattered-verse range) offers Pin, which would erase the old pin');
+  assert.equal(sheet({ ...VERSE, version: 'v'.repeat(41) }).pinBtn.length, 0, 'a 41-char version offers Pin');
+  assert.equal(sheet({ ...VERSE, ref: 'x'.repeat(80) }).pinBtn.length, 1, 'CONTROL: an 80-char ref is refused');
+  assert.equal(sheet({ ...VERSE, version: 'v'.repeat(40) }).pinBtn.length, 1, 'CONTROL: a 40-char version is refused');
+  assert.equal(sheet({ ...VERSE, text: 't'.repeat(900) }).pinBtn.length, 1, 'CONTROL: long text is capped by the engine, not refused');
+});
+test('SHEET: a saved event that does not carry this pin is not announced as pinned', async () => {
+  const s = sheet({ ...VERSE }, { pinResult: { content: JSON.stringify({ about: '' }) } });
+  s.pinBtn[0].props.onClick();
+  await flush();
+  assert.equal(s.toasts.length, 1);
+  assert.doesNotMatch(s.toasts[0], /^Pinned/, 'a save whose event holds no pin was announced as pinned');
+  const ok = sheet({ ...VERSE }, { pinResult: { content: JSON.stringify({ pinnedVerse: VERSE }) } });
+  ok.pinBtn[0].props.onClick();
+  await flush();
+  assert.deepEqual(ok.toasts, ['Pinned to your profile'], 'CONTROL: a save that holds the pin was not announced');
+});
 test('SHEET: a verse that is already pinned shows as pinned and does not save again', async () => {
   const s = sheet({ ...VERSE }, { pinned: { ...VERSE } });
   assert.equal(s.pinBtn.length, 1);
@@ -185,6 +203,15 @@ test('SAVE PATH: saveIdentity passes a pinned verse, passes null (Remove), and s
   assert.deepEqual(sent[0].pinnedVerse, VERSE, 'a pinned verse stops at saveIdentity');
   assert.ok('pinnedVerse' in sent[1] && sent[1].pinnedVerse === null, 'null (Remove) is swallowed, so a pin can never be removed');
   assert.ok(!('pinnedVerse' in sent[2]), 'a name-only save sent a pinnedVerse key');
+});
+test('SAVE PATH: the ctx.pinVerse line in app.jsx reaches setProfile as a pinnedVerse', async () => {
+  const lines = APP.split('\n').filter(l => l.trim().startsWith('pinVerse:'));
+  assert.equal(lines.length, 1, 're-anchor: expected exactly one pinVerse ctx line in app.jsx');
+  const { fn: saveIdentity, sent } = liftSaveIdentity();
+  const ctx = new Function('saveIdentity', 'return ({' + lines[0] + '});')(saveIdentity);
+  await ctx.pinVerse({ ...VERSE });
+  assert.equal(sent.length, 1, 'ctx.pinVerse never reached setProfile');
+  assert.deepEqual(sent[0].pinnedVerse, VERSE);
 });
 test('SAVE PATH: identity.pinnedVerse is the fresh kind-0 copy once our kind-0 was seen, else myProfile', () => {
   const anchor = 'const identity = (() => {';
