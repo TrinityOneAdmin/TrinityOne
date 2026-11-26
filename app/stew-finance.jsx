@@ -3374,7 +3374,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
         </div>}
         {_tabStripLifted ? (
           <div style={{ position: 'relative' }}>
-            <button onClick={() => setActionsOpen(o => !o)} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="more-horizontal" size={16} color="var(--ink)" /> Actions</button>
+            <button onClick={() => setActionsOpen(o => !o)} style={{ border: 'none', cursor: 'pointer', background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '8px 14px', borderRadius: 13, boxShadow: '0 4px 14px rgba(34,28,16,.18)', display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '0.5px', fontFamily: 'var(--font-ui)', textTransform: 'uppercase' }}><Icon name="more-horizontal" size={16} color="currentColor" /> Actions</button>
             {actionsOpen ? <>
               <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
               <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, minWidth: 200, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,.15)', zIndex: 40, padding: '4px 0', animation: 'finDrawerFade .15s ease' }}>
