@@ -326,6 +326,16 @@ export const churchDoc = (church, d, content, at) => finalizeEvent(
 export const relaysDoc = (church, relays, at) => churchDoc(church, RELAYS_D,
   relays.map(r => ({ pubkey: r.relayPub, url: r.base })), at);
 
+// The church's CLIENT-SIDE membership statement — d=trinityone/relay-net, the document proveRelay's ROOT 3
+// reads (netEntries) to admit a self-hosted / partner box by the church's own signature. DISTINCT from
+// relaysDoc above: that one signs RELAYS_D (trinityone/relays, the server-side trusted-relays/resync list,
+// ingested by the relay into TRUSTED_RELAYS/PEER_URLS); this one signs RELAY_NET_D (trinityone/relay-net),
+// which the relay deliberately does NOT ingest (gateway.mjs: "This relay does not ingest relay-net") — it is
+// read by the member app's churchRelayNet(). Content shape parseRelayNet() accepts: [{pubkey, alwaysOn, url?,
+// name?}] — pubkey is the only field admission consults; url is an advisory where-last-seen hint.
+export const relayNetDoc = (church, relays, at) => churchDoc(church, D.RELAY_NET,
+  relays.map(r => ({ pubkey: r.relayPub, url: r.base, alwaysOn: true })), at);
+
 // ── NIP-98, the way the relay-to-relay path does it ─────────────────────────────────────────────────────
 export const nip98 = (sk, url, method, churchPub) => 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent(
   { kind: 27235, created_at: now(), tags: [['u', url], ['method', method], ['church', churchPub]], content: '' }, sk))).toString('base64');
