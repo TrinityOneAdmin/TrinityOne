@@ -144,6 +144,17 @@ function FinanceUnlinked() {
   );
 }
 
+const FIN_NAV = [
+  { key: 'transactions', label: 'Transactions' },
+  { key: 'reports', label: 'Reports' },
+  { key: 'invoices', label: 'Invoices' },
+  { key: 'bills', label: 'Bills' },
+  { key: 'accounts', label: 'Accounts & funds' },
+  { key: 'budget', label: 'Budget' },
+  { key: 'donors', label: 'Donors' },
+  { key: 'insights', label: 'Insights' },
+];
+
 function FinanceShell() {
   const S = window.Steward;
   const church = window.useStewardChurch();
@@ -161,6 +172,22 @@ function FinanceShell() {
   const [settings, setSettings] = React.useState(false);
   const [finTab, setFinTab] = React.useState('transactions');
   const [finMoreOpen, setFinMoreOpen] = React.useState(false);
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const id = 'fin-drawer-anim';
+    if (document.getElementById(id)) return;
+    const s = document.createElement('style');
+    s.id = id;
+    s.textContent = '@keyframes finDrawerSlide{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes finDrawerFade{from{opacity:0}to{opacity:1}}';
+    document.head.appendChild(s);
+  }, []);
+  React.useEffect(() => {
+    if (!drawerOpen || typeof document === 'undefined') return;
+    const close = (e) => { if (e.key === 'Escape') setDrawerOpen(false); };
+    document.addEventListener('keydown', close);
+    return () => document.removeEventListener('keydown', close);
+  }, [drawerOpen]);
   const view = financeShellView(S, church, rosterGenuine);
   const churchName = view === 'unlinked' ? 'Not linked yet' : (church.name || 'Your church');
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -169,10 +196,22 @@ function FinanceShell() {
   return (
     <div data-finance-shell="1" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)', fontFamily: 'var(--font-ui)' }}>
       {settings ? <FinanceSettings onClose={() => setSettings(false)} /> : null}
+      {drawerOpen ? <div onClick={() => setDrawerOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 50, animation: 'finDrawerFade .2s ease' }} /> : null}
+      {drawerOpen ? <div style={{ position: 'fixed', top: 0, left: 0, bottom: 0, width: 280, maxWidth: '80vw', background: 'var(--surface)', zIndex: 51, boxShadow: '4px 0 24px rgba(0,0,0,.18)', display: 'flex', flexDirection: 'column', animation: 'finDrawerSlide .2s ease', padding: 'calc(env(safe-area-inset-top, 0px) + 16px) 12px calc(env(safe-area-inset-bottom, 0px) + 16px) calc(env(safe-area-inset-left, 0px) + 12px)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '0 4px' }}>
+          <Halo size={28} color="var(--ink)" spark="var(--clay)" />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{churchName}</div>
+        </div>
+        <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {FIN_NAV.map(t => (
+            <button key={t.key} onClick={() => { setFinTab(t.key); setDrawerOpen(false); }} style={{ display: 'flex', alignItems: 'center', minHeight: 48, padding: '0 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: finTab === t.key ? 800 : 600, fontSize: 15, background: finTab === t.key ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'transparent', color: finTab === t.key ? 'var(--clay)' : 'var(--ink)' }}>{t.label}</button>
+          ))}
+        </nav>
+      </div> : null}
       <div style={{ flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)', padding: 'calc(6px + env(safe-area-inset-top, 0px)) calc(8px + env(safe-area-inset-right, 0px)) 6px calc(8px + env(safe-area-inset-left, 0px))', display: 'flex', alignItems: 'center', gap: 6 }}>
-        <div style={{ ...tap, cursor: 'default' }}><Halo size={24} color="var(--ink)" spark="var(--clay)" /></div>
+        {view === 'books' ? <button onClick={() => setDrawerOpen(true)} aria-label="Menu" style={tap}><Icon name="menu" size={22} color="currentColor" /></button> : <div style={{ ...tap, cursor: 'default' }}><Halo size={24} color="var(--ink)" spark="var(--clay)" /></div>}
         <div style={{ flex: 1, minWidth: 0, position: 'relative', height: 44 }}>
-          <h1 style={{ position: 'absolute', left: 0, right: 0, top: 3, margin: 0, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15.5, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none' }}>Finance</h1>
+          <h1 style={{ position: 'absolute', left: 0, right: 0, top: 3, margin: 0, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15.5, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none' }}>{view === 'books' ? (FIN_NAV.find(t => t.key === finTab) || FIN_NAV[0]).label : 'Finance'}</h1>
           <IdentitySwitcher compact noNameEdit church={church} churchName={churchName} initials={initials} onEditName={() => {}} />
         </div>
         {hasPin ? <button onClick={() => { try { S.lock('manual'); } catch (e) {} }} aria-label="Lock" title="Lock now" style={tap}><Icon name="lock" size={20} color="currentColor" /></button> : null}
@@ -190,12 +229,7 @@ function FinanceShell() {
           : view === 'off' ? <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Finance is turned off</div>This church has turned its Finance section off. Its owner can turn it back on from their own device.</div>
           : <FinanceUnlinked />}
       </main>
-      {view === 'books' ? <>
-        <button onClick={() => { const ev = new CustomEvent('finance-record'); window.dispatchEvent(ev); }} aria-label="Record a transaction" style={{ position: 'fixed', right: 'calc(16px + env(safe-area-inset-right, 0px))', bottom: 'calc(72px + env(safe-area-inset-bottom, 0px))', width: 56, height: 56, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay, #fff)', cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}><Icon name="plus" size={24} color="currentColor" /></button>
-        <nav style={{ flexShrink: 0, background: 'var(--surface)', borderTop: '1px solid var(--line)', padding: '6px calc(8px + env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) calc(8px + env(safe-area-inset-left, 0px))' }}>
-          <FinTabStrip tab={finTab} setTab={setFinTab} moreOpen={finMoreOpen} setMoreOpen={setFinMoreOpen} />
-        </nav>
-      </> : null}
+      {view === 'books' ? <button onClick={() => { const ev = new CustomEvent('finance-record'); window.dispatchEvent(ev); }} aria-label="Record a transaction" style={{ position: 'fixed', right: 'calc(16px + env(safe-area-inset-right, 0px))', bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))', width: 56, height: 56, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay, #fff)', cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}><Icon name="plus" size={24} color="currentColor" /></button> : null}
     </div>
   );
 }
