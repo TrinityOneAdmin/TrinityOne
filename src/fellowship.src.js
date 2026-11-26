@@ -4105,7 +4105,9 @@ function _mine(o) { return !!(o && o.evt && pub && o.evt.pubkey === pub); }
 // Only THIS identity's entries count (owner 2026-10-27): another identity's parked entries are not this person's queue.
 function _outboxFull() {
   let n = 0;
-  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+  // A pushtoken is one entry per device and REPLACES the older one of its kind (like a join/leave/profile), so it
+  // can never pile up and must not count toward the member's chat-queue limit — nor let a stuck token refuse chat.
+  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && !o.pushtoken && _mine(o)) n++;
   return n >= OUTBOX_MAX;
 }
 // THE "DIDN'T SEND" BIN IS CAPPED AT 500, VISIBLY (owner 2026-10-27). Nothing is ever evicted from it. From 450 the
@@ -4154,6 +4156,11 @@ function _leavingFor(cp) {
 function _announceBlocked(cp) { return _leavingFor(cp); }
 // Take this church's queued join(s) off the queue — a newer join replaces them, a Leave removes them.
 function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o))); return _outbox.length !== n; }   // this identity's only
+// Take this device's queued pushtoken action off the queue. pushtoken:<pub> is ONE replaceable doc, so a newer
+// register (or a deregister) is the whole truth — an older queued copy could only ever be refused as "a newer
+// version is already stored", or, worse, land AFTER the newer one and undo it. Keyed on the SIGNER (this phone's
+// pub), like _mine, so another identity's queued token on a shared device is left alone.
+function _outboxDropPushTokens(p) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.pushtoken && o.evt && o.evt.pubkey === p)); return _outbox.length !== n; }
 _outboxLoad();
 
 // ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
@@ -6982,30 +6989,52 @@ window.Fellowship = {
   // CALLERS: publishPushToken — screens-extras.jsx dpSetTier() 'push' branch + the apnsToken listener (1 logical site).
   //          deletePushToken  — screens-extras.jsx dpSetTier() leaving-'push' branch (1 site).
   //          _buildPushTokenEvent — publishPushToken (here) + scripts/the-push-token-doc-binds-the-members-own-pubkey.test.mjs (lifted).
-  // MULTI-CHURCH NOTE: published to the ACTIVE church's gated relay set (churchRelays()); a member who follows several
-  // churches registers on the active one's relay. Per-church fan-out is a later concern (iOS pilot is single-church).
+  // MULTI-CHURCH NOTE: queued to the outbox and retried to the ACTIVE church's publish set (publishSetFor(churchPub),
+  // re-derived at send time); a member who follows several churches registers on the active one's relay. Per-church
+  // fan-out is a later concern (iOS pilot is single-church).
   _buildPushTokenEvent({ pub, token, env, ts }) {
     const t = ts || Math.floor(Date.now() / 1000);
     return { kind: 30078, created_at: t,
       tags: [['d', 'trinityone/pushtoken:' + pub], ['t', NET], ['p', pub]],
       content: JSON.stringify({ token: String(token || '').toLowerCase(), platform: 'ios', env: env === 'sandbox' ? 'sandbox' : 'production', ts: t }) };
   },
+  // QUEUE FIRST, THEN ATTEMPT — the same rule as announceMembership and a group message. This WAS a bare one-shot
+  // `_publishBounded(churchRelays(), evt)` with a console.warn on failure: no retry, no persistence, nothing on
+  // screen. That is the exact silent-failure the join path was fixed out of (UX audit 2026-08-04): a member who
+  // enables Prompt alerts right after joining hits a COLD gate cache (the church's own box is not proved yet, or
+  // the socket is still coming up), the one send is refused as an outage, and the token is LOST — so the relay
+  // never learns where to push and the member gets no notifications, with no error anywhere. The outbox retries
+  // across reconnects and restarts (trinity-relay-returned / online / the 45s tick) and re-derives the relay set
+  // at send time via publishSetFor(cp), so a box the church proves LATER still gets the token. The item carries
+  // `cp` (the active church) so _itemChurch routes it exactly where announceMembership's join goes.
+  // RETRY-PATH USERS (rule 2): _outbox / _outboxSave / _outboxFlush / _itemChurch / _outboxRelays(→publishSetFor)
+  // / _outboxFull / _outboxDropPushTokens — a pushtoken item is just a church item to all of them (cp set, no
+  // groupId/peer/join/leave), so none needed a pushtoken branch except the one-per-device replace rules above.
   async publishPushToken(token, env) {
     if (!sk) await window.Fellowship.ready;
     const tok = String(token || '').toLowerCase();
     if (!/^[0-9a-f]{8,}$/.test(tok)) return { ok: false, reason: 'bad-token' };   // APNs tokens are hex; refuse anything else before it reaches the relay
     const evt = finalizeEvent(_monotonicF(window.Fellowship._buildPushTokenEvent({ pub, token: tok, env })), sk);
-    try { await _publishBounded(churchRelays(), evt); }
-    catch (e) { console.warn('[fellowship] publishPushToken failed', e); return { ok: false, reason: _pubReason(e) }; }
-    return { ok: true, evt };
+    _outboxDropPushTokens(pub);   // one queued pushtoken action per device; this newer one replaces any older
+    _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    _outboxSave();
+    try { await _outboxFlush(o => o && o.evt && o.evt.id === evt.id); } catch (e) {}
+    const delivered = !_outbox.some(o => o && o.evt && o.evt.id === evt.id);   // flushed off the queue → it landed now
+    return { ok: true, evt, delivered };   // ok: durably QUEUED (retry guarantees delivery), not "landed this instant"
   },
   async deletePushToken() {
     if (!sk) await window.Fellowship.ready;
     // Deregister: a replaceable copy with empty content + a `deleted` tag. The registry drops the token on either.
+    // Same retried path as the register: a one-shot deregister that is refused (cold gate / offline) would leave a
+    // LIVE token in the registry — the member turned push OFF but keeps being pushed. Dropping any queued register
+    // first also stops a token we are deregistering from racing out ahead of this delete.
+    _outboxDropPushTokens(pub);
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pushtoken:' + pub], ['t', NET], ['p', pub], ['deleted', '1']], content: '' }), sk);
-    try { await _publishBounded(churchRelays(), evt); }
-    catch (e) { console.warn('[fellowship] deletePushToken failed', e); return { ok: false, reason: _pubReason(e) }; }
-    return { ok: true, evt };
+    _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    _outboxSave();
+    try { await _outboxFlush(o => o && o.evt && o.evt.id === evt.id); } catch (e) {}
+    const delivered = !_outbox.some(o => o && o.evt && o.evt.id === evt.id);
+    return { ok: true, evt, delivered };
   },
 
   // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
