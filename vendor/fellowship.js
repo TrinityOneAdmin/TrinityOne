@@ -7576,16 +7576,8 @@
   var _staticHost = !!(_loc && _loc.host && /\.(github\.io|pages\.dev|netlify\.app)$/i.test(_loc.host));
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
-  var CANONICAL_RELAYS = [
-    "wss://app.trinityone.church/relay"
-    // a8 / master-01 via Cloudflare — primary (own domain)
-    // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
-    // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
-    // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
-    // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
-    // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
-    // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
-  ];
+  var _TEST_RELAY_OVERRIDE = /^wss:\/\//i.test("") ? "" : "";
+  var CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE ? [_TEST_RELAY_OVERRIDE] : ["wss://app.trinityone.church/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelaysRaw() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
@@ -10265,7 +10257,7 @@
   }
   function _outboxFull() {
     let n = 0;
-    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && !o.pushtoken && _mine(o)) n++;
     return n >= OUTBOX_MAX;
   }
   var FAILED_MAX = 500;
@@ -10312,6 +10304,11 @@
   function _outboxDropJoins(cp) {
     const n = _outbox.length;
     _outbox = _outbox.filter((o) => !(o && o.join === cp && _mine(o)));
+    return _outbox.length !== n;
+  }
+  function _outboxDropPushTokens(p) {
+    const n = _outbox.length;
+    _outbox = _outbox.filter((o) => !(o && o.pushtoken && o.evt && o.evt.pubkey === p));
     return _outbox.length !== n;
   }
   _outboxLoad();
@@ -13211,6 +13208,71 @@
         return { ok: false, reason: _pubReason(e) };
       }
       return { ok: true, evt };
+    },
+    // ── PUSH-NOTIFICATION DEVICE TOKEN (iOS/APNs; the "Prompt alerts" tier only). See reference/SCOPE-notifications.md §15.
+    // The member signs a REPLACEABLE kind-30078 doc that binds their own pubkey -> APNs device token. The relay-side
+    // registry (Linux) verifies the signature and that the author is the <pub> in the d-suffix, then the push hook at
+    // ingest (gateway.mjs) looks the token up and sends a CONTENTLESS "New message" push. An APNs token is a routing
+    // handle, not a secret, so the content is cleartext — nothing here encrypts and nothing reads the member's key.
+    //
+    // PUSH-ONLY, BY OWNER DECISION (2026-11-25): only the Prompt-alerts tier calls this. The On-device polling tier never
+    // does — it must not, because registering a token is unrelated to (and must not arm) the lock-readable "Stay open 30
+    // days" Keychain path that polling needs and push exists to remove. Keep the two code paths apart.
+    //
+    // CALLERS: publishPushToken — screens-extras.jsx dpSetTier() 'push' branch + the apnsToken listener (1 logical site).
+    //          deletePushToken  — screens-extras.jsx dpSetTier() leaving-'push' branch (1 site).
+    //          _buildPushTokenEvent — publishPushToken (here) + scripts/the-push-token-doc-binds-the-members-own-pubkey.test.mjs (lifted).
+    // MULTI-CHURCH NOTE: queued to the outbox and retried to the ACTIVE church's publish set (publishSetFor(churchPub),
+    // re-derived at send time); a member who follows several churches registers on the active one's relay. Per-church
+    // fan-out is a later concern (iOS pilot is single-church).
+    _buildPushTokenEvent({ pub: pub2, token, env, ts }) {
+      const t = ts || Math.floor(Date.now() / 1e3);
+      return {
+        kind: 30078,
+        created_at: t,
+        tags: [["d", "trinityone/pushtoken:" + pub2], ["t", NET], ["p", pub2]],
+        content: JSON.stringify({ token: String(token || "").toLowerCase(), platform: "ios", env: env === "sandbox" ? "sandbox" : "production", ts: t })
+      };
+    },
+    // QUEUE FIRST, THEN ATTEMPT — the same rule as announceMembership and a group message. This WAS a bare one-shot
+    // `_publishBounded(churchRelays(), evt)` with a console.warn on failure: no retry, no persistence, nothing on
+    // screen. That is the exact silent-failure the join path was fixed out of (UX audit 2026-08-04): a member who
+    // enables Prompt alerts right after joining hits a COLD gate cache (the church's own box is not proved yet, or
+    // the socket is still coming up), the one send is refused as an outage, and the token is LOST — so the relay
+    // never learns where to push and the member gets no notifications, with no error anywhere. The outbox retries
+    // across reconnects and restarts (trinity-relay-returned / online / the 45s tick) and re-derives the relay set
+    // at send time via publishSetFor(cp), so a box the church proves LATER still gets the token. The item carries
+    // `cp` (the active church) so _itemChurch routes it exactly where announceMembership's join goes.
+    // RETRY-PATH USERS (rule 2): _outbox / _outboxSave / _outboxFlush / _itemChurch / _outboxRelays(→publishSetFor)
+    // / _outboxFull / _outboxDropPushTokens — a pushtoken item is just a church item to all of them (cp set, no
+    // groupId/peer/join/leave), so none needed a pushtoken branch except the one-per-device replace rules above.
+    async publishPushToken(token, env) {
+      if (!sk) await window.Fellowship.ready;
+      const tok = String(token || "").toLowerCase();
+      if (!/^[0-9a-f]{8,}$/.test(tok)) return { ok: false, reason: "bad-token" };
+      const evt = finalizeEvent2(_monotonicF(window.Fellowship._buildPushTokenEvent({ pub, token: tok, env })), sk);
+      _outboxDropPushTokens(pub);
+      _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || "", at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
+      _outboxSave();
+      try {
+        await _outboxFlush((o) => o && o.evt && o.evt.id === evt.id);
+      } catch (e) {
+      }
+      const delivered = !_outbox.some((o) => o && o.evt && o.evt.id === evt.id);
+      return { ok: true, evt, delivered };
+    },
+    async deletePushToken() {
+      if (!sk) await window.Fellowship.ready;
+      _outboxDropPushTokens(pub);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pushtoken:" + pub], ["t", NET], ["p", pub], ["deleted", "1"]], content: "" }), sk);
+      _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || "", at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
+      _outboxSave();
+      try {
+        await _outboxFlush((o) => o && o.evt && o.evt.id === evt.id);
+      } catch (e) {
+      }
+      const delivered = !_outbox.some((o) => o && o.evt && o.evt.id === evt.id);
+      return { ok: true, evt, delivered };
     },
     // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
     // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
