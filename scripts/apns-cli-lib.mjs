@@ -12,10 +12,11 @@ import { readFileSync } from 'node:fs';
 import { createPrivateKey, sign as cryptoSign } from 'node:crypto';
 import { connect as http2Connect } from 'node:http2';
 
-// §15.2 CONTRACT — CONTENTLESS. No message body, no sender, no church name, no content-available. loc-key form so
-// the DEVICE localises "New message"; the wire carries no church/graph data. Must stay identical to gateway.mjs.
+// §15.2 CONTRACT — CONTENTLESS. No message body, no sender, no church name, no content-available. Literal title/body
+// (owner decision 2026-11-26: pilot app is English-only, no Localizable.strings); the wire carries no church/graph
+// data. Must stay identical to gateway.mjs.
 export function buildPayload() {
-  return { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } };
+  return { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } };
 }
 
 // production vs sandbox is the TOKEN's environment. Any value that is not the literal 'sandbox' is production.

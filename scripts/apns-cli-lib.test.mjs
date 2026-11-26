@@ -38,11 +38,12 @@ test('drift: the lib contentless payload deep-equals the gateway\'s shipped payl
   const gw = liftGateway();
   assert.deepEqual(buildPayload(), gw.buildPayload(),
     'the CLI lib payload drifted from the shipped gateway buildPayload() — they must stay identical');
-  assert.deepEqual(buildPayload(), { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
+  assert.deepEqual(buildPayload(), { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
     'the CLI lib payload drifted from the §15.2 contract literal');
-  // And it carries no content / graph metadata.
+  // And it carries no content / graph metadata. ("body" is a legitimate STATIC alert field now ("New message",
+  // owner 2026-11-26); the deepEqual above pins its EXACT value, so real message content cannot ride in it.)
   const flat = JSON.stringify(buildPayload()).toLowerCase();
-  for (const forbidden of ['"body"', 'content-available', '"from"', '"sender"', '"church"', '"name"', '"text"']) {
+  for (const forbidden of ['content-available', '"from"', '"sender"', '"church"', '"name"', '"text"']) {
     assert.ok(!flat.includes(forbidden), `the payload leaked ${forbidden}`);
   }
 });

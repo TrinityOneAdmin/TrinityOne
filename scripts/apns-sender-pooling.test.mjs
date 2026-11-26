@@ -204,7 +204,7 @@ test('a transport that errors mid-send never throws out of the seam and the body
   const dm = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', B.pub]], content: 'x' }, A.sk);
   assert.doesNotThrow(() => api.sendContentlessPush(B.pub, { token: 'tok-B', env: 'prod' }, dm), 'a mid-send error threw into ingest');
   await flush(); await flush();
-  assert.deepEqual(JSON.parse(sentBody), { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
+  assert.deepEqual(JSON.parse(sentBody), { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
     'the body on the wire drifted from the contentless §15.2 payload');
   assert.equal(api.getCounters().err >= 1, true, 'the mid-send error was not counted');
   assert.equal(api.sessionCount(), 0, 'the errored session was not dropped from the pool');

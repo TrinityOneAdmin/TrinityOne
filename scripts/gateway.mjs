@@ -7432,11 +7432,12 @@ function sendContentlessPush(pub, tokenRec, e) {
 // that injects its HTTP/2 transport (_apnsH2Connect) and its logger (_apnsLog), so a test asserts exactly what
 // WOULD go to Apple with no network call and no weakening of production behaviour.
 
-// §15.2 CONTRACT — CONTENTLESS. No message body, no sender, no church name, no content-available. loc-key form so
-// the DEVICE localises the literal "New message"; the wire carries no church data. collapse-id coalesces a burst
-// into ONE "New message", so thread-id groups them under one conversation bucket on the phone.
+// §15.2 CONTRACT — CONTENTLESS. No message body, no sender, no church name, no content-available. Literal title/body
+// (owner decision 2026-11-26: pilot app is English-only with no Localizable.strings, so loc-key would render the raw
+// key "NEW_MESSAGE"); the wire carries no church data. collapse-id coalesces a burst into ONE "New message", so
+// thread-id groups them under one conversation bucket on the phone.
 function buildPayload() {
-  return { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } };
+  return { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } };
 }
 // production vs sandbox is the TOKEN's environment, never the relay's — a dev build registers a sandbox token.
 function apnsUrl(token, env) {

@@ -114,10 +114,12 @@ const flush = () => new Promise(r => setImmediate(r));
 test('buildPayload is the exact contentless §15.2 payload — no body, no sender, no church, no content-available', () => {
   const { buildPayload } = assemble();
   const p = buildPayload();
-  assert.deepEqual(p, { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
+  assert.deepEqual(p, { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
     'the contentless payload drifted from the §15.2 contract');
   const flat = JSON.stringify(p).toLowerCase();
-  for (const forbidden of ['"body"', 'content-available', '"from"', '"sender"', '"church"', '"name"', '"text"']) {
+  // "body" is a legitimate STATIC alert field now ("New message", owner 2026-11-26); the deepEqual above pins its
+  // EXACT value, so real message content cannot ride in it. Still forbid dynamic content / graph metadata:
+  for (const forbidden of ['content-available', '"from"', '"sender"', '"church"', '"name"', '"text"']) {
     assert.ok(!flat.includes(forbidden), `the payload leaked ${forbidden} — it must carry no message content and no graph metadata`);
   }
 });
@@ -188,7 +190,7 @@ test('a live kind-4 A->B DM through maybePushNotify + the real sender hits the m
   assert.equal(rec.headers['apns-priority'], '10', 'the apns-priority is wrong on the wire');
   assert.equal(rec.headers['apns-collapse-id'], 'trinityone-msgs', 'the collapse id is wrong on the wire');
   assert.match(rec.headers['authorization'], /^bearer eyJ/, 'the authorization is not a bearer JWT');
-  assert.deepEqual(JSON.parse(rec.body), { aps: { alert: { 'loc-key': 'NEW_MESSAGE' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
+  assert.deepEqual(JSON.parse(rec.body), { aps: { alert: { title: 'TrinityOne', body: 'New message' }, sound: 'default', 'thread-id': 'trinityone-msgs' } },
     'the body on the wire is not the contentless payload');
   // NOTHING else: not the sender A, not the bystander C, not the tokenless N.
   assert.ok(!rec.body || rec.headers[':path'] === '/3/device/tok-B', 'a non-recipient token was dialled');
