@@ -8874,6 +8874,11 @@
   }
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
+  var ABOUT_MAX = 160;
+  function _profileAbout(v) {
+    if (typeof v !== "string") return "";
+    return v.length > ABOUT_MAX ? v.slice(0, ABOUT_MAX).replace(/[\uD800-\uDBFF]$/, "") : v;
+  }
   var _profQueue = /* @__PURE__ */ new Set();
   var _profTimer = null;
   function _flushProfiles() {
@@ -8886,7 +8891,7 @@
         try {
           const m = JSON.parse(e.content);
           const had = profiles[e.pubkey] || {};
-          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: _profileAbout(m.about), nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
           _k0Seen.add(e.pubkey);
           _recoverOwnProfile(e);
           saveProfiles();
@@ -10093,6 +10098,8 @@
       av,
       picture: p && p.picture,
       nip05: p && p.nip05 || "",
+      // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
+      about: _profileAbout(p && p.about),
       // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
       signedBy: voice && voice.name ? voice.name : "",
       signedRole: voice && voice.office ? voice.office : "",
@@ -11936,7 +11943,7 @@
               const meta = JSON.parse(e.content);
               const had = profiles[e.pubkey] || {};
               const nm = meta.name || meta.display_name || had.name || "";
-              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: _profileAbout(meta.about), nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
               const m = hub.byPub.get(e.pubkey);
               if (m) {
@@ -15982,7 +15989,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6);
-      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: ev.imgPos && typeof ev.imgPos === "object" ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: typeof ev.imgZoom === "number" && ev.imgZoom > 1 ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions) });
+      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: ev.imgPos && typeof ev.imgPos === "object" ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: typeof ev.imgZoom === "number" && ev.imgZoom > 1 ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp, recur: ev.recur || "", day: ev.date ? (/* @__PURE__ */ new Date(ev.date + "T12:00")).getDay() : 0, nth: ev.recur === "monthly" ? (/* @__PURE__ */ new Date(ev.date + "T12:00")).getDate() >= 29 ? -1 : Math.ceil((/* @__PURE__ */ new Date(ev.date + "T12:00")).getDate() / 7) : null });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/event:" + id], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);

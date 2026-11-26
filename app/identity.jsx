@@ -1605,11 +1605,12 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   const [kidsAt, setKidsAt] = useId(false);   // §3b: "Children at church" — the parent's own, local, answer
   const [name, setName] = useId(identity.name || '');
   const [av, setAv] = useId(identity.avatar);
+  const [about, setAbout] = useId(identity.about || '');   // one-line bio, max 160 (kind-0 `about`)
   // seed the form when the sheet OPENS, and refresh it if the profile changes while NOT editing — but never
   // re-seed mid-edit: an identity update echoing back (relay round-trip / another device / a parent re-render)
   // would otherwise wipe the name/mark you're in the middle of picking and bounce you back to the profile view.
   useIdE(() => { if (open) setEdit(false); }, [open]);
-  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); } }, [open, identity, edit]);
+  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); setAbout(identity.about || ''); } }, [open, identity, edit]);
 
   const named = !!(identity.name && identity.name.trim());
   // steward rule: this church asks for a real first + last name (two words)
@@ -1703,7 +1704,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             <button onClick={() => {
               if (needFull && !twoWords(name)) return;
               setEdit(false);
-              Promise.resolve(onSave({ name: name.trim(), avatar: av }))
+              Promise.resolve(onSave({ name: name.trim(), avatar: av, about: about.trim() }))
                 .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting (setProfile) */ : ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
                 .catch(() => ctx.toast('Couldn’t save your profile — try again.', { error: true }));
             }} disabled={needFull && !twoWords(name)} style={{
@@ -1716,6 +1717,11 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             width: '100%', height: 52, border: '1px solid ' + (needFull && name.trim() && !twoWords(name) ? 'var(--clay)' : 'var(--line)'), borderRadius: 16, background: 'var(--surface)',
             padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)' }} />
           {needFull ? <div style={{ fontSize: 12.5, color: name.trim() && !twoWords(name) ? 'var(--clay-ink)' : 'var(--ink-3)', margin: '8px 2px 0', lineHeight: 1.45 }}>{(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real <b>first and last name</b> so people can recognise you.</div> : null}
+          <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 8px' }}>BIO</label>
+          <textarea value={about} onChange={e => setAbout(e.target.value.replace(/[\r\n]+/g, ' ').slice(0, 160))} maxLength={160} rows={3} placeholder="A short line about you (optional)" style={{
+            width: '100%', border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '12px 16px', fontSize: 15,
+            fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', resize: 'none', lineHeight: 1.45 }} />
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '6px 2px 0', textAlign: 'right' }}>{`${about.length}/160`}</div>
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>YOUR MARK</label>
           {ctx && ctx.safeguard && ctx.safeguard.photoBlocked && ctx.church && !(ctx.church.features && ctx.church.features.memberPhotos === false) ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>A steward has turned off photos for your account. You can still choose a symbol or your initial.</div> : null}
           {/* A member who HAD a photo watches it disappear the first time they open this sheet after the church
@@ -1766,6 +1772,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           </div>
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, letterSpacing: '-.5px' }}>
             {named ? identity.name : 'Anonymous'}</h1>
+          {identity.about && identity.about.trim() ? <div style={{ marginTop: 8, fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.45, maxWidth: 340, marginLeft: 'auto', marginRight: 'auto', overflowWrap: 'anywhere' }}>{identity.about}</div> : null}
           {named && identity.nip05 ? <div style={{ marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--sage)', fontWeight: 700, fontSize: 14 }} title={identity.nip05}>@{String(identity.nip05).split('@')[0]} <Icon name="check" size={14} stroke={3} color="var(--sage)" /></div> : null}
           {/* The 'TrinityOne member' / 'Anonymous member' shield pill was removed from this settings hero
               at the owner's request (2026-10-21) — it added nothing the rest of the screen did not already

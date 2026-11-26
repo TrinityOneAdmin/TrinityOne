@@ -2669,6 +2669,14 @@ if (typeof window !== 'undefined') {
 // names/handles show INSTANTLY on the next load (chat, the People directory) instead of resolving fresh.
 const profiles = {};
 const pendingProfiles = new Set();
+// A MEMBER'S BIO (kind-0 `about`) COMES FROM OTHER PEOPLE'S EVENTS, so it is checked on the way in: a string or
+// nothing, never more than 160 characters (the cap the profile screen enforces). Anything else -> ''. It is
+// rendered as text only. A cut that would split an emoji's surrogate pair drops the stranded half.
+const ABOUT_MAX = 160;
+function _profileAbout(v) {
+  if (typeof v !== 'string') return '';
+  return v.length > ABOUT_MAX ? v.slice(0, ABOUT_MAX).replace(/[\uD800-\uDBFF]$/, '') : v;
+}
 // P4: coalesce per-message profile lookups into ONE kind-0 sub. Firing a separate sub per unknown chat author
 // (as a 200-message backfill does) can approach the relay's 64-sub-per-connection cap — the "names blank" failure.
 const _profQueue = new Set();
@@ -2688,7 +2696,7 @@ function _flushProfiles() {
         // wipe the name back out and they would flip to "Anonymous" mid-session. Keep any name we have already
         // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
         const had = profiles[e.pubkey] || {};
-        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: _profileAbout(m.about), nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
         _k0Seen.add(e.pubkey);
         _recoverOwnProfile(e);   // our OWN kind-0 also refills what a locked boot wiped (picture, avatar, about)
         saveProfiles();
@@ -3914,6 +3922,8 @@ function displayFor(pubkey) {
   const chosen = (p && p.name) || (voice && voice.isChurch && (voice.churchName || '')) || (voice && voice.name) || '';
   const handle = chosen || (voice && voice.isChurch ? 'Your church' : (voice && voice.stewardFallback ? 'A church steward' : UNNAMED));
   return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '',
+    // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
+    about: _profileAbout(p && p.about),
     // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
     signedBy: (voice && voice.name) ? voice.name : '', signedRole: (voice && voice.office) ? voice.office : '', isChurch: !!(voice && voice.isChurch) };
 }
@@ -5820,7 +5830,7 @@ window.Fellowship = {
         // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
         // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
         // this is the roster the member app actually renders.
-        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: _profileAbout(meta.about), nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
         oneose() {},
       });
     };
