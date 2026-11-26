@@ -120,6 +120,8 @@ function consoleWith(deps) {
   const { body } = liftCore('vendor/steward.js');
   const src = read('vendor/steward.js');
   const more = [
+    // THE REAL _packagedOrigin, never stubbed: ownRelay() / _ownOrigin() consult it first (APK, Tauri program -> shared pool).
+    fnBody(src, 'function _packagedOrigin', '_packagedOrigin'),
     fnBody(src, 'function _ownOrigin', '_ownOrigin'),
     fnBody(src, 'function relayNetCandidates', 'relayNetCandidates'),
     fnBody(src, 'function relayNetDoc', 'relayNetDoc'),

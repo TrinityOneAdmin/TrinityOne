@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- finance.html — "TrinityOne Finance": the steward console's code with ONE screen behind its gates (the church books),
+     for a church's finance helper. Same structure as steward.html; finance-mode.js sets the app flag; the scripts that
+     finance never renders are left out (manna, meals, relay, extension, phone, custody, schedule, templates and the
+     steward-manna / steward-meals bundles). Its script list is loaded by scripts/finance-app-shows-only-the-books.test.mjs and booted in chromium by scripts/app-boots.test.mjs (finance case). -->
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>TrinityOne Finance</title>
+<link rel="icon" href="icons/finance-halo.svg" type="image/svg+xml" />
+<link rel="icon" type="image/png" sizes="192x192" href="icons/finance-192.png" />
+<link rel="apple-touch-icon" href="icons/finance-apple-touch.png" />
+<!-- the installable desktop app ("Install TrinityOne Finance"): its own manifest with its own id, so it is a separate
+     installed app from the member app even though manifest.json's scope ("./") covers this page.
+     Proven by scripts/finance-installs-as-its-own-app.test.mjs. -->
+<link rel="manifest" href="finance.webmanifest" />
+<link rel="stylesheet" href="vendor/fonts/fonts.css" />
+<link rel="stylesheet" href="brand.css" />
+<style>
+  /* token supplements not in brand.css */
+  :root {
+    --surface-2: #FBF5EA;
+    --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
+    --font-read: 'Newsreader', Georgia, serif;
+    --shadow: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);   /* index.html's value; the help cards (screens-help.jsx) use it */
+  }
+  html, body { margin: 0; height: 100%; background: #efece6; }
+  /* iOS Safari / WKWebView defaults <button> text to the system accent (blue); any button whose text
+     does not set its own colour rendered blue on iPhone while Android inherited the ink colour. Inherit
+     so buttons match normal text on both. Buttons that set their own colour inline still win. (2026-10-21) */
+  button { color: inherit; }
+  #root { height: 100vh; }
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  /* SETTINGS: A LIST OF PAGES, AND ONE PAGE AT A TIME.
+     reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md. This replaced `.sk-cols` (a two-track grid
+     of authored stacks) which itself replaced `.sk-masonry { column-width: 330px }` — CSS multi-column,
+     where the BROWSER chose the break point, so the reading order, the Tab order and the split all moved
+     whenever a card grew.
+     The stacks fixed the moving, and did not fix the height: measured 2026-09-08 at 1280x713, each section
+     still ran about two screenfuls (Church 1219px, Features 1599px, Network & relays 1242px, Security
+     1364px against a 649px viewport) because the height is CONTENT — one section doing six jobs at once.
+     Two rounds of density work took Features to 1034px and stopped there.
+     So nothing packs any more. One page holds one subject, and it is the only thing on screen.
+     ALL THREE OLD RULES ARE DELETED RATHER THAN LEFT BEHIND (.sk-cols, .net-grid, .relay-grid). Each was a
+     packing grid with exactly one user, and a packing rule left lying in this file is one a future card can
+     pick up by accident — the same reason .sk-masonry was deleted rather than orphaned.
+     THE TWO-COLUMN / ONE-COLUMN CHOICE IS MADE IN JS, not here: DashSettings already asks useStewNarrow()
+     which surface it is on, because on a phone it renders EITHER the list or the page and never both. A
+     media query here as well would be a second answer to a question that already has one, free to disagree
+     with it. */
+  .set-shell { display: grid; grid-template-columns: minmax(200px, 236px) minmax(0, 1fr); gap: 22px; align-items: start; max-width: 1180px; }
+  .set-shell--one { grid-template-columns: minmax(0, 1fr); gap: 0; }   /* phone: one of the two children is rendered */
+  .set-list { display: block; }
+  /* A GROUP HEADER IS A DISCLOSURE BUTTON, not a label. It carries aria-expanded, so it has to be a real
+     button; everything here is the reset that makes a button look like the small-caps label it replaced.
+     44px of height is not available in a 236px sidebar column, but the whole row is the target rather than
+     the chevron alone — the console has already paid for a control where only the small part responded
+     ("you have to hit the little switch itself rather than the words, which Margaret will not work out"). */
+  .set-grp { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: none; background: none; cursor: pointer;
+             font-size: 11px; letter-spacing: .9px; text-transform: uppercase; color: var(--ink-3); font-weight: 800;
+             margin: 16px 0 6px; padding: 4px 10px; border-radius: 8px; font-family: var(--font-ui); }
+  .set-grp:hover { background: color-mix(in oklab, var(--ink) 4%, transparent); color: var(--ink-2); }
+  .set-grp-n { flex: 1; min-width: 0; }
+  /* HOW MANY PAGES ARE BEHIND A SHUT GROUP. Without it a collapsed group is a word with nothing to say
+     whether anything is in there, which is the one thing a steward needs to know before opening it. */
+  .set-grp-c { font-size: 10.5px; font-weight: 700; letter-spacing: 0; color: var(--ink-3); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; }
+  .set-list > :first-child.set-grp { margin-top: 2px; }
+  .set-items { list-style: none; margin: 0; padding: 0; }
+  .set-item { display: block; width: 100%; text-align: left; border: none; background: none; font-family: var(--font-ui); color: var(--ink); padding: 9px 11px; border-radius: 10px; cursor: pointer; }
+  .set-item:hover { background: color-mix(in oklab, var(--ink) 5%, transparent); }
+  /* NOT COLOUR ALONE — the weight carries it too; see the note on the nav button in stew-dashboard.jsx. */
+  .set-item--on { background: color-mix(in oklab, var(--clay) 12%, var(--surface)); }
+  .set-item-n { display: block; font-size: 13.5px; font-weight: 600; }
+  .set-item--on .set-item-n { font-weight: 800; color: var(--clay-ink); }
+  .set-item-d { display: block; font-size: 11.5px; color: var(--ink-3); line-height: 1.35; margin-top: 1px; }
+  .set-back { display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 2px 0 4px; cursor: pointer; font-family: var(--font-ui); font-size: 13px; font-weight: 700; color: var(--clay-ink); }
+  /* THE PAGE, and the CONTAINER every density rule below measures. It replaces `.sk-cols > *` exactly —
+     same flex column, same 16px gap, same min-width:0, same container-type — so a card gets the roomy
+     values while the page is under 430px and the compact ones once it is wider, whatever the window is
+     doing. On a phone the page is about 336px, which is the roomy layout the owner has confirmed twice.
+     The cap is a reading measure, not a grid: one column of text at ~1000px sets a sentence too long to
+     scan, and the widest thing on any of these pages is a relay address. */
+  .set-page { display: flex; flex-direction: column; gap: 16px; min-width: 0; max-width: 860px; container-type: inline-size; }
+  /* ── SETTINGS DENSITY (2026-09-08) ────────────────────────────────────────────────────────────────
+     Measured in Chromium at 1280x713 with a real church loaded: every Settings section ran about two
+     screenfuls — Church 1219px, Features 1599px, Network & relays 1242px, Security 1364px, against a
+     649px viewport. Two things I assumed were wrong and are recorded so nobody re-tries them:
+       • the width is NOT going spare. 1265px page = 199px nav + 1033px main (28px padding). Measured
+         against the two-track .sk-cols this replaced, the cards sat at 977px and never reached their own
+         1120px cap, so raising a cap changes nothing here.
+       • the toggle rows are ALREADY label-left / switch-right. They are 79px because the description
+         wraps to two lines in a 435px card, not because anything is stacked.
+     So the height is padding and leading, and that is what these rules take back. Roomy stays the
+     default; a page only goes compact once it is wide enough that the text is not fighting for room. */
+  .sk-panel { padding: 22px; }
+  .set-row { padding: 11px 13px; }
+  .set-desc { font-size: 12.5px; line-height: 1.45; margin-top: 1px; }
+  @container (min-width: 430px) {
+    .sk-panel { padding: 15px 17px; }
+    .sk-panel-head { margin-bottom: 10px !important; }
+    .set-row { padding: 7px 12px; }
+    .set-desc { font-size: 12px; line-height: 1.35; margin-top: 0; }
+    /* The standing explanation under a panel title. The words stay — this console describes consequences
+       rather than prescribing policy, and hiding them behind a click would be the wrong trade. They just
+       stop setting the height of the page. */
+    /* !important because these keep their inline styles: those ARE the roomy phone default, and the
+       class only has to win inside this query. */
+    .set-note { font-size: 12px !important; line-height: 1.35 !important; margin-bottom: 7px !important; }
+    /* cards on a page sit closer once the page is wide */
+    .set-page { gap: 12px; }
+    /* ROUND TWO, 2026-09-08. The owner looked at round one in a browser and said it was still too bulky and
+       to drop the type as well — and confirmed the APK is right as it is, which is exactly what these
+       container queries protect. Everything below is desktop-only for that reason. Sizes are set here
+       rather than inline so one place governs the whole tab. */
+    .sk-panel h2 { font-size: 15px !important; }
+    .sk-panel { font-size: 13px; }
+    .set-row > div > div:first-child { font-size: 13.5px !important; }   /* the switch's own label */
+    .sk-panel .sk-btn { font-size: 12.5px !important; padding: 8px 13px !important; }
+  }
+  /* .net-grid and .relay-grid were here. Both are gone: Network and Relays are separate pages now, and the
+     Relays card's "many sections" — add, auto-find, connect by name, copy history, keep in sync — are pages
+     of their own, so there is nothing left on either to pack two-across. The lesson they recorded is kept
+     because it still applies to anything added here: they were sized from the CARD and not the viewport,
+     after a 1120px *viewport* media query gave the Relays card two ~150px columns at a 1130px window and
+     broke every line to one word — the card lived inside a sidebar and a grid track, so the window's width
+     said nothing about its own. That is why .set-page is a container and not a media query. */
+  .stew-root *::-webkit-scrollbar { width: 0; height: 0; }
+
+  /* steward UI primitives (from the handoff's Steward Surfaces stylesheet) */
+  .sk-pill { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-ui); font-weight:700; font-size:11px; letter-spacing:1.2px; text-transform:uppercase; padding:5px 11px; border-radius:999px; background:var(--clay-soft); color:var(--clay-ink); }
+  .sk-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; font-family:var(--font-ui); font-weight:700; font-size:14px; padding:11px 18px; border-radius:12px; border:none; cursor:pointer; background:var(--ink); color:var(--paper); line-height:1; transition:transform .15s, box-shadow .15s, background .15s; }
+  .sk-btn:hover { transform:translateY(-1px); box-shadow:var(--shadow-md); }
+  .sk-btn--clay { background:var(--clay-ink); color: var(--on-clay); }   /* a11y: white on --clay is 4.36:1; --clay-ink is 5.87:1 */
+  .sk-btn--gold { background:var(--gold); color:var(--midnight); }
+  .sk-btn--ghost { background:transparent; color:var(--ink); box-shadow:inset 0 0 0 1.4px var(--line); }
+  .sk-btn--ghost:hover { box-shadow:inset 0 0 0 1.4px var(--ink); }
+  .sk-mono { font-family:var(--mono); }
+
+
+  /* ── A DIALOG GIVES UP THE SPACE THE ERROR BANNER IS STANDING IN ─────────────────────────────────────
+     The console's error banner sits ABOVE every modal on purpose (z-index 240 over their 50-220; AUDIT-9,
+     because in flow it was painted underneath them, greyed and untappable, while FinanceShareStatement and
+     the first-run wizard both publish with their modal still open). Since 2026-09-17 it docks to the FOOT of
+     the viewport while a dialog is open, so it stops covering the dialog's title.
+
+     THAT LEFT A DIALOG'S BUTTONS UNDER IT, and both ways of living with the overlap are worse than this rule:
+       · an INTERCEPTING strip eats the bottom 19px of a 44px "Post to members" at 730x328 — measured;
+       · a PASS-THROUGH strip is worse still, and was shipped for exactly one commit: an opaque band that
+         paints as an error banner and ACTUATES the button behind it. A steward aiming at the banner would
+         have published the church's quarterly finances to every member.
+
+     So the dialog gets shorter instead. `max-height` shrinks it and `margin-bottom` moves it up out of the
+     strip: with the overlays' `align-items: safe center`, a panel at its cap then lands clear of the strip
+     with room to spare, and its own `overflow-y: auto` scrolls whatever no longer fits.
+
+     ⚠ THE TWO LENGTHS BELOW MUST MATCH PublishErrorBanner's own `maxHeight` FOR EACH STATE. They are pinned
+     against each other by scripts/the-error-banner-does-not-crop-an-open-dialog.test.mjs, because a drift
+     here is invisible on screen until a dialog is tall enough to reach the strip.
+
+     ⚠ `overflow-y` IS NOT OPTIONAL HERE, AND LEAVING IT OUT SHIPPED FOR ONE COMMIT. A `max-height` on a
+     panel whose own overflow is `visible` neither clips nor scrolls — the content simply spills out of the
+     card, so its rounded corner, border, background and shadow end part-way up its own text, over the dim.
+     Measured at 730x328: NameEditModal 263/236, PinModal 320/236, NewPostModal 269/236, and 19 of the 35
+     panels declare no overflow of their own. It is the "oddly cropped" complaint this branch started from,
+     arriving from the other side. The panels that already scroll are unaffected by saying it twice.
+
+     `!important` because every console overlay is styled inline, and this must win over all 35 of them for
+     as long as a message is up and not one moment longer — the attribute is set and cleared by the banner.
+
+     ⚠ KNOWN LIMIT, MEASURED AND DELIBERATELY NOT FIXED HERE — READ THIS BEFORE CHANGING THESE NUMBERS.
+     A `max-height` is only a SHORTENING while it is tighter than the panel's own cap. Above it, `!important`
+     overrides the panel's inline value and makes the panel TALLER than it was. For a 90vh panel that happens
+     once 100vh - 62 - 28 > 90vh, i.e. above 900px of viewport height — the DESKTOP console, which is what
+     app/stew-dashboard.jsx's first line calls this. Measured on MealsNeedModal, clamped vs no attribute, as
+     clearance between the panel's bottom and the strip's top:
+
+         1024x1366  +302 vs +302   content-sized, neither cap binds
+         1280x1024    -4 vs   +8   <- the rule turns a clearance into an overlap
+         1440x960     -1 vs   +5   <- the panel GREW by 6px, from 864 to 870
+          360x730    +10 vs   -7   the rule doing its job
+          730x328    +31 vs  -27   the rule doing its job
+
+     The overlap is a few pixels of the card's bottom PADDING, never a control, and the `open` state cannot
+     reach it (100vh - 248 exceeds 90vh only above 2480px). It is recorded rather than fixed because the
+     honest repair is not a different number: this reservation is expressed as a CAP when what it means is a
+     FLOOR ON THE GAP AT THE BOTTOM, and a cap only behaves like a floor while it is the binding constraint.
+     CSS cannot say "no taller than whatever this panel already said", so the repair is a different mechanism
+     (shrink the OVERLAY's box rather than the panel's, which needs :has() and converts the panels' vh caps
+     into container-relative ones) and that is a larger change than the defect justifies today.
+
+     THE BLIND SPOT IS THE POINT: every measurement on this branch is 360x730 or 730x328, so a device run on
+     a phone will never find this. */
+  html[data-stew-banner="clamped"] [role="dialog"][aria-modal="true"],
+  html[data-stew-banner="clamped"] [data-stew-modal-panel] {
+    max-height: calc(100vh - min(24vh, 62px) - 28px) !important;
+    margin-bottom: min(24vh, 62px) !important;
+    overflow-y: auto !important;
+  }
+  html[data-stew-banner="open"] [role="dialog"][aria-modal="true"],
+  html[data-stew-banner="open"] [data-stew-modal-panel] {
+    max-height: calc(100vh - min(40vh, 220px) - 28px) !important;
+    margin-bottom: min(40vh, 220px) !important;
+    overflow-y: auto !important;
+  }
+
+  /* ── A 44px FINGER TARGET ON A 28px PILL ──────────────────────────────────────────────────────────────
+     The expanded error banner's "Collapse" pill paints at 28px because the message wraps round it; the
+     codebase’s touch floor is 44. This adds 9px of invisible, hit-testable target above and below (a 1px grid
+     down its centre reads 46, never 43: a sub-pixel pill loses a row at each end at 8) WITHOUT a
+     taller pill (which would re-wrap the sentence) and WITHOUT reaching sideways, where the Dismiss × sits —
+     the two are scanned on a 1px grid for overlap in scripts/the-error-banner-clears-a-dialog-on-the-phone
+     .test.mjs. A ::before is part of its element's hit region, so elementFromPoint there returns the pill.
+     Measured in scripts/console-phone-layout-batch-a.test.mjs. */
+  .stew-reach-44 { position: relative; }
+  .stew-reach-44::before { content: ''; position: absolute; left: 0; right: 0; top: -9px; bottom: -9px; }
+
+  /* ── NO FOCUS RING AROUND A WHOLE DIALOG ──────────────────────────────────────────────────────────────
+     useStewDialog (app/stew-modal.jsx) moves focus onto the panel itself when a dialog opens and nothing
+     inside it took focus — right for a screen reader, which announces the dialog. brand.css paints EVERY
+     `[tabindex]:focus-visible` with a 2px clay outline, !important, so the panel opened with an orange ring
+     round the entire card (audit 2026-09-19 §E: Invite, Group leaders, Bulk upload, New team, the sections
+     drawer). A panel is `tabIndex=-1`: it is never reached by Tab, only by script, so the ring says nothing
+     a keyboard user needs. This out-specifies brand.css's rule (three attributes to its one) and leaves
+     `:focus-visible` on every real control inside the dialog exactly as it was. */
+  [role="dialog"][aria-modal="true"][tabindex="-1"]:focus-visible,
+  [role="dialog"][aria-modal="true"][tabindex="-1"]:focus { outline: none !important; }
+
+  /* ── ONE SIDE MARGIN FOR EVERY DIALOG ON A PHONE ──────────────────────────────────────────────────────
+     Every console overlay is styled inline and each one picked its own gutter: at 360px the panels sat
+     11, 13, 14, 16, 18, 30, 33 and 37px from the screen's edge — eight dialog widths on one phone (audit
+     2026-09-19 §E). The gutter comes from two places, the overlay's padding and the panel's own width cap
+     (`maxWidth: '94%'` and the like), so both are set here: the overlay — selected as the element directly
+     holding a modal panel, the shape all 37 of them share — gets 16px sides, and the panel fills it.
+     Phone widths only: a 520px card on a 730px landscape screen or a desktop keeps the shape it was given.
+     The sections drawer is a dialog too and is excluded — it is a left-hand drawer, not a centred card.
+     Measured in scripts/console-phone-layout-batch-a.test.mjs. */
+  @media (max-width: 480px) {
+    :is(div, section):has(> [role="dialog"][aria-modal="true"]:not([aria-label="Sections"])),
+    :is(div, section):has(> [data-stew-modal-panel]) { padding-left: 16px !important; padding-right: 16px !important; }
+    [role="dialog"][aria-modal="true"]:not([aria-label="Sections"]),
+    [data-stew-modal-panel] { width: 100% !important; max-width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; }
+  }
+
+  @keyframes lumenFade  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes lumenScale { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+  /* the phone's section drawer (StewSectionsMenu) — ends at `transform: none` on purpose, so the finished
+     animation leaves no transform behind to become a containing block for anything fixed inside it */
+  @keyframes lumenSlideIn { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+  @keyframes trinitySpin { to { transform: rotate(360deg); } }
+  /* Pre-React boot splash (#boot-splash below) honours reduced-motion: no entrance, no spin. Scoped to the
+     splash so it cannot alter any animation elsewhere in the app. Elements rest at their natural (visible)
+     state when the animation is removed, so killing them here leaves the splash fully painted. */
+  @media (prefers-reduced-motion: reduce) {
+    #boot-splash *, #boot-splash *::before, #boot-splash *::after { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root">
+  <!-- Static boot state, replaced by React on mount. The console transpiles ~2 MB of JSX in-browser, which is
+       seconds of flat grey on a phone with no indication anything is happening. -->
+  <!-- Pure static HTML+CSS — paints instantly, before React/Babel (loaded by the script tags below) run.
+       NO JavaScript, NO network calls, NO new font loads (Sora comes from vendor/fonts/fonts.css, already
+       linked in <head>). The only motion is CSS @keyframes declared in the <style> block above
+       (lumenScale = entrance, lumenFade = staggered text rise, trinitySpin = the continuous "working" ring),
+       all gated by the #boot-splash reduced-motion rule. Matches the Relay/Console Suite loader feel
+       (relay-app/home.html .brand + .tag, relay-app/control.html spinner). -->
+  <div id="boot-splash" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:0 16px;background:#efece6;font-family:'Sora',system-ui,sans-serif;text-align:center">
+    <!-- The TrinityOne mark: clay tile + aperture ring (cream arcs + gold centre), same as the app logo. -->
+    <div style="width:66px;height:66px;border-radius:18px;background:linear-gradient(155deg,#C25A38,#9C4327);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 26px rgba(34,28,16,.20);animation:lumenScale .55s cubic-bezier(.2,.7,.3,1) both">
+      <svg width="42" height="42" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <circle cx="24" cy="24" r="15" stroke="#F4ECE0" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="16.5 7.06"></circle>
+        <circle cx="24" cy="24" r="3.1" fill="#E7A733"></circle>
+      </svg>
+    </div>
+    <!-- Wordmark + tagline, grouped tight. Trinity in ink, One in clay — the two-tone wordmark. -->
+    <div style="display:flex;flex-direction:column;align-items:center;gap:7px;animation:lumenFade .5s ease .12s both">
+      <div style="font-size:27px;font-weight:800;letter-spacing:-.5px;line-height:1;color:#221C16">Trinity<span style="color:#C25A38">One</span></div>
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#8A7D6C">Read. Gather. Share.</div>
+    </div>
+    <!-- Working indicator + status line, below the logo. -->
+    <div style="display:flex;align-items:center;gap:9px;margin-top:6px;animation:lumenFade .5s ease .3s both">
+      <div style="width:15px;height:15px;border-radius:50%;border:2.4px solid rgba(194,90,56,.2);border-top-color:#C25A38;animation:trinitySpin 1.05s linear infinite"></div>
+      <div style="font-size:13px;font-weight:600;color:#6B6052">Opening the books…</div>
+    </div>
+  </div>
+</div>
+
+<!-- THE APP FLAG, FIRST. window.TRINITY_APP = 'finance' — read by steward-root.jsx (which screen the last slot of
+     StewardRoot shows, ?adopt=, the welcome, the update banner) and by requestSteward's sealed app hint. An external
+     file, never inline: build-pages.sh aborts on inline scripts and the strict CSP blocks them. -->
+<script src="finance-mode.js"></script>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+
+<!-- Bible engine (window.Bible) — verse text preview in the verse prompt tab -->
+<script src="vendor/fflate.js"></script>
+<script src="vendor/sqljs/sql-wasm.js"></script>
+<script src="engine.js"></script>
+<!-- church identity + Nostr publishing (church key, funds, profile); exposes window.Steward -->
+<script src="vendor/steward.js"></script>
+<!-- memory-hard Argon2id KDF (window.TrinityRecovery.argon2Raw) so the church-key backup file uses it too -->
+<script src="vendor/recovery.js"></script>
+<!-- double-entry ledger engine (FINANCE-MODULE.md); exposes window.FinanceLedger -->
+<script src="vendor/finance-ledger.js"></script>
+<!-- UK Gift Aid regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the core does NOT
+     import — exposes window.FinanceGiftAid, used by Finance only when church.features.giftAid === true -->
+<script src="vendor/finance-giftaid.js"></script>
+<!-- Shared contribution-statement regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the
+     core does NOT import — exposes window.FinanceContribution, used by Finance only when the active tax tool is
+     'contributionStatement' (US, New Zealand, …) -->
+<script src="vendor/finance-contribution.js"></script>
+<!-- Ireland Charitable Donation Scheme RECLAIM pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the
+     core does NOT import — exposes window.FinanceIrishCDS, used by Finance only when the active tax tool is
+     'charitableDonationScheme' (Ireland) -->
+<script src="vendor/finance-ie.js"></script>
+<script src="vendor/jsqr.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<!-- shared line icons (window.Icon + window.Halo) -->
+<!-- render-crash boundary: a blank screen is the worst failure this product has, and every one of them was silent -->
+<script type="text/babel" src="app/error-boundary.jsx"></script>
+<script type="text/babel" src="app/icons.jsx"></script>
+<!-- In-app Help, SHARED with the member app: the article copy (help-data), its illustrations, and the block
+     renderer / text-size stepper / read-aloud (screens-help). NOT screens-help-main.jsx — its BackupWalkthrough
+     reads window.TrinityIdentity, which the console does not have. The console's own dialog + entry point is
+     app/stew-help.jsx below (must stay stew-*: sync-web.sh strips stew-* from the member build). -->
+<script type="text/babel" src="app/help-illustrations.jsx"></script>
+<script type="text/babel" src="app/help-data.jsx"></script>
+<script type="text/babel" src="app/screens-help.jsx"></script>
+<!-- shared modal a11y (window.useStewDialog): role=dialog/aria-modal/Escape/focus for the console's dialogs -->
+<script type="text/babel" src="app/stew-modal.jsx"></script>
+<script type="text/babel" src="app/stew-help.jsx"></script>
+<!-- steward surfaces (mock SK data + the four surfaces) -->
+<script type="text/babel" src="app/stew-data.jsx"></script>
+<script type="text/babel" src="app/recur.jsx"></script>
+<script type="text/babel" src="app/stew-console.jsx"></script>
+<script type="text/babel" src="app/reply-kit.jsx"></script>
+<script type="text/babel" src="app/stew-cards.jsx"></script>
+<script type="text/babel" src="app/stew-dashboard.jsx"></script>
+<script type="text/babel" src="app/stew-finance.jsx"></script>
+<script type="text/babel" src="app/backup.jsx"></script>
+<!-- update check: offers the FINANCE APK (StewardRoot passes variant="finance" in this app) -->
+<script type="text/babel" src="app/update-check.jsx"></script>
+<!-- the finance-only last slot of StewardRoot. Loaded by THIS page only; it must come before steward-root.jsx mounts. -->
+<script type="text/babel" src="app/finance-shell.jsx"></script>
+<script type="text/babel" src="app/steward-root.jsx"></script>
+<!-- shared service worker registration (web-push for join alerts) — external so CSP can drop inline -->
+<script src="sw-register.js"></script>
+</body>
+</html>

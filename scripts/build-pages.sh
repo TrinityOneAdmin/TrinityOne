@@ -29,7 +29,7 @@ rm -f  "$OUT"/package*.json "$OUT"/capacitor.config.* "$OUT"/tsconfig* \
 find "$OUT" -type f \( -name '*.md' -o -name '*.service' -o -name '*.yml' -o -name '*.yaml' \
      -o -name '*.toml' -o -name '*.rs' -o -name '*.lock' \) -delete
 
-# ── Pre-transpile JSX -> JS so the APP shells (index.html, steward.html) need NO runtime Babel and no
+# ── Pre-transpile JSX -> JS so the APP shells (index.html, steward.html, finance.html) need NO runtime Babel and no
 # injected inline scripts — that's what lets us serve them a strict CSP. We keep the .jsx files too,
 # because the marketing/help/preview pages (welcome.html, "help.html", landing-app-today.html)
 # legitimately still load .jsx (+ runtime Babel, or plain like help-data.jsx); those keep a loose CSP.
@@ -40,7 +40,7 @@ for f in "$OUT"/app/*.jsx; do
   ./node_modules/.bin/esbuild "$f" --jsx=transform --log-level=error --outfile="$OUT/app/$base.js"
 done
 # point ONLY the app shells at the transpiled .js and drop the Babel runtime from them
-for html in index.html steward.html; do
+for html in index.html steward.html finance.html; do
   [ -e "$OUT/$html" ] || continue
   sed -i \
     -e '/babel\.min\.js/d' \
@@ -48,14 +48,14 @@ for html in index.html steward.html; do
     "$OUT/$html"
 done
 # the app shells must be fully Babel/JSX-free (else the strict CSP below would break them)
-for html in index.html steward.html; do
+for html in index.html steward.html finance.html; do
   [ -e "$OUT/$html" ] || continue
   if grep -qE 'text/babel|babel\.min\.js|src="[^"]*\.jsx"|<script>' "$OUT/$html"; then
     echo "ABORT: $html still has Babel/.jsx/inline-script after transpile" >&2; exit 1
   fi
 done
 
-# CSP. Only the APP shells (served at /, /index.html, /steward.html) get a Content-Security-Policy, and
+# CSP. Only the APP shells (served at /, /index.html, /steward.html, /finance.html) get a Content-Security-Policy, and
 # it's STRICT: no runtime Babel/eval, no inline/injected scripts ('wasm-unsafe-eval' only, for sql.js).
 # We deliberately set CSP ONLY on those exact routes (no overlap with /*) so Cloudflare doesn't have to
 # merge two CSP headers. The marketing/help/preview pages get no CSP (unchanged) — they still rely on
@@ -72,13 +72,24 @@ cat > "$OUT/_headers" <<HDR
   Content-Security-Policy: $STRICT_CSP
 /steward.html
   Content-Security-Policy: $STRICT_CSP
+/finance.html
+  Content-Security-Policy: $STRICT_CSP
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   X-Frame-Options: SAMEORIGIN
 /app/*.jsx
   Content-Type: text/javascript; charset=utf-8
+/*.webmanifest
+  Content-Type: application/manifest+json
+/finance-desktop-latest.json
+  Access-Control-Allow-Origin: *
+  Cache-Control: no-cache
 HDR
+# ^ finance-desktop-latest.json is read cross-origin by the DESKTOP finance program (its page is https://tauri.localhost
+#   or tauri://localhost — app/update-check.jsx 'finance-desktop'), so it needs CORS here as on the gateway (whose
+#   static route already sends Access-Control-Allow-Origin: * on every file). Both are tested by
+#   scripts/finance-desktop-update-manifest-is-readable-cross-origin.test.mjs.
 
 # Root → homepage. The marketing landing is welcome.html; serve it AT / as a 200 rewrite (clean URL, not a
 # redirect). Keeping this in the deploy means the root never depends on an external Cloudflare dashboard rule —
@@ -87,13 +98,14 @@ cat > "$OUT/_redirects" <<'RDR'
 /    /welcome.html    200
 RDR
 
-# Both APKs ship with the site so apks.html's (relative) download links resolve on Pages and the
+# The APKs (member, steward, finance) ship with the site so apks.html's (relative) download links resolve on Pages and the
 # marketing CTA can hand Android visitors the app. They're build artifacts (gitignored), copied in
 # after the git-archive. Each is only shipped if under Cloudflare's 25 MiB/file cap — otherwise it's
 # left to the gateway copy (and apks.html's relative link would 404 on Pages, so keep them under cap).
 CF_CAP=26214400
 [ -f trinityone-steward.apk ] && [ "$(stat -c%s trinityone-steward.apk)" -lt "$CF_CAP" ] && cp trinityone-steward.apk "$OUT/trinityone-steward.apk"
 [ -f trinityone.apk ] && [ "$(stat -c%s trinityone.apk)" -lt "$CF_CAP" ] && cp trinityone.apk "$OUT/trinityone.apk"
+[ -f trinityone-finance.apk ] && [ "$(stat -c%s trinityone-finance.apk)" -lt "$CF_CAP" ] && cp trinityone-finance.apk "$OUT/trinityone-finance.apk"
 [ -f apk-manifest.json ] && cp apk-manifest.json "$OUT/apk-manifest.json"
 [ -f apk-manifest.sig ] && cp apk-manifest.sig "$OUT/apk-manifest.sig"
 

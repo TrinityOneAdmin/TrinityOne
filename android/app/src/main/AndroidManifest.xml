@@ -23,6 +23,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- BEGIN join-link (member only) -->
             <!--
               App links for church invites. Without this the app had only a LAUNCHER filter, so a member who
               followed an invite, installed the APK and opened it arrived at a blank first-run with the invite
@@ -64,6 +65,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="trinityone.church" android:pathPrefix="/join" />
             </intent-filter>
+            <!-- END join-link -->
 
             <!-- BEGIN install-from-file (member only) -->
             <!--

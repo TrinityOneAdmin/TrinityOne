@@ -24,10 +24,15 @@ import { existsSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname;
 const html = readFileSync(ROOT + 'steward.html', 'utf8');
 const buildRaw = readFileSync(ROOT + 'scripts/build-steward-apk.sh', 'utf8');
+// Since 2026-11-18 the page-derived copy lives in scripts/collect-app-page.sh (shared with the desktop finance build),
+// which build-steward-apk.sh calls with "$PAGE". The packager is the two together.
+const collectRaw = readFileSync(ROOT + 'scripts/collect-app-page.sh', 'utf8');
 // Strip shell comments before matching. The first version of this test failed against the FIXED script,
 // because the comment explaining the old hand-written list quotes it — the mirror image of this repo's
 // comment-satisfies-the-assertion bug, and just as misleading.
-const build = buildRaw.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+const uncomment = (t) => t.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+const build = uncomment(buildRaw) + '\n' + uncomment(collectRaw);
+const apkOnly = uncomment(buildRaw);
 
 // every local file the page pulls in
 const refs = [...html.matchAll(/(?:href|src)="([^"]+)"/g)]
@@ -59,8 +64,15 @@ test('the packager does NOT keep its own hand-written list of app files', () => 
 });
 
 test('the packager derives its payload from steward.html, and fails loudly on a missing file', () => {
-  assert.match(build, /grep -oE[^\n]*steward\.html/,
-    're-anchor: the build no longer reads steward.html to decide what to package');
+  // Since T1Finance (2026-11-17) one script builds steward (the default) or finance, so it greps "$PAGE", and the
+  // default maps PAGE to steward.html. scripts/console-apk-build-steward-or-finance.test.mjs RUNS it on the real
+  // steward.html and finance.html and checks the packaged www/; this is the cheap structural half.
+  assert.match(build, /grep -oE[^\n]*"\$PAGE"/,
+    're-anchor: the build no longer reads the page to decide what to package');
+  assert.match(apkOnly, /bash scripts\/collect-app-page\.sh "\$PAGE" "\$WWW"/,
+    'build-steward-apk.sh no longer hands its page to collect-app-page.sh — the page-derived copy is not what packages the APK');
+  assert.match(build, /APP="\$\{1:-steward\}"/, 'the default app is no longer steward (release.sh calls this with no argument)');
+  assert.match(build, /steward\)[^\n]*PAGE="steward\.html"/, 'the steward build no longer packages steward.html');
   assert.match(build, /does not exist[^\n]*(exit 1|>&2)/,
     'a file named by the page but missing from disk must abort the build — shipping the APK anyway is how ' +
     'a console that cannot start gets released');

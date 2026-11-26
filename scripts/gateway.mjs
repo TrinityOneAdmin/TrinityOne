@@ -423,7 +423,8 @@ const BUILD = (() => {
 
 // ── THE INSTALLER THIS BOX HANDS OUT ─────────────────────────────────────────────────────────────────────
 // A church's own box IS its app store. `POST /relay-app/fetch-apk` pulls the member + steward APKs from the
-// update ORIGIN into relay/apks/, and this gateway serves them at /trinityone.apk and /trinityone-steward.apk.
+// update ORIGIN into relay/apks/, and this gateway serves them at /trinityone.apk and /trinityone-steward.apk
+// (and /trinityone-finance.apk once the update source offers it — see APK_OPTIONAL).
 // That is the whole offline / restricted-network story: a hall full of phones installed over local wifi, no
 // Play store, nobody spending mobile data.
 //
@@ -440,11 +441,12 @@ const BUILD = (() => {
 // trusted it would have reported "up to date" over exactly the fault it exists to catch. The verdict is
 // therefore decided by comparing the SIZE OF THE FILE THE ORIGIN WOULD ACTUALLY SERVE against the size of the
 // file this box holds. The version names are what an operator reads; they are never what decides.
-const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk'];
-const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward' };
+const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk', 'trinityone-finance.apk'];
+const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward', 'trinityone-finance.apk': 'TrinityOne Finance' };
 const APK_BLURBS = {
   'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, care and the church calendar.',
   'trinityone-steward.apk': 'For the people who run the church. It installs alongside the member app rather than replacing it.',
+  'trinityone-finance.apk': 'For a church’s treasurer or finance helper — the church books and nothing else. It installs alongside the other apps.',
 };
 // THE IPHONE APP, DURING THE PILOT, COMES THROUGH APPLE'S TESTFLIGHT. An iPhone cannot install an .apk, so
 // /install shows these instead. Public TestFlight links, already handed to pilot churches. Read only by
@@ -454,6 +456,15 @@ const IOS_TESTFLIGHT = {
   steward: 'https://testflight.apple.com/join/whHSMBEZ',
   testflight: 'https://apps.apple.com/app/testflight/id899247664',
 };
+// OPTIONAL INSTALLERS: offered only when the update source really offers them (T1Finance, audit F10, 2026-11-17).
+// The finance app arrived after boxes, origins and signed manifests already existed that know nothing of it, and a
+// gateway that lists it can ship before (or without) the release that first signs it. So for an optional name,
+// "the signed manifest does not list it" or "the origin has no such file" means NOT OFFERED: it is left out of what
+// a fetch reports and out of the operator's status, it is never downloaded unverified past a manifest that omits
+// it, it never makes the box read as "behind", and the member + steward installers are fetched and served exactly
+// as before. The member and steward names stay REQUIRED: a manifest that omits one of them is still refused.
+const APK_OPTIONAL = new Set(['trinityone-finance.apk']);
+const APK_MIN_BYTES = 1000000;   // below this an origin's answer is not an installer (a 404 page, an index.html fallback)
 const APK_DIR = join(DATA_DIR, 'apks');
 const APK_HELD = join(APK_DIR, 'held.json');
 const APK_DAY = 86400000;
@@ -496,10 +507,17 @@ async function originApkFacts() {
       if (j && (j.versionCode || j.versionName)) facts.latest = { versionCode: +j.versionCode || 0, versionName: String(j.versionName || ''), date: String(j.date || '') };
     }
   } catch {}
+  // An optional installer the signed manifest does not list is not on offer, whatever the origin answers for its
+  // name — otherwise a box would read itself as "behind" on a file it must refuse, and the automatic refresh would
+  // re-download the other two every six hours for ever. (A few hundred bytes; only asked when an optional name exists.)
+  let signed = null;
+  if (APK_OPTIONAL.size) { try { signed = await fetchSignedApkManifest(base); } catch {} }
   for (const name of APK_NAMES) {
+    if (APK_OPTIONAL.has(name) && signed && (signed.error || !(signed.manifest && signed.manifest[name]))) continue;
     try {
       const r = await fetch(base + '/' + name, { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(8000) });
       const len = +(r.headers.get('content-length') || 0);
+      if (APK_OPTIONAL.has(name) && len < APK_MIN_BYTES) continue;
       if (r.ok && len > 0) { facts.sizes[name] = len; facts.reachable = true; }
     } catch {}
   }
@@ -564,11 +582,18 @@ async function fetchApksFromOrigin(auto = false) {
   const stamps = (rec && rec.files) || {};
   const files = {};
   for (const f of APK_NAMES) {
+    // An optional installer a signed manifest does not list is NOT OFFERED: skipped before any download, absent from
+    // the result (the operator's panel prints every entry it gets as a success or a failure), stamp left alone.
+    if (APK_OPTIONAL.has(f) && manifest && !manifest[f]) continue;
+    // With NO signed manifest, an optional name the origin has no real file for is likewise not offered. But once a
+    // signed manifest LISTS it, the release says it exists: an origin that then 404s or sends too little is a FAILURE,
+    // reported like a member/steward one (audit A4) — while the other installers are still fetched.
+    const unlistedOptional = APK_OPTIONAL.has(f) && !(manifest && manifest[f]);
     try {
       const r = await fetch(base + '/' + f, { signal: AbortSignal.timeout(900000) });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { if (unlistedOptional) continue; throw new Error('HTTP ' + r.status); }
       const buf = Buffer.from(await r.arrayBuffer());
-      if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
+      if (buf.length < APK_MIN_BYTES) { if (unlistedOptional) continue; throw new Error('too small (' + buf.length + ' bytes) — origin may not have it'); }
       const sha = createHash('sha256').update(buf).digest('hex');
       if (manifest) {
         if (!manifest[f]) throw new Error('the signed manifest does not list ' + f + ' — refusing (the manifest must name every APK this box serves)');
@@ -7523,15 +7548,25 @@ const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'n
 // rather than probing for vendor/babel.min.js — the relay update extracts OVER existing files without pruning,
 // so a stale babel.min.js can linger on disk after the switch and would wrongly force the lax CSP back on.
 let _strictWeb = !!process.env.STRICT_CSP;
-// Auto-detect: engage the strict, eval-free CSP only when BOTH served shells are pre-transpiled (no in-browser
-// Babel). Requiring both avoids the mismatch where a strict index.html forces a CSP that breaks a still-lax
-// steward.html — the shell that holds the church key, where an XSS backstop matters most.
-try {
-  if (!_strictWeb) {
-    const idx = readFileSync(join(ROOT, 'index.html'), 'utf8');
-    let stw = ''; try { stw = readFileSync(join(ROOT, 'steward.html'), 'utf8'); } catch {}
-    _strictWeb = !idx.includes('type="text/babel"') && !stw.includes('type="text/babel"');
+// Auto-detect: engage the strict, eval-free CSP only when EVERY served app shell is pre-transpiled (no in-browser
+// Babel). Requiring all of them avoids the mismatch where a strict index.html forces a CSP that breaks a still-lax
+// steward.html — the shell that holds the church key, where an XSS backstop matters most — or a still-lax
+// finance.html (T1Finance, 2026-11-17: the finance app, which holds a helper key). index.html must exist; a shell
+// that is absent (an older build without finance.html) does not count against it, as steward.html never did.
+// The ONE CSP below applies to every page, so one lax shell must keep it lax. scripts/build-strict-tgz.sh and
+// scripts/build-pages.sh transpile the same three shells.
+const STRICT_SHELLS = ['index.html', 'steward.html', 'finance.html'];
+function shellsAreStrict(readShell) {
+  for (const f of STRICT_SHELLS) {
+    let html = null;
+    try { html = readShell(f); } catch { html = null; }
+    if (html == null) { if (f === 'index.html') return false; continue; }
+    if (String(html).includes('type="text/babel"')) return false;
   }
+  return true;
+}
+try {
+  if (!_strictWeb) _strictWeb = shellsAreStrict((f) => readFileSync(join(ROOT, f), 'utf8'));
 } catch {}
 const CSP = [
   "default-src 'self'",
@@ -9606,7 +9641,7 @@ function serveStatic(req, res) {
     }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
-  // Deploy the latest APKs without SSH: pull trinityone[-steward].apk from the update ORIGIN into
+  // Deploy the latest APKs without SSH: pull trinityone[-steward|-finance].apk from the update ORIGIN into
   // relay/apks/ (the one dir the sandboxed relay can write). The static handler serves /…apk from there.
   if (route === '/relay-app/fetch-apk') {
     const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
@@ -9640,7 +9675,9 @@ function serveStatic(req, res) {
     if (req.method !== 'GET') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
     (async () => {
       const facts = await originApkFacts();
-      const files = heldApks().map((h) => ({ ...h, title: APK_TITLES[h.name] || h.name, originBytes: facts.sizes[h.name] || 0, ...apkVerdict(h, facts) }));
+      const files = heldApks()
+        .filter((h) => !APK_OPTIONAL.has(h.name) || h.present || facts.sizes[h.name])   // not held, not offered: not a row
+        .map((h) => ({ ...h, title: APK_TITLES[h.name] || h.name, originBytes: facts.sizes[h.name] || 0, ...apkVerdict(h, facts) }));
       res.writeHead(200, H); res.end(JSON.stringify({
         ok: true, origin: ORIGIN, originReachable: facts.reachable, latest: facts.latest,
         keepCurrent: SETTINGS.keepApkCurrent === true,
@@ -9991,7 +10028,7 @@ function serveStatic(req, res) {
   }
   // APKs deployed via the dashboard "Fetch latest APK" button live under relay/apks/ (writable, survives
   // self-updates). Serve from there if present; a root-level copy (manual scp) still works as a fallback.
-  if (/^\/(trinityone|trinityone-steward)\.apk$/.test(p)) {
+  if (/^\/(trinityone|trinityone-steward|trinityone-finance)\.apk$/.test(p)) {
     const relApk = join(DATA_DIR,'apks', p.slice(1));
     let st2 = null; try { st2 = statSync(relApk); } catch {}
     if (st2 && st2.isFile()) {

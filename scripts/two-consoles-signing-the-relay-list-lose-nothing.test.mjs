@@ -32,7 +32,7 @@ const PIECES = [
   ['fn', 'async function verifyRelayIdentityDetailed'], ['fn', 'async function verifyRelayIdentity(wssUrl) {'],
   ['st', 'var RELAY_NET_D = '], ['st', 'var _isHex64 = '],
   ['fn', 'function isSharedAddress'], ['fn', 'function sharedRelayKeys'], ['fn', 'function _relayKey'],
-  ['fn', 'function parseRelayNet'], ['fn', 'function _ownOrigin'], ['fn', 'function relayNetCandidates'],
+  ['fn', 'function parseRelayNet'], ['fn', 'function _packagedOrigin'], ['fn', 'function _ownOrigin'], ['fn', 'function relayNetCandidates'],
   ['fn', 'function _oneComplete(filters, ms = 6e3, privateDoc = false) {'],
   ['fn', 'function _readCovers'], ['fn', 'function relayNetDoc'],
   ['fn', 'async function enrolRelayNet'], ['fn', 'async function unenrolRelayNet'], ['fn', 'function normRelay(input) {'],

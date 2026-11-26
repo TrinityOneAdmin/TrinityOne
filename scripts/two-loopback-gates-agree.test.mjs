@@ -27,8 +27,11 @@ import { fnBody, stripComments } from './test-slice.mjs';
 const STEW = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const HOME = stripComments(readFileSync(new URL('../relay-app/home.js', import.meta.url), 'utf8'));
 
-const consoleGate = (hostname) => new Function('location',
-  fnBody(STEW, 'function _originIsLoopback()', '_originIsLoopback') + '\nreturn _originIsLoopback;')({ hostname })();
+// _originIsLoopback() asks the REAL _packagedOrigin() first (a packaged app's "localhost" is its bundle, not a
+// Suite box), so both are lifted together and run against the same location — never a stubbed `false`.
+const consoleGate = (hostname, protocol = 'http:', win) => new Function('location', 'window',
+  fnBody(STEW, 'function _packagedOrigin()', '_packagedOrigin') + '\n' +
+  fnBody(STEW, 'function _originIsLoopback()', '_originIsLoopback') + '\nreturn _originIsLoopback;')({ hostname, protocol }, win)();
 
 const ADMIT = ['localhost', '127.0.0.1', '::1', '[::1]', 'LOCALHOST'];
 // `0.0.0.0` is the one this item is about; the rest are ordinary non-local addresses.

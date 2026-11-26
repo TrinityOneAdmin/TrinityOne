@@ -235,6 +235,8 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function lsSet', 'lsSet'),
     stmt(src, 'var RELAYS_LS = ', 'RELAYS_LS'),
     fnBody(src, 'function normRelay', 'normRelay'),
+    // THE REAL _packagedOrigin, never stubbed: ownRelay() / _ownOrigin() consult it first (APK, Tauri program -> shared pool).
+    fnBody(src, 'function _packagedOrigin', '_packagedOrigin'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),

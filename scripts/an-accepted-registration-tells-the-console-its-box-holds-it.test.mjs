@@ -92,6 +92,8 @@ function harness({ cached = false, origin = ORIGIN, answers = {} } = {}) {
     },
   };
   const scope = proxyOf(stubs);
+  // THE REAL _packagedOrigin (APK / Tauri program -> shared pool), lifted, never stubbed: ownRelay() consults it first.
+  stubs._packagedOrigin = new Function('scope', `with (scope) { return (${fnBody(VENDOR, 'function _packagedOrigin() {', '_packagedOrigin')}); }`)(scope);
   stubs.ownRelay = new Function('scope', `with (scope) { return (${fnBody(VENDOR, 'function ownRelay() {', 'ownRelay')}); }`)(scope);
   stubs.relaysRaw = new Function('scope', `with (scope) { return (${fnBody(VENDOR, 'function relaysRaw() {', 'relaysRaw')}); }`)(scope);
   const body = fnBody(VENDOR, 'async selfRegister(name, opts) {', 'selfRegister');

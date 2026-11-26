@@ -36,6 +36,10 @@ const BOX = 'ws://127.0.0.1:8000/relay';
 const ME = 'ee'.repeat(32);        // the steward's own key — a church nowhere
 const CHURCH = 'cc'.repeat(32);    // the church whose roster names ME
 const STEWARDS_D = 'trinityone/stewards:';
+// The REAL key prefix of a church's sealed books copy, read from the bundle (not retyped), so the lifted
+// _finBookDrop below removes exactly the key the console writes (T1Finance M4, 08b9cf92).
+const FINBOOK_LS = (VENDOR.match(/\bvar FINBOOK_LS = "([^"]+)";/) || [])[1];
+if (!FINBOOK_LS) throw new Error('vendor/steward.js no longer declares FINBOOK_LS — the books-copy lift below cannot run');
 
 function proxyOf(stubs) {
   return new Proxy(stubs, {
@@ -83,7 +87,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     privateKeyFromSeedWords: () => { throw new Error('not a network key'); }, getPublicKey: () => '',
-    NET: 'trinityone', STEWARDS_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY: 'active',
+    NET: 'trinityone', STEWARDS_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY: 'active', FINBOOK_LS,
     // The restore + grant paths gained a pending-church read (2026-11-05, helper-delegation). This fixture sets
     // no pending, so the read returns null and nothing auto-opens — but the identifier must resolve (the proxy
     // throws on an unknown one) so the pending check genuinely runs and finds nothing, which is the control.
@@ -143,10 +147,15 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
   };
   const scope = proxyOf(stubs);
   const lift = (anchor, name) => new Function('scope', `with (scope) { return (${fnBody(VENDOR, anchor, name)}); }`)(scope);
+  // THE REAL _packagedOrigin (APK / Tauri program -> shared pool), lifted, never stubbed: ownRelay() consults it first.
+  stubs._packagedOrigin = lift('function _packagedOrigin() {', '_packagedOrigin');
   stubs.ownRelay = lift('function ownRelay() {', 'ownRelay');
   stubs.relaysRaw = lift('function relaysRaw() {', 'relaysRaw');
   stubs._boxHostsKey = lift('function _boxHostsKey() {', '_boxHostsKey');
   stubs._loadBoxHosts = lift('function _loadBoxHosts() {', '_loadBoxHosts');
+  // the removal purge of ONE church's books copy (08b9cf92) — the REAL function, never a stub; it reads FINBOOK_LS
+  // and the fake localStorage above, so the eviction branches really drop that key in the store
+  stubs._finBookDrop = lift('function _finBookDrop(cp) {', '_finBookDrop');
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');
   const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
@@ -470,12 +479,16 @@ test('a stale roster that includes ME does not override a newer one that removed
     content: JSON.stringify({ pubkeys: [ME] }),
   });
   assert.ok(h.stewardedChurches.has(CHURCH2), 'staging: the initial grant failed');
+  // a sealed books copy for the church about to remove us, and one for a church that is not
+  h.store.set(FINBOOK_LS + CHURCH2, 'sealed-2'); h.store.set(FINBOOK_LS + CHURCH, 'sealed-1');
   d[0].handlers.onevent({
     created_at: 1100,
     tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
     content: JSON.stringify({ pubkeys: [] }),
   });
   assert.ok(!h.stewardedChurches.has(CHURCH2), 'staging: the revocation failed');
+  assert.ok(!h.store.has(FINBOOK_LS + CHURCH2), 'a roster dropping us left that church\'s sealed books copy on the device');
+  assert.equal(h.store.get(FINBOOK_LS + CHURCH), 'sealed-1', 'the removal dropped ANOTHER church\'s books copy');
   // Stale roster from the lagging relay: ME is still listed
   d[0].handlers.onevent({
     created_at: 900,
