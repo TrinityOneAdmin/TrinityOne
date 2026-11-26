@@ -2696,7 +2696,7 @@ function _flushProfiles() {
         // wipe the name back out and they would flip to "Anonymous" mid-session. Keep any name we have already
         // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
         const had = profiles[e.pubkey] || {};
-        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: _profileAbout(m.about), nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: _profileAbout(m.about), k0: true, nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
         _k0Seen.add(e.pubkey);
         _recoverOwnProfile(e);   // our OWN kind-0 also refills what a locked boot wiped (picture, avatar, about)
         saveProfiles();
@@ -3928,6 +3928,9 @@ function displayFor(pubkey) {
   return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '',
     // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
     about: _profileAbout(p && p.about),
+    // true only when this record came from a kind-0 EVENT (k0), so '' above means "they cleared it" and not "we have not heard yet".
+    // The record is replaced by setProfile and init (which copy myProfile) and those carry no k0, so a bio just saved here reads as unknown.
+    aboutKnown: !!(p && p.k0),
     // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
     signedBy: (voice && voice.name) ? voice.name : '', signedRole: (voice && voice.office) ? voice.office : '', isChurch: !!(voice && voice.isChurch) };
 }
@@ -5834,7 +5837,7 @@ window.Fellowship = {
         // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
         // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
         // this is the roster the member app actually renders.
-        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: _profileAbout(meta.about), nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: _profileAbout(meta.about), k0: true, nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
         oneose() {},
       });
     };

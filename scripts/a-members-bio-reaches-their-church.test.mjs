@@ -220,6 +220,22 @@ test('SAVE PATH: the identity App hands ProfileSheet carries the member\'s own s
     'the bio is seeded from a stale myProfile instead of the copy displayFor has, so Edit opens with it empty');
 });
 
+test('SAVE PATH: a bio cleared on another device stays cleared; with no kind-0 seen yet, myProfile is the fallback', () => {
+  const anchor = 'const identity = (() => {';
+  const at = APP.indexOf(anchor);
+  assert.notEqual(at, -1, 're-anchor: the identity object moved in app/app.jsx');
+  const arrow = fnBody(APP, at + anchor.indexOf('() =>'), 'identity');
+  const build = (displayFor) => new Function('window', 'return (' + arrow + ')();')({
+    TrinityIdentity: { current: { npub: 'npub1x', color: '#123456' } }, TrinityData: {},
+    Fellowship: { myProfile: { name: 'Mia', about: 'old' }, myPubkey: 'ab'.repeat(32), displayFor },
+  });
+  assert.equal(build(() => ({ about: '', aboutKnown: true })).about, '',
+    'our own kind-0 was seen with the bio cleared, yet the old one from myProfile is still shown (and would be re-published on the next edit)');
+  assert.equal(build(() => ({ about: '', aboutKnown: false })).about, 'old',
+    'no kind-0 seen yet: the stored bio must still seed the box');
+  assert.equal(build(() => ({ about: 'New', aboutKnown: true })).about, 'New');
+});
+
 // ── 3. the engine (shipped bundle) ──────────────────────────────────────────────────────────────────────────
 // Lift by BUNDLE name; each anchor must occur exactly once so a renamed duplicate cannot be picked up instead.
 function once(src, anchor) {
@@ -289,6 +305,17 @@ test('ENGINE: displayFor caps a bio already sitting in the cache from an older b
   assert.equal(E.displayFor(PK1).about.length, 160, 'an uncapped cached bio is handed to the screen uncut');
   assert.equal(E.displayFor(PK2).about, '', 'someone with no profile at all got a bio');
 });
+
+for (const route of ['viaFlush', 'viaHub']) {
+  test(`ENGINE (${route}): displayFor says aboutKnown only for a record that came from a kind-0 event, even an empty bio`, () => {
+    const E = engine();
+    assert.equal(E.displayFor(PK1).aboutKnown, false, 'nobody heard from: the bio was reported as known');
+    assert.equal(E[route](PK1, { about: '' }).aboutKnown, true, 'a kind-0 with a cleared bio was not reported as known');
+    assert.equal(E.displayFor(PK1).about, '');
+    E.profiles[PK2] = { name: 'Cached', about: 'from a local copy' };   // what init()/setProfile leave: no k0
+    assert.equal(E.displayFor(PK2).aboutKnown, false, 'a local copy (no kind-0 behind it) was reported as known');
+  });
+}
 
 test('ENGINE: the published wire copy carries the bio and never the name', () => {
   const at = once(BUNDLE, 'const wire = { about: p.about, picture: p.picture };');

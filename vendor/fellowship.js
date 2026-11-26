@@ -8891,7 +8891,7 @@
         try {
           const m = JSON.parse(e.content);
           const had = profiles[e.pubkey] || {};
-          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: _profileAbout(m.about), nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: _profileAbout(m.about), k0: true, nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
           _k0Seen.add(e.pubkey);
           _recoverOwnProfile(e);
           saveProfiles();
@@ -10101,6 +10101,9 @@
       nip05: p && p.nip05 || "",
       // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
       about: _profileAbout(p && p.about),
+      // true only when this record came from a kind-0 EVENT (k0), so '' above means "they cleared it" and not "we have not heard yet".
+      // The record is replaced by setProfile and init (which copy myProfile) and those carry no k0, so a bio just saved here reads as unknown.
+      aboutKnown: !!(p && p.k0),
       // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
       signedBy: voice && voice.name ? voice.name : "",
       signedRole: voice && voice.office ? voice.office : "",
@@ -11944,7 +11947,7 @@
               const meta = JSON.parse(e.content);
               const had = profiles[e.pubkey] || {};
               const nm = meta.name || meta.display_name || had.name || "";
-              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: _profileAbout(meta.about), nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: _profileAbout(meta.about), k0: true, nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
               const m = hub.byPub.get(e.pubkey);
               if (m) {

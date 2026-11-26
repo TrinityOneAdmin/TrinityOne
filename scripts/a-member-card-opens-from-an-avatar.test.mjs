@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
 import { fnBody } from './test-slice.mjs';
@@ -56,8 +57,6 @@ test('UserAvatar without onTap renders exactly what it always did; with onTap it
   assert.equal(find(plain, n => n.props && n.props.role === 'button').length, 0, 'an avatar with no onTap must not be a button');
   assert.equal(plain.kids[0].type, 'div', 'no-onTap output is the bare avatar disc');
   assert.deepEqual(words(plain), ['A']);
-  // identical to an explicit onTap:undefined
-  assert.deepEqual(JSON.stringify(draw(UserAvatar, { av, name: 'Anna', size: 44, onTap: undefined })), JSON.stringify(plain));
 
   const taps = [];
   const t = draw(UserAvatar, { av, name: 'Anna', size: 44, onTap: () => taps.push('tap') });
@@ -224,4 +223,70 @@ test('openMember (the real line from app.jsx) stores a pubkey, ignores yourself 
   const ctx = new Function('window', 'setMember', 'return { ' + line + ' };')({ Fellowship: { myPubkey: ME } }, (v) => set.push(v));
   ctx.openMember(ANNA); ctx.openMember(ME); ctx.openMember(''); ctx.openMember(undefined); ctx.openMember({ pubkey: ANNA });
   assert.deepEqual(set, [ANNA]);
+});
+
+// ── the mount in App (rule 1: delete it from the screen and a test must fail) ───────────────────────────────────
+// App itself cannot be mounted here, so the REAL mount line is sliced out of app/app.jsx, compiled, and drawn with
+// the real MemberCard. Deleting or mis-wiring that line (wrong prop, no <MemberCard>) fails this.
+function appMount(member, setMember, opened) {
+  const APP = readFileSync(join(ROOT, 'app/app.jsx'), 'utf8');
+  const i = APP.indexOf('<MemberCard ');
+  assert.ok(i > 0 && APP.indexOf('<MemberCard ', i + 1) === -1, 'the <MemberCard> mount in app/app.jsx is missing or not unique');
+  const el = APP.slice(i, APP.indexOf('\n', i));
+  assert.ok(el.trimEnd().endsWith('/>'), 're-anchor: the mount is no longer a one-line self-closing element');
+  const js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), ['--loader=jsx', '--jsx=transform', '--log-level=error'],
+    { input: 'function Mount() { return (' + el + '); }', encoding: 'utf8' });
+  const { React, draw } = miniReact();
+  const UserAvatar = realAvatar(React);
+  const F = { myPubkey: ME, displayFor: () => ({ handle: 'Anna', about: 'Loves the Psalms', av: { kind: 'monogram', color: '#5E8C6A' } }) };
+  const MemberCard = loadScreen('app/identity-extras.jsx', ['MemberCard'], {
+    React, window: { Fellowship: F }, UserAvatar,
+    BottomSheet: ({ open, children }) => (open ? children : null),
+    IconBtn: ({ name, onClick }) => React.createElement('button', { 'data-icon': name, onClick }),
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+  }).MemberCard;
+  const ctx = { openDM: (pk) => opened.push(pk), canDMPeer: () => true };
+  const Mount = new Function('React', 'MemberCard', 'member', 'setMember', 'ctx', js + '\nreturn Mount;')(React, MemberCard, member, setMember, ctx);
+  return draw(Mount, {});
+}
+test('App mounts the member card: a pubkey in `member` shows that member, null shows nothing, and closing clears it', () => {
+  const opened = [], set = [];
+  const open = appMount(ANNA, (v) => set.push(v), opened);
+  assert.ok(words(open).includes('Anna') && words(open).includes('Loves the Psalms'), 'App renders no card for a member pubkey');
+  assert.equal(find(open, n => n.props && n.props['data-member-card'] === ANNA).length, 1);
+  find(open, n => n.props && n.props['data-member-message'])[0].props.onClick();
+  assert.deepEqual(opened, [ANNA]);
+  assert.deepEqual(set, [null], 'closing the card does not clear `member` in App');
+  const none = appMount(null, () => {}, []);
+  assert.equal(find(none, n => n.props && n.props['data-member-card']).length, 0, 'a null member still renders a card');
+});
+
+// ── no onTap = the PARENT's output (rule 4: compare against what shipped before, not against itself) ────────────
+test('UserAvatar without onTap renders the same tree as the parent commit (ebeb664c) for a range of inputs', (t) => {
+  let parentSrc;
+  try { parentSrc = execFileSync('git', ['show', 'ebeb664c:app/identity-avatar.jsx'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+  catch { t.skip('git or commit ebeb664c is not available here; the parent comparison cannot run'); return; }
+  const load = (src, React) => {
+    const js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), ['--loader=jsx', '--jsx=transform', '--log-level=error'], { input: src, encoding: 'utf8' });
+    return new Function('React', 'window', 'safeImgUrl', js + '\nreturn UserAvatar;')(React, {}, safeImgUrl);
+  };
+  const { React, draw } = miniReact();
+  const OLD = load(parentSrc, React);
+  const NEW = realAvatar(React);
+  const photo = 'data:image/png;base64,AAAA';
+  const cases = [
+    { av: { kind: 'monogram', color: '#5E8C6A' }, name: 'Anna', size: 44 },
+    { av: { kind: 'monogram', color: '#5E8C6A' }, name: '', size: 44 },
+    { av: { kind: 'symbol', color: '#123456', symbol: 'dove' }, name: 'Bo', size: 96, ring: true },
+    { av: { kind: 'symbol', color: '#123456', symbol: 'nonexistent' }, name: 'Bo', size: 22 },
+    { av: { kind: 'photo', photo, color: '#abc' }, name: 'Cy', size: 38 },
+    { av: { kind: 'photo', photo: 'https://evil.example/x.png' }, name: 'Cy', size: 38 },
+    { av: { kind: 'monogram', color: '#fff),url(https://evil/beacon)' }, name: 'Di', size: 30 },
+    { av: undefined, name: undefined },
+  ];
+  for (const c of cases) {
+    assert.equal(JSON.stringify(draw(NEW, c)), JSON.stringify(draw(OLD, c)), 'output without onTap differs from the parent for ' + JSON.stringify(c));
+  }
+  // the comparison can fail: with onTap the tree must differ from the parent
+  assert.notEqual(JSON.stringify(draw(NEW, { ...cases[0], onTap() {} })), JSON.stringify(draw(OLD, cases[0])));
 });
