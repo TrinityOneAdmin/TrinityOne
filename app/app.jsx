@@ -2402,8 +2402,8 @@ function App() {
     // displayFor reads profiles[myPubkey], which every kind-0 reader replaces as our own profile lands, so it is
     // the FRESHEST copy of the bio. myProfile can lag it (a restored phone, before our kind-0 arrives) - an
     // empty seed there used to let a name-only Save wipe the real bio. myProfile is only the fallback.
-    let freshAbout = '', aboutKnown = false;
-    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; if (d && typeof d.about === 'string') freshAbout = d.about; if (d && d.aboutKnown) aboutKnown = true; }
+    let freshAbout = '', aboutKnown = false, freshPin = null;
+    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; if (d && typeof d.about === 'string') freshAbout = d.about; if (d && d.aboutKnown) aboutKnown = true; if (d && d.pinnedVerse) freshPin = d.pinnedVerse; }
     // stewards run their church from the separate Steward console — ordinary members aren't stewards,
     // so the member app hides steward-only tools (e.g. the invite generator).
     // handle '' = the member has chosen NO name (2026-07-30). It used to fall back to 'Anonymous', which
@@ -2411,7 +2411,9 @@ function App() {
     // about = the member's own one-line bio, from the same stored profile as the name ('' when none)
     // '' from a kind-0 we HAVE seen means the bio was cleared (maybe on another device): do not bring the old one back from myProfile.
     const about = aboutKnown ? freshAbout : (freshAbout || ((FS && FS.myProfile && typeof FS.myProfile.about === 'string') ? FS.myProfile.about : ''));
-    return { name, about, avatar, npub: cur.npub || '', handle: cur.handle || '', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', hidden: !!(FS && FS.myProfile && FS.myProfile.hidden), steward: false };
+    // the pinned verse follows the bio's rule: a kind-0 we HAVE seen is the truth (none there = unpinned); until then myProfile.
+    const pinnedVerse = aboutKnown ? freshPin : (freshPin || ((FS && FS.myProfile && FS.myProfile.pinnedVerse) || null));
+    return { name, about, pinnedVerse, avatar, npub: cur.npub || '', handle: cur.handle || '', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', hidden: !!(FS && FS.myProfile && FS.myProfile.hidden), steward: false };
   })();
   // saving a profile publishes name + mark to the user's key (kind-0). Patch only the fields supplied, so
   // a directory-visibility toggle (hidden only) never blanks the name, and vice-versa.
@@ -2425,6 +2427,8 @@ function App() {
     // The bio travels only when the caller supplied one: setProfile reads a MISSING `about` as "keep what is
     // stored", and '' as "clear it". So a name-only save or a directory toggle never touches the bio.
     if (patch.about != null) meta.about = String(patch.about).trim();
+    // The pinned verse: undefined = keep what is stored, null = REMOVE it (so this is `!== undefined`, not `!= null`).
+    if (patch.pinnedVerse !== undefined) meta.pinnedVerse = patch.pinnedVerse;
     // RETURN IT. Audit 2026-09-02 #18. This swallowed the result, so identity.jsx toasted "Profile saved"
     // over a publish nobody accepted — and a member whose display name never reached the relay goes on
     // appearing as Anonymous to their whole church while their own screen shows the name they typed.
@@ -2514,6 +2518,8 @@ function App() {
     openSearch: () => setSearchOpen(true),
     openShare: (v) => setShare(v),
     openShareSheet: (v) => setShareSheet(v),
+    // "Pin to my profile" in the verse share sheet: the same save path as the profile screen; resolves like saveIdentity.
+    pinVerse: (v) => saveIdentity({ pinnedVerse: v }),
     // share arbitrary text via the OS share sheet (native or web), falling back to clipboard
     shareText: async (text, title, url) => {
       const t = (text || '').trim(); if (!t) return;

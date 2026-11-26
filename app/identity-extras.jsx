@@ -45,7 +45,7 @@ function MemberCard({ pubkey, open, onClose, ctx }) {
         ) : null}
         {pv ? (
           <blockquote data-member-pinned="1" style={{ margin: '16px 10px 0', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-            {pv.text}{pv.ref ? <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)' }}>{pv.ref}</div> : null}
+            {pv.text}{pv.ref ? <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)' }}>{pv.ref}{pv.version ? ' · ' + pv.version : ''}</div> : null}
           </blockquote>
         ) : null}
       </div>

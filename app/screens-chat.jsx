@@ -2691,6 +2691,20 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       .catch(() => ctx.toast('Couldn’t send — please try again.'));
     onClose();
   };
+  // PIN TO MY PROFILE. Offered only under the same condition that makes a verse card (verse type, string non-empty ref
+  // AND text), never for commentary/note/devotional or a cross-reference preview whose text is ''. The pin holds the
+  // words, so it needs no Bible module on the reader's phone. Children may pin (owner 2026-11-26).
+  const canPin = type === 'verse' && typeof payload.ref === 'string' && !!payload.ref && typeof payload.text === 'string' && !!payload.text && !!ctx.pinVerse;
+  const pinVal = canPin ? { ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' } : null;
+  const mine = (canPin && FS && FS.myPubkey && FS.displayFor) ? FS.displayFor(FS.myPubkey).pinnedVerse : null;
+  const alreadyPinned = !!(pinVal && mine && mine.ref === pinVal.ref && mine.version === pinVal.version && mine.text === pinVal.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''));
+  const pinIt = () => {
+    if (!pinVal || alreadyPinned) return;
+    Promise.resolve(ctx.pinVerse(pinVal))
+      .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting */ : ok ? ctx.toast('Pinned to your profile') : ctx.toast('Couldn’t pin it — your church still sees your old profile. Try again.')))
+      .catch(() => ctx.toast('Couldn’t pin it — please try again.'));
+    onClose();
+  };
   const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' };
   return (
@@ -2714,6 +2728,18 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
           <Icon name="chevR" size={17} color="var(--ink-3)" />
+        </button>
+      ) : null}
+
+      {canPin ? (
+        // Pin to my profile - shown only for a real verse card (verse type, non-empty ref AND text), so a commentary,
+        // note, devotional or a cross-reference preview with no text never offers it. Same save path as the profile screen.
+        <button type="button" aria-label="Pin to my profile" disabled={alreadyPinned} onClick={pinIt} style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+          border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: alreadyPinned ? 'default' : 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
+          <Icon name="bookmark" size={20} color="var(--clay)" />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{alreadyPinned ? 'Pinned to your profile' : 'Pin to my profile'}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{alreadyPinned ? 'Your church sees it on your card' : 'Show this verse on your card'}</div></div>
         </button>
       ) : null}
 

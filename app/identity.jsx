@@ -1612,11 +1612,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   // until the member touches the box it keeps following identity.about, even mid-edit.
   const [aboutSeed, setAboutSeed] = useId(identity.about || '');
   const [aboutTouched, setAboutTouched] = useId(false);
+  // THE PINNED VERSE IS SENT ONLY IF THE MEMBER REMOVED IT here (as null). Absent = keep it, like the bio.
+  const [pinRemoved, setPinRemoved] = useId(false);
   // seed the form when the sheet OPENS, and refresh it if the profile changes while NOT editing — but never
   // re-seed mid-edit: an identity update echoing back (relay round-trip / another device / a parent re-render)
   // would otherwise wipe the name/mark you're in the middle of picking and bounce you back to the profile view.
   useIdE(() => { if (open) setEdit(false); }, [open]);
-  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); setAbout(identity.about || ''); setAboutSeed(identity.about || ''); setAboutTouched(false); } }, [open, identity, edit]);
+  useIdE(() => { if (open && !edit) { setName(identity.name || ''); setAv(identity.avatar); setAbout(identity.about || ''); setAboutSeed(identity.about || ''); setAboutTouched(false); setPinRemoved(false); } }, [open, identity, edit]);
   useIdE(() => { if (open && edit && !aboutTouched) { setAbout(identity.about || ''); setAboutSeed(identity.about || ''); } }, [open, identity.about, edit, aboutTouched]);
 
   const named = !!(identity.name && identity.name.trim());
@@ -1713,6 +1715,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               setEdit(false);
               const patch = { name: name.trim(), avatar: av };
               if (about.trim() !== aboutSeed.trim()) patch.about = about.trim();   // absent = keep the stored bio
+              if (pinRemoved) patch.pinnedVerse = null;   // null = remove; absent = keep the pinned verse
               Promise.resolve(onSave(patch))
                 .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting (setProfile) */ : ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
                 .catch(() => ctx.toast('Couldn’t save your profile — try again.', { error: true }));
@@ -1731,6 +1734,18 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             width: '100%', border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '12px 16px', fontSize: 15,
             fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', boxShadow: 'var(--shadow)', resize: 'none', lineHeight: 1.45 }} />
           <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '6px 2px 0', textAlign: 'right' }}>{`${about.length}/160`}</div>
+          {identity.pinnedVerse && !pinRemoved ? (
+            <React.Fragment>
+              <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 8px' }}>PINNED VERSE</label>
+              <div data-pinned-verse="1" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface)', padding: '12px 8px 12px 16px', boxShadow: 'var(--shadow)' }}>
+                <blockquote style={{ flex: 1, margin: 0, fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink-2)', overflowWrap: 'anywhere' }}>
+                  {identity.pinnedVerse.text}
+                  <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)' }}>{identity.pinnedVerse.ref}{identity.pinnedVerse.version ? ' · ' + identity.pinnedVerse.version : ''}</div>
+                </blockquote>
+                <IconBtn name="x" title="Remove pinned verse" onClick={() => setPinRemoved(true)} />
+              </div>
+            </React.Fragment>
+          ) : null}
           <label style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '22px 0 12px' }}>YOUR MARK</label>
           {ctx && ctx.safeguard && ctx.safeguard.photoBlocked && ctx.church && !(ctx.church.features && ctx.church.features.memberPhotos === false) ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 12px', lineHeight: 1.45 }}>A steward has turned off photos for your account. You can still choose a symbol or your initial.</div> : null}
           {/* A member who HAD a photo watches it disappear the first time they open this sheet after the church
@@ -1781,6 +1796,12 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           </div>
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, letterSpacing: '-.5px' }}>
             {named ? identity.name : 'Anonymous'}</h1>
+          {identity.pinnedVerse && identity.pinnedVerse.text ? (
+            <blockquote data-pinned-verse="1" style={{ margin: '12px auto 0', maxWidth: 340, fontFamily: 'var(--font-read)', fontSize: 14.5, lineHeight: 1.5, color: 'var(--ink-2)', overflowWrap: 'anywhere' }}>
+              {identity.pinnedVerse.text}
+              <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)' }}>{identity.pinnedVerse.ref}{identity.pinnedVerse.version ? ' · ' + identity.pinnedVerse.version : ''}</div>
+            </blockquote>
+          ) : null}
           {identity.about && identity.about.trim() ? <div style={{ marginTop: 8, fontSize: 14.5, color: 'var(--ink-2)', lineHeight: 1.45, maxWidth: 340, marginLeft: 'auto', marginRight: 'auto', overflowWrap: 'anywhere' }}>{identity.about}</div> : null}
           {named && identity.nip05 ? <div style={{ marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--sage)', fontWeight: 700, fontSize: 14 }} title={identity.nip05}>@{String(identity.nip05).split('@')[0]} <Icon name="check" size={14} stroke={3} color="var(--sage)" /></div> : null}
           {/* The 'TrinityOne member' / 'Anonymous member' shield pill was removed from this settings hero

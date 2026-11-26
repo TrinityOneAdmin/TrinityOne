@@ -249,7 +249,7 @@ function engine() {
   once(BUNDLE, 'function _flushProfiles(');
   const cap = BUNDLE.match(/var ABOUT_MAX = \d+;/g);
   assert.equal(cap && cap.length, 1, 're-anchor: the ABOUT_MAX constant is missing or duplicated in vendor/fellowship.js');
-  const pieces = [cap[0], ...['function _profileAbout(', 'function displayFor(', 'function _flushProfiles('].map(a => fnBody(BUNDLE, a, a))];
+  const pieces = [cap[0], ...['function _profileAbout(', 'function _profilePin(', 'function displayFor(', 'function _flushProfiles('].map(a => fnBody(BUNDLE, a, a))];
   // The member hub's live kind-0 subscription: its onevent is the one that merges into the roster (hub.byPub).
   const hubAt = once(BUNDLE, 'const nm = meta.name || meta.display_name || had.name || "";');
   const hubStart = BUNDLE.lastIndexOf('onevent(e) {', hubAt);
