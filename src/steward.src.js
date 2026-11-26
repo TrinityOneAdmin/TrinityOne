@@ -17797,7 +17797,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
-    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy. exceptions: per-occurrence skips/moves (items 2+4)
+    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy. exceptions: per-occurrence skips/moves (items 2+4)
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     const tags = [['d', EVENT_D + id], ['t', NET]];
@@ -17813,7 +17813,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents); },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), onEvents); },
 
   // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
   // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.

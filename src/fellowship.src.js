@@ -7659,7 +7659,7 @@ window.Fellowship = {
   // UNION of both lines: rosters keep `pods` (console pod-filter feature, from integration); events take the
   // calendar branch's richer mapper — imgPos/imgZoom (focal-point + zoom) and exceptions (move/skip one occurrence).
   subscribeChurchRosters(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/roster:', (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), cb); },
-  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', recur: c.recur || '', day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions) }), cb); },
+  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', recur: c.recur || '', day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), cb); },
 
   // ── Meal trains / Care module (member side) ──
   // Read the church's Care config so the member app knows whether to show the Care card (and, for

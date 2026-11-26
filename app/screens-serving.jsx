@@ -514,7 +514,8 @@ function EventDetail({ event, open, onClose, ctx }) {
           </div>
           {e.blurb ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 4px', textWrap: 'pretty' }}>{e.blurb}</p> : null}
           {/* A NETWORK EVENT IS ONE-WAY (owner 2026-11-19): it says where it came from and offers no RSVP. */}
-          {e._network ? <div style={{ marginTop: 14 }}><SvNetFrom e={e} /></div> : <React.Fragment>
+          {/* noRsvp: steward toggled "No RSVP" — hide the buttons entirely, same as a network event. */}
+          {(e._network || e.noRsvp) ? (e._network ? <div style={{ marginTop: 14 }}><SvNetFrom e={e} /></div> : null) : <React.Fragment>
           <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' }}>Will you be there?{(e.recurring || e.seriesDate) ? <span style={{ textTransform: 'none', fontWeight: 600, letterSpacing: 0, color: 'var(--ink-3)' }}> · this repeats, so your answer covers every date</span> : null}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {[['going', 'Going', 'var(--sage)'], ['maybe', 'Maybe', 'var(--gold)'], ['no', 'Can’t', 'var(--ink-3)']].map(([v, lbl, c]) => {
@@ -532,6 +533,7 @@ window.EventDetail = EventDetail;
 
 const RSVP_WORD = { going: 'You’re going', maybe: 'You said maybe', no: 'You can’t make it' };
 function svEventRsvpRow({ e, rsvps, ctx }) {
+  if (e && e.noRsvp) return null;
   // ONE ANSWER PER SERIES, SHOWN HONESTLY. A weekly meeting is stored as a single event and expanded into a
   // card per date, but the RSVP doc is keyed on the event id alone (rsvp:<eventId>) — so an answer applies to
   // the WHOLE series, not one night. Members read the per-date cards as per-date RSVP and were surprised when

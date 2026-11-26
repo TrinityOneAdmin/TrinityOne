@@ -31297,7 +31297,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
@@ -31310,7 +31310,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", EVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeEvents(onEvents) {
-      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents);
+      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), onEvents);
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
