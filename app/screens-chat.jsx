@@ -1598,11 +1598,13 @@ function GroupEventComposer({ group, ctx, onClose }) {
   const [blurb, setBlurb] = useC('');
   const [busy, setBusy] = useC(false);
   const [err, setErr] = useC('');
+  const [noRsvp, setNoRsvp] = useC(false);
+  const [recur, setRecur] = useC('none');
   const accent = safeCssColor(group.accent);   // SECURITY-AUDIT-2026-07-06 L6: guard against url() beacon in the accent
   const save = async () => {
     if (!title.trim() || !date) return;
     setBusy(true); setErr('');
-    const r = await ctx.publishGroupEvent(group.id, { title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent });
+    const r = await ctx.publishGroupEvent(group.id, { title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent, noRsvp, recur: recur !== 'none' ? recur : undefined });
     setBusy(false);
     if (r) { ctx.toast('Event posted to ' + group.name); onClose(); return; }
     // WHY THIS DOES NOT NAME A REASON. The relay refuses for three different reasons and the member app is
@@ -1626,13 +1628,28 @@ function GroupEventComposer({ group, ctx, onClose }) {
         <div style={lbl}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer breakfast" style={fld} />
         <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ flex: 1 }}><div style={lbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={fld} /></div>
-          <div style={{ width: 130 }}><div style={lbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={lbl}>Date</div><input type="date" aria-label="Date" value={date} onChange={e => setDate(e.target.value)} style={fld} /></div>
+          <div style={{ width: 130 }}><div style={lbl}>Time</div><input type="time" aria-label="Time" value={time} onChange={e => setTime(e.target.value)} style={fld} /></div>
         </div>
         <div style={lbl}>Where</div>
-        <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
+        <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
         <div style={lbl}>Note (optional)</div>
-        <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
+        <textarea aria-label="Note" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 14, cursor: 'pointer', fontSize: 14, fontWeight: 600, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>
+          <input type="checkbox" aria-label="No RSVP" checked={noRsvp} onChange={e => setNoRsvp(e.target.checked)} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
+          No RSVP
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>
+          <input type="checkbox" aria-label="Recurring" checked={recur !== 'none'} onChange={e => setRecur(e.target.checked ? 'weekly' : 'none')} style={{ width: 18, height: 18, accentColor: 'var(--clay)' }} />
+          Repeats
+        </label>
+        {recur !== 'none' ? (
+          <select value={recur} onChange={e => setRecur(e.target.value)} aria-label="Repeat frequency" style={{ ...fld, marginTop: 6, height: 42 }}>
+            <option value="weekly">Weekly</option>
+            <option value="fortnightly">Fortnightly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        ) : null}
         {err ? <div role="alert" style={{ marginTop: 16, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
