@@ -896,7 +896,7 @@ function ReactionWho({ emoji, reactors, onClose, me }) {
       <div data-reaction-who="1" onClick={e => e.stopPropagation()} style={{
         position: 'absolute', bottom: 36, [me ? 'right' : 'left']: 0, zIndex: 11, minWidth: 120, maxWidth: 220,
         padding: '8px 12px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)',
-        boxShadow: 'var(--shadow-lg)', fontSize: 13, lineHeight: 1.6, color: 'var(--ink)' }}>
+        boxShadow: 'var(--shadow-lg)', fontSize: 13, lineHeight: 1.6, color: 'var(--ink)', userSelect: 'none', WebkitTouchCallout: 'none' }}>
         <div style={{ fontWeight: 700, marginBottom: 2 }}>{emoji}</div>
         {shown.map((n, i) => <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>)}
         {names.length > 20 ? <div style={{ color: 'var(--ink-3)', fontSize: 11.5, marginTop: 2 }}>+{names.length - 20} more</div> : null}
@@ -916,12 +916,12 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me, re
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap', justifyContent: me ? 'flex-end' : 'flex-start' }}>
       {summary.map(r => (
         <div key={r.emoji} style={{ position: 'relative' }}>
-          <button data-rx-pill="1" onClick={() => { cancelLP(); onReact(r.emoji); }}
-            onTouchStart={e => e.stopPropagation()} onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
+          <button onClick={() => { cancelLP(); onReact(r.emoji); }}
+            onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
             onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
             style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
-            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)', userSelect: 'none', WebkitTouchCallout: 'none', touchAction: 'manipulation',
+            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)', userSelect: 'none', WebkitTouchCallout: 'none',
             background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
             <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
           </button>
@@ -1390,16 +1390,6 @@ function clampMenuIntoView(el) {
 function Row({ me, m, children, ctx, mod }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
   const canDM = !!(m.pubkey && ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));   // safeguarding gate
-  // press-and-hold a message to share it (OS share sheet). Touch-move cancels so scrolling is unaffected.
-  const lp = React.useRef(null);
-  // OUT OF THE APP: a bound commentary card goes with its FULL notice (chatCardOutsideText), never the short credit
-  const doShare = () => {
-    const sc = m && m.kind === 'card' ? chatShareCard(m.card) : null;
-    const t = (sc && chatCardThoughts(sc, m.text) !== null) ? chatCardOutsideText(sc) : shareTextOf(m);
-    if (t && ctx && ctx.shareText) ctx.shareText(t);
-  };
-  const startLP = () => { clearTimeout(lp.current); lp.current = setTimeout(doShare, 480); };
-  const cancelLP = () => { clearTimeout(lp.current); lp.current = null; };
   const M = mod || {};
   // SWIPE TO REPLY. Drag a bubble to the right and let go. It sits on Row rather than on each bubble kind so
   // a verse, a poll and an ordinary message all behave the same — the alternative was four copies drifting
@@ -1418,9 +1408,8 @@ function Row({ me, m, children, ctx, mod }) {
   // scripts/a-direct-message-can-be-answered.test.mjs. Read `swipe.current.dx`, never `dx`.
   // The swipe itself now lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with the
   // member DM and the console DM. Everything the notes above say still holds; it is just implemented there.
-  // The press-and-hold share timer rides along through the kit's start/move/end hooks.
   const canReply = typeof M.onReply === 'function';
-  const sw = TrinityReplyKit.useSwipe(M.onReply, { enabled: canReply, onStart: startLP, onMove: cancelLP, onEnd: cancelLP });
+  const sw = TrinityReplyKit.useSwipe(M.onReply, { enabled: canReply });
   return (
     // touch-action: pan-y lets the message list keep scrolling and tells the compositor NOT to treat a
     // HORIZONTAL drag as a pan it owns. Without it the browser may claim the gesture for an ancestor scroller
@@ -1430,7 +1419,7 @@ function Row({ me, m, children, ctx, mod }) {
     // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
     // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
     // picker opens upward and needs no lift.
-    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); if (e.target.closest && e.target.closest('[data-rx-pill]')) return; doShare(); }}
+    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
         position: 'relative', zIndex: M.menuOpen ? 30 : undefined,
         // brief gold flash when the pinned banner scrolls here (M.flash, self-clearing in the chat room)
