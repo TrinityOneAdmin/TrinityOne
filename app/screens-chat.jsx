@@ -917,7 +917,7 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me, re
       {summary.map(r => (
         <div key={r.emoji} style={{ position: 'relative' }}>
           <button data-rx-pill="1" onClick={() => { cancelLP(); onReact(r.emoji); }}
-            onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
+            onTouchStart={e => e.stopPropagation()} onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
             onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
             style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
