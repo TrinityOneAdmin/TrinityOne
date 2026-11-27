@@ -3437,7 +3437,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
             ))}
           </div>
         </div>
-        {monthlyIE.length > 0 && (() => {
+        {monthlyIE.length > 0 && window.stewIsFinanceApp && window.stewIsFinanceApp() && (() => {
           const max = Math.max(1, ...monthlyIE.map(m => Math.max(m.income, m.spending)));
           const W = 320, H = 200, padL = 8, padR = 8, padT = 24, padB = 32;
           const cw = (W - padL - padR) / monthlyIE.length;
