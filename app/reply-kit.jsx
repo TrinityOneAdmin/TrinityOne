@@ -27,7 +27,7 @@ var TrinityReplyKit = (function () {
   // be-answered.test.mjs pins). For the same reason every reset calls setDx(0) unconditionally rather than
   // `if (dx) setDx(0)`: `dx` there is the last COMPLETED render's, and testing it left the arrow on screen.
   //   opts.enabled   false -> the row never arms (default true)
-  //   opts.onStart / onMove / onEnd   hooks for extras (Row's press-and-hold share timer)
+  //   opts.onStart / onMove / onEnd   optional hooks called at each gesture phase
   function handlers(st, setDx, onReply, opts) {
     opts = opts || {};
     var enabled = opts.enabled !== false;

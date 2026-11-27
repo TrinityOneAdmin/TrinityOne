@@ -1395,8 +1395,7 @@ function Row({ me, m, children, ctx, mod }) {
   // a verse, a poll and an ordinary message all behave the same — the alternative was four copies drifting
   // apart, which is how this app ended up with two different reaction sets.
   //
-  // It cooperates with the press-and-hold share that was already here: any movement cancels the long-press
-  // timer (that was true before), and a mostly-VERTICAL drag resets the offset and gets out of the way so the
+  // A mostly-VERTICAL drag resets the offset and gets out of the way so the
   // message list still scrolls normally. Only a clearly horizontal drag arms the reply.
   // ⚠ THE OFFSET LIVES IN THE REF, AND `dx` STATE EXISTS ONLY TO REDRAW. The first version read `dx` state in
   // onTE, and `dx` there is whatever the LAST COMPLETED RENDER captured — not what the finger last did. React
