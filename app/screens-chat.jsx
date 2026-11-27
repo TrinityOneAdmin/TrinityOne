@@ -916,12 +916,12 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me, re
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap', justifyContent: me ? 'flex-end' : 'flex-start' }}>
       {summary.map(r => (
         <div key={r.emoji} style={{ position: 'relative' }}>
-          <button onClick={() => { cancelLP(); onReact(r.emoji); }}
+          <button data-rx-pill="1" onClick={() => { cancelLP(); onReact(r.emoji); }}
             onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
             onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
             style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
-            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)', userSelect: 'none', WebkitTouchCallout: 'none',
+            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)', userSelect: 'none', WebkitTouchCallout: 'none', touchAction: 'manipulation',
             background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
             <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
           </button>
@@ -1430,7 +1430,7 @@ function Row({ me, m, children, ctx, mod }) {
     // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
     // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
     // picker opens upward and needs no lift.
-    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); if (e.target.closest && e.target.closest('[data-rx-pill]')) return; doShare(); }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
         position: 'relative', zIndex: M.menuOpen ? 30 : undefined,
         // brief gold flash when the pinned banner scrolls here (M.flash, self-clearing in the chat room)
