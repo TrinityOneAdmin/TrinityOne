@@ -44,3 +44,70 @@ test('the Debug build config actually defines the DEBUG Swift condition (so #if 
   catch { return; }   // no ios/ in this checkout (e.g. a fresh worktree) — the ios-fixup assertion above still holds
   assert.match(pbx, /SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;/, 'the Debug config must define DEBUG for #if DEBUG to fire');
 });
+
+// ── aps-environment must MATCH the build config (2026-11-28 deploy-audit fix) ──
+// Debug signs 'development' (sandbox), Release signs 'production'. Before this, BOTH configs pointed at one
+// hardcoded 'development' entitlement, so a Release build registered a sandbox token while reporting env='production'.
+// Runs the REAL python wiring block lifted from ios-fixup.sh against a fixture pbxproj (no Xcode needed).
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const wire = (() => {
+  const a = FIXUP.indexOf('# BEGIN-WIRE-PY'), b = FIXUP.indexOf('# END-WIRE-PY');
+  assert.ok(a !== -1 && b > a, 'wiring block markers missing from ios-fixup.sh');
+  const blk = FIXUP.slice(a, b);
+  return blk.slice(blk.indexOf("<<'PY'\n") + 7, blk.lastIndexOf('\nPY'));
+})();
+const cfg = (id, name, extra = '') => `\t\t${id} /* ${name} */ = {
+\t\t\tisa = XCBuildConfiguration;
+\t\t\tbuildSettings = {
+\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.trinityone.app;${extra}
+\t\t\t\tSWIFT_VERSION = 5.0;
+\t\t\t};
+\t\t\tname = ${name};
+\t\t};
+`;
+const proj = (extraD = '', extraR = '') => `/* Begin XCBuildConfiguration section */
+\t\tAAA /* Debug */ = {
+\t\t\tisa = XCBuildConfiguration;
+\t\t\tbuildSettings = { SDKROOT = iphoneos; };
+\t\t\tname = Debug;
+\t\t};
+${cfg('BBB', 'Debug', extraD)}${cfg('CCC', 'Release', extraR)}/* End XCBuildConfiguration section */
+`;
+function runWire(src) {
+  const d = mkdtempSync(join(tmpdir(), 'trin-wire-'));
+  try {
+    writeFileSync(join(d, 'p.pbxproj'), src); writeFileSync(join(d, 'w.py'), wire);
+    const r = spawnSync('python3', ['-I', join(d, 'w.py'), join(d, 'p.pbxproj')], { encoding: 'utf8' });
+    return { r, out: readFileSync(join(d, 'p.pbxproj'), 'utf8') };
+  } finally { rmSync(d, { recursive: true, force: true }); }
+}
+const entOf = (out, name) => {
+  const m = [...out.matchAll(/isa = XCBuildConfiguration;.*?\n\t\t\};/gs)].map(x => x[0])
+    .find(b => b.includes('com.trinityone.app') && new RegExp(`name = ${name};`).test(b));
+  return m && (m.match(/CODE_SIGN_ENTITLEMENTS = ([^;]*);/g) || []);
+};
+
+test('fresh pbxproj: Debug -> App.entitlements, Release -> AppRelease.entitlements', () => {
+  const { r, out } = runWire(proj());
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(entOf(out, 'Debug'), ['CODE_SIGN_ENTITLEMENTS = App/App.entitlements;']);
+  assert.deepEqual(entOf(out, 'Release'), ['CODE_SIGN_ENTITLEMENTS = App/AppRelease.entitlements;']);
+});
+
+test('already-wired OLD pbxproj (both configs -> App.entitlements) is corrected, and a re-run is idempotent', () => {
+  const old = '\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = App/App.entitlements;';
+  const first = runWire(proj(old, old));
+  assert.deepEqual(entOf(first.out, 'Release'), ['CODE_SIGN_ENTITLEMENTS = App/AppRelease.entitlements;']);
+  assert.deepEqual(entOf(first.out, 'Debug'), ['CODE_SIGN_ENTITLEMENTS = App/App.entitlements;']);
+  const second = runWire(first.out);
+  assert.equal(second.out, first.out, 'a second run must change nothing');
+});
+
+test('the two entitlement files carry development / production, and the Release one is written by the script', () => {
+  assert.match(FIXUP, /AppRelease\.entitlements"\n(?:.*\n)*?<string>production<\/string>|<key>aps-environment<\/key>\n\t<string>production<\/string>/);
+  assert.match(FIXUP, /<key>aps-environment<\/key>\n\t<string>development<\/string>/);
+});
