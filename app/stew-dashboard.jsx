@@ -3362,7 +3362,7 @@ function InvitePosterModal({ church, url, svg, joinUrl, onClose }) {
           await P.Share.share({ title: fname, text: 'Invite to ' + (church.name || 'our church'), files: [res.uri], dialogTitle: 'Save or share invite PDF' });
         } catch (e) {
           // file-share unsupported on this device → share the link instead so it's not a dead button
-          try { await P.Share.share({ title: 'Join ' + (church.name || 'our church'), text: 'Join us on TrinityOne:\n' + url, url }); } catch (e2) {}
+          try { await P.Share.share({ title: 'Install TrinityOne', text: 'Install the TrinityOne app:\n' + url, url }); } catch (e2) {}
         }
       } else {
         doc.save(fname);
