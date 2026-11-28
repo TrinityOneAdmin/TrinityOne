@@ -10,9 +10,10 @@
 // SLICED OUT of the source and RUN; the REAL ReadScreen is drawn and the assertion reads `selected` off the
 // <VerseRow> elements it produced. Delete the ctx entry, the Library call or the ReadScreen consumer and it goes red.
 //
-// Callers of what changed (rule 2): ctx.selectPassageBookmark is called by screens-library.jsx jump() (now live) and,
-// via ReadScreen's own override, by the Study panel (screens-read.jsx ~1443, unchanged: the override still wins).
-// ctx.pendingPassage / clearPendingPassage are read only by ReadScreen.
+// Callers of what changed (rule 2): ctx.selectPassageBookmark (app.jsx) is called by screens-library.jsx jump()
+// and by the Study-panel bookmark button (screens-read.jsx ~1443); both now route to the single app.jsx function.
+// It sets loc.verse/verseEnd so the reader's inArrived() range-highlight lights the whole passage and survives the
+// arrival effect. (The old pendingPassage/applyPassageSel/CommentaryPanel-override path was removed.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -33,7 +34,7 @@ function liftEngineRefs() {
 const ENG = liftEngineRefs();
 
 function liftSelectPassageBookmark(scope) {
-  const a = APP.indexOf('\n    selectPassageBookmark:'), b = APP.indexOf('\n    pendingPassage,', a);
+  const a = APP.indexOf('\n    selectPassageBookmark:'), b = APP.indexOf('\n    addModule:', a);
   assert.ok(a > 0 && b > a && APP.indexOf('\n    selectPassageBookmark:', a + 1) < 0, 're-anchor: app.jsx selectPassageBookmark');
   const names = Object.keys(scope);
   return new Function(...names, 'return ({' + APP.slice(a, b) + '\n});')(...names.map(k => scope[k])).selectPassageBookmark;
@@ -55,14 +56,13 @@ function world() {
   };
   const win = { Bible, speechSynthesis: null, innerWidth: 360, sanitizeHtml: h => h, getSelection: () => ({ toString: () => '' }), TrinityData: { CROSSREFS: {}, PLANS: [] },
     MyData: { list: () => [PASSAGE], on: () => () => {}, remove() {}, setVisibility() {}, put() {} }, verseRefLabel: r => r, addEventListener() {}, removeEventListener() {} };
-  const st = { loc: { book: 43, chap: 1 }, pending: null, tab: 'library', toasts: [] };
+  const st = { loc: { book: 43, chap: 1 }, version: 'WEB', tab: 'library', toasts: [] };
   const selectPassageBookmark = liftSelectPassageBookmark({
-    setPendingPassage: v => { st.pending = v; }, setPlanRead() {}, setLoc: v => { st.loc = v; }, setReadView() {}, setTab: t => { st.tab = t; },
+    setPlanRead() {}, setLoc: v => { st.loc = v; }, setReadView() {}, setTab: t => { st.tab = t; },
   });
   const ctx = {
-    get loc() { return st.loc; }, get pendingPassage() { return st.pending; }, clearPendingPassage: () => { st.pending = null; },
-    selectPassageBookmark, openReader: () => { st.tab = 'read'; }, planRead: null, planProgress: {}, planChurch: 'A', churchPlans: [],
-    version: 'WEB', setLoc: l => { st.loc = l; }, toast: m => st.toasts.push(m),
+    get loc() { return st.loc; },     selectPassageBookmark, openReader: () => { st.tab = 'read'; }, planRead: null, planProgress: {}, planChurch: 'A', churchPlans: [],
+    get version() { return st.version; }, setLoc: l => { st.loc = l; }, toast: m => st.toasts.push(m),
     gotoRef: (book, chap, verse) => { st.loc = { book, chap, verse }; st.tab = 'read'; },
     highlights: {}, notes: {}, bookmarks: [], toggleBookmark() {}, setHighlight() {}, setNote() {}, hasPassageBookmark: () => false,
     openShareSheet() {}, desktop: false, readScale: 1, removeTranslation() {}, addModule() {}, setVersion() {},
@@ -87,21 +87,39 @@ function world() {
     assert.ok(row.length === 1 || rows.length, 're-anchor: the passage row was not drawn');
     (row.length ? row[0] : rows[0]).props.onClick();
   };
-  const selected = () => { draw(ReadScreen, { ctx }); draw(ReadScreen, { ctx }); const t = draw(ReadScreen, { ctx }); return find(t, n => n.type && n.type.name === 'VerseRow' && n.props.selected).map(n => n.props.n); };
-  return { st, tapLibraryRow, selected };
+  // What the reader LIGHTS: `selected` (setSel) or `reading` (loc-driven inArrived range). Drawn the way React does it:
+  // render, run effects in order, and the arrival effect fires AGAIN when a dep (version) changes later.
+  const lit = () => { const t = draw(ReadScreen, { ctx }); return find(t, n => n.type && n.type.name === 'VerseRow' && (n.props.selected || n.props.reading)).map(n => n.props.n); };
+  const selected = () => { draw(ReadScreen, { ctx }); draw(ReadScreen, { ctx }); return lit(); };
+  const reArrive = () => { st.version = 'KJV'; draw(ReadScreen, { ctx }); st.version = 'WEB'; draw(ReadScreen, { ctx }); };
+  return { st, tapLibraryRow, selected, lit, reArrive, draw, ReadScreen, ctx };
 }
 
-test('a passage bookmark tapped in the Library opens the reader at it and selects 16-18', () => {
+test('a passage bookmark tapped in the Library opens the reader at it and lights 16-18', () => {
   const w = world();
   w.tapLibraryRow();
-  assert.deepEqual(w.st.loc, { book: 43, chap: 3, verse: 16 }, 'the Library tap did not take the reader to John 3:16');
+  assert.deepEqual(w.st.loc, { book: 43, chap: 3, verse: 16, verseEnd: 18 }, 'the Library tap did not carry the range in the location');
   assert.equal(w.st.tab, 'read', 'the Library tap did not open the reader');
-  assert.deepEqual(w.selected(), [16, 17, 18], 'the reader did not select the saved passage');
-  assert.equal(w.st.pending, null, 'the pending passage was not consumed');
+  assert.deepEqual(w.selected(), [16, 17, 18], 'the reader did not light the saved passage');
 });
 
-test('a reader that arrives with no pending passage selects nothing (CONTROL)', () => {
+test('the range SURVIVES the arrival effect re-firing (device bug M4: only the first verse stayed lit)', () => {
+  const w = world();
+  w.tapLibraryRow();
+  assert.deepEqual(w.selected(), [16, 17, 18]);
+  w.reArrive();
+  assert.deepEqual(w.lit(), [16, 17, 18], 'the arrival effect clobbered the range');
+});
+
+test('a passage in a chapter other than the open one still lights whole (cross-screen: reader already elsewhere)', () => {
+  const w = world();
+  w.draw(w.ReadScreen, { ctx: w.ctx });
+  w.tapLibraryRow(); w.reArrive();
+  assert.deepEqual(w.lit(), [16, 17, 18]);
+});
+
+test('a reader that arrives with no passage lights nothing (CONTROL)', () => {
   const w = world();
   w.st.loc = { book: 43, chap: 3, verse: 16 };
-  assert.deepEqual(w.selected(), []);
+  assert.deepEqual(w.selected(), [16], 'a single arrival lights just its verse');
 });
