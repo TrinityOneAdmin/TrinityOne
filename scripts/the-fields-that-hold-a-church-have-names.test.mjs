@@ -58,7 +58,7 @@ test('every bank-import column select says which column it is', () => {
 test('the field that takes a church\'s twelve words has a name', () => {
   const s = read('app/steward-root.jsx');
   assert.match(near(s, 'word one  word two  word three', 400).slice(0, 400) + near(s, 'setPhrase(e.target.value)', 400),
-    /aria-label="Your church's 12-word recovery phrase"/, 'the restore textarea announces as an unnamed edit field');
+    /aria-label=(?:\{[^}]*)?"Your church's 12-word recovery phrase"/, 'the restore textarea announces as an unnamed edit field');
 });
 
 // ── F6: a subscription that cannot survive a reconnect ────────────────────────────────────────────────
