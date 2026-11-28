@@ -315,7 +315,7 @@ function dpWidgetCountClear() {
 // iOS Keychain bg-copy: the plugin's default accessibility (WhenUnlocked) blocks reads while the screen is locked,
 // so a BGAppRefreshTask that runs with the screen off gets nil. The bridge copies the mnemonic to a separate entry
 // with AfterFirstUnlock accessibility. Android doesn't need this (EncryptedSharedPreferences is always readable).
-// Callers: dpSetTier() 'ondevice' branch (1). On Android/web the plugin is absent and these are no-ops. Never called
+// Callers (2): dpSetTier() 'ondevice' branch + dpBootNotifications() 'ondevice' boot branch. On Android/web the plugin is absent and these are no-ops. Never called
 // by the 'push' tier — owner decision: Prompt alerts must not arm the lock-readable key path.
 function dpBgKeyWrite() {
   try {
