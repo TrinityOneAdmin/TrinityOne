@@ -3022,6 +3022,18 @@ function installPageUrl() {
   return { url: u.origin + '/install', lan, why: '' };
 }
 
+// THE ADDRESS THE INVITE POSTER'S PRIMARY QR ENCODES. The poster is a thing people photograph and scan on a
+// wall, and the person scanning has NOT got the app — a join link opens nothing for them. So it is ALWAYS an
+// install address: the church's own relay's /install page when it has one, else the public app's
+// /install page. (shareInvite, person to person, is the join link and stays so.)
+// The public origin is the one the app already ships as its canonical host (update-check.jsx, share-app.jsx).
+const PUBLIC_INSTALL_URL = 'https://app.trinityone.church/install';
+function posterInstallLink(install) {
+  const url = (install && install.url) || PUBLIC_INSTALL_URL;
+  const svg = (window.Steward && window.Steward.qrSVG) ? window.Steward.qrSVG(url) : '';
+  return { url, svg };
+}
+
 // IS THE APP OUR MEMBERS INSTALL FROM OUR RELAY OUT OF DATE? — the question a church that does NOT run
 // its own relay could not ask.
 //
@@ -3350,7 +3362,7 @@ function InvitePosterModal({ church, url, svg, joinUrl, onClose }) {
           await P.Share.share({ title: fname, text: 'Invite to ' + (church.name || 'our church'), files: [res.uri], dialogTitle: 'Save or share invite PDF' });
         } catch (e) {
           // file-share unsupported on this device → share the link instead so it's not a dead button
-          try { await P.Share.share({ title: 'Join ' + (church.name || 'our church'), text: 'Join us on TrinityOne:\n' + url, url }); } catch (e2) {}
+          try { await P.Share.share({ title: 'Install TrinityOne', text: 'Install the TrinityOne app:\n' + url, url }); } catch (e2) {}
         }
       } else {
         doc.save(fname);
@@ -3530,6 +3542,7 @@ function JoinCard({ qrSize = 92, center = false }) {
   // "Install slip": the paper that tells a member how to get the app from the church's OWN box. Only
   // offered when there is an address worth printing — see installPageUrl().
   const install = installPageUrl();
+  const posterLink = posterInstallLink(install);   // the poster QR is ALWAYS an install address, never the join link
   const installSvg = (install.url && window.Steward.qrSVG) ? window.Steward.qrSVG(install.url) : '';
   // Ask the relay, once, how old the app it hands out is. Silent unless there is something to say, and
   // silent on every failure — see readInstallerConcern.
@@ -3627,7 +3640,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         </div>
         {savedLine('join')}
       </div>
-      {poster ? <InvitePosterModal church={church} url={install.url || url} svg={install.url ? installSvg : svg} joinUrl={url} onClose={() => setPoster(false)} /> : null}
+      {poster ? <InvitePosterModal church={church} url={posterLink.url} svg={posterLink.svg} joinUrl={url} onClose={() => setPoster(false)} /> : null}
     </div>
 
     {/* ── GETTING THE APP, kept apart from the joining code on purpose ──────────────────────────────────

@@ -503,7 +503,7 @@ test('the console actually OFFERS the slip, and pressing it prints this church�
     // The staleness check the card now runs is lifted WITH it — real code, given a relay that refuses.
     // These two cases are about the SLIP, and a failed check must leave every part of the card standing.
     [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'],
-     ['async function readInstallerConcern(', 'readInstallerConcern'], ['function JoinCard(', 'JoinCard']],
+     ['async function readInstallerConcern(', 'readInstallerConcern'], ['const PUBLIC_INSTALL_URL', 'PUBLIC_INSTALL_URL'], ['function posterInstallLink(', 'posterInstallLink'], ['function JoinCard(', 'JoinCard']],
     'JoinCard', ['JoinCard'], {
     React, AbortSignal, fetch: async () => { throw new Error('ECONNREFUSED'); },
     window: {
@@ -550,7 +550,7 @@ test('a church with only a loopback relay is not offered a slip it cannot use', 
     // The staleness check the card now runs is lifted WITH it — real code, given a relay that refuses.
     // These two cases are about the SLIP, and a failed check must leave every part of the card standing.
     [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'],
-     ['async function readInstallerConcern(', 'readInstallerConcern'], ['function JoinCard(', 'JoinCard']],
+     ['async function readInstallerConcern(', 'readInstallerConcern'], ['const PUBLIC_INSTALL_URL', 'PUBLIC_INSTALL_URL'], ['function posterInstallLink(', 'posterInstallLink'], ['function JoinCard(', 'JoinCard']],
     'JoinCard', ['JoinCard'], {
     React, AbortSignal, fetch: async () => { throw new Error('ECONNREFUSED'); },
     window: {
@@ -716,7 +716,7 @@ async function joinCardWith(fetchImpl) {
   const stub = () => null;
   const { JoinCard } = liftFromJsx(DASH,
     [['function installerConcern(', 'installerConcern'], ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'],
-     ['async function readInstallerConcern(', 'readInstallerConcern'], ['function JoinCard(', 'JoinCard']],
+     ['async function readInstallerConcern(', 'readInstallerConcern'], ['const PUBLIC_INSTALL_URL', 'PUBLIC_INSTALL_URL'], ['function posterInstallLink(', 'posterInstallLink'], ['function JoinCard(', 'JoinCard']],
     'JoinCard', ['JoinCard'], {
       React, fetch: fetchImpl, AbortSignal,
       window: {
@@ -783,7 +783,7 @@ function installCard({ relay = 'wss://grace.example/relay', copied = [], saved =
   const { JoinCard } = liftFromJsx(DASH,
     [['function installPageUrl()', 'installPageUrl'], ['function installerConcern(', 'installerConcern'],
      ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'], ['async function readInstallerConcern(', 'readInstallerConcern'],
-     ['function JoinCard(', 'JoinCard']],
+     ['const PUBLIC_INSTALL_URL', 'PUBLIC_INSTALL_URL'], ['function posterInstallLink(', 'posterInstallLink'], ['function JoinCard(', 'JoinCard']],
     'JoinCard', ['JoinCard'], {
       React, AbortSignal, fetch: async () => { throw new Error('ECONNREFUSED'); },
       window: {
@@ -869,7 +869,7 @@ test('saving the install QR renders it locally and does not reach for the relay'
   const { JoinCard } = liftFromJsx(DASH,
     [['function installPageUrl()', 'installPageUrl'], ['function installerConcern(', 'installerConcern'],
      ['const INSTALLER_OLD_DAYS', 'INSTALLER_OLD_DAYS'], ['async function readInstallerConcern(', 'readInstallerConcern'],
-     ['function JoinCard(', 'JoinCard']],
+     ['const PUBLIC_INSTALL_URL', 'PUBLIC_INSTALL_URL'], ['function posterInstallLink(', 'posterInstallLink'], ['function JoinCard(', 'JoinCard']],
     'JoinCard', ['JoinCard'], {
       React, AbortSignal,
       fetch: async (u) => { fetches.push(u); throw new Error('ECONNREFUSED'); },
