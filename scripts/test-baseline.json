@@ -1,12 +1,12 @@
 {
-  "_why": "The recorded result of a CLEAN full run, so a later run can be compared against a MEASURED number instead of somebody's memory. On 2026-10-09 a session compared a 5840-test suite against a remembered '~2029' from 2026-08-29, when the repo had 265 test files instead of 664, and spent hours on a non-problem. Update this whenever you land a real change in the pass/fail counts, and say why in the commit.",
-  "recorded": "2026-10-09",
-  "commit": "7a557ef",
-  "branch": "integration/suite-repair",
-  "tests": 5835,
-  "pass": 5801,
-  "fail": 30,
-  "skipped": 2,
-  "todo": 2,
-  "notes": "Clean box, main tree, nothing else running, 428s. The 30 are enumerated in the session notes; 6 of them are deliberate open findings (3 unnamed password fields, 1 contrast failure, 4 doc-registry/verse-prompt) left red on purpose."
+  "_why": "The recorded result of a full run, so a later run can be compared against a MEASURED number instead of somebody's memory. On 2026-10-09 a session compared a 5840-test suite against a remembered '~2029' from 2026-08-29, when the repo had 265 test files instead of 664, and spent hours on a non-problem. Update this whenever you land a real change in the pass/fail counts, and say why in the commit.",
+  "recorded": "2026-11-28",
+  "commit": "f7816fed",
+  "branch": "integration/pre-merge-2026-11-26",
+  "tests": 11052,
+  "pass": 11016,
+  "fail": 22,
+  "skipped": 6,
+  "todo": 8,
+  "notes": "Refreshes the 2026-10-09 baseline (5835 tests, 30 fail), which was 7 weeks and +5217 tests stale after the autumn feature work. Parallel run (concurrency 24) on commit f7816fed, which has merged the Round-A harness-cleanup + UI-test-fix (20 of the 34 then-failing files were stale harness/brittle tests, now green). CAVEAT: this suite still uses FIXED test ports (scripts/test-ports.mjs), so the 'fail' count is NOT stable run-to-run — ~8 of the failing files on any given parallel run are fixed-port/browser collision FLAKES (a different subset each run; see the ephemeral-ports migration plan). Excluding flakes, the stable failures are ~8 Batch-B real/known bugs (a-finance-helper cap-key race, a-shared-card/verse sharing, a-slow-reader relay memory, install-bible join, no-browser-reaches-production rule-10 hygiene, site-links orphan, two-safeguarding _monotonic) plus the 8 intentional todo reds (stress4-clocks, a-member-of-three-churches). Re-record a CLEAN number after Batch B lands and the ephemeral-ports work removes the flake class."
 }
