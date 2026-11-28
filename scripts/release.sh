@@ -16,15 +16,18 @@
 # docs/ops/RELEASES.md, "Cutting a RELAY release".
 set -euo pipefail
 cd "$(dirname "$0")/.."
+DIR="$PWD"   # repo root (used for $DIR/relay/release-key.pem etc.)
 
-DO_WEB=1; DO_APK=1; DO_GW=1; DRY=0
+DO_WEB=1; DO_APK=1; DO_GW=1; DRY=0; SKIP_TESTS=0
 [[ "$*" == *--no-gw* ]] && DO_GW=0
 [[ "$*" == *--dry*  ]] && DRY=1
+[[ "$*" == *--skip-tests* ]] && SKIP_TESTS=1
 # a lone platform flag turns the other off; with neither, do both
 if [[ "$*" == *--web* && "$*" != *--apk* ]]; then DO_APK=0; fi
 if [[ "$*" == *--apk* && "$*" != *--web* ]]; then DO_WEB=0; fi
 
 say() { printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m⚠ %s\033[0m\n' "$*" >&2; }
 run() { if [[ $DRY == 1 ]]; then printf '   [dry] %s\n' "$*"; else eval "$*"; fi; }
 
 # 1. refuse a dirty tree (other than sw.js, which we're about to bump). build-pages.sh deploys
@@ -51,12 +54,14 @@ fi
 #     financial statements to churches. `npm test` now includes vendor-freshness.test.mjs, which reproduces
 #     every bundle from source, so this one command catches both a stale bundle and a broken build script
 #     (build-steward.sh could not run at all for an unknown length of time).
-if [[ $DRY != 1 ]]; then
+if [[ $DRY != 1 && $SKIP_TESTS != 1 ]]; then
   say "running the test suite (privacy gates, ledger, recovery, vendor freshness)"
   if ! npm test; then
     echo "✖ Tests failed — refusing to release. Nothing has been deployed." >&2
     exit 1
   fi
+elif [[ $SKIP_TESTS == 1 && $DRY != 1 ]]; then
+  warn "--skip-tests: full-suite gate bypassed (caller asserts it is green bar known flakes; run vendor-freshness yourself)."
 fi
 
 # 2. bump the service-worker cache version so installed PWAs refresh the shell
