@@ -261,6 +261,8 @@ function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [], d
     console, Promise, Set, Map, JSON, Date, Math, Array, Object, String, Number, Boolean, RegExp,
     URLSearchParams, setTimeout, clearTimeout, CustomEvent: class {},
   };
+  // memberTapFor is a module-level helper next to ChatScreen: the REAL one, lifted over this rig's window (never faked)
+  scope.memberTapFor = new Function('window', `return (${fnBody(CHAT_SRC, 'function memberTapFor(ctx, pk, opts) {', 'memberTapFor')});`)(scope.window);
   const proxy = new Proxy(scope, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];

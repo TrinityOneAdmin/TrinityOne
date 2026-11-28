@@ -57,9 +57,11 @@ function consoleBuilders(location) {
   const src = 'const S = {\n' + slice(VENDOR, 'joinUrl() {', 'Steward.joinUrl')
             + ',\n' + slice(VENDOR, 'memberInviteUrl(mnemonic) {', 'Steward.memberInviteUrl') + '\n};';
   const win = { Steward: { npub: 'npub1testchurch' } };
-  const made = new Function('window', 'location', 'ownRelay', 'ownIsLoopback', 'selfPublicRelay', 'selfRelayName',
+  // the REAL _packagedOrigin (APK / Tauri => shared pool), lifted over this rig's window + location, never faked
+  const _packagedOrigin = new Function('window', 'location', slice(VENDOR, 'function _packagedOrigin() {', '_packagedOrigin') + '\nreturn _packagedOrigin;')(win, location);
+  const made = new Function('window', 'location', 'ownRelay', 'ownIsLoopback', 'selfPublicRelay', 'selfRelayName', '_packagedOrigin',
     src + '\nObject.assign(window.Steward, S); return S;')(
-    win, location, () => 'wss://relay.example.org', () => false, () => '', () => '');
+    win, location, () => 'wss://relay.example.org', () => false, () => '', () => '', _packagedOrigin);
   return { joinUrl: () => made.joinUrl.call(win.Steward), memberInviteUrl: (m) => made.memberInviteUrl.call(win.Steward, m), win };
 }
 
