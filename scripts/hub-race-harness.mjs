@@ -116,6 +116,9 @@ export function memberApp(opts) {
     _churchRoster: new Map(), _nameKeys: new Map(), _nameKeyTs: new Map(), _nameKeyListeners: new Set(),
     // hub-level absorbers that are not under test here
     _absorbRoster: () => false, _absorbVoice: () => false, _ingestGroupKey: () => {}, _ingestCareKey: () => {},
+    // _widgetSeen (home-screen widget count clear) is native-only and returns at once without a Capacitor bridge,
+    // which is exactly this rig; the hub saves call it before their localStorage write.
+    _widgetSeen: () => {},
     _noteAdmitted: () => {}, _replayChurchCalendar: () => {}, _replayReseats: () => {}, _recoverOwnName: () => {},
     _openSealedName: () => false, _replaySealedNames: () => {}, _noteReseat: () => {}, _maybeRebuildFamily: () => {},
     _featureFailed: (where, d, err) => { failures.push(where + ' ' + d + ': ' + (err && err.message)); },
