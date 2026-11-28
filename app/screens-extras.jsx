@@ -377,7 +377,7 @@ function dpTierGet() {
     dpTierSet(v);
   }
   // CLAMP to a tier this platform actually offers, so the picker's selection is always real: a legacy iOS 'ondevice'
-  // (whose BGTask native was never wired) falls to 'off' rather than showing a selected option that isn't listed.
+  // (whose BGTask native was never wired) falls to the FIRST tier this platform offers (dpTierOptions()[0] — 'push' on iOS), and only to 'off' if none is offered, rather than showing a selected option that isn't listed.
   if (!dpTierOptions().some((o) => o.key === v)) v = dpTierOptions()[0]?.key || 'off';
   return v;
 }

@@ -532,7 +532,7 @@ function verseCard({ cap = null, browser = fakeBrowser(), noBlob = false, fontsH
 }
 const noLink = (o) => { const s = JSON.stringify(o); return !/https?:|wss?:|\/v\?|relay\.example/i.test(s); };
 
-test('C1 — "Share as image" (both buttons) sends ONE .png — the drawn card — with the verse words beside it, and NO link', async () => {
+test('C1 — "Share as image" (both buttons) sends ONE .png — the drawn card — and NOTHING beside it (no text, no link)', async () => {
   for (const which of ['main', 'icon']) {
     const cap = fakeCapacitor();
     const v = verseCard({ cap });
@@ -548,8 +548,9 @@ test('C1 — "Share as image" (both buttons) sends ONE .png — the drawn card �
     assert.match(s.files[0], /verse-card\/John-3-16\.png$/, `${which}: the file handed to the share sheet is not named for the verse`);
     assert.deepEqual([...cap.writes[0].bytes], [...CANVAS_BYTES], `${which}: the file shared is not the picture the canvas made`);
     assert.deepEqual([...cap.writes[0].bytes.slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'PNG signature');
-    assert.equal(typeof s.text, 'string', `${which}: the verse words are not beside the picture`);
-    assert.ok(s.text.includes(VERSE.text) && s.text.includes(VERSE.ref), `${which}: the text beside the picture is ${JSON.stringify(s.text)}`);
+    // IMAGE-ONLY (UX #7, owner-confirmed): the picture is the whole share — no text line rides beside it
+    assert.equal(s.text, undefined, `${which}: a text line went beside the picture: ${JSON.stringify(s.text)}`);
+    assert.ok(!('text' in s), `${which}: the share has a text key`);
     assert.equal(s.url, undefined, `${which}: a url went with the picture — that brings back the website preview`);
     const { files, ...rest } = s;
     assert.ok(noLink(rest), `${which}: a link is in the share: ${JSON.stringify(rest)}`);
@@ -561,7 +562,7 @@ test('C1 — "Share as image" (both buttons) sends ONE .png — the drawn card �
   }
 });
 
-test('C2 — on the web the picture goes to navigator.share as ONE image/png File, with the words and no link', async () => {
+test('C2 — on the web the picture goes to navigator.share as ONE image/png File, with no text and no link', async () => {
   const browser = fakeBrowser();
   const v = verseCard({ browser });
   await v.buttons().main.props.onClick();
@@ -571,7 +572,8 @@ test('C2 — on the web the picture goes to navigator.share as ONE image/png Fil
   assert.equal(d.files[0].type, 'image/png');
   assert.equal(d.files[0].name, 'John-3-16.png', 'the web share File is not named for the verse');
   assert.deepEqual([...new Uint8Array(await d.files[0].arrayBuffer())], [...CANVAS_BYTES], 'the File is not the picture the canvas made');
-  assert.ok(typeof d.text === 'string' && d.text.includes(VERSE.text) && d.text.includes(VERSE.ref), `the words are not beside the picture: ${JSON.stringify(d.text)}`);
+  assert.equal(d.text, undefined, `a text line went beside the picture: ${JSON.stringify(d.text)}`);
+  assert.ok(!('text' in d), 'the web share has a text key');
   assert.equal(d.url, undefined, 'a url went with the picture');
   const { files, ...rest } = d;
   assert.ok(noLink(rest), `a link is in the share: ${JSON.stringify(rest)}`);
@@ -586,7 +588,9 @@ test('C3 — a browser that cannot share files downloads the .png instead', asyn
   assert.equal(browser.clicked[0].download, 'John-3-16.png', 'the download is not named for the verse');
   assert.match(v.toasts[0], /Downloading John-3-16\.png/);
   assert.equal(v.toasts.length, 1);
-  assert.match(v.toasts[0], /words were not included/, `a download that drops the words must say so: ${v.toasts[0]}`);
+  // image-only: the file IS the whole share, so nothing is dropped and the toast must not claim words were left out
+  assert.match(v.toasts[0], /share the file from your device/, `the download toast: ${v.toasts[0]}`);
+  assert.doesNotMatch(v.toasts[0], /words were not included/, 'the toast claims words were dropped from an image-only share');
 });
 
 test('C23 — the three paths carry the reference of "1 John 3:16-18", not a fixed name', async () => {
@@ -709,14 +713,17 @@ test('C7 (LOW 2) — the picture is drawn when the card opens, so the tap reache
   assert.equal(v.canvases.length, 2, 'changing the style did not draw a new picture');
 });
 
-test('C8 (LOW 2) — a browser that refuses the share (NotAllowedError) says "tap Share again", and does not quietly download', async () => {
+test('C8 (LOW 2) — image-only: a browser that refuses the share (NotAllowedError) falls back to downloading the .png, naming it, with no "tap Share again" and no text', async () => {
   const browser = fakeBrowser({ shareRejects: 'NotAllowedError' });
   const v = verseCard({ browser });
   await v.settle();
   await v.buttons().main.props.onClick();
-  assert.equal(browser.clicked.length, 0, 'a refused share fell back to a download that drops the words');
+  // With no words to lose, the download loses nothing (the "tap Share again" path exists only for a text share).
+  assert.equal(browser.clicked.length, 1, 'a refused image share did not fall back to downloading the picture');
+  assert.equal(browser.clicked[0].download, 'John-3-16.png');
   assert.equal(v.toasts.length, 1);
-  assert.match(v.toasts[0], /tap Share again/);
+  assert.match(v.toasts[0], /Downloading John-3-16\.png/);
+  assert.doesNotMatch(v.toasts[0], /tap Share again|words were not included/);
 });
 
 test('C9 (LOW 4) — a font that never loads does not stop the share: after the wait the card is drawn anyway', async () => {
@@ -781,7 +788,7 @@ function verseSheet(payloadExtra = {}) {
 }
 const THOUGHTS = 'This carried me through a hard March.';
 
-test('C13 (bug 1) — thoughts typed in the share sheet are drawn on the card and go in the text beside it', async () => {
+test('C13 (bug 1) — thoughts typed in the share sheet are DRAWN ON the card image, and no text goes beside it', async () => {
   const sh = verseSheet();
   let tree = sh.render();
   const box = find(tree, n => n.type === 'textarea');
@@ -802,8 +809,8 @@ test('C13 (bug 1) — thoughts typed in the share sheet are drawn on the card an
   assert.equal(cap.shares.length, 1);
   const s = cap.shares[0];
   assert.match(s.files[0], /\.png$/);
-  assert.ok(s.text.includes(VERSE.text) && s.text.includes(VERSE.ref), 'the verse is not in the shared text');
-  assert.ok(s.text.endsWith('\n\n' + THOUGHTS), `the thoughts are not under the verse in the shared text: ${JSON.stringify(s.text)}`);
+  assert.equal(s.text, undefined, `the thoughts (or verse) went in a text line beside the picture: ${JSON.stringify(s.text)}`);
+  assert.ok(!JSON.stringify(s).includes('hard March'), 'the thoughts leaked into the share payload instead of only the card');
   const onCard = v.drawn.join(' ');
   for (const w of ['carried', 'hard', 'March.']) assert.ok(onCard.includes(w), `"${w}" (the thoughts) is not drawn on the card`);
   const { files, ...rest } = s;
@@ -818,7 +825,10 @@ test('C14 (bug 1) — with no thoughts the card opens with the payload as it was
   const cap = fakeCapacitor();
   const v = verseCard({ cap, verse: sh.opened[0] });
   await v.buttons().main.props.onClick();
-  assert.equal(cap.shares[0].text, realVerseShareText()(VERSE), 'with no thoughts the shared text is not just the verse');
+  assert.equal(cap.shares[0].text, undefined, 'a text line went beside the picture');
+  const onCard = v.drawn.join(' ');
+  for (const w of ['loved', 'world', 'Son.']) assert.ok(onCard.includes(w), `"${w}" is not drawn on the card`);
+  assert.ok(!onCard.includes(THOUGHTS), 'thoughts appeared on a card with none typed');
 });
 
 // ═══════ C, audit of c8334475 (MEDIUM): someone else's thoughts never leave the app on "Share as image" ═══════
@@ -861,7 +871,8 @@ test('C15 (MEDIUM) — tapping a RECEIVED verse bubble opens the card with the v
   await v.settle();
   await v.buttons().main.props.onClick();
   assert.equal(cap.shares.length, 1);
-  assert.ok(!cap.shares[0].text.includes('youth group'), 'the sender\'s thoughts went out in the shared text');
+  assert.equal(cap.shares[0].text, undefined, 'a text line went beside the picture');
+  assert.ok(!JSON.stringify(cap.shares[0]).includes('youth group'), 'the sender\'s thoughts went out in the share payload');
   assert.ok(!v.drawn.join(' ').includes('youth group'), 'the sender\'s thoughts were drawn on the card');
 });
 
@@ -870,7 +881,8 @@ test('C16 (MEDIUM) — ShareCard ignores a `comment` it is handed: only shareTho
   const v = verseCard({ cap, verse: { ...VERSE, comment: SENDERS } });
   await v.settle();
   await v.buttons().main.props.onClick();
-  assert.equal(cap.shares[0].text, realVerseShareText()(VERSE), `a stray comment reached the shared text: ${JSON.stringify(cap.shares[0].text)}`);
+  assert.equal(cap.shares[0].text, undefined, `a text line went beside the picture: ${JSON.stringify(cap.shares[0].text)}`);
+  assert.ok(!JSON.stringify(cap.shares[0]).includes('youth group'), 'a stray comment reached the share payload');
   assert.ok(!v.drawn.join(' ').includes('youth group'), 'a stray comment was drawn on the card');
   // and the share sheet overwrites any shareThoughts a payload arrived with
   const sh = verseSheet({ shareThoughts: SENDERS });
