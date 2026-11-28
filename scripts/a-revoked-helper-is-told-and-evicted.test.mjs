@@ -167,12 +167,16 @@ function makeHelperHandler(ctx) {
     // written once every relay has answered — recorded here so each case can say whether a removal was noted
     evicted: (cp) => { ctx.evicted.push(cp); },
     flushGone: () => { ctx.flushes++; },
+    // the eviction also drops that church's books copy (M4): the REAL _finBookDrop, lifted below, over a fake store
+    FINBOOK_LS: (VENDOR.match(/\bvar FINBOOK_LS = "([^"]+)";/) || [])[1],
+    localStorage: ctx.store = ctx.store || { _m: new Map(), removeItem(k) { this._m.delete(k); }, getItem(k) { return this._m.has(k) ? this._m.get(k) : null; }, setItem(k, v) { this._m.set(k, String(v)); } },
   };
   const scope = new Proxy(stubs, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k]; throw new ReferenceError('the lifted handler needs a stub for ' + String(k)); },
     set: (t, k, v) => { t[k] = v; return true; },
   });
+  stubs._finBookDrop = new Function('scope', `with (scope) { return (${fnBody(VENDOR, 'function _finBookDrop(cp) {', '_finBookDrop')}); }`)(scope);
   const branch = fnBody(VENDOR, 'if (d.startsWith(STEWARDREVOKE_D)) {', 'the stewardrevoke branch in subscribeStewardedChurches');
   return new Function('scope', `with (scope) { return function(e){ const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; ${branch} return 'nomatch'; }; }`)(scope);
 }
