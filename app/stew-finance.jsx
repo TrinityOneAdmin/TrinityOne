@@ -267,6 +267,15 @@ function suggestCode(book, type) {
 // funds; the per-row amounts must add up EXACTLY to the total (integer minor units) or Save is disabled —
 // the bank leg is the single balancing posting, so a mismatch is exactly what the engine's balance check
 // refuses. ATTACHMENT: an optional receipt image, shrunk client-side and published as a side blob.
+// Where "record a transaction" (the + FAB) should send you back to. The FAB forces the Transactions tab so the new
+// entry is visible, which used to strand you there on close. Pure so a test can run it: ev is 'open' | 'save' | 'close';
+// returns the origin to remember and the tab to go to (null = stay put). A SAVE keeps you on Transactions (you came to
+// see the entry land); only a cancel/close returns you to where you tapped +.
+function finRecordNav(origin, ev, tab) {
+  if (ev === 'open') return { origin: origin == null ? tab : origin, goTo: 'transactions' };
+  if (ev === 'save') return { origin: null, goTo: null };
+  return { origin: null, goTo: (origin != null && origin !== tab) ? origin : null };
+}
 function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   const init = initial || {};
   const [dir, setDir] = React.useState(init.dir === 'out' ? 'out' : 'in');
@@ -2431,8 +2440,10 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
   const tab = finTab !== undefined ? finTab : _localTab, setTab = setFinTab || _localSetTab, moreOpen = finMoreOpen !== undefined ? finMoreOpen : _localMoreOpen, setMoreOpen = setFinMoreOpen || _localSetMoreOpen;
   const _tabStripLifted = finTab !== undefined;
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
+  const _tabRef = React.useRef(tab); _tabRef.current = tab;                 // the effect below has [] deps, so it reads the live tab through this
+  const _recOriginRef = React.useRef(null);                                   // tab that was active when + was tapped
   React.useEffect(() => {
-    const onRecord = () => { setTab('transactions'); setRecording(true); };
+    const onRecord = () => { const n = finRecordNav(_recOriginRef.current, 'open', _tabRef.current); _recOriginRef.current = n.origin; setTab(n.goTo); setRecording(true); };
     window.addEventListener('finance-record', onRecord);
     return () => window.removeEventListener('finance-record', onRecord);
   }, []);
@@ -3399,10 +3410,15 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
       </div>}
       {_tabStripLifted && !actionsOpen && <button onClick={() => setActionsOpen(true)} aria-label="Open actions" style={{
         position: 'fixed', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
-        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '14px 12px', minWidth: 44, borderRadius: '13px 0 0 13px',
-        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center',
+        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '12px 0', width: 36, minHeight: 44, borderRadius: '13px 0 0 13px',
+        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
       }}>
-        <Icon name="more-horizontal" size={17} color="#fff" />
+        <Icon name="more-horizontal" size={16} color="#fff" />
+        {/* The word is back (a bare red tab told nobody what it did). It fits because: lineHeight 1 makes the
+            vertical box exactly one em wide (the old default line-height left a fat empty column); letter-spacing
+            adds a trailing space after the LAST letter, which after the 180deg turn sits at the top — the marginTop
+            cancels it so the word is not pushed off-centre with a gap above it. */}
+        <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 11, lineHeight: 1, fontWeight: 800, letterSpacing: '0.08em', marginTop: '-0.08em', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' }}>ACTIONS</span>
       </button>}
       {_tabStripLifted && actionsOpen ? <>
         <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
@@ -3957,7 +3973,7 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
       })()}
 
 
-      {recording && <BooksRecord book={book} onRecord={recordEntry} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
+      {recording && <BooksRecord book={book} onRecord={(e) => { _recOriginRef.current = finRecordNav(_recOriginRef.current, 'save', tab).origin; return recordEntry(e); }} donors={donors} initial={recording && recording.initial} onClose={() => { const n = finRecordNav(_recOriginRef.current, 'close', tab); _recOriginRef.current = n.origin; setRecording(false); if (n.goTo) setTab(n.goTo); }} />}
       {importing && <FinanceImport book={book} F={F} donors={donors} onPost={importStatement} onClose={() => setImporting(false)} />}
       {viewingAtt ? <BooksReceiptView data={viewingAtt} onClose={() => setViewingAtt('')} /> : null}
       {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}
