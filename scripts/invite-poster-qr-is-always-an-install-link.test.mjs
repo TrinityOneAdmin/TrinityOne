@@ -94,3 +94,71 @@ test('(b,d) the real modal: the PDF is built from the install link, and Share li
   assert.equal(pdf[0].url, PUBLIC);
   assert.equal(pdf[0].svg, props.svg);
 });
+
+// ── TWO QR CODES (owner requirement 2026-11-28): the poster shows an INSTALL code AND a JOIN code ──
+function twoQrModal(props, pdf) {
+  const { React, draw } = miniReact();
+  const Modal = lift([['function InvitePosterModal(', 'InvitePosterModal']], 'InvitePosterModal', {
+    React, history: { pushState() {} }, document: { createElement: () => ({}), head: { appendChild() {}, removeChild() {} } },
+    window: { addEventListener() {}, removeEventListener() {}, print() {}, Capacitor: { isNativePlatform: () => true, Plugins: {} } },
+    churchMarkDataUrl: async () => 'logo', buildInvitePdf: async (a) => { pdf.push(a); return null; },
+    copyText: () => true, Icon: () => null, SkQR: () => null, useStewDialog: () => {},
+  });
+  return draw(Modal, props);
+}
+const qrBoxes = (tree) => find(tree, (n) => n.props && n.props['data-poster-qr']);
+const svgsIn = (node) => find(node, (n) => n.props && n.props.dangerouslySetInnerHTML).map((n) => n.props.dangerouslySetInnerHTML.__html);
+
+test('(e) JoinCard hands the poster BOTH codes: install svg for the install URL, join svg for the join URL', () => {
+  const p = openPoster({ url: 'https://grace.example/install', lan: false, why: '' });
+  assert.equal(p.svg, '<svg data-for="https://grace.example/install"/>');
+  assert.match(p.joinUrl, /follow=npub1grace/);
+  assert.equal(p.joinSvg, '<svg data-for="' + p.joinUrl + '"/>', 'the join QR must encode the join link');
+});
+
+test('(e) the real modal draws TWO QRs — install then join — each with its own URL printed under it', () => {
+  const props = openPoster({ url: '', lan: false, why: 'none' });
+  const tree = twoQrModal(props, []);
+  const boxes = qrBoxes(tree);
+  assert.equal(boxes.length, 2, 'the poster must show two QR codes');
+  assert.deepEqual(boxes.map((b) => b.props['data-poster-qr']), ['install', 'join']);
+  assert.deepEqual(svgsIn(boxes[0]), ['<svg data-for="' + PUBLIC + '"/>']);
+  assert.deepEqual(svgsIn(boxes[1]), ['<svg data-for="' + props.joinUrl + '"/>']);
+  const text = JSON.stringify(tree);
+  assert.ok(text.includes(PUBLIC) && text.includes(props.joinUrl), 'both URLs must be printed on the poster');
+  assert.match(text, /Download the app/); assert.match(text, /Join Grace Chapel/);
+});
+
+test('(e) Save PDF hands the PDF builder BOTH codes and both URLs', async () => {
+  const props = openPoster({ url: '', lan: false, why: 'none' });
+  const pdf = [];
+  const tree = twoQrModal(props, pdf);
+  const save = find(tree, (n) => n.type === 'button' && n.props.onClick && /pdf/i.test(JSON.stringify(n.kids || n.props.children || '')));
+  await save[0].props.onClick();
+  assert.equal(pdf.length, 1);
+  assert.equal(pdf[0].url, PUBLIC); assert.equal(pdf[0].svg, props.svg);
+  assert.equal(pdf[0].joinUrl, props.joinUrl); assert.equal(pdf[0].joinSvg, props.joinSvg);
+  assert.ok(pdf[0].joinSvg.includes('follow='));
+});
+
+
+test('(e) the real PDF builder draws BOTH codes (two images) and prints both URLs', async () => {
+  const images = [], texts = [];
+  class FakeDoc {
+    constructor() { this.internal = { pageSize: { getWidth: () => 595, getHeight: () => 842 } }; }
+    setFont() {} setFontSize() {} setTextColor() {} setDrawColor() {} setFillColor() {} roundedRect() {} line() {}
+    splitTextToSize(t) { return [String(t)]; }
+    text(t) { texts.push(JSON.stringify(t)); }
+    addImage(d) { images.push(d); }
+  }
+  const build = lift([['async function buildInvitePdf(', 'buildInvitePdf']], 'buildInvitePdf', { window: { jspdf: { jsPDF: FakeDoc } }, svgToPng: async (s) => 'png:' + s });
+  const J = 'https://app.trinityone.church/?follow=npub1grace';
+  await build({ name: 'Grace Chapel', url: PUBLIC, svg: '<svg a/>', joinUrl: J, joinSvg: '<svg b/>', accent: '#b4462f', logo: null });
+  assert.deepEqual(images, ['png:<svg a/>', 'png:<svg b/>']);
+  const all = texts.join('\n');
+  assert.ok(all.includes(PUBLIC) && all.includes(J), 'both URLs must be printed in the PDF');
+  // no join link (church key not ready): install code only
+  images.length = 0;
+  await build({ name: 'Grace Chapel', url: PUBLIC, svg: '<svg a/>', joinUrl: '', joinSvg: '', accent: '', logo: null });
+  assert.deepEqual(images, ['png:<svg a/>']);
+});
