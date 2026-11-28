@@ -204,3 +204,37 @@ for (const [label, ua, want] of [['iPhone', UA_IPHONE, ['isteps']], ['Android', 
     }
   });
 }
+
+// ── THE FINANCE APP IS A HELPER TOOL, TUCKED BEHIND "For church leaders" LIKE THE STEWARD BUILD.
+let _all3 = null;
+const allThree = () => (_all3 ||= boxHolding(['trinityone.apk', 'trinityone-steward.apk', 'trinityone-finance.apk']));
+
+test('with all three apps held, finance is under "For church leaders", closed, quiet, with its blurb; member stays primary', async () => {
+  const html = await allThree();
+  const links = linkContainers(html);
+  const fin = linkTo(links, '/trinityone-finance.apk');
+  assert.ok(closedAll(fin) && fin.details.some((d) => d.cls.split(/\s+/).includes('leaders')),
+    'the finance download is not inside the closed "For church leaders" chevron — it is a primary card again');
+  assert.ok(fin.cls.split(/\s+/).includes('quiet'), 'the finance download has the solid button');
+  assert.equal(linkTo(links, '/trinityone.apk').details.length, 0, 'the member app is no longer in plain view');
+  assert.ok(closedAll(linkTo(links, '/trinityone-steward.apk')), 'the steward download is no longer closed');
+  const leaders = (html.match(/<details class="fold leaders">([\s\S]*?)<\/details>\s*(?=<details|<\/main|<footer|<section|$)/) || [])[1] || html.slice(html.indexOf('fold leaders'));
+  assert.match(leaders, /TrinityOne Finance/, 'finance card missing from the leaders fold');
+  assert.match(leaders, /treasurer or finance helper/, 'the finance blurb is missing from its card');
+});
+
+test('with all three held, an iPhone page offers no finance TestFlight link', async () => {
+  const b = await boxHolding(['trinityone.apk', 'trinityone-steward.apk', 'trinityone-finance.apk']);
+  const r = await fetch(lastBase + '/install', { headers: { 'User-Agent': UA_IPHONE } });
+  const links = linkContainers(await r.text());
+  assert.ok(b.length > 0);
+  assert.ok(!links.some((l) => /testflight/i.test(l.href) && /financ/i.test(l.href)), 'a finance TestFlight link appeared');
+  assert.equal(links.filter((l) => /testflight\.apple\.com\/join/.test(l.href)).length, 2, 'iPhone TestFlight links are no longer member + steward only');
+});
+
+test('a box holding only the finance app shows it as a normal card, not tucked away', async () => {
+  const links = linkContainers(await boxHolding(['trinityone-finance.apk']));
+  const fin = linkTo(links, '/trinityone-finance.apk');
+  assert.equal(fin.details.length, 0, 'with no member app, the finance download was hidden and the page offered nothing');
+  assert.ok(!fin.cls.split(/\s+/).includes('quiet'));
+});
