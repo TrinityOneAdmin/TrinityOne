@@ -67,24 +67,30 @@ function screen(names, F, extra = {}, counter = null) {
   return { React, draw, mod, win };
 }
 const ev = (card, content, by = ANNA) => ({ id: 'e1', pubkey: by, created_at: 1, tags: [['t', 'g1'], ['p', CHURCH], ['card', '1', JSON.stringify(card)]], content });
-const menuShare = (tree) => {
-  const h = find(tree, n => n.props && typeof n.props.onContextMenu === 'function');
-  assert.equal(h.length, 1, 'no long-press/context-menu Share on the message');
-  h[0].props.onContextMenu({ preventDefault() {} });
+// Long-press-to-share was REMOVED (4ec93e91); onContextMenu is now only preventDefault. Sharing out of the app goes
+// through VerseShareSheet ("Share outside the app" -> ctx.shareText) and a verse card's tap -> ctx.openShare.
+const sheetShare = (payload, label) => {
+  const F = { myPubkey: ME, publishMessage: async () => ({}), sendDM: async () => ({}),
+    subscribeChurchGroups: (_c, cb) => { cb([]); return () => {}; }, subscribeChurchMembers: (_c, cb) => { cb([]); return () => {}; }, displayFor: () => ({ handle: 'x' }) };
+  const s = screen(['VerseShareSheet'], F, { BottomSheet: ({ open, children }) => (open ? children : null), IconBtn: () => null, lsGet: (_k, d) => d, lsSet: () => {} });
+  const shared = [];
+  const props = { payload, open: true, onClose() {}, ctx: { toast() {}, church: { npub: 'n' }, canDMPeer: () => true, shareText: (...a) => shared.push(a[0]), openShare() {} } };
+  s.draw(s.mod.VerseShareSheet, props);
+  const tree = s.draw(s.mod.VerseShareSheet, props);
+  const btn = find(tree, n => n.props && typeof n.props.onClick === 'function' && texts(n).join(' ').includes(label));
+  assert.ok(btn.length >= 1, 'the share sheet has no "' + label + '" control');
+  btn[btn.length - 1].props.onClick({ stopPropagation() {} });
+  return shared;
 };
 
 // ── M1 ────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('M1 POINT OF USE: the real message-menu Share of a received commentary card goes out with the FULL notice', () => {
+test('M1 POINT OF USE: the real share sheet Share outside the app for a commentary card goes out with the FULL notice', () => {
   const card = { type: 'commentary', ref: '2 John 1:1', source: 'Aquifer Open Study Notes', text: 'The elder.', credit: SHORT };
-  const body = '2 John 1:1 — Aquifer Open Study Notes\n\nThe elder.\n\n' + SHORT + '\n\nmy thoughts';
-  const s = screen(['Bubble', 'evtToMsg'], { myPubkey: ME, displayFor: () => ({ handle: 'Anna' }) });
-  const shared = [];
-  const tree = s.draw(s.mod.Bubble, { m: s.mod.evtToMsg(ev(card, body)), ctx: { church: { name: 'x' }, shareText: t => shared.push(t), openShare() {} }, summary: [], live: false });
-  menuShare(tree);
+  // the sheet is opened with the card's short credit AND the module's full licence, as the reader supplies them
+  const shared = sheetShare({ type: 'commentary', ref: card.ref, source: card.source, text: card.text, license: FULL, credit: SHORT }, 'Share outside the app');
   assert.equal(shared.length, 1);
   assert.ok(shared[0].includes(FULL), 'the outside share lacks the full notice: ' + shared[0]);
   assert.ok(!shared[0].includes(SHORT), 'the outside share still carries the short in-app credit');
-  assert.ok(!shared[0].includes('my thoughts'), 'the sender\'s thoughts left the app');
   assert.ok(shared[0].includes('The elder.'));
 });
 test('M1: an imported notice (not the short credit) is shared out unchanged', () => {
@@ -92,13 +98,19 @@ test('M1: an imported notice (not the short credit) is shared out unchanged', ()
   assert.equal(realRead.commentaryFullCredit(SHORT), FULL);
   assert.equal(realRead.commentaryFullCredit(realRead.commentaryInAppCredit('OSN', FULL, false)), FULL, 'the round trip short -> full is not the module notice');
 });
-test('M1: the real menu Share of a verse card carries the verse, not the thoughts', () => {
+test('M1: tapping a received verse card opens the share sheet with the verse, never the thoughts', () => {
   const VERSE = { type: 'verse', ref: 'John 3:16', text: 'For God so loved the world', version: 'BSB' };
   const s = screen(['Bubble', 'evtToMsg'], { myPubkey: ME, displayFor: () => ({ handle: 'Anna' }) });
-  const shared = [];
-  const tree = s.draw(s.mod.Bubble, { m: s.mod.evtToMsg(ev(VERSE, '“For God so loved the world” — John 3:16 · BSB\n\nprivate thoughts')), ctx: { church: {}, shareText: t => shared.push(t), openShare() {} }, summary: [], live: false });
-  menuShare(tree);
-  assert.deepEqual(shared, ['“For God so loved the world” — John 3:16 · BSB']);
+  const opened = [];
+  const tree = s.draw(s.mod.Bubble, { m: s.mod.evtToMsg(ev(VERSE, '\u201cFor God so loved the world\u201d \u2014 John 3:16 \u00b7 BSB\n\nprivate thoughts')), ctx: { church: {}, shareText() {}, openShare: p => opened.push(p) }, summary: [], live: false });
+  const card = find(tree, n => n.props && n.props['data-chat-card'] === 'verse');
+  assert.equal(card.length, 1, 'the verse card is not drawn');
+  card[0].props.onClick({ stopPropagation() {} });
+  assert.deepEqual(opened, [{ ref: 'John 3:16', text: 'For God so loved the world', version: 'BSB' }]);
+  // and the context menu on the row no longer shares anything (long-press-to-share was removed)
+  const cm = find(tree, n => n.props && typeof n.props.onContextMenu === 'function');
+  cm.forEach(n => n.props.onContextMenu({ preventDefault() {}, stopPropagation() {} }));
+  assert.equal(opened.length, 1, 'a context-menu/long-press shared something');
 });
 
 // ── M2 (DM) ───────────────────────────────────────────────────────────────────────────────────────────────────

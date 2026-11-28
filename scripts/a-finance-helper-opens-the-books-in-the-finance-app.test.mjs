@@ -108,7 +108,7 @@ test('a treasurer asks from the finance app, the owner approves with Finance pre
   // ── the finance app opens on the church, and shows the BOOK ──
   await h.waitFor(`window.Steward.actingChurch === ${JSON.stringify(OWNER.churchPub)}`, 90000, 'the finance app opening the church');
   try {
-    await h.waitFor(`!!document.querySelector('[data-finance-shell]') && !!document.querySelector('[data-fin-more]') && !/Waiting for the books to be shared/.test(document.body.innerText)`, 180000, 'the book (its tab strip), with the books key received');
+    await h.waitFor(`!!document.querySelector('[data-finance-shell]') && /in the bank/i.test(document.body.innerText) && !/Waiting for the books to be shared/.test(document.body.innerText)`, 180000, 'the book (the Summary, with its balances), with the books key received');
   } catch (e) {
     // WHERE THE BOOKS KEY STOPPED (audit F7: this failed once in a batch). Which side never moved: did the owner publish a
     // books-key envelope that names the treasurer, and does the treasurer's console hold a ring?
