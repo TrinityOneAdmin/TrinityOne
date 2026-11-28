@@ -442,6 +442,8 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
       </button>
       )}
       {open ? (
+        <React.Fragment>
+        <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
         <div style={popStyle}>
           {ids.filter(idn => idn.kind !== 'network' || window.NETWORKS_ENABLED === true).map(idn => {   /* NETWORKS SWITCH */
             const on = idn.pub === activePub;
@@ -470,6 +472,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
           <button onClick={() => { setOpen(false); onEditName(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}><Icon name="pen" size={13} color="var(--ink-3)" /> Rename {viewingNetwork ? 'network' : 'church'}</button>
           </React.Fragment> : null}
         </div>
+        </React.Fragment>
       ) : null}
     </div>
   );
@@ -3155,7 +3158,7 @@ async function buildInvitePdf({ name, url, svg, accent, logo }) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(60, 52, 44);
   [['1.', 'Open your phone camera and point it at the code (or type the link).'],
    ['2.', 'Tap Add to Home Screen / Install so it works offline.'],
-   ['3.', 'It opens already following ' + nm + '. Set your name so your church family recognises you — you can stay private if you need to.'],
+   ['3.', 'Open the app, tap Follow a church and search for ' + nm + '. Set your name so your church family recognises you — you can stay private if you need to.'],
    ['4.', 'When asked, write your 12-word recovery phrase in the boxes below.']].forEach(([n, s]) => {
     const l = doc.splitTextToSize(s, W - 2 * M - 18); doc.text(n, M, y); doc.text(l, M + 18, y); y += l.length * 13 + 4;
   });
@@ -3296,7 +3299,7 @@ window.SkConfirm = SkConfirm;
 // In-app invite poster. Replaces a window.open() print popup that TRAPPED the steward in the Capacitor
 // webview (chrome-less window, hardware back did nothing). This is a normal in-app overlay: X / Done /
 // backdrop close it, and the hardware back button closes it too (Capacitor App + popstate).
-function InvitePosterModal({ church, url, svg, onClose }) {
+function InvitePosterModal({ church, url, svg, joinUrl, onClose }) {
   React.useEffect(() => {
     try { history.pushState({ inviteposter: 1 }, ''); } catch (e) {}
     const onPop = () => onClose();
@@ -3322,13 +3325,14 @@ function InvitePosterModal({ church, url, svg, onClose }) {
   // desktop/web task, where window.print() works.
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const shareInvite = async () => {
-    const msg = 'Join ' + (church.name || 'our church') + ' on TrinityOne — a private, offline-first place to read and belong. Open this on your phone:\n' + url;
+    const shareUrl = joinUrl || url;
+    const msg = 'Join ' + (church.name || 'our church') + ' on TrinityOne — a private, offline-first place to read and belong. Open this on your phone:\n' + shareUrl;
     try {
       const Share = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
-      if (Share) { await Share.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url, dialogTitle: 'Share invite' }); return; }
-      if (navigator.share) { await navigator.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url }); return; }
+      if (Share) { await Share.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url: shareUrl, dialogTitle: 'Share invite' }); return; }
+      if (navigator.share) { await navigator.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url: shareUrl }); return; }
     } catch (e) {}
-    try { copyText(url); } catch (e) {}   // last resort: copy the link
+    try { copyText(shareUrl); } catch (e) {}   // last resort: copy the link
   };
   const [pdfBusy, setPdfBusy] = React.useState(false);
   const savePdf = async () => {
@@ -3378,7 +3382,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
         <ol style={{ margin: '18px 0 0', paddingLeft: 20, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
           <li>Open your phone camera and point it at the code (or type the link).</li>
           <li>Tap <b>Add to Home Screen / Install</b> so it works offline.</li>
-          <li>It opens already following <b>{church.name || 'your church'}</b>. Set your name so your church family recognises you — you can stay private if you need to.</li>
+          <li>Open the app, tap <b>Follow a church</b> and search for <b>{church.name || 'your church'}</b>. Set your name so your church family recognises you — you can stay private if you need to.</li>
           <li>When asked, write your <b>12-word recovery phrase</b> in the boxes below.</li>
         </ol>
         <div style={{ display: 'flex', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)' }}>
@@ -3623,7 +3627,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         </div>
         {savedLine('join')}
       </div>
-      {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}
+      {poster ? <InvitePosterModal church={church} url={install.url || url} svg={install.url ? installSvg : svg} joinUrl={url} onClose={() => setPoster(false)} /> : null}
     </div>
 
     {/* ── GETTING THE APP, kept apart from the joining code on purpose ──────────────────────────────────

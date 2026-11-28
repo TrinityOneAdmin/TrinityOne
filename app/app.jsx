@@ -1905,6 +1905,7 @@ function App() {
       try { if (key) localStorage.setItem(key, '1'); } catch (e) {}
     }
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
+  React.useEffect(() => { try { if (typeof dpBootNotifications === 'function') dpBootNotifications(); } catch (e) {} }, []);
   React.useEffect(() => { approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
   // Has the ACTIVE church let this person in? For the first-run tour's Community part only (audit M1). Two positive
   // answers, neither falsely positive: my key is on the admitted list (isAdmitted — the approved toast above relies
@@ -3150,8 +3151,8 @@ function App() {
             <PeopleScreen open={people && !desktop} onClose={() => setPeople(false)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
-              onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
-              onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); }} />
+              onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); if (profile) { setProfile(false); setTab('today'); } }}
+              onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); if (profile) { setProfile(false); setTab('today'); } }} />
 
             <Toast msg={toastMsg} />
             {/* A2: the member app's only "that didn't work" surface. Self-contained — it listens for

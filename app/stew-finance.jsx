@@ -3399,11 +3399,10 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
       </div>}
       {_tabStripLifted && !actionsOpen && <button onClick={() => setActionsOpen(true)} aria-label="Open actions" style={{
         position: 'fixed', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
-        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '13px 12px 13px 14px', minWidth: 44, borderRadius: '13px 0 0 13px',
-        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
+        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '14px 12px', minWidth: 44, borderRadius: '13px 0 0 13px',
+        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center',
       }}>
         <Icon name="more-horizontal" size={17} color="#fff" />
-        <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>ACTIONS</span>
       </button>}
       {_tabStripLifted && actionsOpen ? <>
         <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />

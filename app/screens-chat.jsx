@@ -1125,7 +1125,6 @@ function chatCardOutsideText(card) {
 // out of the app (the same rule as the k=verse bubble). A commentary card carries its credit in small type.
 function ChatShareCardView({ card, ctx }) {
   const [more, setMore] = useC(false);
-  const churchName = (ctx && ctx.church && typeof ctx.church.name === 'string') ? ctx.church.name : '';
   if (card.type === 'verse') {
     const open = (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (ctx && ctx.openShare) ctx.openShare({ ref: card.ref || '', text: card.text, version: card.version || '' }); };
     return (
@@ -1138,7 +1137,6 @@ function ChatShareCardView({ card, ctx }) {
             display: '-webkit-box', WebkitLineClamp: 14, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{card.text}</p>
           <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, letterSpacing: '.5px', textTransform: 'uppercase' }}>{card.ref || ''}{card.version ? ' · ' + card.version : ''}</div>
         </div>
-        {churchName ? <div style={{ padding: '7px 18px', fontFamily: 'var(--font-ui)', fontSize: 10.5, fontWeight: 700, letterSpacing: '.4px', background: 'rgba(0,0,0,.14)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</div> : null}
       </div>
     );
   }
