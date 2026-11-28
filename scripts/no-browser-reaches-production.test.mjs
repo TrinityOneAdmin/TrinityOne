@@ -37,6 +37,10 @@ const LAUNCHERS = execFileSync('git', ['ls-files', 'scripts'], { cwd: ROOT, enco
 
 // The rule is the VALUE of the actual flag — quoted or not, template or not — never a comment that mentions it.
 const ruleOf = (src) => (src.match(/--host-resolver-rules=[^\n]*/) || [''])[0];
+// A TOTAL blackhole: every host maps to NOTFOUND, so production (and everything else) fails to resolve. Stronger
+// than naming the hosts and sending them to the discard port. It must be the whole rule: `MAP * ~NOTFOUND` and
+// nothing else mapping elsewhere (an EXCLUDE clause or a further MAP would re-open a path).
+const totalBlackhole = (rule) => /^--host-resolver-rules=["'`]?MAP \* ~NOTFOUND["'`]/.test(rule.trim());
 const TARPIT_SENTENCE = 'PRODUCTION HOSTS RESOLVE TO A TARPIT THIS FILE SPAWNS: it accepts and never answers, so nothing is stored';
 
 test('there are browser launchers to check', () => {
@@ -53,6 +57,7 @@ test('every one of them blackholes the production relays', () => {
     // says the words: a comment above the launcher that explains the rule used to be what this read, and a
     // guarded file was then filed as unguarded (2026-09-22, the-church-creation-wait file).
     const rule = ruleOf(src);
+    if (totalBlackhole(rule)) continue;
     if (!/app\.trinityone\.church/.test(rule)) unguarded.push(f + ' (rule does not name app.trinityone.church)');
     else if (!/\*\.ts\.net/.test(rule)) unguarded.push(f + ' (rule does not cover the Tailscale funnel)');
   }
@@ -76,6 +81,7 @@ test('the rule points at a port nothing listens on — or at a tarpit the file i
     const src = readFileSync(join(DIR, f), 'utf8');
     const rule = ruleOf(src);
     if (!rule) continue;
+    if (totalBlackhole(rule)) continue;
     if (/127\.0\.0\.1:9\b/.test(rule)) continue;
     const declared = src.includes(TARPIT_SENTENCE) && /createServer\(/.test(src);
     assert.ok(declared,
