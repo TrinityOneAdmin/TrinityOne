@@ -491,6 +491,7 @@ function App() {
 
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
+  const [pendingPassage, setPendingPassage] = useA(null);   // { refs } a passage bookmark opened from the Library: the reader selects it on arrival, then clears this
   const [planRead, setPlanRead] = useA(null);   // { plan, day } while the reader was opened FROM a plan day; PlanReadBar shows only while the reader is still on that day's passage
   // On boot the reader opens where this member left off in the translation that loaded (resolveStartLoc,
   // above), else at the translation's default. Every later navigation — the reader's own controls, gotoRef
@@ -2479,6 +2480,10 @@ function App() {
     toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
     gotoRef: (book, chap, verse) => { setPlanRead(null); setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
+    // A PASSAGE BOOKMARK OPENED FROM THE LIBRARY: go to its first verse and leave the range for the reader to select
+    // (ReadScreen consumes ctx.pendingPassage on arrival, after its own arrival effect has cleared any selection).
+    selectPassageBookmark: (refs) => { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec((refs || [])[0]); if (!m) return; setPendingPassage({ refs }); setPlanRead(null); setLoc({ book: +m[1], chap: +m[2], verse: +m[3] }); setReadView('bible'); setTab('read'); },
+    pendingPassage, clearPendingPassage: () => setPendingPassage(null),
     addModule: () => Bible.pickFile(),
     // "bibles" scopes the name: a commentary or a dictionary may legitimately be called KJV too, and
     // this sheet only ever means the translation. Without it, removeModule resolved the name against

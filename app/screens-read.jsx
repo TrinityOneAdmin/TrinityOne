@@ -633,7 +633,7 @@ function CrossRefSheet({ loc, v, label, open, onClose, ctx }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: 700, color: 'var(--clay)', fontSize: 14 }}>{r.ref}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-              <button onClick={(e) => { e.stopPropagation(); ctx.openShareSheet({ ref: r.ref, text: r.text, version: ctx.version || '' }); }} aria-label={'Share ' + r.ref} style={{ width: 36, height: 36, margin: '-6px 0', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}><Icon name="share" size={15} /></button>
+              <button onClick={(e) => { e.stopPropagation(); ctx.openShareSheet({ ref: r.ref, text: r.text, version: 'KJV' }); }} aria-label={'Share ' + r.ref} style={{ width: 36, height: 36, margin: '-6px 0', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}><Icon name="share" size={15} /></button>
               <Icon name="chevR" size={16} color="var(--ink-3)" />
             </div>
           </div>
@@ -1654,6 +1654,27 @@ function ReadScreen({ ctx }) {
       setTimeout(go, 600);
     } else { sc.scrollTop = 0; }
   }, [loc.book, loc.chap, loc.verse, version]);
+  // SELECT A SAVED PASSAGE (a multi-verse bookmark): the verses of refs[0]'s chapter, with the action card open.
+  const applyPassageSel = (refs) => {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(refs[0]);
+    if (!m) return;
+    const chap = +m[2], book = +m[1];
+    const verseNums = refs
+      .map(r => { const rm = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return rm && +rm[1] === book && +rm[2] === chap ? +rm[3] : null; })
+      .filter(v => v != null);
+    setSel(verseNums);
+    setCarry([]);
+    setArrived(null);
+    setSheet('action');
+  };
+  // A passage bookmark opened from the Library (app.jsx ctx.selectPassageBookmark): consumed here, AFTER the arrival
+  // effect above (effects run in order), because that effect clears the selection on every location change.
+  useE(() => {
+    const p = ctx.pendingPassage;
+    if (!p || !p.refs) return;
+    applyPassageSel(p.refs);
+    if (ctx.clearPendingPassage) ctx.clearPendingPassage();
+  }, [ctx.pendingPassage]);
   // The verses a plan day / link arrived on. A range ("John 3:16-21") carries loc.verseEnd and lights all of it;
   // `arrived` is still the single first verse, and goes null on any tap, which clears the whole range.
   const inArrived = (v) => arrived != null && (String(arrived) === String(v)
@@ -2058,14 +2079,7 @@ function ReadScreen({ ctx }) {
         const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(refs[0]);
         if (!m) return;
         ctx.gotoRef(+m[1], +m[2], +m[3]);
-        const chap = +m[2], book = +m[1];
-        const verseNums = refs
-          .map(r => { const rm = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return rm && +rm[1] === book && +rm[2] === chap ? +rm[3] : null; })
-          .filter(v => v != null);
-        setSel(verseNums);
-        setCarry([]);
-        setArrived(null);
-        setSheet('action');
+        applyPassageSel(refs);
       }}} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />

@@ -2747,7 +2747,9 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
   const canPin = type === 'verse' && typeof payload.ref === 'string' && !!payload.ref && payload.ref.length <= 80 && typeof payload.text === 'string' && !!payload.text && !(typeof payload.version === 'string' && payload.version.length > 40) && !!ctx.pinVerse;
   const pinVal = canPin ? { ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' } : null;
   const mine = (canPin && FS && FS.myPubkey && FS.displayFor) ? FS.displayFor(FS.myPubkey).pinnedVerse : null;
-  const alreadyPinned = !!(pinVal && mine && mine.ref === pinVal.ref && mine.version === pinVal.version && mine.text === pinVal.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''));
+  // Dedup is BY REFERENCE (owner 2026-11-28): the same verse reaches this sheet labelled 'KJV' from the cross-reference
+  // sheet and 'BSB' etc. from the reader, with different wording, so version/text equality made it never match.
+  const alreadyPinned = !!(pinVal && mine && mine.ref === pinVal.ref);
   // A saved event carries what went on the wire: if it does not hold THIS pin, the save did not store it. `true` is the
   // engine's "nothing on the wire changed" (already identical), which is a stored pin.
   const pinStored = (ok) => {

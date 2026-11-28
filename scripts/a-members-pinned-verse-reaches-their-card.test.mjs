@@ -119,6 +119,21 @@ test('SHEET: a verse that is already pinned shows as pinned and does not save ag
   assert.deepEqual(s.toasts, []);
 });
 
+test('SHEET: the same verse reached from the cross-reference sheet (KJV wording) is already pinned when pinned from the reader (BSB)', async () => {
+  const fromReader = { ref: 'John 3:16', text: 'For God so loved the world, that He gave His one and only Son', version: 'BSB' };
+  const fromXref = { ref: 'John 3:16', text: 'For God so loved the world, that he gave his only begotten Son', version: 'KJV' };
+  const s = sheet(fromXref, { pinned: fromReader });
+  assert.equal(s.pinBtn.length, 1);
+  assert.match(words(s.pinBtn[0]).join(' '), /Pinned to your profile/, 'the same verse from the cross-ref sheet was offered for pinning again');
+  assert.equal(s.pinBtn[0].props.disabled, true, 'the already-pinned button is not disabled');
+  s.pinBtn[0].props.onClick();
+  await flush();
+  assert.deepEqual(s.pins, [], 'an already-pinned verse was saved a second time');
+  const other = sheet({ ...fromXref, ref: 'John 3:17' }, { pinned: fromReader });
+  assert.match(words(other.pinBtn[0]).join(' '), /Pin to my profile/, 'CONTROL: a DIFFERENT verse was treated as already pinned');
+  assert.notEqual(other.pinBtn[0].props.disabled, true);
+});
+
 // ── 2. the profile screen ──────────────────────────────────────────────────────────────────────────────────
 async function mountProfileSheet(identity) {
   const src = fnBody(IDENTITY, 'function ProfileSheet(', 'ProfileSheet');
