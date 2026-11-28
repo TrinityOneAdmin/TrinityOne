@@ -93,7 +93,7 @@ function liftCreateAccount(sendLog, { failJoin = false, failName = false } = {})
     return { ok: true };
   };
   return lift(BUNDLE, 'async createMemberAccount(name, opts) {', 'createMemberAccount',
-    { ...CRYPTO, _quietSend, actingChurch: '', pub: churchPub }, { method: true });
+    { ...CRYPTO, _monotonic: (t) => t, _quietSend, actingChurch: '', pub: churchPub }, { method: true });
 }
 
 test('createMemberAccount publishes join, kind-0 and a sealed name BOTH the church and the member can open', async () => {
@@ -253,7 +253,7 @@ test('a single name goes through the SAME path (no special case), and the batch 
 test('close-without-print withdraws the name FIRST and then the membership', async () => {
   const log = [];
   const tomb = lift(BUNDLE, 'async tombstoneMemberAccount(mnemonic) {', 'tombstoneMemberAccount',
-    { ...CRYPTO, _quietSend: async (e) => { log.push(e); return { ok: true }; }, actingChurch: '', pub: churchPub }, { method: true });
+    { ...CRYPTO, _monotonic: (t) => t, _quietSend: async (e) => { log.push(e); return { ok: true }; }, actingChurch: '', pub: churchPub }, { method: true });
   assert.equal(await tomb(MEMBER_WORDS), true, 'control row');
   assert.equal(log.length, 2);
   const dOf = (e) => ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';

@@ -19664,14 +19664,14 @@ window.Steward = {
     catch (e) { return { ok: false, attempted: false, name: nm, reason: 'the key words are not a valid phrase' }; }
     const ts = now();
     // the same three documents createChildAccount publishes (src/fellowship.src.js), minus the guardian request
-    const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, memberSk);
-    const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: '{}' }, memberSk);
+    const join = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }), memberSk);
+    const k0 = finalizeEvent(_monotonic({ kind: 0, created_at: ts, tags: [], content: '{}' }), memberSk);
     let nameDoc = null;
     try {
       const body = JSON.stringify({ name: nm });
       const c = nip44e(body, nip44ck(memberSk, cp));          // the church key's copy — a helper console cannot open it (its sk is its own; accepted, plan I7)
       const m = nip44e(body, nip44ck(memberSk, memberPub));   // the member's own recovery copy, same shape as everyone's
-      nameDoc = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c, m }) }, memberSk);
+      nameDoc = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c, m }) }), memberSk);
     } catch (e) {}
     // JOIN FIRST, AND AS A GATE: the relay refuses a name document from a pubkey it does not already know
     // is a member, so publishing the rest over a failed join guarantees refusals (createChildAccount's rule).
@@ -19778,8 +19778,8 @@ window.Steward = {
     if (!cp || !mnemonic) return false;
     let mSk = null; try { mSk = privateKeyFromSeedWords(mnemonic); } catch (e) { return false; }
     const ts = now();
-    const nameGone = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, mSk);
-    const memberGone = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }, mSk);
+    const nameGone = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }), mSk);
+    const memberGone = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }), mSk);
     const r1 = await _quietSend(nameGone);
     const r2 = await _quietSend(memberGone);
     return r1.ok && r2.ok;

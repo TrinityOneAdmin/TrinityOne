@@ -7399,15 +7399,15 @@ window.Fellowship = {
     // them once the roster picks them up), so this first copy is sealed to the CHURCH key — the same path a
     // member awaiting approval uses — and is re-sealed to the congregation key when one arrives.
     const childProfile = {};
-    const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+    const k0 = finalizeEvent(_monotonicF({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }), childSk);
     let childNameDoc = null;
     try {
       const body = JSON.stringify({ name });
       const ct = nip44e(body, nip44ck(childSk, cp));            // the church's copy, so a steward sees who this is
       const own = nip44e(body, nip44ck(childSk, childPub));     // the child's own recovery copy, same shape as everyone's
-      childNameDoc = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+      childNameDoc = finalizeEvent(_monotonicF({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c: ct, m: own }) }), childSk);
     } catch (e) {}
-    const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, childSk);
+    const join = finalizeEvent(_monotonicF({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }), childSk);
     // the parent's guardian-link REQUEST (signed by the parent) — the steward confirms it
     // NO NAMES IN THE REQUEST. This carried the child's name AND the parent's, in cleartext, in a document any
     // effective member of the church could read — a worse leak than the kind-0 it sat beside, and it survived
@@ -7422,8 +7422,9 @@ window.Fellowship = {
     // prefix so it is NOT a new document type), a ['p', parentpub] tag, content {parent, church} — and the request must carry a
     // ['p', churchpub] tag naming a registered church. A drift here is SILENT (the relay just ignores a bad ack), so
     // scripts/a-parent-minted-child-is-a-minor-on-a-real-relay.test.mjs publishes this function's own output to a real gateway.
+    // INTENTIONALLY not _monotonicF: the ack is embedded in req.content and never published as its own document, so it has no tie to lose.
     const ack = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:ack:' + cp], ['p', pub]], content: JSON.stringify({ parent: pub, church: cp }) }, childSk);
-    const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }, sk);
+    const req = finalizeEvent(_monotonicF({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }), sk);
     // PUBLISH FIRST, REVEAL SECOND. This used to console.warn each failure and return the twelve words
     // regardless. On a bad link a parent wrote them down, set up the child's phone, and there was no join
     // document, no sealed name and nothing for the steward — the row said "Waiting for steward to confirm"
