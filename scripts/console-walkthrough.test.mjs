@@ -19,6 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fnBody } from './test-slice.mjs';
 import { compileScreen, loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -251,6 +252,9 @@ function wizardLastStep({ hostname }) {
   const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
   const location = { hostname, host: hostname, href: 'http://' + hostname + '/steward.html' };
   const win = { Steward: { exportMnemonic: () => '', npub: 'npub1x', hasPinLock: () => true, needsPin: false }, addEventListener() {}, removeEventListener() {}, innerWidth: 900, localStorage };
+  // stewOnSuite() asks window.Steward.packagedOrigin() and FAILS CLOSED when it is missing, which hid "Back to the Suite".
+  // Supply the REAL one (vendor/steward.js _packagedOrigin, lifted over this rig's window + location) - never a bare true/false.
+  win.Steward.packagedOrigin = new Function('window', 'location', `return (${fnBody(read('vendor/steward.js'), 'function _packagedOrigin() {', '_packagedOrigin')});`)(win, location);
   const mod = loadScreen('app/stew-dashboard.jsx', ['StewSetupWizard'], {
     React, window: win, location, localStorage, document: { addEventListener() {}, removeEventListener() {} },
     navigator: { userAgent: '' }, setTimeout, clearTimeout, console, fetch: async () => ({ ok: false, json: async () => ({}) }),
