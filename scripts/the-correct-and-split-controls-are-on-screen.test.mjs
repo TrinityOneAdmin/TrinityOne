@@ -49,9 +49,9 @@ function setup() {
   return { fr, pub, mods, draw, feed, get tree() { return tree; } };
 }
 
-// A feed row is a flex div at padding '9px 0' with a top border; return {texts, hasCorrect} for each.
+// A feed row is a flex div at padding '12px 0' with a top border; return {texts, hasCorrect} for each.
 const feedRows = (tree) => nodes(tree)
-  .filter(n => n.type === 'div' && n.props && n.props.style && n.props.style.padding === '9px 0' && n.props.style.borderTop === '1px solid var(--line)')
+  .filter(n => n.type === 'div' && n.props && n.props.style && n.props.style.padding === '12px 0' && n.props.style.borderTop === '1px solid var(--line)')
   .map(row => ({
     text: texts(row).join(' '),
     hasCorrect: nodes(row).some(n => n.type === 'button' && (n.kids || []).some(k => k === 'Correct')),
@@ -77,9 +77,12 @@ test('"Correct" is on a NORMAL row and ABSENT on a reversed row, its reversal ro
   h.feed(FL.bookToDocs(bookWithAReversal()));
   const rows = feedRows(h.tree);
   const normal = rows.find(r => r.text.includes('keepme'));
-  const reversed = rows.find(r => r.text.includes('wrongone'));
+  // the reversal row's text ALSO carries the memo ("Reversal of #2: wrongone") and sorts first: exclude it, or this
+  // finds the reversal row twice and the reversed-row gate (!wasReversed) is never actually read
+  const reversed = rows.find(r => r.text.includes('wrongone') && !/Reversal of #/.test(r.text));
   const reversal = rows.find(r => /Reversal of #/.test(r.text));
   const transfer = rows.find(r => /Transfer:/.test(r.text));
+  assert.ok(reversed !== reversal, 're-anchor: the reversed row and the reversal row must be two different rows');
   assert.ok(normal && reversed && reversal && transfer, 're-anchor: expected a normal, a reversed, a reversal and a transfer row; got: ' + rows.map(r => r.text).join(' | '));
   assert.ok(normal.hasCorrect, 'the NORMAL row has no "Correct" control');
   assert.ok(!reversed.hasCorrect, 'A REVERSED ROW STILL OFFERS "Correct" — the gate !isReversal && !wasReversed is not applied');
@@ -181,6 +184,6 @@ test('an entry carrying attachmentRefs shows the receipt chip (the finItemToDoc 
   const chips = nodes(h.tree).filter(n => n.type === 'button' && n.props && n.props['aria-label'] === 'View receipt');
   assert.equal(chips.length, 1, 'expected exactly ONE receipt chip — the entry with attachmentRefs should show it and the one without should not; found ' + chips.length);
   // and it is on the row for the receipted entry, not the other one
-  const receiptRow = nodes(h.tree).find(n => n.type === 'div' && n.props && n.props.style && n.props.style.padding === '9px 0' && texts(n).join(' ').includes('gift with receipt') && nodes(n).some(x => x.type === 'button' && x.props && x.props['aria-label'] === 'View receipt'));
+  const receiptRow = nodes(h.tree).find(n => n.type === 'div' && n.props && n.props.style && n.props.style.padding === '12px 0' && texts(n).join(' ').includes('gift with receipt') && nodes(n).some(x => x.type === 'button' && x.props && x.props['aria-label'] === 'View receipt'));
   assert.ok(receiptRow, 'the 📎 receipt chip did not render on the row of the entry that carries attachmentRefs — the deserialize path dropped the refs');
 });

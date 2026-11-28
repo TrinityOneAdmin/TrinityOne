@@ -178,7 +178,15 @@ test('the Community list re-subscribes on reconnect', () => {
 });
 
 test('an open room re-subscribes on reconnect, without blinking itself empty', () => {
-  const room = stripComments(fnBody(CHAT, 'function ChatRoom('));
+  // NOT fnBody: ChatRoom contains JSX text with an apostrophe followed by braces on the same line (the empty-events
+  // line, "the group's next gathering ... </div> : null}"), which fnBody's quote walk reads as an open string and
+  // so never finds the end. ChatRoom is a top-level function: it ends at the first column-0 closing brace after it.
+  const roomAt = CHAT.indexOf('function ChatRoom(');
+  assert.notEqual(roomAt, -1, 'ChatRoom is missing - re-anchor this test');
+  assert.equal(CHAT.indexOf('function ChatRoom(', roomAt + 1), -1, 'ChatRoom anchor is not unique');
+  const roomEnd = CHAT.indexOf('\n}\n', roomAt);
+  assert.ok(roomEnd > roomAt + 20000, 'ChatRoom slice is suspiciously short (' + (roomEnd - roomAt) + ' chars) - it must reach the real end of the function');
+  const room = stripComments(CHAT.slice(roomAt, roomEnd + 2));
   const at = room.indexOf('window.Fellowship.subscribeGroup(group.id, add)');
   assert.notEqual(at, -1, 'the room subscription is gone — re-anchor this test');
   assert.match(room.slice(at), /\}, \[group, ctx\.connTick\]/,

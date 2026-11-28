@@ -39,6 +39,8 @@ const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'u
 const ME = 'ee'.repeat(32);        // the helper's OWN key — a church nowhere
 const CHURCH = 'cc'.repeat(32);    // the real church whose roster names ME
 const OWN_NAME_LS = 'trinityone.steward.ownname.';
+const FINBOOK_LS = (VENDOR.match(/\bvar FINBOOK_LS = "([^"]+)";/) || [])[1];
+if (!FINBOOK_LS) throw new Error('vendor/steward.js no longer declares FINBOOK_LS - _finBookDrop cannot be lifted');
 const SELFREG_KEY = 'trinityone.steward.selfreg';
 const ACTIVE_ID_KEY = 'trinityone.steward.active';
 
@@ -120,6 +122,9 @@ function build({ ownName = '', registered = false, stewarded = [], active = '', 
   stubs._ownChurchName = lift('function _ownChurchName() {', '_ownChurchName');
   stubs._ownKeyRegistered = lift('function _ownKeyRegistered() {', '_ownKeyRegistered');
   stubs._ownKeyBlank = lift('function _ownKeyBlank() {', '_ownKeyBlank');
+  // the eviction branches drop the removed church's books copy: the REAL function, over the fake localStorage above
+  stubs.FINBOOK_LS = FINBOOK_LS;
+  stubs._finBookDrop = lift('function _finBookDrop(cp) {', '_finBookDrop');
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const identities = method('identities() {', 'identities');
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');

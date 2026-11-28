@@ -112,7 +112,7 @@ test('every offline fallback is awaited, so none of them is dead code', () => {
   assert.notEqual(at, -1, 'the shell branch is gone from the service worker');
   // Strip comments first: the note explaining this fix quotes the broken chain verbatim, and matching it in
   // prose rather than in code is how a test starts failing against a correct fix.
-  const branch = sw.slice(at, at + 1400).split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  const branch = fnBody(sw, 'if (isShell)', 'the sw.js shell branch').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
   assert.doesNotMatch(branch, /c \|\| caches\.match\('\.\/index\.html'\) \|\| caches\.match/,
     'the fallback chain ors together promises — every term after the first is unreachable');
   const awaits = (branch.match(/await caches\.match\(/g) || []).length;
@@ -122,7 +122,7 @@ test('every offline fallback is awaited, so none of them is dead code', () => {
 test('a shell miss still renders something rather than a browser error page', () => {
   const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
   const at = sw.indexOf('if (isShell)');
-  const branch = sw.slice(at, at + 1400);
+  const branch = fnBody(sw, 'if (isShell)', 'the sw.js shell branch');
   assert.match(branch, /new Response\(/,
     'with nothing cached the handler resolves undefined, and the browser shows "site can’t be reached"');
   assert.match(branch, /offline/i, 'the last-resort page should say what happened in plain words');
