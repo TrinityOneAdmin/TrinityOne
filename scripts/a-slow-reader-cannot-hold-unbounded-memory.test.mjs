@@ -260,7 +260,8 @@ test('(iii) the charge is unsent bytes: it FALLS as a paused stream drains, CLOS
   assert.equal((await backlog(A)).heldBytes, 0, 'a CLOSEd stream kept its charge on an open socket');
   // A paused socket that simply goes away.
   const h = await pausedReader(A, 'H', 1);
-  assert.ok((await backlog(A)).heldBytes > 4 * MB, 'the vanishing socket was never charged');
+  // one sub is ~8 MB on the wire but the kernel send buffer absorbs ~3-4 MB of it on this box; > 2 MB (as h0 above) proves it was charged
+  assert.ok((await backlog(A)).heldBytes > 2 * MB, 'the vanishing socket was never charged');
   h.ws.terminate(); await sleep(800);
   s.ws.close(); x.ws.close(); await sleep(500);
   const end = await backlog(A);
