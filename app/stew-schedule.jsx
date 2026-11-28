@@ -181,6 +181,35 @@ function eventHistory(events) {
     images: distinct(list.map(e => e && e.image)),
   };
 }
+function SchAutoInput({ value, onChange, suggestions, placeholder, label, autoFocus, style }) {
+  const [open, setOpen] = React.useState(false);
+  const skipFirst = React.useRef(!!autoFocus);
+  const lc = value.toLowerCase();
+  const filtered = (suggestions || []).filter(s => s !== value && (!lc || s.toLowerCase().includes(lc)));
+  return (
+    <div style={{ position: 'relative' }}>
+      <input aria-label={label} value={value} autoFocus={autoFocus}
+        onChange={e => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => { if (skipFirst.current) skipFirst.current = false; else setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
+        placeholder={placeholder} style={style} />
+      {open && filtered.length ? (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+          background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10,
+          boxShadow: 'var(--shadow-lg)', maxHeight: 160, overflowY: 'auto', marginTop: 2 }}>
+          {filtered.slice(0, 8).map(s => (
+            <button key={s}
+              onMouseDown={e => { e.preventDefault(); onChange(s); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                border: 'none', background: 'none', cursor: 'pointer', fontSize: 13.5,
+                fontFamily: 'var(--font-ui)', color: 'var(--ink)' }}>{s}</button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SchNotSaved({ msg }) {
   if (!msg) return null;
   return (
@@ -1755,6 +1784,7 @@ function SchEventModal({ day, onClose }) {
   const ownedNets = React.useMemo(() => (window.NETWORKS_ENABLED === true && window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);   // NETWORKS SWITCH (app/stew-data.jsx)
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
+  const [noRsvp, setNoRsvp] = useSch(false);
   const [err, setErr] = useSch('');
   // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
   const [busy, setBusy] = useSch(false);
@@ -1776,8 +1806,8 @@ function SchEventModal({ day, onClose }) {
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = isSeries
-      ? [await Promise.resolve(window.Steward.publishEvent({ title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid, recur: repeat, day: new Date(date + 'T12:00:00').getDay(), ...(repeat === 'monthly' ? { nth } : {}) }, asPub))]
-      : await Promise.all(planned.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid }, asPub)));
+      ? [await Promise.resolve(window.Steward.publishEvent({ title: title.trim(), date, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid, recur: repeat, day: new Date(date + 'T12:00:00').getDay(), ...(repeat === 'monthly' ? { nth } : {}), noRsvp }, asPub))]
+      : await Promise.all(planned.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid, noRsvp }, asPub)));
     // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted.
     // A church event only: a network-published event has no share: doc.
     // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
@@ -1826,8 +1856,7 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" list="sch-event-names" style={schFld} />
-      <datalist id="sch-event-names">{history.names.map(n => <option key={n} value={n} />)}</datalist>
+      <SchAutoInput label="Title" value={title} onChange={setTitle} autoFocus suggestions={history.names} placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
@@ -1840,8 +1869,7 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" list="sch-event-wheres" style={schFld} />
-      <datalist id="sch-event-wheres">{history.wheres.map(w => <option key={w} value={w} />)}</datalist>
+      <SchAutoInput label="Where" value={where} onChange={setWhere} suggestions={history.wheres} placeholder="e.g. Prayer chapel" style={schFld} />
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
@@ -1866,6 +1894,13 @@ function SchEventModal({ day, onClose }) {
           optional fields to reach the one control that decides whether the event becomes public. "Belongs
           to" is its neighbour because that answer is what decides which of the two ticks is shown at all. */}
       {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
+      {!asNetwork ? <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: noRsvp ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+        <input type="checkbox" aria-label="No RSVP" checked={!!noRsvp} onChange={ev => setNoRsvp(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>No RSVP</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members see the event but can't respond.</div>
+        </div>
+      </label> : null}
       <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} history={history.images} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
@@ -2013,7 +2048,7 @@ function DashCalendar() {
         <div className="no-scrollbar" style={{ flex: narrow ? 'none' : 1, minHeight: 0, overflow: narrow ? 'visible' : 'auto', display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: narrow ? 'minmax(52px, auto)' : 'minmax(74px, 1fr)', gap: 5 }}>
           {cells.map((d, i) => {
             if (!d) return <div key={i} />;
-            const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
+            const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today); const isPast = key < schKey(today);
             const has = it.services.length || it.events.length;
             return (
               <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day"
@@ -2021,6 +2056,7 @@ function DashCalendar() {
                 onDragLeave={() => { if (dragOverKey === key) setDragOverKey(null); }}
                 onDrop={ev => { ev.preventDefault(); onDropDay(key); }}
                 style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
+                opacity: isPast ? 0.4 : 1,
                 border: dragOverKey === key ? '2px dashed var(--clay)' : pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: dragOverKey === key ? 'color-mix(in oklab, var(--clay) 11%, var(--surface))' : isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} draggable
@@ -2072,6 +2108,7 @@ function DashCalendar() {
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
                   {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
                   {(() => {
+                    if (e.noRsvp) return <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 7 }}>RSVP off</div>;
                     const rs = rsvpSummary(e.id); const total = rs.going.length + rs.maybe.length + rs.no.length;
                     if (!total) return <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 7 }}>No RSVPs yet</div>;
                     return (
@@ -2160,6 +2197,7 @@ function SchEventEdit({ event, onClose }) {
   const [imgPub, setImgPub] = React.useState(e.imgPub || '');
   const [imgPos, setImgPos] = React.useState(e.imgPos || null);
   const [imgZoom, setImgZoom] = React.useState(typeof e.imgZoom === 'number' ? e.imgZoom : 1);
+  const [noRsvp, setNoRsvp] = React.useState(!!e.noRsvp);
   // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
@@ -2188,7 +2226,7 @@ function SchEventEdit({ event, onClose }) {
     try {
       r = await Promise.resolve(window.Steward.publishEvent({
         id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
-        accent: e.accent || '', image, imgPub, imgPos, imgZoom, groupId: e.groupId || '',
+        accent: e.accent || '', image, imgPub, imgPos, imgZoom, groupId: e.groupId || '', noRsvp,
         // CARRY THE PER-OCCURRENCE EXCEPTIONS THROUGH (items 2+4): a plain edit must not wipe the weeks a steward
         // has moved or skipped. Only a series has them; a one-off never does. (CLAUDE.md rule 2 round-trip.)
         ...(series ? { recur, day, nth, exceptions: e.exceptions || {} } : {}),
@@ -2249,6 +2287,13 @@ function SchEventEdit({ event, onClose }) {
           dialog has no "Belongs to" — the scope is fixed once an event exists — so the tick follows Where,
           which is the last field that says what the event IS. */}
       {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: noRsvp ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+        <input type="checkbox" aria-label="No RSVP" checked={!!noRsvp} onChange={ev => setNoRsvp(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>No RSVP</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members see the event but can't respond.</div>
+        </div>
+      </label>
       <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
@@ -2527,10 +2572,10 @@ function SchEventDetail({ event, onClose }) {
             </div>
           </div>
           {e.blurb ? <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 0' }}>{e.blurb}</p> : null}
-          <div style={{ marginTop: 16, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
+          {e.noRsvp ? <div style={{ marginTop: 16, borderTop: '1px solid var(--line-2)', paddingTop: 12, fontSize: 13, color: 'var(--ink-3)' }}>RSVP is off for this event.</div> : <div style={{ marginTop: 16, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Who’s coming</div>
             {total ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 9 }}>{chip('going', 'going', 'var(--sage)')}{chip('maybe', 'maybe', '#8a6717')}{chip('no', 'can’t make it', 'var(--ink-3)')}</div> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
-          </div>
+          </div>}
         </div>
         {/* ONE-WEEK BREAK, for a repeating meeting only: skips THIS occurrence (item 4), not the series. */}
         {e.recur ? <div style={{ padding: '12px 22px 0', display: 'flex' }}>

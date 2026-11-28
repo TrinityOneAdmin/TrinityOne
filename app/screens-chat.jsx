@@ -49,26 +49,41 @@ function myAvatar(id) {
   return { kind: 'monogram', color: (id && id.color) || '#5E8C6A' };
 }
 function avOf(d) { return d.av || { kind: 'monogram', color: d.color || '#5E8C6A' }; }
+// THE TAP THAT OPENS A MEMBER'S CARD: a function only for another member's real pubkey (never your own, never a
+// blank), and only when the app supplied ctx.openMember. Undefined means the avatar is NOT a tap target.
+function memberTapFor(ctx, pk, opts) {
+  const me = window.Fellowship && window.Fellowship.myPubkey;
+  return (typeof pk === 'string' && pk && pk !== me && ctx && typeof ctx.openMember === 'function') ? (opts ? () => ctx.openMember(pk, opts) : () => ctx.openMember(pk)) : undefined;
+}
 
 // avatar = profile picture if set, else a colored circle with the name's initial
-function Avatar({ handle, color, size = 38, src }) {
+function Avatar({ handle, color, size = 38, src, onTap }) {
   const [err, setErr] = useC(false);
   // SECURITY-AUDIT-2026-07-06 accent-mopup: handle/color/src come from an untrusted member profile.
   // src → data: image only (no remote beacon); color → hex/var() only (no url() smuggling into the gradient).
   const pic = safeImgUrl(src), col = safeCssColor(color);
+  let node;
   if (pic && !err) {
-    return <img src={pic} alt="" onError={() => setErr(true)}
+    node = <img src={pic} alt="" onError={() => setErr(true)}
       style={{ width: size, height: size, borderRadius: 999, objectFit: 'cover', flexShrink: 0 }} />;
+  } else {
+    const word = (handle || 'Anonymous').split(' ').slice(-1)[0];
+    node = (
+      <div style={{
+        width: size, height: size, borderRadius: 999, flexShrink: 0,
+        background: `linear-gradient(150deg, ${col}, color-mix(in oklab, ${col} 60%, #16120c))`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: size * 0.4,
+      }}>{(word[0] || '?').toUpperCase()}</div>
+    );
   }
-  const word = (handle || 'Anonymous').split(' ').slice(-1)[0];
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: 999, flexShrink: 0,
-      background: `linear-gradient(150deg, ${col}, color-mix(in oklab, ${col} 60%, #16120c))`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: size * 0.4,
-    }}>{(word[0] || '?').toUpperCase()}</div>
-  );
+  if (typeof onTap !== 'function') return node;
+  // A TAPPABLE avatar (opens the member card), same contract as UserAvatar's onTap: stops the click so a row
+  // behind it does not also fire. Absent onTap, the output is exactly the disc it always was.
+  const go = (e) => { if (e && e.stopPropagation) e.stopPropagation(); onTap(e); };
+  return <span role="button" tabIndex={0} aria-label={'View ' + (handle || 'member') + '\'s profile'} onClick={go}
+    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); go(e); } }}
+    style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, borderRadius: 999, cursor: 'pointer' }}>{node}</span>;
 }
 
 // ── Identity manager sheet (anonymous Nostr key: recovery / restore / steward invite) ──
@@ -740,7 +755,7 @@ function ChatScreen({ ctx }) {
             return (
               <div key={i} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} onClick={() => openGroup(group)} style={{ padding: 13, borderRadius: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                  <UserAvatar av={avOf(d)} name={d.handle} size={20} />
+                  <UserAvatar av={avOf(d)} name={d.handle} size={20} onTap={memberTapFor(ctx, e.pubkey)} />
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{me ? 'You' : d.handle}</span>
                   <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>· {group.name}</span>
                 </div>
@@ -779,14 +794,18 @@ function ChatScreen({ ctx }) {
               const d = (F && F.displayFor) ? F.displayFor(c.peer) : { handle: '' };
               const nm = (d && (d.name || d.handle)) || 'Someone in your church';
               return (
-                <button key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', cursor: 'pointer', padding: 13, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)' }}>
-                  <UserAvatar av={d && d.av} name={nm} size={38} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div>
-                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preview || 'Private message'}</div>
-                  </div>
-                  {c.lastTs ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{relTime(c.lastTs)}</span> : null}
-                </button>
+                <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 0, width: '100%', textAlign: 'left', padding: 0, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                  {/* the avatar is a SIBLING of the row's button (a button may not contain another control). The padding the
+                      old single button had moved onto the two halves, so the row looks and measures the same */}
+                  <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 13 }}><UserAvatar av={d && d.av} name={nm} size={38} onTap={memberTapFor(ctx, c.peer)} /></div>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.openDM(c.peer); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px 13px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'inherit' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.preview || 'Private message'}</div>
+                    </div>
+                    {c.lastTs ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', flexShrink: 0 }}>{relTime(c.lastTs)}</span> : null}
+                  </button>
+                </div>
               );
             })}
             {dmThreads.length > 3 ? <button onClick={() => ctx.openDMInbox()} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>All messages ({dmThreads.length})</button> : null}
@@ -860,18 +879,54 @@ function ChatScreen({ ctx }) {
 // single source: a second literal list is how the two drifted apart in the first place.
 const REACT_EMOJIS = ['👍', '❤️', '😂', '🙏', '🔥', '🙌'];
 
+// who-reacted popover: shows up to 20 names for one emoji, positioned above the pill
+function ReactionWho({ emoji, reactors, onClose, me }) {
+  if (!reactors) return null;
+  // resolve pubkeys -> display names for everyone who reacted with this emoji
+  const names = [];
+  for (const pk in reactors) {
+    if (!reactors[pk] || reactors[pk].content !== emoji || reactors[pk].content === '-') continue;
+    const d = (window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(pk) : null;
+    names.push(d && d.handle ? d.handle : (pk || '').slice(0, 8) + '…');
+  }
+  if (!names.length) return null;
+  const shown = names.slice(0, 20);
+  return (
+    <div onClick={e => { e.stopPropagation(); onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 10, background: 'transparent' }}>
+      <div data-reaction-who="1" onClick={e => e.stopPropagation()} style={{
+        position: 'absolute', bottom: 36, [me ? 'right' : 'left']: 0, zIndex: 11, minWidth: 120, maxWidth: 220,
+        padding: '8px 12px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)',
+        boxShadow: 'var(--shadow-lg)', fontSize: 13, lineHeight: 1.6, color: 'var(--ink)', userSelect: 'none', WebkitTouchCallout: 'none' }}>
+        <div style={{ fontWeight: 700, marginBottom: 2 }}>{emoji}</div>
+        {shown.map((n, i) => <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>)}
+        {names.length > 20 ? <div style={{ color: 'var(--ink-3)', fontSize: 11.5, marginTop: 2 }}>+{names.length - 20} more</div> : null}
+      </div>
+    </div>
+  );
+}
+
 // reaction pills + a small react button (with emoji picker), shown under each bubble
-function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) {
+function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me, reactors }) {
+  const [whoEmoji, setWhoEmoji] = useC(null);   // which emoji's who-reacted popover is showing
+  const lpRef = useCR(null);                     // long-press timer ref
   if (!live) return null;
+  const startLP = (emoji) => { clearTimeout(lpRef.current); lpRef.current = setTimeout(() => setWhoEmoji(emoji), 300); };
+  const cancelLP = () => clearTimeout(lpRef.current);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap', justifyContent: me ? 'flex-end' : 'flex-start' }}>
       {summary.map(r => (
-        <button key={r.emoji} onClick={() => onReact(r.emoji)} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
-          border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)',
-          background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
-          <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
-        </button>
+        <div key={r.emoji} style={{ position: 'relative' }}>
+          <button onClick={() => { cancelLP(); onReact(r.emoji); }}
+            onPointerDown={() => startLP(r.emoji)} onPointerUp={cancelLP} onPointerLeave={cancelLP}
+            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
+            style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, cursor: 'pointer',
+            border: r.mine ? '1px solid var(--clay)' : '1px solid var(--line)', userSelect: 'none', WebkitTouchCallout: 'none',
+            background: r.mine ? 'var(--clay-soft)' : 'var(--surface-2)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>
+            <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
+          </button>
+          {whoEmoji === r.emoji ? <ReactionWho emoji={r.emoji} reactors={reactors} onClose={() => setWhoEmoji(null)} me={me} /> : null}
+        </div>
       ))}
       <div data-rx-pop="1" style={{ position: 'relative' }}>
         <button onClick={onOpenPicker} title="React" style={{
@@ -1070,7 +1125,6 @@ function chatCardOutsideText(card) {
 // out of the app (the same rule as the k=verse bubble). A commentary card carries its credit in small type.
 function ChatShareCardView({ card, ctx }) {
   const [more, setMore] = useC(false);
-  const churchName = (ctx && ctx.church && typeof ctx.church.name === 'string') ? ctx.church.name : '';
   if (card.type === 'verse') {
     const open = (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (ctx && ctx.openShare) ctx.openShare({ ref: card.ref || '', text: card.text, version: card.version || '' }); };
     return (
@@ -1083,7 +1137,6 @@ function ChatShareCardView({ card, ctx }) {
             display: '-webkit-box', WebkitLineClamp: 14, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{card.text}</p>
           <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, letterSpacing: '.5px', textTransform: 'uppercase' }}>{card.ref || ''}{card.version ? ' · ' + card.version : ''}</div>
         </div>
-        {churchName ? <div style={{ padding: '7px 18px', fontFamily: 'var(--font-ui)', fontSize: 10.5, fontWeight: 700, letterSpacing: '.4px', background: 'rgba(0,0,0,.14)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</div> : null}
       </div>
     );
   }
@@ -1111,12 +1164,12 @@ function ChatCardThoughts({ text, me }) {
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash, reactors }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
   const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash };
-  const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
+  const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} reactors={reactors} />;
 
   if (m.kind === 'verse') {
     return (
@@ -1313,38 +1366,34 @@ function shareTextOf(m) {
 // there; it runs in a real browser and on device, which is where the clamp must be checked.
 function clampMenuIntoView(el) {
   if (!el || typeof el.getBoundingClientRect !== 'function' || typeof window === 'undefined') return;
-  el.style.transform = '';                                                   // measure the un-nudged CSS position
+  el.style.transform = '';
   var docEl = window.document && window.document.documentElement;
   var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
   var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
   if (!vw || !vh) return;
+  var clipTop = 0, clipBottom = vh;
+  var sc = el.parentElement;
+  while (sc && sc !== document.body) {
+    var ov = getComputedStyle(sc).overflowY;
+    if (ov === 'auto' || ov === 'scroll') { var scr = sc.getBoundingClientRect(); clipTop = Math.max(clipTop, scr.top); clipBottom = Math.min(clipBottom, scr.bottom); break; }
+    sc = sc.parentElement;
+  }
   var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
-  if (r.right > vw - pad) dx = (vw - pad) - r.right;                         // far edge past the right gutter → slide left
-  if (r.left + dx < pad) dx = pad - r.left;                                  // …but never past the left gutter
-  if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;                       // card runs off the bottom → slide up
-  if (r.top + dy < pad) dy = pad - r.top;                                    // …but never above the top edge
+  if (r.right > vw - pad) dx = (vw - pad) - r.right;
+  if (r.left + dx < pad) dx = pad - r.left;
+  if (r.bottom > clipBottom - pad) dy = (clipBottom - pad) - r.bottom;
+  if (r.top + dy < clipTop + pad) dy = (clipTop + pad) - r.top;
   if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
 }
 function Row({ me, m, children, ctx, mod }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
   const canDM = !!(m.pubkey && ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));   // safeguarding gate
-  // press-and-hold a message to share it (OS share sheet). Touch-move cancels so scrolling is unaffected.
-  const lp = React.useRef(null);
-  // OUT OF THE APP: a bound commentary card goes with its FULL notice (chatCardOutsideText), never the short credit
-  const doShare = () => {
-    const sc = m && m.kind === 'card' ? chatShareCard(m.card) : null;
-    const t = (sc && chatCardThoughts(sc, m.text) !== null) ? chatCardOutsideText(sc) : shareTextOf(m);
-    if (t && ctx && ctx.shareText) ctx.shareText(t);
-  };
-  const startLP = () => { clearTimeout(lp.current); lp.current = setTimeout(doShare, 480); };
-  const cancelLP = () => { clearTimeout(lp.current); lp.current = null; };
   const M = mod || {};
   // SWIPE TO REPLY. Drag a bubble to the right and let go. It sits on Row rather than on each bubble kind so
   // a verse, a poll and an ordinary message all behave the same — the alternative was four copies drifting
   // apart, which is how this app ended up with two different reaction sets.
   //
-  // It cooperates with the press-and-hold share that was already here: any movement cancels the long-press
-  // timer (that was true before), and a mostly-VERTICAL drag resets the offset and gets out of the way so the
+  // A mostly-VERTICAL drag resets the offset and gets out of the way so the
   // message list still scrolls normally. Only a clearly horizontal drag arms the reply.
   // ⚠ THE OFFSET LIVES IN THE REF, AND `dx` STATE EXISTS ONLY TO REDRAW. The first version read `dx` state in
   // onTE, and `dx` there is whatever the LAST COMPLETED RENDER captured — not what the finger last did. React
@@ -1356,9 +1405,8 @@ function Row({ me, m, children, ctx, mod }) {
   // scripts/a-direct-message-can-be-answered.test.mjs. Read `swipe.current.dx`, never `dx`.
   // The swipe itself now lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with the
   // member DM and the console DM. Everything the notes above say still holds; it is just implemented there.
-  // The press-and-hold share timer rides along through the kit's start/move/end hooks.
   const canReply = typeof M.onReply === 'function';
-  const sw = TrinityReplyKit.useSwipe(M.onReply, { enabled: canReply, onStart: startLP, onMove: cancelLP, onEnd: cancelLP });
+  const sw = TrinityReplyKit.useSwipe(M.onReply, { enabled: canReply });
   return (
     // touch-action: pan-y lets the message list keep scrolling and tells the compositor NOT to treat a
     // HORIZONTAL drag as a pan it owns. Without it the browser may claim the gesture for an ancestor scroller
@@ -1368,7 +1416,7 @@ function Row({ me, m, children, ctx, mod }) {
     // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
     // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
     // picker opens upward and needs no lift.
-    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
         position: 'relative', zIndex: M.menuOpen ? 30 : undefined,
         // brief gold flash when the pinned banner scrolls here (M.flash, self-clearing in the chat room)
@@ -1377,7 +1425,7 @@ function Row({ me, m, children, ctx, mod }) {
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
-        <UserAvatar av={avOf(d)} name={d.handle} size={22} />
+        <UserAvatar av={avOf(d)} name={d.handle} size={22} onTap={m.pubkey && !(window.Fellowship && m.pubkey === window.Fellowship.myPubkey) && ctx && ctx.openMember ? () => ctx.openMember(m.pubkey) : undefined} />
         {/* A PARISH LETTER: the church's name on the letterhead, the person's underneath. Round 6 had a vicar's
             welcome to her whole congregation arrive attributed to "Member", which a member called a
             noticeboard "signed by nobody". `signedBy` is only ever set from the church-signed steward roster,
@@ -1626,13 +1674,13 @@ function GroupEventComposer({ group, ctx, onClose }) {
         <div style={lbl}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer breakfast" style={fld} />
         <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ flex: 1 }}><div style={lbl}>Date</div><input type="date" value={date} onChange={e => setDate(e.target.value)} style={fld} /></div>
-          <div style={{ width: 130 }}><div style={lbl}>Time</div><input type="time" value={time} onChange={e => setTime(e.target.value)} style={fld} /></div>
+          <div style={{ flex: 1 }}><div style={lbl}>Date</div><input type="date" aria-label="Date" value={date} onChange={e => setDate(e.target.value)} style={fld} /></div>
+          <div style={{ width: 130 }}><div style={lbl}>Time</div><input type="time" aria-label="Time" value={time} onChange={e => setTime(e.target.value)} style={fld} /></div>
         </div>
         <div style={lbl}>Where</div>
-        <input value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
+        <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Church café" style={fld} />
         <div style={lbl}>Note (optional)</div>
-        <textarea value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
+        <textarea aria-label="Note" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical' }} />
         {err ? <div role="alert" style={{ marginTop: 16, padding: '11px 13px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>{err}</div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
@@ -1768,6 +1816,13 @@ function GroupInfo({ group, open, onClose, ctx }) {
   const chipStyle = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left' };
 
+  // UPCOMING EVENTS for this group — shown between indicators and members (2026-11-26).
+  // Same filter as the chat card but capped at 5 and uses the defensive todayISO pattern.
+  const giTodayIso = (typeof todayISO === 'function') ? todayISO() : '';
+  const giEvents = (ctx.churchEvents || [])
+    .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= giTodayIso)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 5);
+
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ padding: '10px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
@@ -1794,6 +1849,40 @@ function GroupInfo({ group, open, onClose, ctx }) {
             </div>
           ) : null}
         </div>
+
+        {/* UPCOMING EVENTS — the group's future events, same data as the chat card but shown here so a member
+            opening GroupInfo can see what is coming up without scrolling through the chat. Omitted entirely
+            when the group has no upcoming events (the "Nothing planned" message belongs in the chat card, not
+            here — this is an info panel, not a prompt to create). Tapping an event opens the same EventDetail
+            sheet the chat card opens. */}
+        {giEvents.length ? (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
+              <Icon name="calendar" size={14} color="var(--clay)" /> UPCOMING EVENTS
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {giEvents.map(e => {
+                const d = new Date(e.date + 'T00:00');
+                const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] || '';
+                const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()] || '';
+                return (
+                  <button key={e.id} onClick={() => ctx.openEvent ? ctx.openEvent(e) : (ctx.openServing && ctx.openServing())} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 8, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                    <div style={{ width: 42, flexShrink: 0, textAlign: 'center', borderRadius: 10, padding: '5px 0', background: `color-mix(in oklab, ${safeCssColor(e.accent)} 13%, var(--surface))` }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', color: safeCssColor(e.accent) }}>{dow}</div>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, lineHeight: 1 }}>{d.getDate()}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase' }}>{mon}</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[e.time, e.where].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <Icon name="chevR" size={16} color="var(--ink-3)" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {/* MEMBERS — only for a room with a real roster. An open room keeps silent absence: no count, no list.
             Owner 2026-10-19: the default screen is clean (identity + indicators + a "N members" button); the
@@ -1822,14 +1911,17 @@ function GroupInfo({ group, open, onClose, ctx }) {
                       {!roster.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one to show here.</div> : null}
                       {roster.length && !shown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
                       {shown.map(r => (
-                        <button key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={rowStyle}>
-                          <Avatar handle={r.name} color={r.color} src={r.picture} size={40} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                            {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
-                          </div>
-                          <Icon name="chevR" size={16} color="var(--ink-3)" />
-                        </button>
+                        <div key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={{ ...rowStyle, padding: 0, gap: 0, cursor: 'pointer' }}>
+                          {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
+                          <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 12 }}><Avatar handle={r.name} color={r.color} src={r.picture} size={40} onTap={memberTapFor(ctx, r.pubkey)} /></div>
+                          <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setSelected(r.pubkey); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px 10px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                              {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
+                            </div>
+                            <Icon name="chevR" size={16} color="var(--ink-3)" />
+                          </button>
+                        </div>
                       ))}
                     </div>
                     {/* READ-ONLY MEMBER CARD (phase 1). No actions — message / leader controls are phase 2. */}
@@ -1840,7 +1932,7 @@ function GroupInfo({ group, open, onClose, ctx }) {
                           <IconBtn name="x" onClick={() => setSelected(null)} title="Close" />
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-                          <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} />
+                          <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} onTap={memberTapFor(ctx, selectedRow.pubkey)} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{selectedRow.name}</div>
                             {selectedRow.nip05 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>@{String(selectedRow.nip05).split('@')[0]}</div> : null}
@@ -2230,7 +2322,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       </div>
     ) : null}
     <Bubble key={m.id} m={m} ctx={ctx}
-    summary={summaryFor(m.id)} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
+    summary={summaryFor(m.id)} reactors={reactions[m.id]} onReact={(emoji) => toggleReact(m.id, m.pubkey, emoji)}
     pickerOpen={pickerFor === m.id} onOpenPicker={() => setPickerFor(pickerFor === m.id ? null : m.id)}
     live={!!window.Fellowship}
     canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
@@ -2349,16 +2441,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           ))}
         </div>
       ) : null}
-      <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* THE STATE, AND NOTHING ELSE. This was a full sentence — "Church room · not end-to-end encrypted, so
-            the relay can read messages here" — shown over every room, every time. The owner removed it
-            (2026-08-13): a standing warning on a screen you open twenty times a day is not read, it is just
-            noise, and it made the room look like a place to be careful rather than a place to talk.
-            The pill still states the fact, which is the part that must not go: a room the relay can read says
-            "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
-            someone asking the question can find it, instead of being shouted at everyone who is not.
-            no-overclaims.test.mjs follows it there. */}
-        {calFeatOn && (groupEvents.length || canAddEvent) ? (
+      {/* UPCOMING EVENTS CARD — moved OUT of the scroll container (2026-11-26) so it stays visible at the top
+          of the room instead of scrolling away with messages. It sits in the same non-scrolling band as the
+          encryption pill, the pinned banner and the pod filter. The GroupEventComposer overlay (above, line ~2335)
+          is already outside the scroll container and stays where it is. */}
+      {calFeatOn && (groupEvents.length || canAddEvent) ? (
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
               <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
@@ -2369,7 +2457,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   costs someone the whole form before they find out. */}
               {canAddEvent ? <button onClick={() => setComposeEvt(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'var(--surface)', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}><Icon name="plus" size={12} color="var(--clay)" /> EVENT</button> : null}
             </div>
-            {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group’s next gathering so everyone sees it.</div> : null}
+            {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group's next gathering so everyone sees it.</div> : null}
             {!evShown ? <button onClick={() => setEvOpen(true)} data-ev-summary style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{evSummary}</button> : null}
             {evShown ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {groupEvents.map(e => {
@@ -2394,7 +2482,17 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
               })}
             </div> : null}
           </div>
-        ) : null}
+        </div>
+      ) : null}
+      <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* THE STATE, AND NOTHING ELSE. This was a full sentence — "Church room · not end-to-end encrypted, so
+            the relay can read messages here" — shown over every room, every time. The owner removed it
+            (2026-08-13): a standing warning on a screen you open twenty times a day is not read, it is just
+            noise, and it made the room look like a place to be careful rather than a place to talk.
+            The pill still states the fact, which is the part that must not go: a room the relay can read says
+            "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
+            someone asking the question can find it, instead of being shouted at everyone who is not.
+            no-overclaims.test.mjs follows it there. */}
         {/* AN EMPTY ROOM MUST EXPLAIN ITSELF. This rendered {bubbles} alone, so a room with no messages was a
             blank area between the header and the message box — and a member cannot tell "nobody has posted"
             from "it is broken" or "it has not loaded". The group list one screen earlier already says "No
@@ -2639,6 +2737,30 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       .catch(() => ctx.toast('Couldn’t send — please try again.'));
     onClose();
   };
+  // PIN TO MY PROFILE. Offered only under the same condition that makes a verse card (verse type, string non-empty ref
+  // AND text), never for commentary/note/devotional or a cross-reference preview whose text is ''. The pin holds the
+  // words, so it needs no Bible module on the reader's phone. Children may pin (owner 2026-11-26).
+  // The SAME shape rule as the engine (setProfile / _profilePin): ref <= 80, version <= 40 (text is capped, not refused).
+  // Past either, the engine reads the pin as malformed = CLEAR, which would erase the old pin and still say "Pinned".
+  const canPin = type === 'verse' && typeof payload.ref === 'string' && !!payload.ref && payload.ref.length <= 80 && typeof payload.text === 'string' && !!payload.text && !(typeof payload.version === 'string' && payload.version.length > 40) && !!ctx.pinVerse;
+  const pinVal = canPin ? { ref: payload.ref, text: payload.text, version: typeof payload.version === 'string' ? payload.version : '' } : null;
+  const mine = (canPin && FS && FS.myPubkey && FS.displayFor) ? FS.displayFor(FS.myPubkey).pinnedVerse : null;
+  // Dedup is BY REFERENCE (owner 2026-11-28): the same verse reaches this sheet labelled 'KJV' from the cross-reference
+  // sheet and 'BSB' etc. from the reader, with different wording, so version/text equality made it never match.
+  const alreadyPinned = !!(pinVal && mine && mine.ref === pinVal.ref);
+  // A saved event carries what went on the wire: if it does not hold THIS pin, the save did not store it. `true` is the
+  // engine's "nothing on the wire changed" (already identical), which is a stored pin.
+  const pinStored = (ok) => {
+    if (ok === true || !ok || typeof ok.content !== 'string') return true;
+    try { const w = JSON.parse(ok.content); return !!(w && w.pinnedVerse && w.pinnedVerse.ref === pinVal.ref); } catch (e) { return false; }
+  };
+  const pinIt = () => {
+    if (!pinVal || alreadyPinned) return;
+    Promise.resolve(ctx.pinVerse(pinVal))
+      .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting */ : (ok && pinStored(ok)) ? ctx.toast('Pinned to your profile') : ctx.toast('Couldn’t pin it — your church still sees your old profile. Try again.')))
+      .catch(() => ctx.toast('Couldn’t pin it — please try again.'));
+    onClose();
+  };
   const lblStyle = { fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' };
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' };
   return (
@@ -2662,6 +2784,18 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
           <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>Share as image</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>A card for your camera roll or socials</div></div>
           <Icon name="chevR" size={17} color="var(--ink-3)" />
+        </button>
+      ) : null}
+
+      {canPin ? (
+        // Pin to my profile - shown only for a real verse card (verse type, non-empty ref AND text), so a commentary,
+        // note, devotional or a cross-reference preview with no text never offers it. Same save path as the profile screen.
+        <button type="button" aria-label="Pin to my profile" disabled={alreadyPinned} onClick={pinIt} style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 14,
+          border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: alreadyPinned ? 'default' : 'pointer', color: 'var(--ink)', textAlign: 'left', marginBottom: 18 }}>
+          <Icon name="bookmark" size={20} color="var(--clay)" />
+          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{alreadyPinned ? 'Pinned to your profile' : 'Pin to my profile'}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{alreadyPinned ? 'Your church sees it on your card' : 'Show this verse on your card'}</div></div>
         </button>
       ) : null}
 
@@ -2708,13 +2842,16 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
             {peopleShown.map(m => {
               const d = (FS && FS.displayFor) ? FS.displayFor(m.pubkey) : { handle: m.name || 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
               return (
-                <button key={m.pubkey} onClick={() => sendToPerson(m)} style={rowStyle}>
-                  <UserAvatar av={avOf(d)} name={m.name || d.handle} size={38} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || d.handle}</div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Direct message</div></div>
-                  <Icon name="send" size={17} color="var(--clay)" />
-                </button>
+                <div key={m.pubkey} onClick={() => sendToPerson(m)} style={{ ...rowStyle, padding: 0, gap: 0, cursor: 'pointer' }}>
+                  {/* avatar = sibling of the row's button (no control inside a button); the row's padding moved onto the halves */}
+                  <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 13 }}><UserAvatar av={avOf(d)} name={m.name || d.handle} size={38} onTap={memberTapFor(ctx, m.pubkey)} /></div>
+                  <button onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); sendToPerson(m); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px 11px 12px', border: 'none', background: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'inherit' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || d.handle}</div>
+                      <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Direct message</div></div>
+                    <Icon name="send" size={17} color="var(--clay)" />
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -3007,7 +3144,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
       <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} />
-          <UserAvatar av={avOf(d)} name={d.handle} size={38} />
+          <UserAvatar av={avOf(d)} name={d.handle} size={38} onTap={memberTapFor(ctx, peer, { inDMWith: peer })} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>
             {/* A PARISH LETTER, in a private thread: the church-signed steward title under the name — the group
@@ -3051,11 +3188,26 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
             {(m.noReply || m.eventId) ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />{dmAnnounceLabel(m, ctx && ctx.churchEvents)}</span> : null}
             {(chatShareCard(m.card) && chatCardThoughts(chatShareCard(m.card), m.content) !== null) ? (
-              // a shared verse/commentary arrives as its designed card, the sender's thoughts under it as text
-              // (the group bubble's ChatShareCardView + ChatCardThoughts). Tapping the thoughts opens reactions.
               <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', cursor: 'pointer' }}>
-                <ChatShareCardView card={chatShareCard(m.card)} ctx={ctx} />
+                <ChatShareCardView card={chatShareCard(m.card)} ctx={{...ctx, openShare: (v) => {
+                  var p = window.Bible && window.Bible.parseRef(v.ref);
+                  if (p && ctx.gotoRef) { ctx.gotoRef(p.book, p.chap, p.verse); onClose(); }
+                }}} />
                 <ChatCardThoughts text={chatCardThoughts(chatShareCard(m.card), m.content)} me={m.mine} />
+                <div data-dm-rx="1" style={{ position: 'relative', marginTop: 4, alignSelf: m.mine ? 'flex-end' : 'flex-start' }}>
+                  <button data-dm-rx="1" onClick={(e) => { e.stopPropagation(); setRxFor(v => v === m.id ? '' : m.id); }} title="React" style={{
+                    width: 28, height: 22, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)',
+                    cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .8 }}>
+                    <Icon name="heart" size={13} /></button>
+                  {rxFor === m.id ? (
+                    <div data-dm-rx="1" ref={el => el && el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })} style={{ position: 'absolute', bottom: 28, [m.mine ? 'right' : 'left']: 0, zIndex: 10, display: 'flex', gap: 2, padding: '6px 8px', borderRadius: 14,
+                      background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+                      {DM_EMOJI.map(emo => (
+                        <button key={emo} onClick={(e) => { e.stopPropagation(); react(m, emo); }} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
@@ -3093,7 +3245,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                 ))}
               </div>
             ) : null}
-            {rxFor === m.id ? (
+            {rxFor === m.id && !(chatShareCard(m.card) && chatCardThoughts(chatShareCard(m.card), m.content) !== null) ? (
               <div data-dm-rx="1" style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                 {DM_EMOJI.map(emo => (
                   <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
@@ -3156,7 +3308,7 @@ function DMInbox({ open, onClose, ctx, docked }) {
           const d = FS.displayFor(c.peer);
           return (
             <div key={c.peer} onClick={() => ctx.openDM(c.peer)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 6px', borderBottom: '1px solid var(--line-2)', cursor: 'pointer' }}>
-              <UserAvatar av={avOf(d)} name={d.handle} size={44} />
+              <UserAvatar av={avOf(d)} name={d.handle} size={44} onTap={c.peer && c.peer !== (FS && FS.myPubkey) && ctx.openMember ? () => ctx.openMember(c.peer) : undefined} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15 }}>{d.handle}</span>
@@ -3292,7 +3444,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
           const allowDM = !ctx.canDMPeer || ctx.canDMPeer(m.pubkey);   // safeguarding: a child↔non-cleared-adult DM is blocked
           return (
             <div key={m.pubkey} onClick={() => { if (isMe || !allowDM) return; onClose(); ctx.openDM(m.pubkey); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 6px', borderBottom: '1px solid var(--line-2)', cursor: allowDM ? 'pointer' : 'default', opacity: allowDM ? 1 : 0.65 }}>
-              <UserAvatar av={avOf(d)} name={name} size={44} />
+              <UserAvatar av={avOf(d)} name={name} size={44} onTap={!isMe && ctx.openMember ? () => ctx.openMember(m.pubkey) : undefined} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {name}

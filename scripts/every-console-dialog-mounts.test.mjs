@@ -10,7 +10,7 @@
 // What this does. It ENUMERATES (by reading the source — that is all the source is used for) every top-level
 // function in app/stew-*.jsx whose body carries `role="dialog"`, loads the whole console the way the phone
 // does (scripts/console-screens.mjs: every script steward.html lists, esbuild `jsx: 'transform'` as
-// build-steward-apk.sh runs it, one shared scope), and CALLS each one once with minimal props. Then:
+// scripts/collect-app-page.sh runs it, one shared scope), and CALLS each one once with minimal props. Then:
 //   • a ReferenceError anywhere in that render, or in the effects it queued, FAILS the test and names the
 //     component and the identifier;
 //   • any other error means this harness could not supply what the dialog needs (a real relay, a real

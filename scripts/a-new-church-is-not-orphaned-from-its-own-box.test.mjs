@@ -73,6 +73,7 @@ function harness({ cached = null, hostedChurches = [], origin = 'http://127.0.0.
     // Its dependencies are real too, so a regression anywhere in the chain surfaces here.
     _localToken: '',
     location: { hostname: originHost, protocol: 'http:', host: originHost + ':8000' },
+    window: {},   // a browser: no Capacitor bridge. _packagedOrigin (lifted below, real) reads it
     ownIsLoopback: () => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/)/i.test(stubs.ownRelay()),
     _authHdr: () => ({}),
     npubEncode: (p) => 'npub_' + p,
@@ -85,6 +86,10 @@ function harness({ cached = null, hostedChurches = [], origin = 'http://127.0.0.
   // Degrade when the bundle predates the fix: the OLD localAdminToken does not reference this at all, so
   // omitting it lets the real (old) token chain run and the BEHAVIOUR assertion fire. Lifting a function
   // that is not there turns every test red on a missing anchor, which proves a rename, not a regression.
+  // THE REAL _packagedOrigin, never stubbed: _originIsLoopback() refuses a packaged app before it reads the hostname.
+  if (VENDOR.includes('function _packagedOrigin()')) {
+    stubs._packagedOrigin = lift('function _packagedOrigin() {', '_packagedOrigin', stubs);
+  }
   if (VENDOR.includes('function _originIsLoopback()')) {
     stubs._originIsLoopback = lift('function _originIsLoopback() {', '_originIsLoopback', stubs);
   }

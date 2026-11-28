@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "finance-main",
+  "description": "The finance window grants the page NO Tauri IPC permission at all. Everything native (navigation policy, the system-browser allow-list, downloads) is decided in Rust (src/main.rs, src/nav.rs), which the frontend ACL does not gate. Pinned empty by scripts/finance-desktop-program-carries-no-relay-code.test.mjs.",
+  "windows": ["main"],
+  "permissions": []
+}

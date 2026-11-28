@@ -265,11 +265,13 @@ test('POINT OF USE: the real DMThread draws the card, the thoughts under it', as
   const F = { myPubkey: ME, displayFor: () => ({ handle: 'Anna', av: {} }), subscribeThread: o.subscribeThread };
   const mod = loadScreen('app/screens-chat.jsx', ['DMThread'], {
     ...bubbleGlobals(React, F, opened),
-    window: { Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    // DMThread deliberately turns a verse-card tap into NAVIGATION (parseRef -> gotoRef -> onClose); only the group bubble re-shares
+    window: { Fellowship: F, Bible: { parseRef: (r) => (r === 'John 3:16' ? { book: 'John', chap: 3, verse: 16 } : null) }, addEventListener() {}, removeEventListener() {} },
     document: { addEventListener() {}, removeEventListener() {} },
     Overlay: ({ children }) => children, IconBtn: () => null, avOf: d => d.av, confirm: () => false,
   });
-  const props = { peer: ANNA, open: true, onClose() {}, ctx: { ...CTX(opened), connTick: 0 } };
+  const went = []; let closed = 0;
+  const props = { peer: ANNA, open: true, onClose() { closed++; }, ctx: { ...CTX(opened), gotoRef: (...a) => went.push(a), connTick: 0 } };
   draw(mod.DMThread, props);
   await push({ id: 'd1', kind: 4, pubkey: ANNA, created_at: 5, tags: [['p', ME]], content: o._dmWrap(PLAIN + '\n\n' + THOUGHTS, null, { card: VERSE }) });
   await settle();
@@ -279,7 +281,9 @@ test('POINT OF USE: the real DMThread draws the card, the thoughts under it', as
   assert.ok(!texts(c[0]).join(' ').includes(THOUGHTS));
   assert.equal(thoughtsOf(tree), THOUGHTS);
   c[0].props.onClick({ stopPropagation() {} });
-  assert.deepEqual(opened, [{ ref: 'John 3:16', text: 'For God so loved the world', version: 'BSB' }]);
+  assert.deepEqual(went, [['John', 3, 16]], 'tapping the DM verse card did not navigate to the verse');
+  assert.equal(closed, 1, 'the DM did not close after navigating');
+  assert.deepEqual(opened, [], 'a DM verse-card tap re-shared instead of navigating');
 });
 
 // ═════ WHO MAY POST WHICH CARD ═════════════════════════════════════════════════════════════════════════════

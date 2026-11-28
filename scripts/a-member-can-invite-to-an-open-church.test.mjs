@@ -199,7 +199,7 @@ test('GATE H2: the docs hub\'s CACHED replay (no relay reached) paints the churc
 });
 
 // ═══════════════════════════════ 2. THE BOX: inviteRelayFor ═══════════════════════════════
-const SHIPPED = (() => { const m = /var CANONICAL_RELAYS = \[\s*"([^"]+)"/.exec(FELLOW); assert.ok(m, 'anchor: CANONICAL_RELAYS'); return m[1]; })();
+const SHIPPED = (() => { const m = /var CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE \? \[_TEST_RELAY_OVERRIDE\] : \[\s*"([^"]+)"/.exec(FELLOW); assert.ok(m, 'anchor: CANONICAL_RELAYS'); return m[1]; })();
 const SHARED_KEY = (() => { const m = /var SHARED_RELAY_KEYS = Object\.freeze\(\[\s*"([0-9a-f]{64})"/.exec(FELLOW); assert.ok(m, 'anchor: SHARED_RELAY_KEYS'); return m[1]; })();
 const hex = () => getPublicKey(generateSecretKey());
 
@@ -213,6 +213,7 @@ function inviter({ relays = [], admitted = {}, docs = {} } = {}) {
     stmt(src, 'var SHARED_RELAY_KEYS = ', 'SHARED_RELAY_KEYS'),
     stmt(src, 'var SHARED_RELAY_HINTS = ', 'SHARED_RELAY_HINTS'),
     stmt(src, 'var CANONICAL_RELAY_PUBS = ', 'CANONICAL_RELAY_PUBS'),
+    stmt(src, 'var _TEST_RELAY_OVERRIDE = ', '_TEST_RELAY_OVERRIDE'),   // the shipped build leaves it empty; CANONICAL_RELAYS reads it
     stmt(src, 'var CANONICAL_RELAYS = ', 'CANONICAL_RELAYS'),
     stmt(src, 'var CANONICAL_RELAY = ', 'CANONICAL_RELAY'),
     fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),

@@ -16962,8 +16962,15 @@ zoo`.split("\n");
   }
   var CANONICAL_RELAYS = ["wss://app.trinityone.church/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
+  function _packagedOrigin() {
+    if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+    const l = typeof location !== "undefined" ? location : null;
+    if (!l) return false;
+    if (String(l.protocol || "").toLowerCase() === "tauri:") return true;
+    return String(l.hostname || "").toLowerCase().replace(/\.$/, "") === "tauri.localhost";
+  }
   function ownRelay() {
-    if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
+    if (_packagedOrigin()) return CANONICAL_RELAY;
     if (_boxHostsUs === false) return CANONICAL_RELAY;
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.host) return CANONICAL_RELAY;
@@ -17224,6 +17231,7 @@ zoo`.split("\n");
   }
   var _localToken = null;
   function _originIsLoopback() {
+    if (_packagedOrigin()) return false;
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.hostname) return false;
     return /^(localhost|127\.0\.0\.1|::1)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ""));
@@ -18824,6 +18832,13 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  function _finBookDrop(cp) {
+    if (!cp) return;
+    try {
+      localStorage.removeItem(FINBOOK_LS + cp);
+    } catch (e) {
+    }
+  }
   var BLOCKED_SINCE_LS = "trinityone.steward.blockedsince.";
   function _blockedSinceGet(cp) {
     try {
@@ -20206,7 +20221,7 @@ zoo`.split("\n");
     return out.trim();
   }
   function _ownOrigin() {
-    if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "";
+    if (_packagedOrigin()) return "";
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.host) return "";
     if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return "";
@@ -25098,9 +25113,14 @@ zoo`.split("\n");
       const cp = chk.church;
       const who = String(name == null ? "" : name).trim().slice(0, 60);
       if (!who) return Promise.resolve({ ok: false, error: "Add your name first." });
+      const sealed = { name: who };
+      try {
+        if (typeof window !== "undefined" && window.TRINITY_APP === "finance") sealed.app = "finance";
+      } catch (e) {
+      }
       let content;
       try {
-        content = JSON.stringify({ n: encrypt2(JSON.stringify({ name: who }), getConversationKey(sk, cp)) });
+        content = JSON.stringify({ n: encrypt2(JSON.stringify(sealed), getConversationKey(sk, cp)) });
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
@@ -25352,19 +25372,21 @@ zoo`.split("\n");
             return;
           }
           const asName = (x) => typeof x === "string" ? x.trim().slice(0, 60) : "";
-          let name = "";
+          let name = "", app = "";
           try {
             const c = JSON.parse(e.content);
             if (typeof c.n === "string" && c.n) {
               try {
-                name = asName((JSON.parse(decrypt3(c.n, getConversationKey(sk, e.pubkey))) || {}).name);
+                const o = JSON.parse(decrypt3(c.n, getConversationKey(sk, e.pubkey))) || {};
+                name = asName(o.name);
+                if (o.app === "finance") app = "finance";
               } catch {
               }
             }
             if (!name) name = asName(c.name);
           } catch {
           }
-          byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
+          byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at, ...app ? { app } : {} });
           emit();
         },
         oneose() {
@@ -25503,6 +25525,7 @@ zoo`.split("\n");
       try {
         if (!churchPub || !churchSk) return "no-key";
         if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return "native";
+        if (_packagedOrigin()) return "unsupported";
         if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           const ok = await Notification.requestPermission();
@@ -31297,7 +31320,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
@@ -31310,7 +31333,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", EVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeEvents(onEvents) {
-      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents);
+      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), onEvents);
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -31462,7 +31485,7 @@ zoo`.split("\n");
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), _by: e.pubkey, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp, _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
           }
@@ -32356,6 +32379,14 @@ zoo`.split("\n");
     isDelegated() {
       return !!actingChurch;
     },
+    // HAS THIS DEVICE SEEN ANY SIGN THAT ITS OWN KEY RUNS A CHURCH? (T1Finance audit F1, 2026-11-17.) The read of
+    // _ownKeyBlank(): true = no church name for the own key is remembered here AND the own key was never
+    // self-registered from here. ONE-DIRECTIONAL and DEVICE-LOCAL: `false` is a real sign the own key is a church; `true`
+    // is NOT proof it is not one (a church restored on a new device looks blank until its profile is read). The finance
+    // app hides "Show my 12 words" when this is false, and words its reveal honestly because `true` proves nothing.
+    ownKeyBlank() {
+      return _ownKeyBlank();
+    },
     // Was this list fetched for the church and epoch the console is on now? See _listTag. The key enrolment
     // (KeyDistributor, app/stew-dashboard.jsx) uses a list only when this says yes.
     listIsCurrent(list) {
@@ -32618,6 +32649,7 @@ zoo`.split("\n");
                 evicted(rcp);
                 stewardedChurches.delete(rcp);
                 save();
+                _finBookDrop(rcp);
                 if (actingChurch === rcp) {
                   const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find((k) => !_ownedPubs.has(k)) : "";
                   if (other) window.Steward.setActiveIdentity(other, { persist: false });
@@ -32678,6 +32710,7 @@ zoo`.split("\n");
               if (e.pubkey === cp) evicted(cp);
               stewardedChurches.delete(cp);
               save();
+              _finBookDrop(cp);
               if (actingChurch === cp) {
                 const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find((k) => !_ownedPubs.has(k)) : "";
                 if (other) window.Steward.setActiveIdentity(other, { persist: false });
@@ -32844,6 +32877,11 @@ zoo`.split("\n");
     },
     ownRelay() {
       return ownRelay();
+    },
+    // Is this page inside a packaged app (Capacitor APK / Tauri program)? Read by app/steward-root.jsx initChurch
+    // (the dev ?churchkey= hook) and app/stew-dashboard.jsx stewOnSuite (the Suite-only links).
+    packagedOrigin() {
+      return _packagedOrigin();
     },
     extraRelays() {
       return extraRelays();
@@ -33509,14 +33547,14 @@ zoo`.split("\n");
         return { ok: false, attempted: false, name: nm, reason: "the key words are not a valid phrase" };
       }
       const ts = now();
-      const join3 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, memberSk);
-      const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: "{}" }, memberSk);
+      const join3 = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }), memberSk);
+      const k0 = finalizeEvent2(_monotonic({ kind: 0, created_at: ts, tags: [], content: "{}" }), memberSk);
       let nameDoc = null;
       try {
         const body = JSON.stringify({ name: nm });
         const c = encrypt2(body, getConversationKey(memberSk, cp));
         const m = encrypt2(body, getConversationKey(memberSk, memberPub));
-        nameDoc = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c, m }) }, memberSk);
+        nameDoc = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c, m }) }), memberSk);
       } catch (e) {
       }
       const j = await _quietSend(join3);
@@ -33649,8 +33687,8 @@ zoo`.split("\n");
         return false;
       }
       const ts = now();
-      const nameGone = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, mSk);
-      const memberGone = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp], ["deleted", "1"]], content: "" }, mSk);
+      const nameGone = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }), mSk);
+      const memberGone = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp], ["deleted", "1"]], content: "" }), mSk);
       const r1 = await _quietSend(nameGone);
       const r2 = await _quietSend(memberGone);
       return r1.ok && r2.ok;
@@ -33661,7 +33699,7 @@ zoo`.split("\n");
       const np = window.Steward.npub || "";
       const o = typeof location !== "undefined" && location.origin || "";
       const PUBLIC_BASE = "https://app.trinityone.church";
-      const isPublic = /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
+      const isPublic = !_packagedOrigin() && /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
       const base = isPublic ? o : PUBLIC_BASE;
       const relay = ownIsLoopback() && selfPublicRelay() ? selfPublicRelay() : ownRelay();
       const nm = ownIsLoopback() ? selfRelayName() : "";

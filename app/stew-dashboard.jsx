@@ -352,7 +352,10 @@ function _expiryIsoDay(untilSec) {
 // header's middle column, sits under the section heading, and is still the WHOLE column as a tap target
 // (44px tall — the heading over it lets taps through). Same onClick, same popover, same rename route; the
 // pencil that sat on the card is the small glyph at the end of the line.
-function IdentitySwitcher({ church, churchName, initials, onEditName, compact = false }) {
+// `noNameEdit` (T1Finance M5): no "Set church name" anywhere in this control — naming the church is the owner's job,
+// and the finance app's header (FinanceShell, app/finance-shell.jsx) is the only caller that passes it. CALLERS (rule 2):
+// StewDashboard (phone header, compact; desktop sidebar) — unchanged, no prop; FinanceShell — noNameEdit.
+function IdentitySwitcher({ church, churchName, initials, onEditName, compact = false, noNameEdit = false }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
   // The phone header lays these out with its own `gap`, so the sidebar's bottom margin is pure waste
   // there — measured at 18px of a 730px screen, below a header block already 309px tall.
@@ -384,6 +387,15 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
   const compactName = { flexShrink: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   // no other identities (no owned networks, no stewarded churches) → original behaviour (tap to set/rename the church)
   if (!networks.length && !stewarded.length) {
+    if (noNameEdit) {
+      // the same face, as a label: nothing to switch to and nothing this console may rename
+      return (
+        <div style={compact ? { ...compactBtn, cursor: 'default' } : { display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', marginBottom: narrow ? 0 : 18, textAlign: 'left' }}>
+          {compact ? null : <SkBadge initials={initials} picture={church.picture} size={34} radius={999} />}
+          <span style={compact ? { ...compactName, color: 'var(--ink-2)' } : { fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{churchName}</span>
+        </div>
+      );
+    }
     if (compact) {
       return (
         <button onClick={onEditName} title="Set church name" style={compactBtn}>
@@ -430,6 +442,8 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
       </button>
       )}
       {open ? (
+        <React.Fragment>
+        <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
         <div style={popStyle}>
           {ids.filter(idn => idn.kind !== 'network' || window.NETWORKS_ENABLED === true).map(idn => {   /* NETWORKS SWITCH */
             const on = idn.pub === activePub;
@@ -453,11 +467,12 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
             );
           })}
           {pickErr ? <div role="alert" data-pick-err="1" style={{ fontSize: 12, color: 'var(--clay-ink)', lineHeight: 1.45, padding: '6px 10px' }}>{pickErr}</div> : null}
-          {!delegated ? <React.Fragment>
+          {!delegated && !noNameEdit ? <React.Fragment>
           <div style={{ height: 1, background: 'var(--line)', margin: '5px 4px' }} />
           <button onClick={() => { setOpen(false); onEditName(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}><Icon name="pen" size={13} color="var(--ink-3)" /> Rename {viewingNetwork ? 'network' : 'church'}</button>
           </React.Fragment> : null}
         </div>
+        </React.Fragment>
       ) : null}
     </div>
   );
@@ -1504,14 +1519,17 @@ function KeyDistributor() {
 }
 
 // IS THIS CONSOLE THE SUITE'S? — the desktop app, where the launcher (relay-app/home.html) is one page away.
-// The sidebar's "Relay & Suite home" link gates on a loopback hostname alone. That is TRUE inside the steward
+// The sidebar's "Relay & Suite home" link used to gate on a loopback hostname alone. That is TRUE inside the steward
 // APK as well (Capacitor serves it from https://localhost — measured 2026-09-22, REPORT-suite-B3 §4), where
 // there is no launcher to go back to; the APK hides that link only by accident of its narrow layout. So the
 // wizard's "Back to the Suite" asks both: loopback, AND no Capacitor bridge on the page. (`window.Capacitor`
 // is absent on the web console and on the Suite — a plain WebKitGTK webview — and present on every APK.)
+// A PACKAGED APP (Tauri program, Capacitor APK) is never the Suite: tauri://localhost has hostname "localhost"
+// too, and has no launcher and no relay pages. window.Steward.packagedOrigin reads location/Capacitor only.
 function stewOnSuite() {
   try {
     if (typeof location === 'undefined' || !['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname)) return false;
+    if (window.Steward.packagedOrigin()) return false;   // throws if missing -> catch -> false (fails closed)
     return !(typeof window !== 'undefined' && window.Capacitor);
   } catch (e) { return false; }
 }
@@ -2897,8 +2915,9 @@ function StewDashboard({ initial = 'overview' }) {
             );
           })()}
           {/* In the desktop Suite (served from loopback), this box IS the relay — give a one-click door back to the
-              relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8). */}
-          {typeof location !== 'undefined' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname) && (
+              relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8),
+              and in a packaged app (APK, Tauri program) — stewOnSuite() decides, the same gate as "Back to the Suite". */}
+          {stewOnSuite() && (
             <a href="/relay-app/home.html" onClick={e => stewOpenRelayPanel(e, '/relay-app/home.html')} title="Relay & Suite controls" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 12px', marginTop: 10, borderRadius: 11, border: '1px solid var(--line)', textDecoration: 'none', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
               <Icon name="grid2" size={18} color="var(--ink-3)" /> Relay &amp; Suite home
             </a>
@@ -3001,6 +3020,18 @@ function installPageUrl() {
   if (h === 'localhost' || h === '::1' || h === '0.0.0.0' || /^127\./.test(h)) return { url: '', lan: false, why: 'local' };
   const lan = /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || /\.local$/.test(h);
   return { url: u.origin + '/install', lan, why: '' };
+}
+
+// THE ADDRESS THE INVITE POSTER'S PRIMARY QR ENCODES. The poster is a thing people photograph and scan on a
+// wall, and the person scanning has NOT got the app — a join link opens nothing for them. So it is ALWAYS an
+// install address: the church's own relay's /install page when it has one, else the public app's
+// /install page. (shareInvite, person to person, is the join link and stays so.)
+// The public origin is the one the app already ships as its canonical host (update-check.jsx, share-app.jsx).
+const PUBLIC_INSTALL_URL = 'https://app.trinityone.church/install';
+function posterInstallLink(install) {
+  const url = (install && install.url) || PUBLIC_INSTALL_URL;
+  const svg = (window.Steward && window.Steward.qrSVG) ? window.Steward.qrSVG(url) : '';
+  return { url, svg };
 }
 
 // IS THE APP OUR MEMBERS INSTALL FROM OUR RELAY OUT OF DATE? — the question a church that does NOT run
@@ -3113,7 +3144,7 @@ async function churchMarkDataUrl({ picture, name, accent } = {}) {
   try { return await svgToPng(svg, 240); } catch (e) { return null; }
 }
 // build the printable invite as a real PDF (A4) — CHURCH-branded (name + accent + logo), then QR + steps.
-async function buildInvitePdf({ name, url, svg, accent, logo }) {
+async function buildInvitePdf({ name, url, svg, joinUrl, joinSvg, accent, logo }) {
   const J = window.jspdf && window.jspdf.jsPDF; if (!J) return null;
   const doc = new J({ unit: 'pt', format: 'a4' });
   const W = doc.internal.pageSize.getWidth(), M = 56; let y = 66;
@@ -3131,16 +3162,26 @@ async function buildInvitePdf({ name, url, svg, accent, logo }) {
   doc.text('on TrinityOne', W / 2, y, { align: 'center', charSpace: 1 }); y += 20;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(107, 96, 82);
   doc.text(doc.splitTextToSize('A private, offline-first place to read and belong — no sign-up, no tracking.', W - 2 * M), W / 2, y, { align: 'center' }); y += 26;
-  try { const png = await svgToPng(svg, 600); const qs = 168; doc.addImage(png, 'PNG', (W - qs) / 2, y, qs, qs); y += qs + 16; } catch (e) { y += 6; }
-  doc.setFontSize(10.5); doc.setTextColor(120, 110, 95);
-  doc.text('Scan with a phone camera, or go to:', W / 2, y, { align: 'center' }); y += 14;
-  doc.setFont('courier', 'normal'); doc.setFontSize(8); doc.setTextColor(90, 80, 70);
-  const ul = doc.splitTextToSize(url, W - 2 * M); doc.text(ul, W / 2, y, { align: 'center' }); y += ul.length * 10 + 16;
+  // TWO codes, side by side: 1 = install the app (install page), 2 = join this church (join link).
+  // The second is dropped only when there is no join link to encode (church key not ready).
+  const codes = [{ n: '1 · Download the app', u: url, s: svg }];
+  if (joinUrl && joinSvg) codes.push({ n: '2 · Join ' + nm, u: joinUrl, s: joinSvg });
+  const colw = (W - 2 * M) / codes.length, qs = codes.length > 1 ? 128 : 168; let rowEnd = y;
+  for (let ci = 0; ci < codes.length; ci++) {
+    const c = codes[ci], cx = M + colw * ci + colw / 2; let cy = y;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(ar, ag, ab);
+    doc.text(doc.splitTextToSize(c.n, colw - 12), cx, cy, { align: 'center' }); cy += 8;
+    try { const png = await svgToPng(c.s, 600); doc.addImage(png, 'PNG', cx - qs / 2, cy, qs, qs); } catch (e) {}
+    cy += qs + 12;
+    doc.setFont('courier', 'normal'); doc.setFontSize(6.5); doc.setTextColor(90, 80, 70);
+    const ul = doc.splitTextToSize(c.u, colw - 14); doc.text(ul, cx, cy, { align: 'center' }); cy += ul.length * 8;
+    rowEnd = Math.max(rowEnd, cy);
+  }
+  y = rowEnd + 14;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(60, 52, 44);
-  [['1.', 'Open your phone camera and point it at the code (or type the link).'],
-   ['2.', 'Tap Add to Home Screen / Install so it works offline.'],
-   ['3.', 'It opens already following ' + nm + '. Set your name so your church family recognises you — you can stay private if you need to.'],
-   ['4.', 'When asked, write your 12-word recovery phrase in the boxes below.']].forEach(([n, s]) => {
+  [['1.', 'Scan code 1 with your phone camera (or type its link) to download the app. Tap Add to Home Screen / Install so it works offline.'],
+   ['2.', 'Open the app, then scan code 2 (or tap Follow a church and search for ' + nm + ') to join. Set your name so your church family recognises you — you can stay private if you need to.'],
+   ['3.', 'When asked, write your 12-word recovery phrase in the boxes below.']].forEach(([n, s]) => {
     const l = doc.splitTextToSize(s, W - 2 * M - 18); doc.text(n, M, y); doc.text(l, M + 18, y); y += l.length * 13 + 4;
   });
   y += 8;
@@ -3280,7 +3321,7 @@ window.SkConfirm = SkConfirm;
 // In-app invite poster. Replaces a window.open() print popup that TRAPPED the steward in the Capacitor
 // webview (chrome-less window, hardware back did nothing). This is a normal in-app overlay: X / Done /
 // backdrop close it, and the hardware back button closes it too (Capacitor App + popstate).
-function InvitePosterModal({ church, url, svg, onClose }) {
+function InvitePosterModal({ church, url, svg, joinUrl, joinSvg, onClose }) {
   React.useEffect(() => {
     try { history.pushState({ inviteposter: 1 }, ''); } catch (e) {}
     const onPop = () => onClose();
@@ -3306,20 +3347,21 @@ function InvitePosterModal({ church, url, svg, onClose }) {
   // desktop/web task, where window.print() works.
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const shareInvite = async () => {
-    const msg = 'Join ' + (church.name || 'our church') + ' on TrinityOne — a private, offline-first place to read and belong. Open this on your phone:\n' + url;
+    const shareUrl = joinUrl || url;
+    const msg = 'Join ' + (church.name || 'our church') + ' on TrinityOne — a private, offline-first place to read and belong. Open this on your phone:\n' + shareUrl;
     try {
       const Share = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
-      if (Share) { await Share.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url, dialogTitle: 'Share invite' }); return; }
-      if (navigator.share) { await navigator.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url }); return; }
+      if (Share) { await Share.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url: shareUrl, dialogTitle: 'Share invite' }); return; }
+      if (navigator.share) { await navigator.share({ title: 'Join ' + (church.name || 'our church'), text: msg, url: shareUrl }); return; }
     } catch (e) {}
-    try { copyText(url); } catch (e) {}   // last resort: copy the link
+    try { copyText(shareUrl); } catch (e) {}   // last resort: copy the link
   };
   const [pdfBusy, setPdfBusy] = React.useState(false);
   const savePdf = async () => {
     setPdfBusy(true);
     try {
       const logo = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });   // dp, or the initials badge
-      const doc = await buildInvitePdf({ name: church.name, url, svg, accent: church.accent, logo });
+      const doc = await buildInvitePdf({ name: church.name, url, svg, joinUrl, joinSvg, accent: church.accent, logo });
       if (!doc) { window.print(); return; }   // jsPDF missing → fall back to browser print
       const fname = 'TrinityOne-invite-' + ((church.name || 'church').replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'church') + '.pdf';
       if (isNative) {
@@ -3330,7 +3372,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
           await P.Share.share({ title: fname, text: 'Invite to ' + (church.name || 'our church'), files: [res.uri], dialogTitle: 'Save or share invite PDF' });
         } catch (e) {
           // file-share unsupported on this device → share the link instead so it's not a dead button
-          try { await P.Share.share({ title: 'Join ' + (church.name || 'our church'), text: 'Join us on TrinityOne:\n' + url, url }); } catch (e2) {}
+          try { await P.Share.share({ title: 'Install TrinityOne', text: 'Install the TrinityOne app:\n' + url, url }); } catch (e2) {}
         }
       } else {
         doc.save(fname);
@@ -3352,17 +3394,23 @@ function InvitePosterModal({ church, url, svg, onClose }) {
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '1.6px', color: 'var(--clay-ink)', marginBottom: 8 }}>TRINITYONE</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, lineHeight: 1.1, marginBottom: 8 }}>Join {church.name || 'your church'}</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16, maxWidth: 320, marginLeft: 'auto', marginRight: 'auto' }}>A private, offline-first place to read and belong — no sign-up, no tracking.</div>
-          <div style={{ display: 'inline-flex', padding: 12, background: '#fff', borderRadius: 16, border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ width: 190, height: 190 }} dangerouslySetInnerHTML={{ __html: svg }} />
-          </div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '14px 0 6px' }}>Scan with a phone camera, or go to:</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 11px', textAlign: 'left' }}>{url}</div>
+          {/* TWO codes, stacked: 1 installs the app (install page), 2 joins this church (join link). */}
+          {[{ k: 'install', n: '1 · Download the app', h: 'Scan to install, or go to:', u: url, s: svg },
+            joinUrl && joinSvg ? { k: 'join', n: '2 · Join ' + (church.name || 'your church'), h: 'Already have the app? Scan to join, or open:', u: joinUrl, s: joinSvg } : null].filter(Boolean).map(c => (
+            <div key={c.k} data-poster-qr={c.k} style={{ marginBottom: 14, breakInside: 'avoid' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--clay-ink)', marginBottom: 8 }}>{c.n}</div>
+              <div style={{ display: 'inline-flex', padding: 12, background: '#fff', borderRadius: 16, border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
+                <div style={{ width: 170, height: 170 }} dangerouslySetInnerHTML={{ __html: c.s }} />
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '10px 0 6px' }}>{c.h}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 11px', textAlign: 'left' }}>{c.u}</div>
+            </div>
+          ))}
         </div>
         {/* getting started + a place to write the recovery phrase (so the printed sheet is self-contained) */}
         <ol style={{ margin: '18px 0 0', paddingLeft: 20, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
-          <li>Open your phone camera and point it at the code (or type the link).</li>
-          <li>Tap <b>Add to Home Screen / Install</b> so it works offline.</li>
-          <li>It opens already following <b>{church.name || 'your church'}</b>. Set your name so your church family recognises you — you can stay private if you need to.</li>
+          <li>Scan <b>code 1</b> with your phone camera (or type its link) to download the app. Tap <b>Add to Home Screen / Install</b> so it works offline.</li>
+          <li>Open the app, then scan <b>code 2</b> (or tap <b>Follow a church</b> and search for <b>{church.name || 'your church'}</b>) to join. Set your name so your church family recognises you — you can stay private if you need to.</li>
           <li>When asked, write your <b>12-word recovery phrase</b> in the boxes below.</li>
         </ol>
         <div style={{ display: 'flex', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)' }}>
@@ -3510,6 +3558,7 @@ function JoinCard({ qrSize = 92, center = false }) {
   // "Install slip": the paper that tells a member how to get the app from the church's OWN box. Only
   // offered when there is an address worth printing — see installPageUrl().
   const install = installPageUrl();
+  const posterLink = posterInstallLink(install);   // the poster QR is ALWAYS an install address, never the join link
   const installSvg = (install.url && window.Steward.qrSVG) ? window.Steward.qrSVG(install.url) : '';
   // Ask the relay, once, how old the app it hands out is. Silent unless there is something to say, and
   // silent on every failure — see readInstallerConcern.
@@ -3607,7 +3656,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         </div>
         {savedLine('join')}
       </div>
-      {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}
+      {poster ? <InvitePosterModal church={church} url={posterLink.url} svg={posterLink.svg} joinUrl={url} joinSvg={svg} onClose={() => setPoster(false)} /> : null}
     </div>
 
     {/* ── GETTING THE APP, kept apart from the joining code on purpose ──────────────────────────────────
@@ -3881,9 +3930,16 @@ function Panel({ title, action, children, style = {}, scroll = false, collapsibl
 
 // lets the steward put join alerts on their phone (web-push, PWA). Silently re-registers if permission
 // is already granted; otherwise a tap prompts for it. Hidden on native (uses local notifs) / unsupported.
+//
+// NOT IN A PACKAGED APP (Tauri program, Capacitor APK — window.Steward.packagedOrigin, read off location): registerPush()
+// answers 'unsupported' there anyway, since the push endpoints live on the page's own box and a packaged app has none.
+// Decided before the first render so the button never flashes. Fails closed if the export is ever missing.
 function PushEnabler() {
-  const [state, setState] = React.useState('off');   // off | working | on | denied | hide
+  const S = window.Steward;
+  const packaged = !S || typeof S.packagedOrigin !== 'function' || !!S.packagedOrigin();
+  const [state, setState] = React.useState(packaged ? 'hide' : 'off');   // off | working | on | denied | hide
   React.useEffect(() => {
+    if (packaged) { setState('hide'); return; }
     if (typeof Notification === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) { setState('hide'); return; }
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) { setState('hide'); return; }
     if (Notification.permission === 'granted') { window.Steward.registerPush().then(r => setState(r === 'on' ? 'on' : (r === 'native' || r === 'unsupported' ? 'hide' : 'off'))); }
@@ -4929,7 +4985,7 @@ function GroupChatModal({ group, onClose }) {
   const setGevOpen = (v) => { setGevOpenState(v); try { window.localStorage.setItem(gevKey, v ? '1' : '0'); } catch {} };
   React.useEffect(() => (window.Steward.subscribeGroupEvents ? window.Steward.subscribeGroupEvents(group.id, setGevents) : undefined), [group.id]);
   const [composeEvt, setComposeEvt] = React.useState(false);
-  const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '' });
+  const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '', noRsvp: false, recur: 'none' });
   const [evtBusy, setEvtBusy] = React.useState(false);
   const [evtErr, setEvtErr] = React.useState('');
   const [evDetail, setEvDetail] = React.useState(null);   // a tapped event → full details
@@ -4941,10 +4997,10 @@ function GroupChatModal({ group, onClose }) {
     // so the steward's typing went and no event existed. (Audit of 7a45d4d, finding 2: this call site was
     // named in that commit's caller list and then not changed.)
     let r = null;
-    try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
+    try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id, noRsvp: !!evt.noRsvp, recur: evt.recur !== 'none' ? evt.recur : undefined, day: evt.recur !== 'none' && evt.date ? new Date(evt.date + 'T12:00:00').getDay() : undefined, nth: evt.recur === 'monthly' && evt.date ? (new Date(evt.date + 'T12:00:00').getDate() >= 29 ? -1 : Math.ceil(new Date(evt.date + 'T12:00:00').getDate() / 7)) : undefined }); } catch (e) { r = null; }
     setEvtBusy(false);
     if (r == null) { let why = ''; try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) { setEvtErr('Setting up your church’s keys… try again in a moment.'); return; } why = (window.Steward.keyWaitNote && window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
-    setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
+    setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '', noRsvp: false, recur: 'none' });
   };
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
@@ -4984,6 +5040,23 @@ function GroupChatModal({ group, onClose }) {
               <input type="time" value={evt.time} onChange={e => setEvt(v => ({ ...v, time: e.target.value }))} style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             </div>
             <input value={evt.where} onChange={e => setEvt(v => ({ ...v, where: e.target.value }))} placeholder="Where (optional)" style={{ boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', cursor: 'pointer' }}>
+                <input type="checkbox" aria-label="No RSVP" checked={!!evt.noRsvp} onChange={e => setEvt(v => ({ ...v, noRsvp: e.target.checked }))} style={{ width: 16, height: 16, accentColor: 'var(--clay)' }} />
+                No RSVP
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', cursor: 'pointer' }}>
+                <input type="checkbox" aria-label="Recurring" checked={evt.recur !== 'none'} onChange={e => setEvt(v => ({ ...v, recur: e.target.checked ? 'weekly' : 'none' }))} style={{ width: 16, height: 16, accentColor: 'var(--clay)' }} />
+                Recurring
+              </label>
+              {evt.recur !== 'none' ? (
+                <select value={evt.recur} onChange={e => setEvt(v => ({ ...v, recur: e.target.value }))} aria-label="Repeat frequency" style={{ border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)', padding: '6px 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }}>
+                  <option value="weekly">Weekly</option>
+                  <option value="fortnightly">Fortnightly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              ) : null}
+            </div>
             <div style={{ display: 'flex', gap: 7 }}>
               <button onClick={postEvent} disabled={!evt.title.trim() || !evt.date || evtBusy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '8px', fontSize: 13, opacity: (evt.title.trim() && evt.date && !evtBusy) ? 1 : 0.5 }}>{evtBusy ? 'Posting…' : 'Post event'}</button>
               {evtErr ? <div role="alert" style={{ flexBasis: '100%', marginTop: 8, fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)' }}>{evtErr}</div> : null}
@@ -12750,11 +12823,16 @@ function DashStewardsPanel({ church }) {
   // then grants the preset's capabilities — never add(pk) with no name and no caps, which left the helper with
   // [] (nothing) and an invented name. `claimedName` prefills from what the requester typed, as a starting
   // point the owner can correct. The default preset is the conservative 'general'.
-  const startApprove = (pk, claimedName) => {
+  // `appHint` (T1Finance M6): a request sent from the finance app carries app:'finance' inside its sealed body
+  // (Steward.subscribeStewardRequests). EXACTLY 'finance' pre-selects the Finance helper preset — the owner still
+  // sees the sheet and can pick another; any other value is ignored. The hint only chooses which existing preset
+  // is ticked first; the grant is always presetCaps() of what the owner confirms.
+  const startApprove = (pk, claimedName, appHint) => {
+    const preset = appHint === 'finance' ? 'finance' : 'general';
     setApproving(pk); setApprovePin(''); setApproveErr('');
     setApproveName((claimedName || '').trim());
-    setApprovePreset('general');
-    setApproveCaps((window.Steward.presetCaps && window.Steward.presetCaps('general')) || ['care', 'content', 'members']);
+    setApprovePreset(preset);
+    setApproveCaps((window.Steward.presetCaps && window.Steward.presetCaps(preset)) || ['care', 'content', 'members']);
   };
   // The caps the chosen preset grants: a fixed bundle, or — for 'custom' — whatever is ticked in approveCaps.
   // presetCaps() never returns [] for a known preset and falls back to 'general' for an unknown id, so this
@@ -12945,7 +13023,7 @@ function DashStewardsPanel({ church }) {
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to help</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
-                <button onClick={() => startApprove(r.pubkey, r.name)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>Approve…</button>
+                <button onClick={() => startApprove(r.pubkey, r.name, r.app)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>Approve…</button>
                 <button onClick={() => markHandled(r.pubkey, answeredAt(r.pubkey, r.ts))} title="Decline" aria-label="Decline this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
               </React.Fragment>}
             </div>
@@ -16024,12 +16102,19 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed,
 // small build/version line at the foot of Settings. On the APK it reads the real native version
 // (versionName + build) via the Capacitor App plugin; on the web it reads the live service-worker
 // cache version (trinity-shell-vNN) so it always reflects what's actually running.
-function StewVersion() {
+// `name` (T1Finance): the app's own name on this line. CALLERS (rule 2): DashSettings (no prop → "TrinityOne Steward",
+// unchanged) and FinanceSettings in app/finance-shell.jsx ("TrinityOne Finance").
+// The DESKTOP finance program (no Capacitor, no service worker) shows its build stamp instead: window.TRINITY_BUILD
+// (scripts/build-finance-desktop.sh) → "v0.1.0 (8c30bf1)" — the version and the short commit. Display only.
+function StewVersion({ name = 'TrinityOne Steward' } = {}) {
   const [v, setV] = React.useState('');
   React.useEffect(() => {
     let alive = true;
     const P = window.Capacitor && window.Capacitor.Plugins;
-    if (P && P.App && P.App.getInfo) {
+    const B = window.TRINITY_BUILD;
+    if (B && typeof B.version === 'string' && B.version) {
+      setV('v' + B.version + (typeof B.sha === 'string' && /^[0-9a-f]{7,40}$/.test(B.sha) ? ' (' + B.sha.slice(0, 7) + ')' : ''));
+    } else if (P && P.App && P.App.getInfo) {
       P.App.getInfo().then(i => { if (alive && i) setV('v' + i.version + ' (' + i.build + ')'); }).catch(() => {});
     } else if (typeof caches !== 'undefined' && caches.keys) {
       caches.keys().then(keys => {
@@ -16041,7 +16126,7 @@ function StewVersion() {
   }, []);
   return (
     <div style={{ textAlign: 'center', fontSize: 11.5, color: 'var(--ink-3)', marginTop: 20, fontFamily: 'var(--font-ui)' }}>
-      TrinityOne Steward{v ? ' · ' + v : ''}
+      {name}{v ? ' · ' + v : ''}
     </div>
   );
 }

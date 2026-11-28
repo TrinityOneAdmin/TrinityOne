@@ -66,7 +66,7 @@ say "service-worker cache v$cur → v$next"
 run "sed -i 's/trinity-shell-v$cur/trinity-shell-v$next/' sw.js"
 run "git add sw.js && git commit -q -m 'Release: sw cache v$cur -> v$next'"
 
-# 4. rebuild BOTH Android APKs (member + steward) and stage them for download.
+# 4. rebuild ALL THREE Android APKs (member + steward + finance) and stage them for download.
 #    versionName lives in android/app/build.gradle (gitignored = disk-only); set it by hand when you
 #    cut a new pilot build (0.9.0 -> 0.9.1). versionCode (the integer Android compares for updates) is
 #    bumped automatically here so every build supersedes the last.
@@ -104,7 +104,9 @@ if [[ $DO_APK == 1 ]]; then
   # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served
   # at ASSET_BASE). Old installs compare their versionCode to this and show an "Update available" banner.
   if [[ $DRY == 0 ]]; then
-    printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "url": "trinityone.apk",\n  "stewardVersionCode": %s,\n  "stewardUrl": "trinityone-steward.apk",\n  "date": "%s"\n}\n' "$nvc" "$vn" "$nvc" "$(date +%F)" > apk-latest.json
+    # one row per app (member / steward / finance) — scripts/apk-release-json.sh, tested on its own
+    # written to a temp file and moved into place only on success: a failure never leaves apk-latest.json truncated
+    bash scripts/apk-release-json.sh latest "$nvc" "$vn" "$(date +%F)" --out apk-latest.json
     say "update manifest → apk-latest.json (versionCode $nvc)"
     # COMMIT IT. This file is tracked, and leaving it dirty meant the next release refused to run until
     # someone committed it by hand — and, worse, that the manifest describing THIS build sat outside the
@@ -115,6 +117,9 @@ if [[ $DO_APK == 1 ]]; then
   # the member project on exit.
   say "steward APK"
   run "bash scripts/build-steward-apk.sh"
+  # finance APK — "TrinityOne Finance" (com.trinityone.finance): the same script with the finance identity and page
+  say "finance APK"
+  run "bash scripts/build-finance-apk.sh"
   # refresh the self-serve index the gateway serves at /apks.html
   run "bash scripts/build-apk-index.sh"
   # STAGE THEM WHERE THE RELAY ACTUALLY SERVES FROM. /trinityone.apk is served out of relay/apks/ — the one
@@ -124,27 +129,38 @@ if [[ $DO_APK == 1 ]]; then
   # 2026-08-15: repo root and pages-dist held the 10.5 MB build while relay/apks/ still held a 7.5 MB one from
   # 31 July, and the site advertised versionCode 197 with cf-cache-status DYNAMIC — not a cache, a different
   # and older origin. Two other release bugs had to be fixed before this one became visible at all.
-  run "mkdir -p relay/apks"
-  run "cp trinityone.apk relay/apks/trinityone.apk"
-  run "cp trinityone-steward.apk relay/apks/trinityone-steward.apk"
-  [[ $DRY == 0 ]] && say "APKs → trinityone.apk ($(du -h trinityone.apk | cut -f1)) + trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))"
+  #
+  # SIGN FIRST, STAGE AFTER (audit R4, 2026-11-17). The APKs used to be copied into relay/apks/ BEFORE the manifest was
+  # signed, so a signing failure left NEW APKs beside the OLD signed manifest there: every box fetching from this origin
+  # refused them on a hash mismatch, and a box with "keep the installer up to date" on re-downloaded every six hours.
+  # Now nothing is copied into relay/apks/ unless the manifest that describes those bytes has been signed.
   # R-9: signed APK manifest — the gateway verifies this before trusting a downloaded APK.
   # Same key the bundle signature uses (relay/release-key.pem); RELEASE_KEY overrides the path
   # (publish-relay-bundle.sh uses the same var).
   RKEY="${RELEASE_KEY:-$DIR/relay/release-key.pem}"
   if [ -s "$RKEY" ]; then
-    MEMBER_SHA="$(sha256sum trinityone.apk | cut -c1-64)"
-    STEWARD_SHA="$(sha256sum trinityone-steward.apk | cut -c1-64)"
-    printf '{"trinityone.apk":{"sha256":"%s","versionCode":%s,"versionName":"%s","date":"%s"},"trinityone-steward.apk":{"sha256":"%s","versionCode":%s,"versionName":"%s","date":"%s"}}\n' \
-      "$MEMBER_SHA" "$nvc" "$vn" "$(date +%F)" \
-      "$STEWARD_SHA" "$nvc" "$vn" "$(date +%F)" > apk-manifest.json
-    openssl pkeyutl -sign -inkey "$RKEY" -rawin -in apk-manifest.json -out apk-manifest.sig \
-      || die "APK manifest signing failed"
-    run "cp apk-manifest.json relay/apks/apk-manifest.json"
-    run "cp apk-manifest.sig relay/apks/apk-manifest.sig"
+    # member + steward + finance (the finance entry is what lets a box offer the finance app at all — F10).
+    # NOT under --dry (audit A1): a dry run used to rewrite and re-sign the real files. And never in place: the helper
+    # builds both in temp files and replaces apk-manifest.json/.sig only if every step worked — a missing APK used to
+    # truncate apk-manifest.json to 0 bytes beside the old .sig, and the gateway serves it from this directory.
+    if [[ $DRY == 1 ]]; then
+      printf '   [dry] bash scripts/apk-release-json.sh sign %s %s %s %s .\n' "$nvc" "$vn" "$(date +%F)" "$RKEY"
+    elif ! bash scripts/apk-release-json.sh sign "$nvc" "$vn" "$(date +%F)" "$RKEY" .; then
+      echo "✖ APK manifest signing failed — apk-manifest.json / .sig left exactly as they were" >&2
+      exit 1
+    fi
     [[ $DRY == 0 ]] && say "signed APK manifest → apk-manifest.json + apk-manifest.sig"
   else
     warn "no release key at $RKEY — APK manifest will not be signed (R-9 verification disabled)"
+  fi
+  run "mkdir -p relay/apks"
+  run "cp trinityone.apk relay/apks/trinityone.apk"
+  run "cp trinityone-steward.apk relay/apks/trinityone-steward.apk"
+  run "cp trinityone-finance.apk relay/apks/trinityone-finance.apk"
+  [[ $DRY == 0 ]] && say "APKs → trinityone.apk ($(du -h trinityone.apk | cut -f1)) + trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1)) + trinityone-finance.apk ($(du -h trinityone-finance.apk | cut -f1))"
+  if [ -s "$RKEY" ]; then
+    run "cp apk-manifest.json relay/apks/apk-manifest.json"
+    run "cp apk-manifest.sig relay/apks/apk-manifest.sig"
   fi
 fi
 

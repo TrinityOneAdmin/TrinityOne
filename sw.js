@@ -41,10 +41,12 @@ const EXTRA = [
 const sameOrigin = (u) => u && !/^[a-z]+:/i.test(u) && !u.startsWith('//') && !u.startsWith('#');
 const norm = (u) => (u.startsWith('./') ? u : './' + u.replace(/^\//, '')).split('#')[0];
 
-async function shellUrls() {
-  const out = new Set(EXTRA);
+// `page`/`extra` (T1Finance, 2026-11-17): the same derivation for another app shell — finance.html, cached when a
+// finance-app window is open (see 'activate'). Called with no arguments it is exactly what it always was.
+async function shellUrls(page = './index.html', extra = EXTRA) {
+  const out = new Set(extra);
   try {
-    const res = await fetch('./index.html', { cache: 'reload' });
+    const res = await fetch(page, { cache: 'reload' });
     if (res && res.ok) {
       const html = await res.text();
       for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) if (sameOrigin(m[1])) out.add(norm(m[1]));
@@ -72,10 +74,29 @@ self.addEventListener('install', (e) => {
   ))).then(() => self.skipWaiting()));
 });
 
+// THE FINANCE APP'S SHELL (T1Finance F11, 2026-11-17). The precache above is derived from index.html — the member app —
+// so a treasurer who opened finance.html had nothing of THEIR app cached, and offline the navigation fell back to
+// index.html: the member app, in the finance app's place. Most member devices never open finance.html, so it is not
+// added to everyone's precache (the 20 kB/s rule above). Instead, when this worker activates with a finance.html
+// window open — the first visit, which is the one that registered it — that page and what it references are cached.
+// Later visits are cached by the fetch handler like any other page.
+const FINANCE_SHELL = './finance.html';
+const isFinanceShell = (pathname) => /\/finance\.html$/.test(pathname);
+async function cacheFinanceShellIfOpen() {
+  try {
+    const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (!cs.some((c) => { try { return isFinanceShell(new URL(c.url).pathname); } catch (_) { return false; } })) return;
+    const urls = await shellUrls(FINANCE_SHELL, [FINANCE_SHELL]);
+    const c = await caches.open(CACHE);
+    await Promise.all(urls.map((u) => c.add(u).catch((err) => console.warn('[sw] skip', u, err && err.message))));
+  } catch (_) {}
+}
+
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys()
     .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-    .then(() => self.clients.claim()));
+    .then(() => self.clients.claim())
+    .then(() => cacheFinanceShellIfOpen()));
 });
 
 self.addEventListener('fetch', (e) => {
@@ -123,8 +144,12 @@ self.addEventListener('fetch', (e) => {
     // index.html happened not to be cached (the install loop caches each URL independently and swallows
     // individual failures) the handler resolved `undefined` into respondWith, which the browser renders as
     // "site can't be reached". Precisely the page this branch exists to prevent. AUDIT-2026-07-27.
+    // …EXCEPT THE FINANCE APP: its fallback is its own cached shell, never the member app (index.html / './'), which
+    // would put a different app on a treasurer's screen. With nothing of it cached, the honest offline page below.
+    const fin = isFinanceShell(url.pathname);
     e.respondWith(fresh(e.request).catch(async () => (
-      (await caches.match(e.request)) || (await caches.match('./index.html')) || (await caches.match('./')) ||
+      (await caches.match(e.request)) ||
+      (fin ? (await caches.match(FINANCE_SHELL)) : ((await caches.match('./index.html')) || (await caches.match('./')))) ||
       new Response('<!doctype html><meta charset=utf-8><title>TrinityOne</title><p style="font:16px system-ui;padding:2rem">TrinityOne is offline and this page was never saved to this device. Reconnect once and it will work offline afterwards.', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
     )));
     return;

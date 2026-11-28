@@ -112,7 +112,7 @@ function VerseRow({ n, html, hl, note, bookmarked, bmIcon, selected, reading, on
 }
 
 // ── header ──
-function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSettings, compare, onCompare, onListen, narrating, canListen }) {
+function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSettings, compare, onCompare, cmpAbbr, onCompareVersion, onListen, narrating, canListen }) {
   return (
     <div style={{
       position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)',
@@ -145,6 +145,11 @@ function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSetting
           borderRadius: 12, padding: '9px 12px', fontWeight: 700, fontSize: 13, color: 'var(--clay)',
           boxShadow: 'var(--shadow)', maxWidth: 150, whiteSpace: 'nowrap',
         }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{version}</span><Icon name="chevD" size={13} stroke={2.2} color="var(--clay)" style={{ flexShrink: 0 }} /></button>
+        {compare && cmpAbbr ? <button data-tour="compare-version" onClick={onCompareVersion} style={{
+          display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--line)', cursor: 'pointer', background: 'var(--surface)', flexShrink: 1, minWidth: 0,
+          borderRadius: 12, padding: '9px 12px', fontWeight: 700, fontSize: 13, color: 'var(--sage)',
+          boxShadow: 'var(--shadow)', maxWidth: 150, whiteSpace: 'nowrap',
+        }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{cmpAbbr}</span><Icon name="chevD" size={13} stroke={2.2} color="var(--sage)" style={{ flexShrink: 0 }} /></button> : null}
         <div style={{ flex: 1, minWidth: 4 }} />
       </div>
     </div>
@@ -1559,6 +1564,7 @@ function ReadScreen({ ctx }) {
   const loc = ctx.loc || Bible.defaultLoc() || { book: 43, chap: 1 };
   const version = ctx.version;
   const [compare, setCompare] = useS(false);
+  const [cmpSide, setCmpSide] = useS(null);
   const [scale, setScale] = useS(() => lsGet('trinityone.readerScale', 1.08));
   const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
   const [showStrongs, setShowStrongs] = useS(() => lsGet('trinityone.readerStrongs', true));
@@ -1739,10 +1745,10 @@ function ReadScreen({ ctx }) {
   // The text of the whole passage. A carried chapter is NOT in `verses` (that memo holds the chapter on
   // screen only), so its words are fetched when Copy or Share actually asks — never on every draw, which is
   // what the perf note on the `verses` memo above is about. Callers: _copy, _share (and nothing else).
-  const passageText = () => passage.map(s => {
-    const rows = (s.book === loc.book && s.chap === loc.chap) ? verses : (Bible.getVerses(s.book, s.chap, version) || []);
+  const passageText = () => { const useCmp = compare && cmpSide === 'right'; const ver = useCmp ? cmpAbbr : version; return passage.map(s => {
+    const rows = (s.book === loc.book && s.chap === loc.chap) ? (useCmp ? cmpVerses : verses) : (Bible.getVerses(s.book, s.chap, ver) || []);
     return s.verses.map(v => { const r = rows.find(x => String(x.v) === String(v)); return r ? r.text : ''; }).filter(Boolean).join(' ');
-  }).filter(Boolean).join(' ');
+  }).filter(Boolean).join(' '); };
   const sheetCtx = {
     toast: ctx.toast,
     _bm: () => {
@@ -1772,8 +1778,8 @@ function ReadScreen({ ctx }) {
         }
       }
     },
-    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
-    _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
+    _copy: () => { const ver = (compare && cmpSide === 'right') ? cmpAbbr : version; try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' (' + ver + ') — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
+    _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version: (compare && cmpSide === 'right') ? cmpAbbr : version }); },
     _define: () => setSheet('define'),
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
@@ -1910,7 +1916,8 @@ function ReadScreen({ ctx }) {
     <div style={{ position: 'absolute', inset: 0 }}>
       <ReadHeader ctx={ctx} loc={{ book: bname, ch: loc.chap }} version={version}
         onBook={() => setSheet('book')} onChapter={(rect) => { setCvAnchor(rect); setSheet('cv'); }} onVersion={() => setSheet('version')}
-        onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
+        onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => { setCompare(c => c ? false : true); setCmpSide(null); }}
+        cmpAbbr={compare && vlist.length > 1 ? cmpAbbr : null} onCompareVersion={() => setSheet('cmpVersion')}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
       <div ref={scrollRef} className="no-scrollbar" onScroll={onReaderScroll}
@@ -1995,19 +2002,22 @@ function ReadScreen({ ctx }) {
             </p>
           ) : (
             <div>
-              {verses.map((row, i) => (
-                <div key={row.v} style={{ display: 'flex', gap: 12, padding: '11px 0', borderBottom: '1px solid var(--line-2)' }}>
-                  <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink-3)', width: 18, flexShrink: 0, paddingTop: 5 }}>{row.v}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--clay)', letterSpacing: '.5px', marginBottom: 2 }}>{version}</div>
-                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink)' }}>{row.text}</p>
+              {verses.map((row, i) => {
+                const isSel = selSorted.some(v => String(v) === String(row.v));
+                return (
+                <div key={row.v} id={'rv-' + row.v} style={{ display: 'flex', gap: 0, padding: '11px 0', borderBottom: '1px solid var(--line-2)', cursor: 'pointer', borderRadius: 6 }}>
+                  <div onClick={() => { const already = sel.some(x => String(x) === String(row.v)); setCmpSide('left'); if (already && cmpSide !== 'left') return; selectVerse(row.v); }} style={{ flex: 1, padding: '2px 6px', borderRadius: 4, transition: 'background .15s',
+                    background: isSel && (!cmpSide || cmpSide === 'left') ? 'color-mix(in oklab, var(--clay) 30%, transparent)' : 'transparent' }}>
+                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink)' }}><sup style={{ fontFamily: 'var(--font-ui)', fontSize: '.65em', fontWeight: 700, color: 'var(--ink-3)', marginRight: 3, verticalAlign: 'super', position: 'relative', top: '-.1em' }}>{row.v}</sup>{row.text}</p>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage)', letterSpacing: '.5px', marginBottom: 2 }}>{cmpAbbr}</div>
-                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}>{cmpIdx[String(row.v)] ? cmpIdx[String(row.v)].text : ''}</p>
+                  <div style={{ width: 1, flexShrink: 0, background: 'var(--line-2)', margin: '2px 0' }} />
+                  <div onClick={() => { const already = sel.some(x => String(x) === String(row.v)); setCmpSide('right'); if (already && cmpSide !== 'right') return; selectVerse(row.v); }} style={{ flex: 1, padding: '2px 6px', borderRadius: 4, transition: 'background .15s',
+                    background: isSel && cmpSide === 'right' ? 'color-mix(in oklab, var(--sage) 30%, transparent)' : 'transparent' }}>
+                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}><sup style={{ fontFamily: 'var(--font-ui)', fontSize: '.65em', fontWeight: 700, color: 'var(--ink-3)', marginRight: 3, verticalAlign: 'super', position: 'relative', top: '-.1em' }}>{row.v}</sup>{cmpIdx[String(row.v)] ? cmpIdx[String(row.v)].text : ''}</p>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -2044,22 +2054,11 @@ function ReadScreen({ ctx }) {
         }} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
-      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={{...ctx, selectPassageBookmark: (refs) => {
-        const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(refs[0]);
-        if (!m) return;
-        ctx.gotoRef(+m[1], +m[2], +m[3]);
-        const chap = +m[2], book = +m[1];
-        const verseNums = refs
-          .map(r => { const rm = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return rm && +rm[1] === book && +rm[2] === chap ? +rm[3] : null; })
-          .filter(v => v != null);
-        setSel(verseNums);
-        setCarry([]);
-        setArrived(null);
-        setSheet('action');
-      }}} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
+      <VersionSheet open={sheet === 'cmpVersion'} onClose={close} version={cmpAbbr} ctx={ctx} onPick={(k) => { setCompare(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
       <BookPicker open={sheet === 'book'} onClose={close} version={version}

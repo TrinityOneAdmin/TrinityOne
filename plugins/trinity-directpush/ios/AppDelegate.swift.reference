@@ -1,0 +1,99 @@
+// REFERENCE: This is the modified AppDelegate.swift for the iOS background refresh feature.
+// The Mac session should apply these changes to ios/App/App/AppDelegate.swift (which is gitignored,
+// regenerated per machine by `npx cap add ios`).
+//
+// Changes from stock Capacitor AppDelegate:
+//   1. Import BackgroundTasks and UserNotifications
+//   2. Register BGAppRefreshTask in didFinishLaunchingWithOptions (BEFORE return)
+//   3. Schedule on applicationDidEnterBackground
+//   4. Set self as UNUserNotificationCenterDelegate for notification tap routing
+//   5. Implement userNotificationCenter(_:didReceive:withCompletionHandler:) for tap → messages
+
+import UIKit
+import Capacitor
+import BackgroundTasks
+import UserNotifications
+
+@UIApplicationMain
+class AppDelegate: UIResponder, UIApplicationDelegate {
+
+    var window: UIWindow?
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        // Register BGAppRefreshTask BEFORE the end of this method (Apple requirement).
+        BackgroundRefreshScheduler.register()
+
+        // Set ourselves as the notification delegate so we receive tap callbacks.
+        UNUserNotificationCenter.current().delegate = self
+
+        return true
+    }
+
+    func applicationWillResignActive(_ application: UIApplication) {
+    }
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        // Schedule the background refresh task.
+        BackgroundRefreshScheduler.scheduleIfOptedIn()
+    }
+
+    func applicationWillEnterForeground(_ application: UIApplication) {
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+    }
+
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
+    }
+
+    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
+        return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
+    }
+}
+
+// MARK: - UNUserNotificationCenterDelegate (notification tap routing)
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+
+    /// Called when the user taps a notification while the app is in the foreground.
+    /// We suppress the banner (the user is already in the app).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Don't show the notification banner if the app is already in the foreground.
+        completionHandler([])
+    }
+
+    /// Called when the user taps a notification. Read userInfo["push"] and navigate to messages.
+    /// This mirrors Android's ACTION_VIEW intent with `?push=msgs` — the app.jsx URL parameter
+    /// handling consumes it.
+    ///
+    /// COLD-START CAVEAT (audit 2026-11-25): on a cold start (app killed, iOS relaunches for tap),
+    /// didReceive fires immediately after didFinishLaunchingWithOptions. The Capacitor WebView may
+    /// not be loaded yet, so evaluateJavaScript either runs on a half-loaded page or the optional
+    /// chain returns nil. The fix is to store the pending push intent and replay it once the WebView
+    /// reports ready. Verify on device which path Capacitor takes (cold vs warm).
+    static var pendingPushRoute: String?
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let userInfo = response.notification.request.content.userInfo
+        if let push = userInfo["push"] as? String, push == "msgs" {
+            if let rootVC = window?.rootViewController as? CAPBridgeViewController,
+               let webView = rootVC.bridge?.webView, !webView.isLoading {
+                webView.evaluateJavaScript(
+                    "window.location.search = '?push=msgs';",
+                    completionHandler: nil
+                )
+            } else {
+                AppDelegate.pendingPushRoute = "msgs"
+            }
+        }
+        completionHandler()
+    }
+}

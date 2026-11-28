@@ -423,7 +423,8 @@ const BUILD = (() => {
 
 // ── THE INSTALLER THIS BOX HANDS OUT ─────────────────────────────────────────────────────────────────────
 // A church's own box IS its app store. `POST /relay-app/fetch-apk` pulls the member + steward APKs from the
-// update ORIGIN into relay/apks/, and this gateway serves them at /trinityone.apk and /trinityone-steward.apk.
+// update ORIGIN into relay/apks/, and this gateway serves them at /trinityone.apk and /trinityone-steward.apk
+// (and /trinityone-finance.apk once the update source offers it — see APK_OPTIONAL).
 // That is the whole offline / restricted-network story: a hall full of phones installed over local wifi, no
 // Play store, nobody spending mobile data.
 //
@@ -440,11 +441,12 @@ const BUILD = (() => {
 // trusted it would have reported "up to date" over exactly the fault it exists to catch. The verdict is
 // therefore decided by comparing the SIZE OF THE FILE THE ORIGIN WOULD ACTUALLY SERVE against the size of the
 // file this box holds. The version names are what an operator reads; they are never what decides.
-const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk'];
-const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward' };
+const APK_NAMES = ['trinityone.apk', 'trinityone-steward.apk', 'trinityone-finance.apk'];
+const APK_TITLES = { 'trinityone.apk': 'TrinityOne', 'trinityone-steward.apk': 'TrinityOne Steward', 'trinityone-finance.apk': 'TrinityOne Finance' };
 const APK_BLURBS = {
   'trinityone.apk': 'The app for everyone at the church — Scripture, prayer, groups, care and the church calendar.',
   'trinityone-steward.apk': 'For the people who run the church. It installs alongside the member app rather than replacing it.',
+  'trinityone-finance.apk': 'For a church’s treasurer or finance helper — the church books and nothing else. It installs alongside the other apps.',
 };
 // THE IPHONE APP, DURING THE PILOT, COMES THROUGH APPLE'S TESTFLIGHT. An iPhone cannot install an .apk, so
 // /install shows these instead. Public TestFlight links, already handed to pilot churches. Read only by
@@ -454,6 +456,15 @@ const IOS_TESTFLIGHT = {
   steward: 'https://testflight.apple.com/join/whHSMBEZ',
   testflight: 'https://apps.apple.com/app/testflight/id899247664',
 };
+// OPTIONAL INSTALLERS: offered only when the update source really offers them (T1Finance, audit F10, 2026-11-17).
+// The finance app arrived after boxes, origins and signed manifests already existed that know nothing of it, and a
+// gateway that lists it can ship before (or without) the release that first signs it. So for an optional name,
+// "the signed manifest does not list it" or "the origin has no such file" means NOT OFFERED: it is left out of what
+// a fetch reports and out of the operator's status, it is never downloaded unverified past a manifest that omits
+// it, it never makes the box read as "behind", and the member + steward installers are fetched and served exactly
+// as before. The member and steward names stay REQUIRED: a manifest that omits one of them is still refused.
+const APK_OPTIONAL = new Set(['trinityone-finance.apk']);
+const APK_MIN_BYTES = 1000000;   // below this an origin's answer is not an installer (a 404 page, an index.html fallback)
 const APK_DIR = join(DATA_DIR, 'apks');
 const APK_HELD = join(APK_DIR, 'held.json');
 const APK_DAY = 86400000;
@@ -496,10 +507,17 @@ async function originApkFacts() {
       if (j && (j.versionCode || j.versionName)) facts.latest = { versionCode: +j.versionCode || 0, versionName: String(j.versionName || ''), date: String(j.date || '') };
     }
   } catch {}
+  // An optional installer the signed manifest does not list is not on offer, whatever the origin answers for its
+  // name — otherwise a box would read itself as "behind" on a file it must refuse, and the automatic refresh would
+  // re-download the other two every six hours for ever. (A few hundred bytes; only asked when an optional name exists.)
+  let signed = null;
+  if (APK_OPTIONAL.size) { try { signed = await fetchSignedApkManifest(base); } catch {} }
   for (const name of APK_NAMES) {
+    if (APK_OPTIONAL.has(name) && signed && (signed.error || !(signed.manifest && signed.manifest[name]))) continue;
     try {
       const r = await fetch(base + '/' + name, { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(8000) });
       const len = +(r.headers.get('content-length') || 0);
+      if (APK_OPTIONAL.has(name) && len < APK_MIN_BYTES) continue;
       if (r.ok && len > 0) { facts.sizes[name] = len; facts.reachable = true; }
     } catch {}
   }
@@ -564,11 +582,18 @@ async function fetchApksFromOrigin(auto = false) {
   const stamps = (rec && rec.files) || {};
   const files = {};
   for (const f of APK_NAMES) {
+    // An optional installer a signed manifest does not list is NOT OFFERED: skipped before any download, absent from
+    // the result (the operator's panel prints every entry it gets as a success or a failure), stamp left alone.
+    if (APK_OPTIONAL.has(f) && manifest && !manifest[f]) continue;
+    // With NO signed manifest, an optional name the origin has no real file for is likewise not offered. But once a
+    // signed manifest LISTS it, the release says it exists: an origin that then 404s or sends too little is a FAILURE,
+    // reported like a member/steward one (audit A4) — while the other installers are still fetched.
+    const unlistedOptional = APK_OPTIONAL.has(f) && !(manifest && manifest[f]);
     try {
       const r = await fetch(base + '/' + f, { signal: AbortSignal.timeout(900000) });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { if (unlistedOptional) continue; throw new Error('HTTP ' + r.status); }
       const buf = Buffer.from(await r.arrayBuffer());
-      if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
+      if (buf.length < APK_MIN_BYTES) { if (unlistedOptional) continue; throw new Error('too small (' + buf.length + ' bytes) — origin may not have it'); }
       const sha = createHash('sha256').update(buf).digest('hex');
       if (manifest) {
         if (!manifest[f]) throw new Error('the signed manifest does not list ' + f + ' — refusing (the manifest must name every APK this box serves)');
@@ -1654,6 +1679,7 @@ const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — 
 const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S key, wrapped to whoever the church's PERMISSIONS admit — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
 const CHECKINPERM_D = D.CHECKINPERM;   // A PERSON IS CLEARED for children's check-in — d=checkinperm:<personPub>. Owner-only, cleartext, and CARRIES NO KEY. The half of the old grant that says WHO, split out 2026-09-09 so a church can clear its volunteers once a year as it actually does, rather than once a service.
 const CHECKINARRIVAL_D = D.CHECKINARRIVAL; // A PARENT SAYS “WE ARE HERE” — d=checkinarrival:<sid>:<authorpubhex>, authored by the parent. NOT a register row and never convertible into one: a parent never authors a trinityone/checkin:. See arrivalIdOk for the whole reason.
+const PUSHTOKEN_D = D.PUSHTOKEN; // A MEMBER'S OWN iOS push token — d=pushtoken:<memberpubhex>, the suffix IS the author. Self-bound by pushtokenIdOk (a stateless mirror of arrivalIdOk) at all four store doors, so member A cannot register under member B's key; recorded into TOKENS_BY_PUB by note(). Phase 1: registry + admission only, no sender yet.
 const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to the church + every safeguarding-capable steward. Separate from FINANCEKEY_D on purpose: they shared one derived key until 2026-08-20, so a treasurer could read every child's name, room and pickup code.
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
@@ -2526,6 +2552,7 @@ let _wsBytesIn = 0, _wsBytesOut = 0;
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
 const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church authorised as trusted infra — may pull the FULL corpus)
+const TOKENS_BY_PUB = new Map();  // AUTHOR pubkey -> { token, platform, env, ts } — a member's iOS push token (phase 1 of contentless APNs). Keyed by e.pubkey (the author), NEVER the d-suffix, though pushtokenIdOk has already proved them equal on any stored event. Derived by note()/notePushtoken, so it REBUILDS from the store on every sync/replay/boot, exactly like TRUSTED_RELAYS; nothing reads it yet (the sender is a later phase).
 const PEER_URLS = new Map();      // churchpub -> Map(relay URL -> that relay's pubkey), from the same church-signed doc; the pubkey lets syncAllChurches skip our OWN entry by identity key
 const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
@@ -3420,6 +3447,26 @@ function arrivalIdOk(e, d) {
   const a = arrivalAddrOf(d);
   if (!a) return false;                                  // ONE RULE: an address that names nobody names nobody
   return String(e.pubkey || '').toLowerCase() === a.who; // the address names them, so only they may write here
+}
+// -- A PUSH TOKEN'S ADDRESS NAMES ITS AUTHOR, AND THAT HOLDS AT EVERY DOOR ---------------------------------
+//
+// THE STATELESS HALF of the pushtoken rule, in the exact shape arrivalIdOk has and for the identical reason:
+// the generic kind-30078 member catch-all (memberDocTypeOk) binds a d-tag to a member but NOT the d-suffix to
+// the author, so without this member A could register an iOS push token under member B's key — d=pushtoken:<B>
+// signed by A — and a future sender would then wake A's phone for B, or silence B by overwriting their token.
+// This check holds NO STATE and consults NO MAP: it is a property of the event, true at every door, on every
+// relay, after every restart, so it is applied at the websocket door AND at all three ingest sites that call
+// store.put() with no accept() pass (the /import loop, syncChurchFromPeer, reconcileChurchWithPeer) — exactly
+// where arrivalIdOk and carereqIdOk sit, for exactly the same reason. The suffix is a BARE 64-hex pubkey (no
+// sessionId, unlike an arrival), so there is nothing to split: slice it, validate it, require it to equal the
+// signer. An address that names nobody is REFUSED outright, not waved through — carereqIdOk's "ONE RULE". It is
+// inert for every other document (the prefix guard returns true). The relay-wide MEMBERS.has() membership check
+// is accept()'s ALONE (it consults a hydrated map), mirroring how churchWriter stays out of arrivalIdOk.
+function pushtokenIdOk(e, d) {
+  if (!e || e.kind !== 30078 || !String(d || '').startsWith(PUSHTOKEN_D)) return true;
+  const who = String(d).slice(PUSHTOKEN_D.length);
+  if (!/^[0-9a-f]{64}$/.test(who)) return false;         // ONE RULE: an address that names nobody names nobody
+  return String(e.pubkey || '').toLowerCase() === who;   // the address names them, so only they may write here
 }
 // The session an arrival's ADDRESS names -- the identity half of `<sessionId>:<authorpubhex>`. Read from the
 // address rather than from the ['session'] tag, because the address is what the store keys on and the tag is
@@ -4552,6 +4599,18 @@ function persistChurches() { try {
   const churches = [...CHURCH_PUBS].map(h => { const m = CHURCH_META.get(h) || {}; return { npub: npubEncode(h), ...(MEDIA_HOSTS.has(h) && !envMedia.has(h) ? { media: true } : {}), ...(m.by ? { by: m.by } : {}), ...(m.at ? { at: m.at } : {}) }; });
   const tmp = CHURCH_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify({ churches, envMigrated: true }, null, 2) + '\n'); renameSync(tmp, CHURCH_FILE);
 } catch {} }
+// RECORD or DROP a member's iOS push token. Keyed by the AUTHOR (e.pubkey) as a defence in depth — never the
+// d-suffix, though pushtokenIdOk has already proved them equal on any stored event this reaches. `removed` is
+// note()'s own (a ['deleted'] tag or empty content), so an empty-content republish drops the entry. Garbage or
+// non-object content also drops it rather than storing a half-record. Lifted and driven directly (with note()
+// around it) by scripts/a-push-token-is-remembered-and-forgotten.test.mjs.
+function notePushtoken(e, removed, map = TOKENS_BY_PUB) {
+  const pub = String(e.pubkey || '');
+  if (removed) { map.delete(pub); return; }
+  let v = null; try { v = JSON.parse(e.content); } catch {}
+  if (!v || typeof v !== 'object') { map.delete(pub); return; }
+  map.set(pub, { token: v.token, platform: v.platform, env: v.env, ts: v.ts });
+}
 function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   if (!CHURCH_PUBS.size) return;
   // A CHURCH'S OWN PROFILE CARRIES ITS SAFEGUARDING SWITCHES, and until 2026-08-27 this relay never read them.
@@ -4600,6 +4659,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     const cp = e.pubkey; const pubs = new Set(), peerMap = new Map();   // peerMap: url -> that relay's pubkey, so syncAllChurches can skip OUR OWN entry by identity key (not by ORIGIN)
     if (!removed) { let list = []; try { list = JSON.parse(e.content); } catch {} for (const r of (Array.isArray(list) ? list : [])) { if (r && r.pubkey) pubs.add(String(r.pubkey)); if (r && r.url) peerMap.set(String(r.url), r && r.pubkey ? String(r.pubkey) : ''); } }
     TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, peerMap);
+  }
+  else if (d.startsWith(PUSHTOKEN_D)) {   // a member's iOS push token (phase 1 of contentless APNs) — recorded by author pubkey, never gated on CHURCH_PUBS (member-authored, unlike RELAYS_D above)
+    notePushtoken(e, removed);
   }
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
   // EVERY CAPABILITY GATE BELOW ASKS 'any', NOT A SPECIFIC ROLE — pre-push audit, 2026-08-25.
@@ -6180,6 +6242,15 @@ function accept(e) {
     // STEWARDREVOKE_D branch (served to the subject alone). Writers of stewardrevoke:, enumerated: the owner console's
     // publishStewardRevoke / clearStewardRevoke (src/steward.src.js), both church-key-signed; nothing else writes it.
     if (d.startsWith(STEWARDREVOKE_D)) return CHURCH_PUBS.has(e.pubkey);
+    // A MEMBER'S OWN iOS PUSH TOKEN — d=pushtoken:<memberpubhex>. A DEDICATED branch, BEFORE the generic member
+    // catch-all below, because that catch-all binds the d-tag to a member but NOT the suffix to the author: it
+    // would let member A store d=pushtoken:<B> and so register a token under B's key. pushtokenIdOk (stateless,
+    // mirrors arrivalIdOk) binds the suffix to the signer, and MEMBERS.has(e.pubkey) requires an EFFECTIVE member
+    // — the relay-wide MEMBERS set is correct here, not a church-scoped check, because the document names no
+    // church to scope to (it is the member's own device, not a church's content). A non-member is refused; a
+    // member registering under anyone else's key is refused; a member registering their OWN key is admitted.
+    // RETURNS, with no fall-through to the catch-all.
+    if (d.startsWith(PUSHTOKEN_D)) return pushtokenIdOk(e, d) && MEMBERS.has(e.pubkey);
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     if (!isMember) return false;
@@ -7340,6 +7411,115 @@ function canRead(e, authed) {
   const mem = GROUP_MEMBERS.get(g); return !!(mem && mem.has(authed));
 }
 
+// ══ PHASE 2 of contentless APNs: THE INGEST PUSH HOOK ═══════════════════════════════════════════════════════
+// Decides WHO is woken by a contentless "New message" push when a NEW message is stored, and hands each chosen
+// recipient to the SEAM below. Phase 2 stops at the seam; the actual APNs send is Phase 3.
+//
+// FIRED FROM EXACTLY ONE SITE — the live websocket EVENT handler, right after `note(evt)`, gated on
+// putRes==='stored'. It is deliberately NOT inside note(). note() also runs on syncChurchFromPeer (cursor pull),
+// reconcileChurchWithPeer (negentropy), the /import restore loop and the boot rehydrate (hydrateMaps), and every
+// one of those REPLAYS old / back-dated events — a hook there would fire a push per event on a corpus resync (a
+// push storm). The live EVENT site is the only place a message is genuinely NEW.
+//
+// canRead IS THE SOLE VISIBILITY GATE (child-safety critical). Everything that decides who may SEE a message —
+// DM narrowing to the ['p'] recipient, invite-only / team room membership, the adults-only-room / minor
+// safeguarding bar, and blocks — lives in canRead, so a recipient is NEVER pushed for a message they could not
+// read. TOKENS_BY_PUB is NOT a membership proof (phase-1 audit N1: a token can linger for an ex-member); canRead
+// re-proves the right to read at hook time, so presence in TOKENS_BY_PUB is never treated as permission.
+function maybePushNotify(e) {
+  if (!e) return;
+  // 1. KIND ALLOWLIST. Push ONLY for a NIP-04 DM (kind 4) or a ROOM-addressed chat line (kind 1 WITH a group id).
+  //    Everything else returns here: reactions (7), deletions (5), MyData / admin docs (30078), and an ungrouped
+  //    kind-1. gidOf(e) is the house helper for the room id (the non-network 't' tag); require it truthy.
+  const eligible = e.kind === 4 || (e.kind === 1 && !!gidOf(e));
+  if (!eligible) return;
+  // 2. Iterate ONLY the members who registered an iOS token (bounds the work), and push to each one canRead admits.
+  for (const pub of TOKENS_BY_PUB.keys()) {
+    if (pub === e.pubkey) continue;        // never push the SENDER to their own phone (canRead(e, author) is true)
+    if (!canRead(e, pub)) continue;        // THE single visibility authority — never push what this pub can't read
+    const rec = TOKENS_BY_PUB.get(pub);
+    if (rec) sendContentlessPush(pub, rec, e);   // → THE SEAM (forwards the contentless wake to the push service)
+  }
+}
+// ── THE SEAM. maybePushNotify calls this once per eligible recipient. _pushSender is null (a pure no-op) UNLESS
+// something downstream wires it: the test file-spy (TRINITY_PUSH_SPY_FILE) OR the real push FORWARDER (only when
+// TRINITY_PUSH_SERVICE_URL is set). The wiring is at the bottom of this block and the two are mutually exclusive.
+// A failed send must NEVER break ingest, so the call is wrapped and swallows.
+let _pushSender = null;
+function sendContentlessPush(pub, tokenRec, e) {
+  const f = _pushSender;
+  if (f) { try { f(pub, tokenRec, e); } catch {} }   // else: pure no-op (unconfigured — the current production reality)
+}
+
+// ── PHASE 2 (push-service redesign): the relay no longer holds the Apple .p8 or talks to Apple directly. The seam
+// now FORWARDS each eligible recipient to the central, key-holding push service (scripts/push-service.mjs), which
+// performs the real contentless APNs send. The .p8 is an UNSCOPEABLE master key: no relay — especially a
+// self-hosted one — may hold it, so ONE key-holder sends on every relay's behalf. gateway.mjs references no Apple
+// key, no JWT and no APNs endpoint any more.
+//
+// The forward authenticates with THIS relay's OWN identity key (RELAY_SK — the same key relayProof() /
+// relayNameClaimEvent() / relayIdentityUrl() sign with; NOT a new key), so the service can attribute and
+// rate-limit per relay. The body stays §15.2-CONTENTLESS — { token, env } and NOTHING ELSE — so no sender, church,
+// room or message ever crosses to the service and it structurally cannot build a communication graph.
+
+// FORWARD TIMEOUT. The push service (a8) being unreachable or slow is the COMMON case, not an exception. A refused
+// connection or a silent hang must NEVER throw into ingest nor leave an unhandled promise rejection — a stray
+// rejection reaching the process-wide handler would make an a8 blip look like an error on EVERY church's relay.
+// Bounded and unref'd; it is a safety deadline, not an operator knob. A TEST may shorten it via
+// TRINITY_PUSH_FORWARD_TIMEOUT_MS so it can drive the abort path in bounded time — that env is set by NO deploy
+// (like TRINITY_DATA_DIR / TRINITY_TAILSCALE_BIN); unset or non-numeric leaves the production 8s default untouched.
+let _pushForwardTimeoutMs = Number(process.env.TRINITY_PUSH_FORWARD_TIMEOUT_MS) || 8 * 1000;
+function _pushNote(msg) { try { console.log(msg); } catch {} }   // COARSE only — never a token, never a pubkey
+
+// Build the fire-and-forget forwarder wired as _pushSender. `serviceBase` is TRINITY_PUSH_SERVICE_URL (trailing
+// slash trimmed). The returned function NEVER throws and NEVER leaves an unhandled rejection: every async failure
+// (connection refused, DNS, timeout/abort, non-2xx) is swallowed and coarse-logged, so an a8 outage cannot touch
+// the ingest path that called it. The '/wake' path and the kind-27235 envelope shape MUST match push-service.mjs's
+// WAKE_PATH + verifyEnvelope (pinned by the forward test, not by importing the service into the relay).
+function makePushForward(serviceBase) {
+  const wakeUrl = String(serviceBase).replace(/\/+$/, '') + '/wake';
+  return function pushForward(_pub, tokenRec, _e) {
+    try {
+      const token = tokenRec && tokenRec.token;
+      if (!token) return;
+      const env = tokenRec.env === 'sandbox' ? 'sandbox' : 'production';   // the TOKEN's environment, never the relay's
+      const rawBody = JSON.stringify({ token, env });                      // CONTENTLESS: recipient token + env ONLY
+      // A relay-identity-signed NIP-98 envelope bound to method + url + sha256(body) — the EXACT shape the service
+      // verifies (verifyEnvelope in push-service.mjs). Signed with RELAY_SK, the relay's own identity key.
+      const auth = 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({
+        kind: 27235, created_at: Math.floor(Date.now() / 1000),
+        tags: [['u', wakeUrl], ['method', 'POST'], ['payload', createHash('sha256').update(rawBody).digest('hex')]],
+        content: '',
+      }, RELAY_SK))).toString('base64');
+      // BOUNDED, FIRE-AND-FORGET. Own AbortController deadline, own .catch so a reject never escapes, own .finally
+      // to clear the (unref'd) timer. The whole chain is detached — the caller (ingest) does not await it.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, _pushForwardTimeoutMs);
+      if (timer && timer.unref) timer.unref();
+      Promise.resolve()
+        .then(() => fetch(wakeUrl, { method: 'POST', headers: { 'content-type': 'application/json', authorization: auth }, body: rawBody, signal: ctrl.signal }))
+        .then((resp) => { _pushNote('push forward status ' + (resp && resp.status)); })   // non-2xx is just a status — swallowed
+        .catch(() => { _pushNote('push forward failed'); })                               // refused / DNS / timeout / abort — swallowed
+        .finally(() => { try { clearTimeout(timer); } catch {} });
+    } catch { _pushNote('push forward error'); }   // any synchronous slip — never into ingest
+  };
+}
+
+// ── WIRING. Mutually exclusive, in priority order; NEVER two at once in production. The test file-spy wins when
+// present (so the hook tests keep observing recipients and forward nothing). Otherwise the forwarder is wired ONLY
+// when TRINITY_PUSH_SERVICE_URL is set; otherwise the seam stays a pure no-op — the relay simply does not notify,
+// the same graceful nothing as a box with no push configured today. No Apple key / .p8 is read here any more.
+if (process.env.TRINITY_PUSH_SPY_FILE) {
+  // TEST OBSERVABILITY ONLY, inert in the field (set by no deploy, like TRINITY_DATA_DIR / TRINITY_TAILSCALE_BIN).
+  const _spy = process.env.TRINITY_PUSH_SPY_FILE;
+  _pushSender = (pub, _rec, e) => { try { appendFileSync(_spy, JSON.stringify({ to: pub, id: e.id, kind: e.kind, from: e.pubkey }) + '\n'); } catch {} };
+} else if (process.env.TRINITY_PUSH_SERVICE_URL) {
+  _pushSender = makePushForward(process.env.TRINITY_PUSH_SERVICE_URL);
+  console.log('push forwarding enabled — contentless wakes POST to the push service');   // no URL/token logged
+} else {
+  console.log('push forwarding not configured — notifications disabled');   // graceful no-op (no TRINITY_PUSH_SERVICE_URL)
+}
+
 // ---- static file serving ----
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -7523,15 +7703,25 @@ const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'n
 // rather than probing for vendor/babel.min.js — the relay update extracts OVER existing files without pruning,
 // so a stale babel.min.js can linger on disk after the switch and would wrongly force the lax CSP back on.
 let _strictWeb = !!process.env.STRICT_CSP;
-// Auto-detect: engage the strict, eval-free CSP only when BOTH served shells are pre-transpiled (no in-browser
-// Babel). Requiring both avoids the mismatch where a strict index.html forces a CSP that breaks a still-lax
-// steward.html — the shell that holds the church key, where an XSS backstop matters most.
-try {
-  if (!_strictWeb) {
-    const idx = readFileSync(join(ROOT, 'index.html'), 'utf8');
-    let stw = ''; try { stw = readFileSync(join(ROOT, 'steward.html'), 'utf8'); } catch {}
-    _strictWeb = !idx.includes('type="text/babel"') && !stw.includes('type="text/babel"');
+// Auto-detect: engage the strict, eval-free CSP only when EVERY served app shell is pre-transpiled (no in-browser
+// Babel). Requiring all of them avoids the mismatch where a strict index.html forces a CSP that breaks a still-lax
+// steward.html — the shell that holds the church key, where an XSS backstop matters most — or a still-lax
+// finance.html (T1Finance, 2026-11-17: the finance app, which holds a helper key). index.html must exist; a shell
+// that is absent (an older build without finance.html) does not count against it, as steward.html never did.
+// The ONE CSP below applies to every page, so one lax shell must keep it lax. scripts/build-strict-tgz.sh and
+// scripts/build-pages.sh transpile the same three shells.
+const STRICT_SHELLS = ['index.html', 'steward.html', 'finance.html'];
+function shellsAreStrict(readShell) {
+  for (const f of STRICT_SHELLS) {
+    let html = null;
+    try { html = readShell(f); } catch { html = null; }
+    if (html == null) { if (f === 'index.html') return false; continue; }
+    if (String(html).includes('type="text/babel"')) return false;
   }
+  return true;
+}
+try {
+  if (!_strictWeb) _strictWeb = shellsAreStrict((f) => readFileSync(join(ROOT, f), 'utf8'));
 } catch {}
 const CSP = [
   "default-src 'self'",
@@ -8818,6 +9008,10 @@ function serveStatic(req, res) {
           // unlike the window half it is safe here: this loop runs before hydrateMaps(), and a check that
           // needed a hydrated map would refuse a church its own archive (9f17160).
           if (!arrivalIdOk(e, dtag(e))) { invalid++; continue; }
+          // …and never a PUSH TOKEN registered under another member's key. STATELESS (pushtokenIdOk consults no
+          // map), so like arrivalIdOk it is safe on this pre-hydrateMaps() loop; the relay-wide MEMBERS.has check
+          // stays in accept() ONLY, so a restore keeps a member's own archived token even before membership rehydrates.
+          if (!pushtokenIdOk(e, dtag(e))) { invalid++; continue; }
           // …AND A CHECK-IN RECORD BELONGS TO ONE SESSION, WHICH ALSO HOLDS AT EVERY DOOR. Same argument as
           // the line above, on the register instead of on care: this route writes straight to the store with
           // no accept() pass, so without this a helper's forgery at another session's address arrives by
@@ -9606,7 +9800,7 @@ function serveStatic(req, res) {
     }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
-  // Deploy the latest APKs without SSH: pull trinityone[-steward].apk from the update ORIGIN into
+  // Deploy the latest APKs without SSH: pull trinityone[-steward|-finance].apk from the update ORIGIN into
   // relay/apks/ (the one dir the sandboxed relay can write). The static handler serves /…apk from there.
   if (route === '/relay-app/fetch-apk') {
     const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
@@ -9640,7 +9834,9 @@ function serveStatic(req, res) {
     if (req.method !== 'GET') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
     (async () => {
       const facts = await originApkFacts();
-      const files = heldApks().map((h) => ({ ...h, title: APK_TITLES[h.name] || h.name, originBytes: facts.sizes[h.name] || 0, ...apkVerdict(h, facts) }));
+      const files = heldApks()
+        .filter((h) => !APK_OPTIONAL.has(h.name) || h.present || facts.sizes[h.name])   // not held, not offered: not a row
+        .map((h) => ({ ...h, title: APK_TITLES[h.name] || h.name, originBytes: facts.sizes[h.name] || 0, ...apkVerdict(h, facts) }));
       res.writeHead(200, H); res.end(JSON.stringify({
         ok: true, origin: ORIGIN, originReachable: facts.reachable, latest: facts.latest,
         keepCurrent: SETTINGS.keepApkCurrent === true,
@@ -9991,7 +10187,7 @@ function serveStatic(req, res) {
   }
   // APKs deployed via the dashboard "Fetch latest APK" button live under relay/apks/ (writable, survives
   // self-updates). Serve from there if present; a root-level copy (manual scp) still works as a fallback.
-  if (/^\/(trinityone|trinityone-steward)\.apk$/.test(p)) {
+  if (/^\/(trinityone|trinityone-steward|trinityone-finance)\.apk$/.test(p)) {
     const relApk = join(DATA_DIR,'apks', p.slice(1));
     let st2 = null; try { st2 = statSync(relApk); } catch {}
     if (st2 && st2.isFile()) {
@@ -10268,6 +10464,7 @@ async function syncChurchFromPeer(cp, peerBase) {
     if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
     if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
     if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
+    if (!pushtokenIdOk(e, dtag(e))) return;                // …and never a push token registered under another member's key (stateless, like arrivalIdOk)
     if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
     const put = store.put(e, cp);
     if (put === 'stored') { imported++; note(e); }
@@ -10352,7 +10549,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
     let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) { await _notePeer401(cp, peerBase, r); continue; } body = await readCapped(r, MAX_IMPORT); } catch { continue; }
-    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
+    for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!pushtokenIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
 }
@@ -11030,7 +11227,7 @@ wss.on('connection', (ws, req) => {
       // revoked steward restoring their authority, a child's DM protections being stripped — and worst,
       // replaying a stale group doc put the attacker back in GROUP_MEMBERS, which canRead() consults, handing
       // them the READ history of an invite-only group. The store was always right; the running relay was not.
-      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events (a steward's approval is receipted inside — ADMITTED_RECEIPTS)
+      if (putRes === 'stored') { note(evt); maybePushNotify(evt); }   // a membership/broadcast change takes effect for subsequent events (a steward's approval is receipted inside — ADMITTED_RECEIPTS). PHASE-2 PUSH HOOK: the ONE live new-message site — maybePushNotify picks contentless-push recipients here and ONLY here (note() also runs on sync/reconcile/import/boot replays, which would storm).
       // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
       // the old code returned on that without ever applying the deletion — so the second and every later
       // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.

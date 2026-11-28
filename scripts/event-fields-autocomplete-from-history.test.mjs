@@ -33,6 +33,7 @@ const expand = (n) => {
   return { ...n, props: { ...n.props, children: expand(n.props.children) } };
 };
 const flat = (n, out = []) => { if (Array.isArray(n)) n.forEach(x => flat(x, out)); else if (n && typeof n === 'object') { out.push(n); flat(n.props.children, out); } return out; };
+const text = (n) => (Array.isArray(n) ? n.map(text).join('') : (n && typeof n === 'object') ? text(n.props && n.props.children) : (n == null || n === false ? '' : String(n)));
 
 // Build the REAL app/stew-schedule.jsx and hand back eventHistory + SchEventModal, wired to a persistent
 // useState store so a handler fired after render can be observed by RE-RENDERING (idx resets each render).
@@ -110,30 +111,40 @@ test('eventHistory is safe on empty / missing input', () => {
   assert.deepEqual(eventHistory(undefined), { names: [], wheres: [], images: [] });
 });
 
-// ── point of use: the real modal wires each field to its OWN datalist / picker ───────────────────────────────
-function datalistValues(nodes, id) {
-  const dl = nodes.find(n => n.type === 'datalist' && n.props.id === id);
-  assert.ok(dl, 'no <datalist id="' + id + '"> rendered by the modal');
-  return flat(dl).filter(n => n.type === 'option').map(n => n.props.value);
-}
+// ── point of use: the real modal wires each field to its OWN autocomplete (SchAutoInput) ───────────────────────
+// SchAutoInput wraps each input in a position:relative div and renders dropdown suggestions on typing.
+// To test: type a character (onChange opens the dropdown) → re-render → check the dropdown buttons.
 const input = (nodes, label) => nodes.find(n => n.type === 'input' && n.props['aria-label'] === label);
+function dropdownValues(nodes) {
+  const dropdowns = nodes.filter(n => n.type === 'div' && n.props.style && n.props.style.position === 'absolute' && n.props.style.zIndex === 20);
+  if (!dropdowns.length) return [];
+  return flat(dropdowns[0]).filter(n => n.type === 'button').map(n => text(n)).filter(Boolean);
+}
 
-test('the Name input is wired to a datalist of the distinct past names', () => {
+test('the Name input is wired to an autocomplete of the distinct past names', () => {
   const { render } = buildSched(EVENTS);
-  const nodes = render();
+  let nodes = render();
   const name = input(nodes, 'Title');
   assert.ok(name, 'no Title input on the form');
-  assert.equal(name.props.list, 'sch-event-names', 'the Title input is not wired to list="sch-event-names"');
-  assert.deepEqual(datalistValues(nodes, 'sch-event-names'), EXPECT.names, 'the name datalist does not carry the distinct past names');
+  name.props.onChange({ target: { value: 'P' } });
+  nodes = render();
+  const values = dropdownValues(nodes);
+  assert.ok(values.includes('Prayer'), 'typing "P" should show Prayer in suggestions; got: ' + values);
+  name.props.onChange({ target: { value: 'o' } });
+  nodes = render();
+  const afterO = dropdownValues(nodes);
+  assert.ok(afterO.includes('Social'), 'typing "o" should show Social; got: ' + afterO);
 });
 
-test('the Where input is wired to a SEPARATE datalist of the distinct past wheres', () => {
+test('the Where input is wired to a SEPARATE autocomplete of the distinct past wheres', () => {
   const { render } = buildSched(EVENTS);
-  const nodes = render();
+  let nodes = render();
   const where = input(nodes, 'Where');
   assert.ok(where, 'no Where input on the form');
-  assert.equal(where.props.list, 'sch-event-wheres', 'the Where input is not wired to list="sch-event-wheres"');
-  assert.deepEqual(datalistValues(nodes, 'sch-event-wheres'), EXPECT.wheres, 'the where datalist does not carry the distinct past wheres');
+  where.props.onChange({ target: { value: 'a' } });
+  nodes = render();
+  const values = dropdownValues(nodes);
+  assert.deepEqual(values, EXPECT.wheres, 'the where autocomplete does not carry the distinct past wheres; got: ' + values);
 });
 
 test('the image picker lists the distinct past cover images', () => {

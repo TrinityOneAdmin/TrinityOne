@@ -2087,10 +2087,29 @@ function _migrateNetKeysToSealed() {
 // the steward publishes across all of them (they don't sync to each other). Add a URL here per host.
 const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay'];   // own domain (Cloudflare). ts.net fallback (same box) removed 2026-11-10 (D0): retired/dead Tailscale path; its dead default address deadlocked every relay removal. dev-box relay dropped 2026-06-25; NAS removed 2026-06-17
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
+// IS THIS PAGE INSIDE A PACKAGED APP — one whose files came out of an app bundle, not off a network?
+// Three shapes, and in none of them is there a relay of ours at the page's own address:
+//   · the Capacitor APK — origin https://localhost (measured on the Oppo, 2026-09-02);
+//   · a Tauri program on Mac/Linux — origin tauri://localhost, so location.hostname is "localhost";
+//   · a Tauri program on Windows — origin http(s)://tauri.localhost, which RESOLVES to 127.0.0.1.
+// Before this existed only the first was known, so a Tauri build named ws://localhost/relay (or
+// ws(s)://tauri.localhost/relay) as the church's own relay: any local process running our open-source relay
+// at that address could prove a key and be admitted (rule 10). A packaged app runs on the shared pool, exactly
+// as the APK always has.
+// READ OFF location AND THE CAPACITOR BRIDGE ONLY — never a flag, query param or storage key a page could set.
+// Packaged-origin readers: ownRelay, _ownOrigin, _originIsLoopback, joinUrl, registerPush, and (via
+// window.Steward.packagedOrigin) initChurch's dev hook and stewOnSuite. Tests: scripts/a-packaged-app-talks-only-to-the-shared-relays.test.mjs.
+function _packagedOrigin() {
+  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+  const l = (typeof location !== 'undefined') ? location : null;
+  if (!l) return false;
+  if (String(l.protocol || '').toLowerCase() === 'tauri:') return true;
+  return String(l.hostname || '').toLowerCase().replace(/\.$/, '') === 'tauri.localhost';
+}
 function ownRelay() {
-  // native (Capacitor APK): location.host is just "localhost", which has no relay — use the shared pool
-  // so a phone-installed steward (or one restored via handoff) reaches the church's data.
-  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;
+  // A PACKAGED APP (Capacitor APK, Tauri program): the page's own host has no relay — use the shared pool
+  // so a phone-installed steward (or one restored via handoff) reaches the church's data. See _packagedOrigin.
+  if (_packagedOrigin()) return CANONICAL_RELAY;
   // Suite "Console only" mode (launcher ?host=off): this box isn't the church's relay — run on the community pool.
   // WHERE THE CHURCH LIVES IS A FACT, NOT A MODE. The Suite used to ask at every launch — "full suite" or
   // "console only" — and the answer wrote a hidden marker that stuck for ever. Two doors into the same
@@ -2390,6 +2409,8 @@ let _localToken = null;
 // token" — so this is the rule being made the same in both places, not a live bug. Audit item 20,
 // 2026-09-14. scripts/two-loopback-gates-agree.test.mjs pins them together.
 function _originIsLoopback() {
+  // A packaged app's "localhost" is the app bundle, not a Suite box: never ask it for the admin token.
+  if (_packagedOrigin()) return false;
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.hostname) return false;
   return /^(localhost|127\.0\.0\.1|::1)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
@@ -4128,6 +4149,16 @@ function _finBookClear(keep) {
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(FINBOOK_LS) && (!keep || k !== FINBOOK_LS + keep)) ks.push(k); }
     for (const k of ks) localStorage.removeItem(k);
   } catch (e) {}
+}
+// ONE CHURCH'S sealed book, by name — for a church that has just REMOVED this helper (T1Finance M4, 2026-11-17).
+// _finBookClear runs on every identity switch and keeps only the church being switched TO, which covers a removal
+// from the church this console is acting for; this covers the church it is NOT acting for, whose copy would otherwise
+// sit sealed on the device until the next switch. Honest limit (DOMAIN.md): this removes the local copy going
+// forward; it cannot take back what the device already held. CALLERS: subscribeStewardedChurches' two eviction
+// branches (a signed revocation notice; a roster from the church that no longer lists us).
+function _finBookDrop(cp) {
+  if (!cp) return;
+  try { localStorage.removeItem(FINBOOK_LS + cp); } catch (e) {}
 }
 // WHEN THIS DEVICE LEARNED EACH REMEMBERED BLOCK, so a lift can tell a NEWER unblock from an older one. The device copy
 // above is a bare array with no clock, which is why a remembered block could never be lifted: nothing could say an
@@ -6070,7 +6101,7 @@ function _one(filters, ms = 4000) {
 //
 // READ STRAIGHT OFF location. NOT ownRelay(), which consults _boxHostsUs — see the deadlock rule above.
 function _ownOrigin() {
-  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return '';
+  if (_packagedOrigin()) return '';   // Capacitor APK or Tauri program — see _packagedOrigin
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.host) return '';
   if (/\.(github\.io|pages\.dev|netlify\.app)$/i.test(l.host)) return '';
@@ -11603,8 +11634,15 @@ window.Steward = {
     // under seizure identifies the leadership-in-waiting as precisely as the steward list identifies the
     // leadership. If sealing is impossible we publish the request WITHOUT a name rather than with one; the
     // owner still sees the request and can identify it by key.
+    // THE APP HINT (T1Finance M6, 2026-11-17): a request sent from the finance app (finance.html sets
+    // window.TRINITY_APP = 'finance') carries app:'finance' INSIDE the sealed object, next to the name — never as a
+    // tag or in the clear, which would mark this person as the church's would-be treasurer to anyone reading the relay.
+    // It only lets the owner's approve sheet PRE-SELECT the Finance preset (subscribeStewardRequests reads it, the
+    // owner can still change it); it grants nothing. Older owner consoles read only `.name` and ignore it.
+    const sealed = { name: who };
+    try { if (typeof window !== 'undefined' && window.TRINITY_APP === 'finance') sealed.app = 'finance'; } catch (e) {}
     let content;
-    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: who }), nip44ck(sk, cp)) }); }
+    try { content = JSON.stringify({ n: nip44e(JSON.stringify(sealed), nip44ck(sk, cp)) }); }
     catch (e) { content = JSON.stringify({ n: '' }); }
     return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }), sk))
       // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
@@ -11785,13 +11823,16 @@ window.Steward = {
         // where they would decline it (audit of 0252ae9a, M2). Keep a string only, trimmed and cut to the 60 the
         // sender allows (requestSteward); anything else reads as no name, and the row still shows by its npub.
         const asName = (x) => (typeof x === 'string' ? x.trim().slice(0, 60) : '');
-        let name = '';
+        // THE APP HINT (T1Finance M6) — read from the SEALED object only, and only the exact string 'finance'; anything
+        // else (a cleartext field, another value, another type) is no hint at all. It is a pre-selection for the approve
+        // sheet and nothing more: what the helper is granted is whatever the owner confirms there.
+        let name = '', app = '';
         try {
           const c = JSON.parse(e.content);
-          if (typeof c.n === 'string' && c.n) { try { name = asName((JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name); } catch {} }
+          if (typeof c.n === 'string' && c.n) { try { const o = JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}; name = asName(o.name); if (o.app === 'finance') app = 'finance'; } catch {} }
           if (!name) name = asName(c.name);
         } catch {}
-        byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
+        byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at, ...(app ? { app } : {}) });
         emit();
       },
       oneose() { eosed = true; emit(); },
@@ -11876,6 +11917,9 @@ window.Steward = {
     try {
       if (!churchPub || !churchSk) return 'no-key';
       if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return 'native';
+      // a Tauri program: the relative /push/vapid + /push/subscribe below would go to the app bundle's own
+      // origin (on Windows, 127.0.0.1) — not a relay of ours. Never send the church-key proof there.
+      if (_packagedOrigin()) return 'unsupported';
       if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
       if (typeof Notification !== 'undefined' && Notification.permission === 'default') { const ok = await Notification.requestPermission(); if (ok !== 'granted') return 'denied'; }
       if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') return 'denied';
@@ -17797,7 +17841,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
-    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy. exceptions: per-occurrence skips/moves (items 2+4)
+    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy. exceptions: per-occurrence skips/moves (items 2+4)
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     const tags = [['d', EVENT_D + id], ['t', NET]];
@@ -17813,7 +17857,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents); },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), onEvents); },
 
   // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
   // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -17937,7 +17981,7 @@ window.Steward = {
         // 2026-08-28, where members could see the event perfectly and the steward who created it could not.
         // An event we cannot open is marked _locked rather than dropped, so a key that has not arrived yet
         // leaves a placeholder instead of silently shortening the list.
-        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp, _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });
@@ -18637,6 +18681,12 @@ window.Steward = {
   },
   isViewingNetwork() { return _viewingNetwork(); },
   isDelegated() { return !!actingChurch; },
+  // HAS THIS DEVICE SEEN ANY SIGN THAT ITS OWN KEY RUNS A CHURCH? (T1Finance audit F1, 2026-11-17.) The read of
+  // _ownKeyBlank(): true = no church name for the own key is remembered here AND the own key was never
+  // self-registered from here. ONE-DIRECTIONAL and DEVICE-LOCAL: `false` is a real sign the own key is a church; `true`
+  // is NOT proof it is not one (a church restored on a new device looks blank until its profile is read). The finance
+  // app hides "Show my 12 words" when this is false, and words its reveal honestly because `true` proves nothing.
+  ownKeyBlank() { return _ownKeyBlank(); },
   // Was this list fetched for the church and epoch the console is on now? See _listTag. The key enrolment
   // (KeyDistributor, app/stew-dashboard.jsx) uses a list only when this says yes.
   listIsCurrent(list) { const t = list && list._for; return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch; },
@@ -18865,6 +18915,7 @@ window.Steward = {
             if (stewardedChurches.has(rcp) && !isTomb && e.created_at > (seenAt.get(rcp) || 0)) {
               evicted(rcp);
               stewardedChurches.delete(rcp); save();
+              _finBookDrop(rcp);   // its books leave this device whether or not it is the church open now (M4)
               if (actingChurch === rcp) {
                 const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find(k => !_ownedPubs.has(k)) : '';
                 if (other) window.Steward.setActiveIdentity(other, { persist: false });
@@ -18924,6 +18975,7 @@ window.Steward = {
           else if (!listed && had) {
             if (e.pubkey === cp) evicted(cp);   // the notice needs the church's own signature (the eviction is unchanged)
             stewardedChurches.delete(cp); save();
+            _finBookDrop(cp);   // its books leave this device whether or not it is the church open now (M4)
             if (actingChurch === cp) {
               // We were acting as this church and it just revoked us. Landing on churchPub re-shows the OWN
               // identity — correct for a real own church, and correct when no stewarded church remains (the
@@ -19028,6 +19080,9 @@ window.Steward = {
   // ---- relays: the church's relay(s) — real status, not a mock ----
   relayList() { return relays(); },
   ownRelay() { return ownRelay(); },
+  // Is this page inside a packaged app (Capacitor APK / Tauri program)? Read by app/steward-root.jsx initChurch
+  // (the dev ?churchkey= hook) and app/stew-dashboard.jsx stewOnSuite (the Suite-only links).
+  packagedOrigin() { return _packagedOrigin(); },
   extraRelays() { return extraRelays(); },
   // ---- self-hosted "go public" (desktop Suite): make the church reachable from anywhere BEFORE inviting.
   // The console is same-origin with its own relay on loopback; these hit it directly, authing with the token
@@ -19609,14 +19664,14 @@ window.Steward = {
     catch (e) { return { ok: false, attempted: false, name: nm, reason: 'the key words are not a valid phrase' }; }
     const ts = now();
     // the same three documents createChildAccount publishes (src/fellowship.src.js), minus the guardian request
-    const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, memberSk);
-    const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: '{}' }, memberSk);
+    const join = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }), memberSk);
+    const k0 = finalizeEvent(_monotonic({ kind: 0, created_at: ts, tags: [], content: '{}' }), memberSk);
     let nameDoc = null;
     try {
       const body = JSON.stringify({ name: nm });
       const c = nip44e(body, nip44ck(memberSk, cp));          // the church key's copy — a helper console cannot open it (its sk is its own; accepted, plan I7)
       const m = nip44e(body, nip44ck(memberSk, memberPub));   // the member's own recovery copy, same shape as everyone's
-      nameDoc = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c, m }) }, memberSk);
+      nameDoc = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c, m }) }), memberSk);
     } catch (e) {}
     // JOIN FIRST, AND AS A GATE: the relay refuses a name document from a pubkey it does not already know
     // is a member, so publishing the rest over a failed join guarantees refusals (createChildAccount's rule).
@@ -19723,8 +19778,8 @@ window.Steward = {
     if (!cp || !mnemonic) return false;
     let mSk = null; try { mSk = privateKeyFromSeedWords(mnemonic); } catch (e) { return false; }
     const ts = now();
-    const nameGone = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, mSk);
-    const memberGone = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }, mSk);
+    const nameGone = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }), mSk);
+    const memberGone = finalizeEvent(_monotonic({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }), mSk);
     const r1 = await _quietSend(nameGone);
     const r2 = await _quietSend(memberGone);
     return r1.ok && r2.ok;
@@ -19739,7 +19794,8 @@ window.Steward = {
     // origin is `https://localhost` (and a self-hosted box may be a LAN IP) — those pass a naive https
     // check but are useless on someone else's phone, so treat them as non-public and fall back.
     const PUBLIC_BASE = 'https://app.trinityone.church';   // canonical public member-app URL (the relay travels separately in &relay=)
-    const isPublic = /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
+    // A packaged app's origin (https://tauri.localhost on Windows) is the app bundle: never an invite base.
+    const isPublic = !_packagedOrigin() && /^https:\/\//i.test(o) && !/^https:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(o);
     const base = isPublic ? o : PUBLIC_BASE;   // the member-app URL members open
     // carry the church's REAL relay so a member who follows from anywhere connects to the right place.
     // ownRelay() is the church's relay (a TrinityOne community node on a static host, or the box's own

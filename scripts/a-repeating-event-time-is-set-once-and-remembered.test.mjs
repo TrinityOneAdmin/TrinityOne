@@ -56,6 +56,9 @@ function mount({ stored = null } = {}) {
   const input = (label) => nodes().find(n => n && n.props && n.props['aria-label'] === label);
   return { nodes, text, input, store, writes, published, states, draw };
 }
+// The Title is now a SchAutoInput component (autocomplete), not a bare <input>: this harness does not expand children, so
+// the real setter the modal hands it is called with the typed text - the same call its inner <input> onChange makes.
+const typeTitle = (m, v) => { const f = m.nodes().find(n => n && n.type && n.type.name === 'SchAutoInput' && n.props && n.props.label === 'Title'); assert.ok(f, 'the form has no Title field - re-anchor this test'); f.props.onChange(v); };
 const press = (m, re) => { const b = m.nodes().find(n => n && n.props && typeof n.props.onClick === 'function' && re.test(String(walkText(n)))); assert.ok(b, 'no button matching ' + re); return b.props.onClick(); };
 const walkText = (n) => { const out = []; (function w(x) { if (x == null) return; if (typeof x === 'string' || typeof x === 'number') { out.push(x); return; } if (Array.isArray(x)) { x.forEach(w); return; } if (x.props) w(x.props.children); })(n); return out.join(' '); };
 
@@ -73,7 +76,7 @@ test('a stored value that is not a time is ignored, not shown', () => {
 
 test('saving an event remembers its time', async () => {
   const m = mount();
-  m.input('Title').props.onChange({ target: { value: 'Prayer breakfast' } });
+  typeTitle(m, 'Prayer breakfast');
   m.input('Time').props.onChange({ target: { value: '09:00' } });
   await press(m, /^\s*Add\b|Save|Add event|Publish/i);
   assert.equal(m.published.length, 1, 'the save did not publish - re-anchor this test (button label?)');
@@ -97,7 +100,7 @@ test('a repeat is ONE recurring event at the one Time typed; the form says it re
   assert.equal(findRow().props.hideUntil, true, 'a repeating event still offers an Until box, though it is saved as one open-ended series');
   assert.doesNotMatch(rep.text(), /dates use this time/i, 'a series still talks about "N dates". On screen: ' + rep.text().slice(0, 400));
   assert.match(rep.text(), /This event repeats weekly/i, 'a weekly repeat does not say that it repeats. On screen: ' + rep.text().slice(0, 400));
-  rep.input('Title').props.onChange({ target: { value: 'Prayer breakfast' } });
+  typeTitle(rep, 'Prayer breakfast');
   rep.input('Time').props.onChange({ target: { value: '09:00' } });
   await press(rep, /^\s*Add\b|Save|Add event|Publish/i);
   assert.equal(rep.published.length, 1, 'a weekly repeat must publish ONE recurring event, not one per date');

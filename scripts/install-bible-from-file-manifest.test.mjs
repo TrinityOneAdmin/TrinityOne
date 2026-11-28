@@ -6,10 +6,14 @@
 // the applicationId, name, icons and webDir — so without a strip step the Console would be offered for every zip
 // on the phone and do nothing when tapped (audit H2, 2026-11-14).
 //
-//   M1  the tracked manifest: a VIEW filter for scheme content only, between BEGIN/END markers; the MAIN and the
-//       autoVerify /join filters are intact. (A text check on XML is allowed: rule 3 is about app/*.jsx.)
+//   M1  the tracked manifest: a VIEW filter for scheme content only, between BEGIN/END markers; the MAIN filter is
+//       the ONLY filter outside every member-only block. (A text check on XML is allowed: rule 3 is about app/*.jsx.)
+//   M1b the /join App Link (church invites) and its comment sit in their OWN member-only block, so the Console APKs
+//       stop claiming church invite links (T1Finance step 0 / owner D5, 2026-11-17). The member manifest still has
+//       the autoVerify /join filter, unchanged.
 //   M2  THE REAL build-steward-apk.sh IS RUN, in a scratch tree with stubbed tools (gradle, npx, esbuild, aapt2).
-//       The stub gradle copies the manifest it was handed. That copy must hold no content filter; afterwards the
+//       The stub gradle copies the manifest it was handed. That copy must hold no content filter and no /join App
+//       Link — only the launcher filter; afterwards the
 //       member manifest is back, byte for byte — on success AND when the build dies half way (the existing trap).
 //   M3  scripts/manifest-member-only.sh on its own: strip, restore, a crashed previous run, no marker.
 // FAKED, and named: gradle, npx cap, esbuild, aapt2 and android-env.sh (tiny stubs in the scratch tree). Not proved
@@ -25,9 +29,15 @@ import { join } from 'node:path';
 const ROOT = new URL('../', import.meta.url).pathname;
 const MANIFEST = join(ROOT, 'android/app/src/main/AndroidManifest.xml');
 const manifest = () => readFileSync(MANIFEST, 'utf8');
+// The same removal scripts/manifest-member-only.sh makes (sed '/<!-- BEGIN [^>]*(member only) -->/,/<!-- END [^>]*-->/d').
+const stripMemberOnly = (xml) => xml.split('\n').reduce((acc, l) => {
+  if (acc.inBlock) { if (/<!-- END [^>]*-->/.test(l)) acc.inBlock = false; return acc; }
+  if (/<!-- BEGIN [^>]*\(member only\) -->/.test(l)) { acc.inBlock = true; return acc; }
+  acc.out.push(l); return acc;
+}, { inBlock: false, out: [] }).out.join('\n');
 const filters = (xml) => [...xml.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<intent-filter[\s\S]*?<\/intent-filter>/g)].map(m => m[0]);
 
-test('M1 — the tracked manifest: one VIEW filter, scheme content only, between the BEGIN and END markers; MAIN and /join untouched', () => {
+test('M1 — the tracked manifest: one VIEW filter, scheme content only, between the BEGIN and END markers; only MAIN outside every member-only block', () => {
   const xml = manifest();
   const lines = xml.split('\n');
   const b = lines.findIndex(l => /^\s*<!-- BEGIN install-from-file \(member only\) -->\s*$/.test(l));
@@ -45,17 +55,32 @@ test('M1 — the tracked manifest: one VIEW filter, scheme content only, between
   assert.deepEqual([...new Set(schemes)], ['content'], 'schemes other than content: ' + schemes);
   const mimes = [...f.matchAll(/android:mimeType="([^"]+)"/g)].map(m => m[1]).sort();
   assert.deepEqual(mimes, ['application/octet-stream', 'application/vnd.sqlite3', 'application/x-sqlite3', 'application/x-zip-compressed', 'application/zip']);
-  // outside the block: the launcher plus the two App Link filters (app host, marketing apex — QR round
-  // 2026-11-24; their coverage is proven by scripts/qr-links-open-the-app.test.mjs, this only counts them)
-  const outside = filters([...lines.slice(0, b), ...lines.slice(e + 1)].join('\n'));
-  assert.equal(outside.length, 3, 'filters outside the marked block: ' + outside.length);
-  assert.ok(outside.some(x => /android\.intent\.action\.MAIN/.test(x) && /category\.LAUNCHER/.test(x)), 'the MAIN/LAUNCHER filter is gone');
-  const applinks = outside.filter(x => /autoVerify/.test(x) || /pathPrefix="\/join"/.test(x));
-  assert.equal(applinks.length, 2, 'expected the two autoVerify App Link filters');
-  assert.ok(applinks.every(x => /android:autoVerify="true"/.test(x) && /android:scheme="https"/.test(x)), 'an App Link filter lost autoVerify or https');
-  assert.ok(applinks.some(x => /android:host="app\.trinityone\.church"/.test(x)), 'the app-host App Link filter changed');
-  assert.ok(applinks.some(x => /android:host="trinityone\.church"/.test(x)), 'the apex App Link filter changed');
+  // outside EVERY member-only block (what the Console keeps): the launcher filter and nothing else
+  const outside = filters(stripMemberOnly(xml));
+  assert.equal(outside.length, 1, 'filters outside the member-only blocks: ' + outside.length);
+  assert.ok(/android\.intent\.action\.MAIN/.test(outside[0]) && /category\.LAUNCHER/.test(outside[0]), 'the MAIN/LAUNCHER filter is gone');
   assert.ok(!outside.some(x => /scheme="content"/.test(x)), 'a content filter exists OUTSIDE the markers, where the Console strip cannot reach it');
+  assert.ok(!outside.some(x => /autoVerify|pathPrefix="\/join"/.test(x)), 'the /join App Link exists OUTSIDE the markers: the Console APKs would claim church invite links');
+});
+
+test('M1b — the /join App Link and its comment are in their own member-only block; the member manifest keeps it with autoVerify', () => {
+  const xml = manifest();
+  const lines = xml.split('\n');
+  const b = lines.findIndex(l => /^\s*<!-- BEGIN join-link \(member only\) -->\s*$/.test(l));
+  const e = lines.findIndex(l => /^\s*<!-- END join-link -->\s*$/.test(l));
+  assert.ok(b > 0 && e > b, 'the join-link BEGIN/END markers are missing, or not on their own lines in that order');
+  assert.equal(lines.filter(l => /BEGIN join-link/.test(l)).length, 1);
+  assert.equal(lines.filter(l => /END join-link/.test(l)).length, 1);
+  const block = lines.slice(b, e + 1).join('\n');
+  assert.match(block, /App links? for church invites/, 'the explanatory comment is not inside the join-link block');
+  const inside = filters(block);
+  assert.equal(inside.length, 2, 'the join-link block must hold exactly the two App Link intent-filters (app host + apex host)');
+  assert.ok(inside.every(f => /android:autoVerify="true"/.test(f)), 'every join-link filter must have autoVerify');
+  assert.ok(inside.every(f => /android\.intent\.action\.VIEW/.test(f)), 'every join-link filter must be a VIEW action');
+  assert.ok(inside.every(f => /category\.BROWSABLE/.test(f)), 'every join-link filter must be BROWSABLE');
+  assert.ok(inside.some(f => /android:host="app\.trinityone\.church"/.test(f) && /pathPrefix="\/join"/.test(f)), 'the app-host /join filter');
+  assert.ok(inside.some(f => /android:host="trinityone\.church"/.test(f) && /pathPrefix="\/join"/.test(f)), 'the apex /join filter');
+  assert.equal(filters(xml).filter(x => /pathPrefix="\/join"/.test(x)).length, 2, 'the two /join filters are in this block and nowhere else');
 });
 
 // ── a scratch tree to run the REAL build script in ───────────────────────────────────────────────────────────
@@ -67,6 +92,7 @@ function scratch({ gradleFails = false } = {}) {
   mkdirSync(join(T, 'scripts'), { recursive: true });
   copyFileSync(join(ROOT, 'scripts/build-steward-apk.sh'), join(T, 'scripts/build-steward-apk.sh'));
   copyFileSync(join(ROOT, 'scripts/manifest-member-only.sh'), join(T, 'scripts/manifest-member-only.sh'));
+  copyFileSync(join(ROOT, 'scripts/collect-app-page.sh'), join(T, 'scripts/collect-app-page.sh'));   // build-steward-apk.sh's page copy (2026-11-18)
   put('scripts/android-env.sh', `export ANDROID_HOME="${T}/sdk"\n`);
   put('scripts/sync-web.sh', 'echo member-sync\n');
   put('steward.html', '<link href="vendor/x.css"><script type="text/babel" src="app/a.jsx"></script>\n');
@@ -94,8 +120,10 @@ test('M2 — THE REAL build-steward-apk.sh hands gradle a manifest with NO conte
   assert.doesNotMatch(built, /scheme="content"/, 'THE CONSOLE APK WOULD BE OFFERED FOR EVERY ZIP: a content filter reached the build');
   assert.doesNotMatch(built, /install-from-file/, 'the marker block (or part of it) reached the build');
   assert.match(built, /android\.intent\.action\.MAIN/, 'the strip took the launcher filter with it');
-  assert.match(built, /android:autoVerify="true"/, 'the strip took the /join filter with it');
-  assert.equal(filters(built).length, 3, 'the Console manifest should keep exactly the launcher and the two App Link filters');
+  assert.doesNotMatch(built, /autoVerify/, 'THE CONSOLE APK WOULD CLAIM CHURCH INVITE LINKS: the autoVerify filter reached the build');
+  assert.doesNotMatch(built, /pathPrefix="\/join"/, 'THE CONSOLE APK WOULD CLAIM CHURCH INVITE LINKS: the /join filter reached the build');
+  assert.doesNotMatch(built, /join-link|App link for church invites/, 'the join-link block (or part of it) reached the build');
+  assert.equal(filters(built).length, 1, 'the Console manifest should keep exactly the launcher filter');
   assert.equal(s.manifestNow(), original, 'the member manifest was not restored byte for byte');
   assert.ok(!existsSync(join(s.T, 'android/app/src/main/AndroidManifest.xml.member-bak')), 'a backup file was left behind');
 });
@@ -118,7 +146,9 @@ test('M3 — manifest-member-only.sh on its own: strip removes only the marked b
   sh('strip');
   const stripped = readFileSync(m, 'utf8');
   assert.doesNotMatch(stripped, /scheme="content"/);
-  assert.equal(filters(stripped).length, 3);
+  assert.doesNotMatch(stripped, /pathPrefix="\/join"/);
+  assert.equal(filters(stripped).length, 1);
+  assert.equal(stripped, stripMemberOnly(original), 'the script and this test disagree on what a strip removes');
   assert.ok(stripped.length < original.length);
   sh('strip');                                           // a second strip (a crashed earlier build) must not back up the stripped file
   sh('restore');
@@ -126,7 +156,8 @@ test('M3 — manifest-member-only.sh on its own: strip removes only the marked b
   sh('restore');                                         // nothing to restore: harmless
   assert.equal(readFileSync(m, 'utf8'), original);
   // a manifest with no marked block is left alone by strip
-  const plain = original.replace(/[ \t]*<!-- BEGIN install-from-file[\s\S]*?<!-- END install-from-file -->\n/, '');
+  const plain = original.replace(/[ \t]*<!-- BEGIN install-from-file[\s\S]*?<!-- END install-from-file -->\n/, '')
+    .replace(/[ \t]*<!-- BEGIN join-link[\s\S]*?<!-- END join-link -->\n/, '');
   assert.notEqual(plain, original);
   writeFileSync(m, plain); sh('strip'); assert.equal(readFileSync(m, 'utf8'), plain); sh('restore'); assert.equal(readFileSync(m, 'utf8'), plain);
   const bad = spawnSync('bash', [join(ROOT, 'scripts/manifest-member-only.sh'), 'nonsense'], { encoding: 'utf8' });

@@ -44,11 +44,13 @@ test('the label is rendered ABOVE the scrolling message list, not inside it', ()
 
 test('exactly one label in the room — a second would drift from the first', () => {
   const src = strip(SRC);
-  const scroller = src.indexOf(ROOM_SCROLLER);
-  const room = src.slice(Math.max(0, scroller - 4000), scroller + 4000);
-  const n = room.split("encState === 'sealed' ? 'End-to-end encrypted'").length - 1;
+  // Count the label across the whole chat-room source, not a fixed-size window near the scroller:
+  // the non-scrolling header legitimately grew (events card, 2026-11-26) and pushed the label >4000
+  // chars above the scroller. Test 1 above still proves the single label sits ABOVE the scroller;
+  // this guards that there is exactly ONE (a drifting duplicate would make it two).
+  const n = src.split("encState === 'sealed' ? 'End-to-end encrypted'").length - 1;
   assert.equal(n, 1,
-    `${n} encryption labels around the room view. Two copies drift: group-encryption-honesty.test.mjs ` +
+    `${n} encryption labels in the chat room. Two copies drift: group-encryption-honesty.test.mjs ` +
     'exists because a room once said "End-to-end encrypted" over plain text, and a stale duplicate is ' +
     'how that comes back.');
 });

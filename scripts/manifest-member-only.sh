@@ -11,6 +11,9 @@
 # Library, no installFromBytes and no listener, so without this it would be offered for every zip on the phone and
 # do nothing when tapped. The block sits between marker comments:
 #     <!-- BEGIN install-from-file (member only) -->  ...  <!-- END install-from-file -->
+# The /join App Link (church invites, autoVerify) is member-only too (2026-11-17): a Console APK has no join flow,
+# so it must not be the app Android opens a church invite in. It sits in its own pair:
+#     <!-- BEGIN join-link (member only) -->  ...  <!-- END join-link -->
 #
 # THE BACKUP IS A WHOLE-FILE COPY, so `restore` is exact by construction. THE HARD-KILL CASE (audit L3): a SIGKILL or
 # a power cut between `strip` and `restore` runs no trap, and leaves the manifest stripped with the backup beside it.

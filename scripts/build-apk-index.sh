@@ -13,6 +13,7 @@ meta() {
   case "$1" in
     trinityone)                 echo "TrinityOne — member (Pilot)|main|The member app: Scripture, community, library. Pilot build (0.9.x). The main APK to test.";;
     trinityone-steward)         echo "TrinityOne — Steward (Pilot)|main|The steward console: create & manage a church on a phone. Separate app ID (com.trinityone.steward), installs alongside the member build.";;
+    trinityone-finance)         echo "TrinityOne Finance (Pilot)|main|For a church's treasurer or finance helper: the church books and nothing else. Separate app ID (com.trinityone.finance), installs alongside the member and steward builds.";;
     trinityone-all)             echo "All features (everything)|claude/all-features|Notifications + DM dot + settings + currency, ecash-at-rest security, name-clash, and the full CCEL library incl. a Church Fathers shelf. The one member APK to test.";;
     trinityone-steward-all)     echo "Steward console (all)|claude/all-features|Steward console with QR handoff + responsive mobile layout. Separate app ID (com.trinityone.steward), installs alongside the member build.";;
       trinityone-test-bundle)     echo "Test bundle (4 branches)|claude/test-bundle|Notifications + settings + currency, security hardening (ecash-at-rest), name-clash disambiguation, and the CCEL Christian library (books download on demand). The main build to test.";;

@@ -9,11 +9,11 @@
 // The mount tests that existed (removing-a-relay-asks-first.test.mjs and its kin) slice ONE function out of a
 // file with fnBody() and compile it alone. That cannot tell a free identifier that is a bug from one that is
 // a helper defined elsewhere — both are absent from the slice. This module instead does what steward.html
-// and scripts/build-steward-apk.sh do:
+// and scripts/collect-app-page.sh (the APK and desktop builds' page copy) do:
 //   • every `<script type="text/babel" src="app/*.jsx">` in steward.html, in that order, steward-root.jsx
 //     included (its ReactDOM mount is a no-op here; the hooks it installs on window are real);
-//   • each compiled by esbuild with `jsx: 'transform'` — the same transform build-steward-apk.sh runs as
-//     `esbuild --jsx=transform` for the steward APK (React.createElement, no automatic runtime);
+//   • each compiled by esbuild with `jsx: 'transform'` — the same transform collect-app-page.sh runs as
+//     `esbuild --jsx=transform` for the APKs and the desktop finance program (React.createElement, no automatic runtime);
 //   • run in ONE `vm` context whose global object IS the fake `window`. That is the browser's model exactly:
 //     a top-level `const` in one file is visible to the next, `window.todayISO = …` (recur.jsx) makes a bare
 //     `todayISO` resolve, and a name nobody defined throws ReferenceError at the line that reads it.
@@ -39,12 +39,20 @@ import { transformSync } from 'esbuild';
 const ROOT = new URL('../', import.meta.url);
 
 // The console's script list, read from steward.html so the harness follows the page rather than restating it.
-export function consoleScripts() {
-  const html = readFileSync(new URL('steward.html', ROOT), 'utf8');
+// `page` (T1Finance, 2026-11-17): 'finance.html' reads the finance app's own, shorter list instead. Every existing
+// caller passes nothing and gets steward.html exactly as before.
+export function consoleScripts(page = 'steward.html') {
+  const html = readFileSync(new URL(page, ROOT), 'utf8');
   const out = [];
   for (const m of html.matchAll(/<script type="text\/babel" src="(app\/[^"]+\.jsx)"><\/script>/g)) out.push(m[1]);
-  if (!out.length) throw new Error('steward.html lists no text/babel scripts — re-anchor console-screens.mjs');
+  if (!out.length) throw new Error(page + ' lists no text/babel scripts — re-anchor console-screens.mjs');
   return out;
+}
+// The plain (non-babel) scripts a page loads from its own directory, in order — e.g. finance.html's finance-mode.js.
+// Only the ones that need no DOM and no network are meant to be run through loadConsole's `vendor` list.
+export function pagePlainScripts(page) {
+  const html = readFileSync(new URL(page, ROOT), 'utf8');
+  return [...html.matchAll(/<script src="([^"]+\.js)"><\/script>/g)].map(m => m[1]);
 }
 
 const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, n) => Object.is(v, b[n]));
@@ -155,7 +163,7 @@ export function fakeBrowser({ Steward = fakeSteward(), TrinityBackup = {} } = {}
 // of these is a hole in fakeBrowser(), any other name is a free identifier in the console's own code.
 export const BROWSER_GLOBALS = new Set(['window', 'document', 'localStorage', 'sessionStorage', 'location', 'navigator', 'history', 'screen', 'alert', 'confirm', 'prompt', 'CustomEvent', 'Event', 'KeyboardEvent', 'MouseEvent', 'HTMLElement', 'Element', 'Node', 'Image', 'FileReader', 'XMLHttpRequest', 'MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'matchMedia', 'getComputedStyle', 'getSelection', 'scrollTo', 'open', 'print', 'self', 'innerWidth', 'innerHeight', 'devicePixelRatio', 'ReactDOM', 'Capacitor', 'indexedDB', 'caches', 'Notification', 'speechSynthesis', 'ImageData', 'OffscreenCanvas', 'DOMParser', 'XMLSerializer', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask', 'console', 'crypto', 'TextEncoder', 'TextDecoder', 'URL', 'URLSearchParams', 'btoa', 'atob', 'Blob', 'File', 'FormData', 'Headers', 'Request', 'Response', 'AbortController', 'structuredClone', 'performance', 'fetch', 'WebSocket', 'Worker', 'AudioContext', 'MediaRecorder', 'HTMLCanvasElement', 'HTMLInputElement', 'DataTransfer', 'ClipboardItem']);
 
-// Compile each console script the way build-steward-apk.sh does and run them all in one context whose global
+// Compile each console script the way scripts/collect-app-page.sh does and run them all in one context whose global
 // is `window`. Returns the value of `expr` evaluated in that context afterwards — e.g. '({ StewBackupModal })'.
 // `vendor` lists plain (non-jsx) bundles to run first, as steward.html does — only ones that need no DOM and no
 // network. vendor/finance-ledger.js is such a bundle; vendor/steward.js is not (sockets, storage, timers).

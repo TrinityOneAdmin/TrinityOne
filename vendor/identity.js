@@ -12068,6 +12068,12 @@ zoo`.split("\n"));
       } catch (e) {
       }
     }
+    try {
+      const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge;
+      if (P && P.deleteBgKey) Promise.resolve(P.deleteBgKey()).catch(() => {
+      });
+    } catch (e) {
+    }
   }
   function widgetSignalForgot() {
     try {
@@ -12086,6 +12092,12 @@ zoo`.split("\n"));
     }
     try {
       localStorage.removeItem("trinityone.directpush.optin");
+    } catch (e) {
+    }
+    try {
+      const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge;
+      if (P && P.deleteBgKey) Promise.resolve(P.deleteBgKey()).catch(() => {
+      });
     } catch (e) {
     }
     const W = _widgetPlugin();

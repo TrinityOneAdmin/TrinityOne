@@ -552,7 +552,7 @@ async function shareCardShare(verse, st, probe, ctx, opts) {
     return ctx.shareText(text, 'A verse for you');
   }
   const title = String(verse.ref || '').trim() || 'A verse';
-  return window.shareOneFile({ bytes, filename: shareCardFilename(verse.ref), cacheDir: 'verse-card', mime: 'image/png', title, dialogTitle: 'Share this verse', text, slot: 'verse' }, ctx);
+  return window.shareOneFile({ bytes, filename: shareCardFilename(verse.ref), cacheDir: 'verse-card', mime: 'image/png', title, dialogTitle: 'Share this verse', slot: 'verse' }, ctx);
 }
 
 // `cv`: the same look for the canvas — [colour, fallback] pairs; a var(--x) is resolved on the card on screen.

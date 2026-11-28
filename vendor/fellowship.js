@@ -7576,16 +7576,8 @@
   var _staticHost = !!(_loc && _loc.host && /\.(github\.io|pages\.dev|netlify\.app)$/i.test(_loc.host));
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
-  var CANONICAL_RELAYS = [
-    "wss://app.trinityone.church/relay"
-    // a8 / master-01 via Cloudflare — primary (own domain)
-    // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
-    // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
-    // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
-    // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
-    // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
-    // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
-  ];
+  var _TEST_RELAY_OVERRIDE = /^wss:\/\//i.test("") ? "" : "";
+  var CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE ? [_TEST_RELAY_OVERRIDE] : ["wss://app.trinityone.church/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function churchRelaysRaw() {
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
@@ -8874,6 +8866,17 @@
   }
   var profiles = {};
   var pendingProfiles = /* @__PURE__ */ new Set();
+  var ABOUT_MAX = 160;
+  function _profileAbout(v) {
+    if (typeof v !== "string") return "";
+    return v.length > ABOUT_MAX ? v.slice(0, ABOUT_MAX).replace(/[\uD800-\uDBFF]$/, "") : v;
+  }
+  function _profilePin(v) {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    if (typeof v.ref !== "string" || typeof v.text !== "string" || typeof v.version !== "string") return null;
+    if (!v.ref || v.ref.length > 80 || !v.text || v.version.length > 40) return null;
+    return { ref: v.ref, text: v.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""), version: v.version };
+  }
   var _profQueue = /* @__PURE__ */ new Set();
   var _profTimer = null;
   function _flushProfiles() {
@@ -8886,7 +8889,7 @@
         try {
           const m = JSON.parse(e.content);
           const had = profiles[e.pubkey] || {};
-          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: m.about || "", nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
+          profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || "", picture: m.picture || "", about: _profileAbout(m.about), pinnedVerse: _profilePin(m.pinnedVerse), k0: true, nip05: m.nip05 || "", hidden: !!m.hidden, av: m.av || void 0 };
           _k0Seen.add(e.pubkey);
           _recoverOwnProfile(e);
           saveProfiles();
@@ -9216,14 +9219,22 @@
       changed = true;
     }
     for (const k of ["about", "picture"]) {
-      if (!cur[k] && typeof m[k] === "string" && m[k]) {
-        next[k] = m[k];
+      const v = k === "about" && typeof m[k] === "string" ? m[k].slice(0, 160).replace(/[\uD800-\uDBFF]$/, "") : m[k];
+      if (!cur[k] && typeof v === "string" && v) {
+        next[k] = v;
         changed = true;
       }
     }
     if (!cur.av && m.av && typeof m.av === "object") {
       next.av = m.av;
       changed = true;
+    }
+    if (!cur.pinnedVerse && m.pinnedVerse && typeof m.pinnedVerse === "object" && !Array.isArray(m.pinnedVerse)) {
+      const pv = m.pinnedVerse;
+      if (typeof pv.ref === "string" && typeof pv.text === "string" && typeof pv.version === "string" && pv.ref && pv.ref.length <= 80 && pv.text && pv.version.length <= 40) {
+        next.pinnedVerse = { ref: pv.ref, text: pv.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""), version: pv.version };
+        changed = true;
+      }
     }
     if (!changed) return false;
     window.Fellowship.myProfile = next;
@@ -10093,6 +10104,13 @@
       av,
       picture: p && p.picture,
       nip05: p && p.nip05 || "",
+      // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
+      about: _profileAbout(p && p.about),
+      // the member's pinned verse ({ ref, text, version }) or null; validated again here like `about`.
+      pinnedVerse: _profilePin(p && p.pinnedVerse),
+      // true only when this record came from a kind-0 EVENT (k0), so '' above means "they cleared it" and not "we have not heard yet".
+      // The record is replaced by setProfile and init (which copy myProfile) and those carry no k0, so a bio just saved here reads as unknown.
+      aboutKnown: !!(p && p.k0),
       // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
       signedBy: voice && voice.name ? voice.name : "",
       signedRole: voice && voice.office ? voice.office : "",
@@ -10265,7 +10283,7 @@
   }
   function _outboxFull() {
     let n = 0;
-    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && !o.pushtoken && _mine(o)) n++;
     return n >= OUTBOX_MAX;
   }
   var FAILED_MAX = 500;
@@ -10312,6 +10330,11 @@
   function _outboxDropJoins(cp) {
     const n = _outbox.length;
     _outbox = _outbox.filter((o) => !(o && o.join === cp && _mine(o)));
+    return _outbox.length !== n;
+  }
+  function _outboxDropPushTokens(p) {
+    const n = _outbox.length;
+    _outbox = _outbox.filter((o) => !(o && o.pushtoken && o.evt && o.evt.pubkey === p));
     return _outbox.length !== n;
   }
   _outboxLoad();
@@ -11936,7 +11959,7 @@
               const meta = JSON.parse(e.content);
               const had = profiles[e.pubkey] || {};
               const nm = meta.name || meta.display_name || had.name || "";
-              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: meta.about || "", nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
+              profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || "", about: _profileAbout(meta.about), pinnedVerse: _profilePin(meta.pinnedVerse), k0: true, nip05: meta.nip05 || "", hidden: !!meta.hidden, av: meta.av || void 0 };
               saveProfiles();
               const m = hub.byPub.get(e.pubkey);
               if (m) {
@@ -12351,10 +12374,18 @@
       const prev = profiles[pub] || {};
       const p = {
         name: (meta.name != null ? meta.name : prev.name || "").trim(),
-        about: (meta.about != null ? meta.about : prev.about || "").trim(),
+        // missing `about` keeps the stored one, '' clears it; either way capped to 160 - _profileAbout's rule,
+        // inline for the reason given in _recoverOwnProfile
+        about: (meta.about != null ? meta.about : prev.about || "").trim().slice(0, 160).replace(/[\uD800-\uDBFF]$/, ""),
         picture: (meta.picture != null ? meta.picture : prev.picture || "").trim()
       };
       if (meta.av || prev.av) p.av = meta.av || prev.av;
+      {
+        const raw = meta.pinnedVerse !== void 0 ? meta.pinnedVerse : prev.pinnedVerse;
+        if (raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.ref === "string" && typeof raw.text === "string" && typeof raw.version === "string" && raw.ref && raw.ref.length <= 80 && raw.text && raw.version.length <= 40) {
+          p.pinnedVerse = { ref: raw.ref, text: raw.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""), version: raw.version };
+        }
+      }
       if (_churchPhotosOff() || _myPhotoReset()) {
         p.picture = "";
         if (p.av) p.av = _stripPhoto(pub, p.av);
@@ -12364,6 +12395,7 @@
       const wire = { about: p.about, picture: p.picture };
       if (p.av) wire.av = p.av;
       if (p.hidden) wire.hidden = true;
+      if (p.pinnedVerse) wire.pinnedVerse = p.pinnedVerse;
       const body = JSON.stringify(wire);
       const wireUnchanged = _profilePubFor === pub && _profilePubBody === body;
       let evt = null, sent = false, lost = false, queued = false;
@@ -12393,7 +12425,7 @@
               } catch (x) {
               }
             }
-          } else if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+          } else if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null) || meta && meta.pinnedVerse !== void 0) {
             let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
             const _why = _pubReason(e);
             const _advice = _why === "not-sent" ? "It didn\u2019t leave this phone \u2014 none of your church\u2019s relays could be confirmed. Ask a steward." : _why === "refused" ? "Your church\u2019s relay refused it, so trying again won\u2019t help. Ask a steward." : "Try again when you have a signal.";
@@ -12408,7 +12440,7 @@
         }
       } else {
         console.warn("[fellowship] profile publish withheld \u2014 our own kind-0 has not arrived, publishing now would blank it");
-        if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+        if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null) || meta && meta.pinnedVerse !== void 0) {
           lost = true;
           try {
             if (window.trinityToast) window.trinityToast("Your photo and profile details aren\u2019t saved yet \u2014 this phone is still connecting to your church\u2019s relay. Try again in a moment.");
@@ -13212,6 +13244,71 @@
       }
       return { ok: true, evt };
     },
+    // ── PUSH-NOTIFICATION DEVICE TOKEN (iOS/APNs; the "Prompt alerts" tier only). See reference/SCOPE-notifications.md §15.
+    // The member signs a REPLACEABLE kind-30078 doc that binds their own pubkey -> APNs device token. The relay-side
+    // registry (Linux) verifies the signature and that the author is the <pub> in the d-suffix, then the push hook at
+    // ingest (gateway.mjs) looks the token up and sends a CONTENTLESS "New message" push. An APNs token is a routing
+    // handle, not a secret, so the content is cleartext — nothing here encrypts and nothing reads the member's key.
+    //
+    // PUSH-ONLY, BY OWNER DECISION (2026-11-25): only the Prompt-alerts tier calls this. The On-device polling tier never
+    // does — it must not, because registering a token is unrelated to (and must not arm) the lock-readable "Stay open 30
+    // days" Keychain path that polling needs and push exists to remove. Keep the two code paths apart.
+    //
+    // CALLERS: publishPushToken — screens-extras.jsx dpSetTier() 'push' branch + the apnsToken listener (1 logical site).
+    //          deletePushToken  — screens-extras.jsx dpSetTier() leaving-'push' branch (1 site).
+    //          _buildPushTokenEvent — publishPushToken (here) + scripts/the-push-token-doc-binds-the-members-own-pubkey.test.mjs (lifted).
+    // MULTI-CHURCH NOTE: queued to the outbox and retried to the ACTIVE church's publish set (publishSetFor(churchPub),
+    // re-derived at send time); a member who follows several churches registers on the active one's relay. Per-church
+    // fan-out is a later concern (iOS pilot is single-church).
+    _buildPushTokenEvent({ pub: pub2, token, env, ts }) {
+      const t = ts || Math.floor(Date.now() / 1e3);
+      return {
+        kind: 30078,
+        created_at: t,
+        tags: [["d", "trinityone/pushtoken:" + pub2], ["t", NET], ["p", pub2]],
+        content: JSON.stringify({ token: String(token || "").toLowerCase(), platform: "ios", env: env === "sandbox" ? "sandbox" : "production", ts: t })
+      };
+    },
+    // QUEUE FIRST, THEN ATTEMPT — the same rule as announceMembership and a group message. This WAS a bare one-shot
+    // `_publishBounded(churchRelays(), evt)` with a console.warn on failure: no retry, no persistence, nothing on
+    // screen. That is the exact silent-failure the join path was fixed out of (UX audit 2026-08-04): a member who
+    // enables Prompt alerts right after joining hits a COLD gate cache (the church's own box is not proved yet, or
+    // the socket is still coming up), the one send is refused as an outage, and the token is LOST — so the relay
+    // never learns where to push and the member gets no notifications, with no error anywhere. The outbox retries
+    // across reconnects and restarts (trinity-relay-returned / online / the 45s tick) and re-derives the relay set
+    // at send time via publishSetFor(cp), so a box the church proves LATER still gets the token. The item carries
+    // `cp` (the active church) so _itemChurch routes it exactly where announceMembership's join goes.
+    // RETRY-PATH USERS (rule 2): _outbox / _outboxSave / _outboxFlush / _itemChurch / _outboxRelays(→publishSetFor)
+    // / _outboxFull / _outboxDropPushTokens — a pushtoken item is just a church item to all of them (cp set, no
+    // groupId/peer/join/leave), so none needed a pushtoken branch except the one-per-device replace rules above.
+    async publishPushToken(token, env) {
+      if (!sk) await window.Fellowship.ready;
+      const tok = String(token || "").toLowerCase();
+      if (!/^[0-9a-f]{8,}$/.test(tok)) return { ok: false, reason: "bad-token" };
+      const evt = finalizeEvent2(_monotonicF(window.Fellowship._buildPushTokenEvent({ pub, token: tok, env })), sk);
+      _outboxDropPushTokens(pub);
+      _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || "", at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
+      _outboxSave();
+      try {
+        await _outboxFlush((o) => o && o.evt && o.evt.id === evt.id);
+      } catch (e) {
+      }
+      const delivered = !_outbox.some((o) => o && o.evt && o.evt.id === evt.id);
+      return { ok: true, evt, delivered };
+    },
+    async deletePushToken() {
+      if (!sk) await window.Fellowship.ready;
+      _outboxDropPushTokens(pub);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pushtoken:" + pub], ["t", NET], ["p", pub], ["deleted", "1"]], content: "" }), sk);
+      _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || "", at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
+      _outboxSave();
+      try {
+        await _outboxFlush((o) => o && o.evt && o.evt.id === evt.id);
+      } catch (e) {
+      }
+      const delivered = !_outbox.some((o) => o && o.evt && o.evt.id === evt.id);
+      return { ok: true, evt, delivered };
+    },
     // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
     // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
     subscribeChurchGroups(churchNpub, onGroups) {
@@ -13511,18 +13608,18 @@
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
       const childProfile = {};
-      const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+      const k0 = finalizeEvent2(_monotonicF({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }), childSk);
       let childNameDoc = null;
       try {
         const body = JSON.stringify({ name });
         const ct = encrypt(body, getConversationKey(childSk, cp));
         const own = encrypt(body, getConversationKey(childSk, childPub));
-        childNameDoc = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+        childNameDoc = finalizeEvent2(_monotonicF({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c: ct, m: own }) }), childSk);
       } catch (e) {
       }
-      const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
+      const join2 = finalizeEvent2(_monotonicF({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }), childSk);
       const ack = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:ack:" + cp], ["p", pub]], content: JSON.stringify({ parent: pub, church: cp }) }, childSk);
-      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }, sk);
+      const req = finalizeEvent2(_monotonicF({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }), sk);
       const why = { join: "", k0: "", name: "", req: "" };
       const sent = async (e, key) => {
         if (!e) return false;
@@ -13943,7 +14040,7 @@
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/roster:", (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), cb);
     },
     subscribeChurchEvents(churchNpub, cb) {
-      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions) }), cb);
+      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), cb);
     },
     // ── Meal trains / Care module (member side) ──
     // Read the church's Care config so the member app knows whether to show the Care card (and, for
@@ -15933,7 +16030,7 @@
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", exceptions: _evExceptions(c.exceptions), byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp, byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
             emit();
           } catch {
           }
@@ -15982,7 +16079,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6);
-      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: ev.imgPos && typeof ev.imgPos === "object" ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: typeof ev.imgZoom === "number" && ev.imgZoom > 1 ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions) });
+      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: ev.imgPos && typeof ev.imgPos === "object" ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: typeof ev.imgZoom === "number" && ev.imgZoom > 1 ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp, recur: ev.recur || "", day: ev.date ? (/* @__PURE__ */ new Date(ev.date + "T12:00")).getDay() : 0, nth: ev.recur === "monthly" ? (/* @__PURE__ */ new Date(ev.date + "T12:00")).getDate() >= 29 ? -1 : Math.ceil((/* @__PURE__ */ new Date(ev.date + "T12:00")).getDate() / 7) : null });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/event:" + id], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);

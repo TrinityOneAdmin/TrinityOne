@@ -267,6 +267,15 @@ function suggestCode(book, type) {
 // funds; the per-row amounts must add up EXACTLY to the total (integer minor units) or Save is disabled —
 // the bank leg is the single balancing posting, so a mismatch is exactly what the engine's balance check
 // refuses. ATTACHMENT: an optional receipt image, shrunk client-side and published as a side blob.
+// Where "record a transaction" (the + FAB) should send you back to. The FAB forces the Transactions tab so the new
+// entry is visible, which used to strand you there on close. Pure so a test can run it: ev is 'open' | 'save' | 'close';
+// returns the origin to remember and the tab to go to (null = stay put). A SAVE keeps you on Transactions (you came to
+// see the entry land); only a cancel/close returns you to where you tapped +.
+function finRecordNav(origin, ev, tab) {
+  if (ev === 'open') return { origin: origin == null ? tab : origin, goTo: 'transactions' };
+  if (ev === 'save') return { origin: null, goTo: null };
+  return { origin: null, goTo: (origin != null && origin !== tab) ? origin : null };
+}
 function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   const init = initial || {};
   const [dir, setDir] = React.useState(init.dir === 'out' ? 'out' : 'in');
@@ -383,7 +392,7 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   // anyone who does not distinguish sage from clay.
   const seg = (v, label) => (
     <button onClick={() => setDir(v)} title={v === 'in' ? 'Record money coming in, such as a gift' : 'Record money going out, such as a bill'} aria-pressed={dir === v} aria-label={label + (dir === v ? ' (selected)' : '')}
-      style={{ flex: 1, height: 42, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
+      style={{ flex: 1, minHeight: 44, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14,
       background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{(v === 'in' ? '+ ' : '− ') + label}</button>
   );
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
@@ -405,13 +414,13 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
           <div style={{ border: '1px solid var(--line)', borderRadius: 11, padding: 8, marginBottom: 8 }}>
             {rows.map((r, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-                <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} aria-label={'Split category ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', flex: 1 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-                <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} aria-label={'Split fund ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', width: 112 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
-                <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" aria-label={'Split amount ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', width: 84 }} />
-                <button onClick={() => removeRow(i)} title="Remove this split row" aria-label={'Remove split row ' + (i + 1)} disabled={rows.length <= 1} style={{ border: 'none', background: 'transparent', cursor: rows.length <= 1 ? 'default' : 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 2, opacity: rows.length <= 1 ? 0.4 : 1 }}>×</button>
+                <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} aria-label={'Split category ' + (i + 1)} style={{ ...bkFld, height: 44, fontSize: 13, padding: '0 8px', flex: 1 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} aria-label={'Split fund ' + (i + 1)} style={{ ...bkFld, height: 44, fontSize: 13, padding: '0 8px', width: 112 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" aria-label={'Split amount ' + (i + 1)} style={{ ...bkFld, height: 44, fontSize: 13, padding: '0 8px', width: 84 }} />
+                <button onClick={() => removeRow(i)} title="Remove this split row" aria-label={'Remove split row ' + (i + 1)} disabled={rows.length <= 1} style={{ ...bkRowIconBtn, border: 'none', background: 'transparent', cursor: rows.length <= 1 ? 'default' : 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 2, opacity: rows.length <= 1 ? 0.4 : 1 }}>×</button>
               </div>
             ))}
-            <button onClick={addRow} style={{ border: '1px dashed var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add category</button>
+            <button onClick={addRow} style={{ border: '1px dashed var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add category</button>
           </div>
           <div style={{ fontSize: 12.5, marginBottom: 12, color: splitSum === total && total > 0 ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)', fontWeight: 600 }}>
             Split {booksFmt(splitSum, book)} of {booksFmt(total, book)}{total > 0 && splitSum !== total ? ' · ' + (splitSum < total ? booksFmt(total - splitSum, book) + ' left to assign' : booksFmt(splitSum - total, book) + ' over') : ''}
@@ -2082,7 +2091,7 @@ function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
   // falls back to the wide layout rather than throwing. Default false = show all tabs (desktop).
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
   const pill = (active, onClick, label, key, extra) => (
-    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, minHeight: 44, boxSizing: 'border-box',
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, minHeight: 44, boxSizing: 'border-box',
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', ...(extra || {}) }}>{label}</button>
   );
   const activeMore = FIN_TABS_MORE.find(t => t.key === tab);
@@ -2098,14 +2107,14 @@ function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
   // DESKTOP / wide (>=760): all tabs inline, flex-wrap, no "More" button.
   if (!narrow) {
     return (
-      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
         {FIN_TABS.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
       </div>
     );
   }
   // NARROW / phone (<760): two primary pills + the More ▾ popover.
   return (
-    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
       {FIN_TABS_PRIMARY.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
       <div data-fin-more style={{ position: 'relative' }}>
         {pill(!!activeMore || moreOpen, () => setMoreOpen(o => !o), (activeMore ? 'More · ' + activeMore.label : 'More') + ' ▾', 'more', { display: 'inline-flex', alignItems: 'center' })}
@@ -2204,7 +2213,7 @@ function BillPaymentDialog({ book, bill, mode, amount0, date0, onConfirm, onClos
   );
 }
 
-function DashFinance() {
+function DashFinance({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}) {
   const F = window.FinanceLedger;
   const S = window.Steward;
   const [finKey, setFinKey] = React.useState(() => !!(S && S.financeKeyRing && S.financeKeyRing().length));
@@ -2220,10 +2229,34 @@ function DashFinance() {
   // ledger is the most misleading thing this screen can display: it reads as "your church has never recorded
   // anything", which is exactly what a treasurer must not be told by mistake.
   if (S && S.actingChurch && !finKey) return <div style={{ padding: 28, maxWidth: 520, color: 'var(--ink-2)', lineHeight: 1.5 }}><div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--ink)', marginBottom: 8 }}>Waiting for the books to be shared with you</div>The church keeps its accounts under their own key. Whoever holds the church key needs to give you the <b>Finance</b> permission — once they do, the books open here on their own. If they already have, give it a moment to arrive.</div>;
-  return <DashFinanceBook />;
+  return <DashFinanceBook finTab={finTab} setFinTab={setFinTab} finMoreOpen={finMoreOpen} setFinMoreOpen={setFinMoreOpen} />;
 }
 
-function DashFinanceBook() {
+// MAY THIS CONSOLE POST INTO A MEMBERS' CHANNEL AT ALL? (T1Finance step 0, 2026-11-17; S0-1 2026-11-17)
+// The relay accepts a post into a broadcast, invite-only or team group from the church key, or from a delegate
+// whose capabilities include `content` (scripts/gateway.mjs, stewardCan(…, 'content')). "Post to members" used to
+// be offered whenever a broadcast group existed, so a finance-only helper pressed it and was refused with a
+// "check your connection" message that was not true.
+//   not delegated (no actingChurch)        → the church key: may post;
+//   delegated, roster NOT yet known        → may NOT (S0-1). myStewardCaps() is null until the church's steward
+//                                            roster arrives, and is reset on every church switch — reading that
+//                                            null as "unscoped" offered Post to a finance-only helper for the
+//                                            seconds before the roster landed, and the relay refused it;
+//   delegated, roster known, caps null     → a delegate with no capabilities recorded is a full steward at the
+//                                            relay (stewardCan's no-caps compat branch): may post;
+//   delegated, roster known, caps an array → may post only if it carries 'content'.
+// `rosterKnown` is the caller's Steward.listIsFresh(<the roster list from useStewardStewards()>) — a GENUINE settled read
+// of the roster for this church and epoch (audit F3: stewardStreamLoaded, used before, also flipped on an empty
+// end-of-stored-events delivery while the caps were still unknown). The same signal FinanceShell uses (app/finance-shell.jsx).
+function financeMayPostToMembers(S, rosterKnown) {
+  if (!(S && S.actingChurch)) return true;
+  if (!rosterKnown) return false;
+  const caps = (typeof S.myStewardCaps === 'function') ? S.myStewardCaps() : null;
+  if (!Array.isArray(caps)) return true;
+  return caps.indexOf('content') >= 0;
+}
+
+function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}) {
   const F = window.FinanceLedger;
   const S = window.Steward;
   const _bIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
@@ -2402,8 +2435,18 @@ function DashFinanceBook() {
   const [showRemovedBills, setShowRemovedBills] = React.useState(false);   // reveal voided bills in the list (audit trail)
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
-  const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors|insights (default Transactions)
-  const [moreOpen, setMoreOpen] = React.useState(false);  // the tab strip's "More ▾" popover (owner 2+More layout)
+  const [_localTab, _localSetTab] = React.useState('transactions');   // fallback when called without lifted tab state (full Steward console)
+  const [_localMoreOpen, _localSetMoreOpen] = React.useState(false);  // fallback: tab strip "More" popover
+  const tab = finTab !== undefined ? finTab : _localTab, setTab = setFinTab || _localSetTab, moreOpen = finMoreOpen !== undefined ? finMoreOpen : _localMoreOpen, setMoreOpen = setFinMoreOpen || _localSetMoreOpen;
+  const _tabStripLifted = finTab !== undefined;
+  const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
+  const _tabRef = React.useRef(tab); _tabRef.current = tab;                 // the effect below has [] deps, so it reads the live tab through this
+  const _recOriginRef = React.useRef(null);                                   // tab that was active when + was tapped
+  React.useEffect(() => {
+    const onRecord = () => { const n = finRecordNav(_recOriginRef.current, 'open', _tabRef.current); _recOriginRef.current = n.origin; setTab(n.goTo); setRecording(true); };
+    window.addEventListener('finance-record', onRecord);
+    return () => window.removeEventListener('finance-record', onRecord);
+  }, []);
   const [donorTab, setDonorTab] = React.useState('donors'); // Donors tab sub-tab: 'donors' (records) | 'giving' (giving-by-member + Gift Aid)
   const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
   const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y | custom
@@ -2419,6 +2462,8 @@ function DashFinanceBook() {
   const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
   const [reconciling, setReconciling] = React.useState(null);// reconcile modal: null closed · {} new · {id,…} reopen a saved reconciliation
   const [recurringOpen, setRecurringOpen] = React.useState(false); // collapsible "Recurring payments" panel
+  const [actionsOpen, setActionsOpen] = React.useState(false);    // "Actions" edge tab dropdown (Import/Reconcile/Share)
+  React.useEffect(() => { if (!actionsOpen) return; const h = e => { if (e.key === 'Escape') setActionsOpen(false); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [actionsOpen]);
   const [tplEditing, setTplEditing] = React.useState(null);  // template modal: null closed · {} add · {id,…} edit
   const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
   const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
@@ -2441,7 +2486,11 @@ function DashFinanceBook() {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const broadcastGroup = groups.find(g => g.kind === 'broadcast');
-  const canPost = !!(useRelay && S && S.publishPost && broadcastGroup);
+  // THE ROSTER, so a delegate's capabilities are KNOWN before Post is offered (S0-1). The same shared stream the
+  // console's other screens and FinanceShell hold; holding it here is also what re-renders this screen when it lands.
+  const _finRoster = window.useStewardStewards ? window.useStewardStewards() : [];
+  const _rosterKnown = !!(S && S.listIsFresh && S.listIsFresh(_finRoster));
+  const canPost = !!(useRelay && S && S.publishPost && broadcastGroup && financeMayPostToMembers(S, _rosterKnown));
   const postStatementToMembers = async (model, text, targetId, opts) => {
     // TARGET (2026-10-30): the treasurer chooses where the statement goes — whole-church announcements (the
     // default) OR a particular group — via the "Send to" picker in FinanceShareStatement. `targetId` is that
@@ -3223,6 +3272,22 @@ function DashFinanceBook() {
   const fyYear = fyStart.slice(0, 4);   // the fiscal year the Budget panel plans/compares against
   const budgetForFy = budgets.find(b => b.year === fyYear) || budgets[0] || null;   // one budget per year; fall back to any saved budget
   const ie = React.useMemo(() => F.incomeExpenditure(book, { from: fyStart }), [tick, fyStart]);
+  const monthlyIE = React.useMemo(() => {
+    const months = [];
+    const fy = fyStart.slice(0, 7);
+    const now = todayISO().slice(0, 7);
+    let cur = fy;
+    while (cur <= now && months.length < 12) {
+      const from = cur + '-01';
+      const [y, m] = cur.split('-').map(Number);
+      const nm = m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0');
+      const to = nm + '-00';
+      const r = F.incomeExpenditure(book, { from, to });
+      months.push({ month: cur, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1], income: r.income, spending: r.expenditure });
+      cur = nm;
+    }
+    return months;
+  }, [tick, fyStart]);
   const bank = React.useMemo(() => F.trialBalance(book), [tick]).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
   const recent = React.useMemo(() => book.journal.slice(-16).reverse(), [tick]);
@@ -3305,16 +3370,16 @@ function DashFinanceBook() {
   };
 
   const stat = (label, val, tone) => (
-    <div style={{ ...bkCard, flex: 1, minWidth: 150 }}>
+    <div role="group" aria-label={label} style={{ ...bkCard, flex: 1, minWidth: 150 }}>
       <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</div>
-      <div style={{ fontSize: 25, fontWeight: 800, marginTop: 6, color: tone || 'var(--ink)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{val}</div>
+      <div style={{ fontSize: 25, fontWeight: 800, marginTop: 6, color: tone || 'var(--ink)', fontFamily: 'var(--font-display, var(--font-ui))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{val}</div>
     </div>
   );
 
   // One pill in the tab strip (and in the Donors sub-tab strip). The label is a single string child, so the
   // point-of-use tests' button() helper (which matches a button's string kids) can select a tab by its label.
   const tabBtn = (active, onClick, label, key) => (
-    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13,
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, minHeight: 44, boxSizing: 'border-box',
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
   );
 
@@ -3329,8 +3394,8 @@ function DashFinanceBook() {
     </div>
   );
   return (
-    <div style={{ padding: '4px 2px 40px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+    <div style={{ padding: '4px 2px 80px', position: 'relative' }}>
+      {!_tabStripLifted && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
         <div>
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
           <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
@@ -3339,42 +3404,86 @@ function DashFinanceBook() {
           <button onClick={() => setImporting(true)} title="Bring in transactions from a bank statement file" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
           <button onClick={() => setReconciling({})} title="Reconcile a bank statement against your ledger and check the closing balance" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
           <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
-          {/* Share statement lives HERE (header), not in the Transactions tab's card — it is a whole-screen
-              action, reachable from any tab. Not disabled on bookErrors: it only reads + posts a summary. */}
           <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
-          {/* Small, quiet "support the project" affordance — opens the same BooksDonate panel the monthly nudge
-              uses. GATED on DONATE_ON (off for now): with no owned Lightning address yet, nothing donate-facing
-              may render, or it solicits to an unclaimed handle. Flips back on with DONATE_ON once the address is real. */}
           {DONATE_ON && <button onClick={() => setDonate(true)} title="Support TrinityOne — a gift helps cover the shared relays" className="sk-btn" style={{ padding: '10px 14px', fontSize: 13, border: '1px solid var(--line)', background: 'transparent', color: 'var(--ink-3)' }}><Icon name="gift" size={15} color="var(--clay)" /> Support the project</button>}
         </div>
-      </div>
+      </div>}
+      {_tabStripLifted && !actionsOpen && <button onClick={() => setActionsOpen(true)} aria-label="Open actions" style={{
+        position: 'fixed', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
+        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '14px 0', width: 36, minHeight: 44, borderRadius: '13px 0 0 13px',
+        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {/* Word only, centred both ways. The icon + gap + letter-spacing were what left the word sitting off-centre
+            with empty space: letter-spacing puts a trailing gap in the span's layout box, and the old marginTop
+            cancelled it on the wrong side once the span is turned 180deg. No letter-spacing, so nothing to cancel;
+            lineHeight 1 keeps the vertical box exactly one em wide; the pill is content-sized (padding only). */}
+        <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 11, lineHeight: 1, fontWeight: 800, whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' }}>ACTIONS</span>
+      </button>}
+      {_tabStripLifted && actionsOpen ? <>
+        <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
+        <div style={{ position: 'fixed', right: 0, top: '40%', zIndex: 40, minWidth: 200, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '12px 0 0 12px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', padding: '4px 0', animation: 'finDrawerFade .15s ease' }}>
+          <button onClick={() => { setActionsOpen(false); setImporting(true); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', minHeight: 44, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => { setActionsOpen(false); setReconciling({}); }} disabled={bookErrors.length > 0} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', minHeight: 44, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
+          <button onClick={() => { setActionsOpen(false); setSharing(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', minHeight: 44, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
+        </div>
+      </> : null}
 
       {bookErrors.length > 0 && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, marginBottom: 16, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
         <Icon name="alert" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your books are incomplete — {bookErrors[0]}. Don't re-enter anything; new entries can't be saved until it arrives. If this persists, check your connection.</div>
       </div>}
 
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-        {stat('In the bank', booksFmt(cash, book))}
-        {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
-        {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
-        {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
-      </div>
-
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Funds</div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {funds.map(f => (
-            <div key={f.fund} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 14px', minWidth: 150 }}>
-              <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>{f.name}{f.kind === 'restricted' ? ' · restricted' : f.kind === 'designated' ? ' · designated' : ''}</div>
-              <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{booksFmt(f.balance, book)}</div>
-            </div>
-          ))}
+      {(!_tabStripLifted || tab === 'summary') ? <>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+          {stat('In the bank', booksFmt(cash, book))}
+          {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
+          {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
+          {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
         </div>
-      </div>
+        <div style={{ ...bkCard, marginBottom: 16 }}>
+          <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Funds</div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {funds.map(f => (
+              <div key={f.fund} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 14px', minWidth: 150 }}>
+                <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>{f.name}{f.kind === 'restricted' ? ' · restricted' : f.kind === 'designated' ? ' · designated' : ''}</div>
+                <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2 }}>{booksFmt(f.balance, book)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {monthlyIE.length > 0 && window.stewIsFinanceApp && window.stewIsFinanceApp() && (() => {
+          const max = Math.max(1, ...monthlyIE.map(m => Math.max(m.income, m.spending)));
+          const W = 320, H = 200, padL = 8, padR = 8, padT = 24, padB = 32;
+          const cw = (W - padL - padR) / monthlyIE.length;
+          const bw = Math.min(cw * 0.35, 18);
+          const ch = H - padT - padB;
+          return (
+            <div style={{ ...bkCard, marginBottom: 16 }}>
+              <div style={{ fontWeight: 800, marginBottom: 10, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Income vs Spending</div>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, marginBottom: 8 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--sage, #4f7a5e)', flexShrink: 0 }} /> Income</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--clay-deep, #b4462f)', flexShrink: 0 }} /> Spending</span>
+              </div>
+              <svg viewBox={'0 0 ' + W + ' ' + H} style={{ width: '100%', height: 'auto' }} role="img" aria-label="Monthly income vs spending bar chart">
+                {monthlyIE.map((m, i) => {
+                  const x = padL + i * cw + cw / 2;
+                  const ih = (m.income / max) * ch;
+                  const sh = (m.spending / max) * ch;
+                  return React.createElement('g', { key: m.month },
+                    React.createElement('rect', { x: x - bw - 1, y: padT + ch - ih, width: bw, height: ih, rx: 3, fill: 'var(--sage, #4f7a5e)' }),
+                    React.createElement('rect', { x: x + 1, y: padT + ch - sh, width: bw, height: sh, rx: 3, fill: 'var(--clay-deep, #b4462f)' }),
+                    React.createElement('text', { x: x, y: H - 8, textAnchor: 'middle', style: { fontSize: 10, fill: 'var(--ink-3)', fontFamily: 'var(--font-ui)' } }, m.label)
+                  );
+                })}
+                <line x1={padL} y1={padT + ch} x2={W - padR} y2={padT + ch} stroke="var(--line)" strokeWidth="1" />
+                <text x={padL} y={padT - 6} style={{ fontSize: 9, fill: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{booksFmt(max, book)}</text>
+              </svg>
+            </div>
+          );
+        })()}
+      </> : null}
 
-      {/* ── TAB STRIP (under the Funds card): 2 primary tabs + a "More ▾" menu; content below swaps to ONE panel ── */}
-      <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />
+      {!_tabStripLifted && <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />}
 
       {/* ── TRANSACTIONS tab (default): recent transactions, then the Recurring-payments collapsible ── */}
       {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
@@ -3382,13 +3491,13 @@ function DashFinanceBook() {
           <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Recent transactions</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {/* Share statement moved to the Finance header (reachable from any tab); only Export CSV stays here. */}
-            <button onClick={exportCsv} title="Download all transactions as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
+            <button onClick={exportCsv} title="Download all transactions as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export CSV</button>
           </div>
         </div>
         {exported ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '-4px 0 10px' }}>{exported}</div> : null}
         {recent.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 14, padding: '10px 0' }}>No transactions yet — record your first with the button above.</div>}
         {recent.map(e => { const v = booksEntryView(book, e); return (
-          <div key={e.seq} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+          <div key={e.seq} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: '1px solid var(--line)', flexWrap: 'wrap' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.wasReversed ? 'line-through' : 'none', opacity: v.wasReversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}{v.wasReversed ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>reversed</span> : ''}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{v.date}{v.fund && v.fund !== 'general' ? ' · ' + ((book.funds.get(v.fund) || {}).name || v.fund) : ''}</div>
@@ -3411,7 +3520,7 @@ function DashFinanceBook() {
       {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button onClick={() => setRecurringOpen(r => !r)} title="Show or hide standing orders and other repeating payments" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{recurringOpen ? '▾' : '▸'} Recurring payments</button>
-          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add recurring</button>}
+          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add recurring</button>}
         </div>
         {recurringOpen && (
           <div style={{ marginTop: 12 }}>
@@ -3439,8 +3548,8 @@ function DashFinanceBook() {
         {(() => {
           const m = rptModel;
           const chip = (active, onClick, label, key) => (
-            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
-              border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
+            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, minHeight: 44, boxSizing: 'border-box',
+              border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', display: 'inline-flex', alignItems: 'center' }}>{label}</button>
           );
           const line = (label, val, bold) => (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', fontWeight: bold ? 800 : 400 }}>
@@ -3490,16 +3599,30 @@ function DashFinanceBook() {
             {m.fundMovements && m.fundMovements.length ? (
               <div style={{ marginBottom: 8 }}>
                 <div style={{ ...bkLbl, margin: '6px 0 4px' }}>Fund movements</div>
-                <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 3px' }}><span style={{ flex: 1 }} /><span style={{ width: 86, textAlign: 'right' }}>Opening</span><span style={{ width: 70, textAlign: 'right' }}>In</span><span style={{ width: 70, textAlign: 'right' }}>Out</span><span style={{ width: 86, textAlign: 'right' }}>Closing</span></div>
-                {m.fundMovements.map(r => (
-                  <div key={r.fund} style={{ display: 'flex', fontSize: 13, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
-                    <span style={{ flex: 1, minWidth: 0 }}>{r.name}{kindOf(r)}</span>
-                    <span style={{ width: 86, textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
-                    <span style={{ width: 70, textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
-                    <span style={{ width: 70, textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
-                    <span style={{ width: 86, textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
-                  </div>
-                ))}
+                {narrow ? (
+                  m.fundMovements.map(r => (
+                    <div key={r.fund} style={{ borderTop: '1px solid var(--line)', padding: '8px 0' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{r.name}{kindOf(r)}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 12px', fontSize: 12.5 }}>
+                        <span style={{ color: 'var(--ink-3)' }}>Opening</span><span style={{ textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
+                        <span style={{ color: 'var(--sage, #4f7a5e)' }}>In</span><span style={{ textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
+                        <span style={{ color: 'var(--clay-deep, #b4462f)' }}>Out</span><span style={{ textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
+                        <span style={{ color: 'var(--ink-3)' }}>Closing</span><span style={{ textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (<>
+                  <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 3px' }}><span style={{ flex: 1 }} /><span style={{ width: 86, textAlign: 'right' }}>Opening</span><span style={{ width: 70, textAlign: 'right' }}>In</span><span style={{ width: 70, textAlign: 'right' }}>Out</span><span style={{ width: 86, textAlign: 'right' }}>Closing</span></div>
+                  {m.fundMovements.map(r => (
+                    <div key={r.fund} style={{ display: 'flex', fontSize: 13, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+                      <span style={{ flex: 1, minWidth: 0 }}>{r.name}{kindOf(r)}</span>
+                      <span style={{ width: 86, textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
+                      <span style={{ width: 70, textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
+                      <span style={{ width: 70, textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
+                      <span style={{ width: 86, textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
+                    </div>
+                  ))}
+                </>)}
               </div>
             ) : null}
             {m.receipts ? (() => { const rp = m.receipts; return (
@@ -3516,9 +3639,9 @@ function DashFinanceBook() {
             {m.balance ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Balance sheet</div>{line('Assets', m.balance.assets)}{line('Liabilities', m.balance.liabilities)}{line('Net funds', m.balance.funds, true)}</div> : null}
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-              <button onClick={exportReportPdf} title="Download this report as a PDF to print or share" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export PDF</button>
-              <button onClick={exportReportCsv} title="Download this report as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
-              <button onClick={exportReportHtml} title="Download this report as a printable web page" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export HTML</button>
+              <button onClick={exportReportPdf} title="Download this report as a PDF to print or share" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export PDF</button>
+              <button onClick={exportReportCsv} title="Download this report as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export CSV</button>
+              <button onClick={exportReportHtml} title="Download this report as a printable web page" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Export HTML</button>
             </div>
             {rptFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', marginTop: 8 }}>{rptFlash}</div> : null}
           </div>
@@ -3582,8 +3705,8 @@ function DashFinanceBook() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '2px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Funds</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => setMoving(true)} disabled={bookErrors.length > 0} title="Move money from one fund to another" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Move between funds</button>
-                <button onClick={() => setFundEditing({})} title="Create a new fund" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add fund</button>
+                <button onClick={() => setMoving(true)} disabled={bookErrors.length > 0} title="Move money from one fund to another" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1, minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Move between funds</button>
+                <button onClick={() => setFundEditing({})} title="Create a new fund" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add fund</button>
               </div>
             </div>
             {[...book.funds.values()].map(f => (
@@ -3598,7 +3721,7 @@ function DashFinanceBook() {
             {/* ── Accounts, grouped by type (the reserved fund-transfer + accounts-receivable accounts are exempt and hidden) ── */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Accounts</div>
-              <button onClick={() => setAccEditing({})} title="Create a new account (category)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add account</button>
+              <button onClick={() => setAccEditing({})} title="Create a new account (category)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add account</button>
             </div>
             {ACCT_TYPES_ORDER.map(type => {
               const list = [...book.accounts.values()].filter(a => a.type === type && a.id !== 'fund-transfer' && a.id !== 'accounts-receivable');
@@ -3624,8 +3747,8 @@ function DashFinanceBook() {
             {/* ── Currencies (Phase 8, multi-currency) — OPT-IN, OFF by default (silent-£). Turning it on reveals
                 the currency + rate fields on the Record form and the Foreign balances / Revalue list below. ── */}
             <div style={{ margin: '18px 0 8px', fontWeight: 700, fontSize: 14 }}>Currencies</div>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderTop: '1px solid var(--line)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={!!book.multiCurrency} onChange={e => setMultiCurrencyOn(e.target.checked)} aria-label="Record transactions in other currencies" style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 0', borderTop: '1px solid var(--line)', cursor: 'pointer', minHeight: 44 }}>
+              <input type="checkbox" checked={!!book.multiCurrency} onChange={e => setMultiCurrencyOn(e.target.checked)} aria-label="Record transactions in other currencies" style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }} />
               <span style={{ fontSize: 13.5, color: 'var(--ink)' }}>Record transactions in other currencies
                 <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', fontWeight: 400, marginTop: 2 }}>Your books stay in {CCY_SYM[book.baseCurrency] || book.baseCurrency}. A foreign entry is converted at the rate you enter; the original amount is kept alongside it.</span>
               </span>
@@ -3652,7 +3775,7 @@ function DashFinanceBook() {
         </div>
         {donorTab === 'donors' && <div style={{ marginTop: 4 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-          <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>
+          <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add donor</button>
           </div>
             {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member{giftAidOn ? ' and (if your church uses it) Gift Aid' : ''}.</div>}
             {donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => (
@@ -3720,8 +3843,8 @@ function DashFinanceBook() {
       {/* ── INVOICES tab ── */}
       {tab === 'invoices' && <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginBottom: 12 }}>
-            <button onClick={() => setContactEditing({})} title="Add a customer / contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add contact</button>
-            <button onClick={() => setInvEditing({})} disabled={bookErrors.length > 0} title="Create and issue an invoice" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New invoice</button>
+            <button onClick={() => setContactEditing({})} title="Add a customer / contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ Add contact</button>
+            <button onClick={() => setInvEditing({})} disabled={bookErrors.length > 0} title="Create and issue an invoice" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1, minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>+ New invoice</button>
         </div>
         {(() => {
           const today = booksTodayISO();
@@ -3849,7 +3972,7 @@ function DashFinanceBook() {
       })()}
 
 
-      {recording && <BooksRecord book={book} onRecord={recordEntry} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
+      {recording && <BooksRecord book={book} onRecord={(e) => { _recOriginRef.current = finRecordNav(_recOriginRef.current, 'save', tab).origin; return recordEntry(e); }} donors={donors} initial={recording && recording.initial} onClose={() => { const n = finRecordNav(_recOriginRef.current, 'close', tab); _recOriginRef.current = n.origin; setRecording(false); if (n.goTo) setTab(n.goTo); }} />}
       {importing && <FinanceImport book={book} F={F} donors={donors} onPost={importStatement} onClose={() => setImporting(false)} />}
       {viewingAtt ? <BooksReceiptView data={viewingAtt} onClose={() => setViewingAtt('')} /> : null}
       {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}

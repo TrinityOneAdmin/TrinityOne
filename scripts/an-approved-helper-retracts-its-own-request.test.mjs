@@ -114,6 +114,8 @@ function harness({ proven = [BOX, CANON] } = {}) {
   };
   const scope = proxyOf(stubs);
   const lift = (anchor, name) => new Function('scope', `with (scope) { return (${fnBody(VENDOR, anchor, name)}); }`)(scope);
+  // THE REAL _packagedOrigin (APK / Tauri program -> shared pool), lifted, never stubbed: ownRelay() consults it first.
+  stubs._packagedOrigin = lift('function _packagedOrigin() {', '_packagedOrigin');
   stubs.ownRelay = lift('function ownRelay() {', 'ownRelay');
   stubs.relaysRaw = lift('function relaysRaw() {', 'relaysRaw');
   stubs._boxHostsKey = lift('function _boxHostsKey() {', '_boxHostsKey');

@@ -1044,15 +1044,23 @@ const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static 
 // down. Also the fallback when a church is joined by bare npub (no relay in the link) and we have none
 // yet (e.g. the CDN-hosted app), so its name + groups resolve. Add a host's wss URL here once it joins
 // the pool — these relays don't sync to each other, so clients write to all of them.
-const CANONICAL_RELAYS = [
-  'wss://app.trinityone.church/relay',                    // a8 / master-01 via Cloudflare — primary (own domain)
-  // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
-  // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
-  // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
-  // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
-  // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
-  // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
-];
+// ⚠ COMPILE-TIME TEST-RELAY OVERRIDE (live-sim isolation, "option B"). A build made with
+// TRINITY_TEST_RELAY=wss://… (esbuild --define:__TEST_RELAY__, see scripts/build-fellowship.sh) makes the WHOLE
+// shared canonical pool that ONE relay — so EVERY consumer (the export window.Fellowship.CANONICAL_RELAYS, the
+// follow path app/app.jsx:~1105 which addRelay()s F.CANONICAL_RELAYS, churchRelaysRaw, and each
+// `CANONICAL_RELAYS.includes` shared-pool check) routes to the isolated test relay and NOT app.trinityone.church.
+// In every normal/Release build __TEST_RELAY__ is "" so this is byte-for-byte the old value. ADMISSION IS
+// UNTOUCHED: _netRelays / churchRelays() still require the relay to PROVE its identity key, and the pin list
+// (CANONICAL_RELAY_PUBS) is not edited — an unpinned test relay is admitted the ordinary way (it proves our key,
+// root 2), never as a pinned canonical. The `'wss://app.trinityone.church/relay'` literal stays inline so the
+// is-this-relay-one-of-ours pin guardian still reads the shipped canonical URL. `typeof` guards the define so a
+// test that evaluates this with __TEST_RELAY__ absent keeps the production path.
+// ⚠ RELAY SESSION: review against reference/RELAY-ADMISSION.md before merge.
+// (History, now in git: a dead ts.net path to the same box was removed 2026-11-10 (D0); dev-box 2026-06-25; NAS 2026-06-17.)
+// The regex lives in its own statement so the CANONICAL_RELAYS line stays a clean, regex-free literal the
+// is-this-relay-one-of-ours pin guardian can parse (it reads the quoted canonical URL out of that statement).
+const _TEST_RELAY_OVERRIDE = (typeof __TEST_RELAY__ !== 'undefined' && /^wss:\/\//i.test(__TEST_RELAY__)) ? __TEST_RELAY__ : '';
+const CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE ? [_TEST_RELAY_OVERRIDE] : ['wss://app.trinityone.church/relay'];   // a8 / master-01 via Cloudflare — primary (own domain, pinned)
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 // Church content (members, groups, plans, devotionals) must stay reachable on the church's SHARED relays
 // even when the member also runs a private/home relay — otherwise a relay split (groups on one relay,
@@ -1062,6 +1070,8 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // background verifier works from, what the Relays sheet shows, and what the membership document is READ over
 // (see churchRelayNet): a reader built on the FILTERED list could never learn about the box that would admit
 // itself, which is the §6-bis deadlock one level down from enrolment. Nothing publishes over this.
+// (The test-relay override now lives in the CANONICAL_RELAYS const above, so this stays the original one-liner —
+// it, and every other consumer of CANONICAL_RELAYS, picks up the isolated pool automatically.)
 function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 // THE PUBLISH SET — the same list with the C4 gate applied, AFTER the never-empty guards above. May be
 // empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
@@ -2669,6 +2679,24 @@ if (typeof window !== 'undefined') {
 // names/handles show INSTANTLY on the next load (chat, the People directory) instead of resolving fresh.
 const profiles = {};
 const pendingProfiles = new Set();
+// A MEMBER'S BIO (kind-0 `about`) COMES FROM OTHER PEOPLE'S EVENTS, so it is checked on the way in: a string or
+// nothing, never more than 160 characters (the cap the profile screen enforces). Anything else -> ''. It is
+// rendered as text only. A cut that would split an emoji's surrogate pair drops the stranded half.
+const ABOUT_MAX = 160;
+function _profileAbout(v) {
+  if (typeof v !== 'string') return '';
+  return v.length > ABOUT_MAX ? v.slice(0, ABOUT_MAX).replace(/[\uD800-\uDBFF]$/, '') : v;
+}
+// A MEMBER'S PINNED VERSE ({ ref, text, version }) also comes from other people's events, so it is checked on the way
+// in: an object whose three fields are strings, ref 1-80, text 1-500 (cut, never leaving half an emoji), version <= 40.
+// Anything else -> null. Rendered as text only. (setProfile and _recoverOwnProfile carry the same rule INLINE, for
+// the lifted-harness reason given in _recoverOwnProfile.)
+function _profilePin(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  if (typeof v.ref !== 'string' || typeof v.text !== 'string' || typeof v.version !== 'string') return null;
+  if (!v.ref || v.ref.length > 80 || !v.text || v.version.length > 40) return null;
+  return { ref: v.ref, text: v.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''), version: v.version };
+}
 // P4: coalesce per-message profile lookups into ONE kind-0 sub. Firing a separate sub per unknown chat author
 // (as a 200-message backfill does) can approach the relay's 64-sub-per-connection cap — the "names blank" failure.
 const _profQueue = new Set();
@@ -2688,7 +2716,7 @@ function _flushProfiles() {
         // wipe the name back out and they would flip to "Anonymous" mid-session. Keep any name we have already
         // opened unless this event actually carries one (a church's own kind-0 still does, deliberately).
         const had = profiles[e.pubkey] || {};
-        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: m.about || '', nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
+        profiles[e.pubkey] = { ...had, name: m.name || m.display_name || had.name || '', picture: m.picture || '', about: _profileAbout(m.about), pinnedVerse: _profilePin(m.pinnedVerse), k0: true, nip05: m.nip05 || '', hidden: !!m.hidden, av: m.av || undefined };
         _k0Seen.add(e.pubkey);
         _recoverOwnProfile(e);   // our OWN kind-0 also refills what a locked boot wiped (picture, avatar, about)
         saveProfiles();
@@ -3151,9 +3179,20 @@ function _recoverOwnProfile(e) {
   // OUT visible again, and the Settings toggle then agreed with the wrong answer. AUDIT-2026-07-28.
   if (cur.hidden === undefined && m.hidden !== undefined) { next.hidden = !!m.hidden; changed = true; }
   for (const k of ['about', 'picture']) {
-    if (!cur[k] && typeof m[k] === 'string' && m[k]) { next[k] = m[k]; changed = true; }
+    // the bio is capped like everyone else's: our own event is still read off a relay. Same rule as
+    // _profileAbout, written inline ON PURPOSE - six test harnesses lift this function (and setProfile) with a
+    // fixed set of globals, and a new helper dependency is a ReferenceError in every one of them.
+    const v = (k === 'about' && typeof m[k] === 'string') ? m[k].slice(0, 160).replace(/[\uD800-\uDBFF]$/, '') : m[k];
+    if (!cur[k] && typeof v === 'string' && v) { next[k] = v; changed = true; }
   }
   if (!cur.av && m.av && typeof m.av === 'object') { next.av = m.av; changed = true; }
+  // the pinned verse: same shape rule as _profilePin, inline for the same reason as the bio above.
+  if (!cur.pinnedVerse && m.pinnedVerse && typeof m.pinnedVerse === 'object' && !Array.isArray(m.pinnedVerse)) {
+    const pv = m.pinnedVerse;
+    if (typeof pv.ref === 'string' && typeof pv.text === 'string' && typeof pv.version === 'string' && pv.ref && pv.ref.length <= 80 && pv.text && pv.version.length <= 40) {
+      next.pinnedVerse = { ref: pv.ref, text: pv.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''), version: pv.version }; changed = true;
+    }
+  }
   if (!changed) return false;
   window.Fellowship.myProfile = next;
   try { localStorage.setItem(PROFILE_KEY, JSON.stringify(next)); } catch (x) {}
@@ -3914,6 +3953,13 @@ function displayFor(pubkey) {
   const chosen = (p && p.name) || (voice && voice.isChurch && (voice.churchName || '')) || (voice && voice.name) || '';
   const handle = chosen || (voice && voice.isChurch ? 'Your church' : (voice && voice.stewardFallback ? 'A church steward' : UNNAMED));
   return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '',
+    // the member's one-line bio ('' when none). Re-checked here because a cached entry may predate the cap.
+    about: _profileAbout(p && p.about),
+    // the member's pinned verse ({ ref, text, version }) or null; validated again here like `about`.
+    pinnedVerse: _profilePin(p && p.pinnedVerse),
+    // true only when this record came from a kind-0 EVENT (k0), so '' above means "they cleared it" and not "we have not heard yet".
+    // The record is replaced by setProfile and init (which copy myProfile) and those carry no k0, so a bio just saved here reads as unknown.
+    aboutKnown: !!(p && p.k0),
     // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
     signedBy: (voice && voice.name) ? voice.name : '', signedRole: (voice && voice.office) ? voice.office : '', isChurch: !!(voice && voice.isChurch) };
 }
@@ -4095,7 +4141,9 @@ function _mine(o) { return !!(o && o.evt && pub && o.evt.pubkey === pub); }
 // Only THIS identity's entries count (owner 2026-10-27): another identity's parked entries are not this person's queue.
 function _outboxFull() {
   let n = 0;
-  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+  // A pushtoken is one entry per device and REPLACES the older one of its kind (like a join/leave/profile), so it
+  // can never pile up and must not count toward the member's chat-queue limit — nor let a stuck token refuse chat.
+  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && !o.pushtoken && _mine(o)) n++;
   return n >= OUTBOX_MAX;
 }
 // THE "DIDN'T SEND" BIN IS CAPPED AT 500, VISIBLY (owner 2026-10-27). Nothing is ever evicted from it. From 450 the
@@ -4144,6 +4192,11 @@ function _leavingFor(cp) {
 function _announceBlocked(cp) { return _leavingFor(cp); }
 // Take this church's queued join(s) off the queue — a newer join replaces them, a Leave removes them.
 function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o))); return _outbox.length !== n; }   // this identity's only
+// Take this device's queued pushtoken action off the queue. pushtoken:<pub> is ONE replaceable doc, so a newer
+// register (or a deregister) is the whole truth — an older queued copy could only ever be refused as "a newer
+// version is already stored", or, worse, land AFTER the newer one and undo it. Keyed on the SIGNER (this phone's
+// pub), like _mine, so another identity's queued token on a shared device is left alone.
+function _outboxDropPushTokens(p) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.pushtoken && o.evt && o.evt.pubkey === p)); return _outbox.length !== n; }
 _outboxLoad();
 
 // ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
@@ -5820,7 +5873,7 @@ window.Fellowship = {
         // the whole cached entry AND the roster row — so a profile arriving after _openSealedName had resolved
         // someone flipped them straight back to Anonymous. Worse than the sibling in _flushProfiles, because
         // this is the roster the member app actually renders.
-        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: meta.about || '', nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
+        onevent(e) { try { const meta = JSON.parse(e.content); const had = profiles[e.pubkey] || {}; const nm = meta.name || meta.display_name || had.name || ''; profiles[e.pubkey] = { ...had, name: nm, picture: meta.picture || '', about: _profileAbout(meta.about), pinnedVerse: _profilePin(meta.pinnedVerse), k0: true, nip05: meta.nip05 || '', hidden: !!meta.hidden, av: meta.av || undefined }; saveProfiles(); const m = hub.byPub.get(e.pubkey); if (m) { if (nm) m.name = nm; m.picture = profiles[e.pubkey].picture; m.nip05 = profiles[e.pubkey].nip05; m.hidden = !!meta.hidden; hub.dirty = true; _memHubSaveSoon(hub); } emit(); } catch {} },
         oneose() {},
       });
     };
@@ -6201,10 +6254,21 @@ window.Fellowship = {
     const prev = profiles[pub] || {};
     const p = {
       name: (meta.name != null ? meta.name : (prev.name || '')).trim(),
-      about: (meta.about != null ? meta.about : (prev.about || '')).trim(),
+      // missing `about` keeps the stored one, '' clears it; either way capped to 160 - _profileAbout's rule,
+      // inline for the reason given in _recoverOwnProfile
+      about: (meta.about != null ? meta.about : (prev.about || '')).trim().slice(0, 160).replace(/[\uD800-\uDBFF]$/, ''),
       picture: (meta.picture != null ? meta.picture : (prev.picture || '')).trim(),
     };
     if (meta.av || prev.av) p.av = meta.av || prev.av;   // chosen symbol/monogram avatar
+    // PINNED VERSE: undefined keeps the previous one, null clears it, anything malformed is treated as null.
+    // The shape rule is _profilePin's, written inline ON PURPOSE (lifted harnesses, see _recoverOwnProfile).
+    {
+      const raw = meta.pinnedVerse !== undefined ? meta.pinnedVerse : prev.pinnedVerse;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.ref === 'string' && typeof raw.text === 'string' && typeof raw.version === 'string'
+          && raw.ref && raw.ref.length <= 80 && raw.text && raw.version.length <= 40) {
+        p.pinnedVerse = { ref: raw.ref, text: raw.text.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ''), version: raw.version };
+      }
+    }
     // THE PUBLISH DOOR (see _churchPhotosOff above). Carrying the old photo forward is what made every later
     // edit unpublishable once a church switched member photos off — the relay refused the whole event, so the
     // name change or the directory opt-out that the member actually came here to make never landed either.
@@ -6240,6 +6304,7 @@ window.Fellowship = {
     const wire = { about: p.about, picture: p.picture };
     if (p.av) wire.av = p.av;
     if (p.hidden) wire.hidden = true;
+    if (p.pinnedVerse) wire.pinnedVerse = p.pinnedVerse;   // NEVER `name` here (Stage 2)
     const body = JSON.stringify(wire);
     // AN IDENTICAL WIRE COPY IS A REASON NOT TO PUBLISH. IT IS NOT A REASON TO DROP THE SAVE.
     // Audit 2026-09-04, and it was wrong in two ways at once.
@@ -6297,7 +6362,7 @@ window.Fellowship = {
         // this device. So the switch sat in its new position and the church went on seeing the old profile.
         // `hidden` is the one that matters: it is a privacy control, and a member told they are hidden from
         // the directory while still being listed has been misled about something they chose deliberately.
-        if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+        if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null) || (meta && meta.pinnedVerse !== undefined)) {
           // WHICH WAY THE SWITCH WAS MOVED DECIDES THE SENTENCE, and this branched on `meta.hidden != null`.
           // `false != null` is TRUE, and `hidden: false` is exactly what DirectoryToggle.flip sends when a
           // member asks to be listed again — so a member who tapped "show me in the directory", and whose
@@ -6344,7 +6409,7 @@ window.Fellowship = {
       // never reached the network, and nothing said so. Only speak up about a field that actually travels in
       // kind-0 — a name-only save has lost nothing, so saying "not saved" about it would be a lie.
       console.warn('[fellowship] profile publish withheld — our own kind-0 has not arrived, publishing now would blank it');
-      if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null)) {
+      if (['about', 'picture', 'av', 'hidden'].some(k => meta && meta[k] != null) || (meta && meta.pinnedVerse !== undefined)) {
         lost = true;
         try { if (window.trinityToast) window.trinityToast('Your photo and profile details aren’t saved yet — this phone is still connecting to your church’s relay. Try again in a moment.'); } catch (x) {}
       }
@@ -6959,6 +7024,67 @@ window.Fellowship = {
     return { ok: true, evt };
   },
 
+  // ── PUSH-NOTIFICATION DEVICE TOKEN (iOS/APNs; the "Prompt alerts" tier only). See reference/SCOPE-notifications.md §15.
+  // The member signs a REPLACEABLE kind-30078 doc that binds their own pubkey -> APNs device token. The relay-side
+  // registry (Linux) verifies the signature and that the author is the <pub> in the d-suffix, then the push hook at
+  // ingest (gateway.mjs) looks the token up and sends a CONTENTLESS "New message" push. An APNs token is a routing
+  // handle, not a secret, so the content is cleartext — nothing here encrypts and nothing reads the member's key.
+  //
+  // PUSH-ONLY, BY OWNER DECISION (2026-11-25): only the Prompt-alerts tier calls this. The On-device polling tier never
+  // does — it must not, because registering a token is unrelated to (and must not arm) the lock-readable "Stay open 30
+  // days" Keychain path that polling needs and push exists to remove. Keep the two code paths apart.
+  //
+  // CALLERS: publishPushToken — screens-extras.jsx dpSetTier() 'push' branch + the apnsToken listener (1 logical site).
+  //          deletePushToken  — screens-extras.jsx dpSetTier() leaving-'push' branch (1 site).
+  //          _buildPushTokenEvent — publishPushToken (here) + scripts/the-push-token-doc-binds-the-members-own-pubkey.test.mjs (lifted).
+  // MULTI-CHURCH NOTE: queued to the outbox and retried to the ACTIVE church's publish set (publishSetFor(churchPub),
+  // re-derived at send time); a member who follows several churches registers on the active one's relay. Per-church
+  // fan-out is a later concern (iOS pilot is single-church).
+  _buildPushTokenEvent({ pub, token, env, ts }) {
+    const t = ts || Math.floor(Date.now() / 1000);
+    return { kind: 30078, created_at: t,
+      tags: [['d', 'trinityone/pushtoken:' + pub], ['t', NET], ['p', pub]],
+      content: JSON.stringify({ token: String(token || '').toLowerCase(), platform: 'ios', env: env === 'sandbox' ? 'sandbox' : 'production', ts: t }) };
+  },
+  // QUEUE FIRST, THEN ATTEMPT — the same rule as announceMembership and a group message. This WAS a bare one-shot
+  // `_publishBounded(churchRelays(), evt)` with a console.warn on failure: no retry, no persistence, nothing on
+  // screen. That is the exact silent-failure the join path was fixed out of (UX audit 2026-08-04): a member who
+  // enables Prompt alerts right after joining hits a COLD gate cache (the church's own box is not proved yet, or
+  // the socket is still coming up), the one send is refused as an outage, and the token is LOST — so the relay
+  // never learns where to push and the member gets no notifications, with no error anywhere. The outbox retries
+  // across reconnects and restarts (trinity-relay-returned / online / the 45s tick) and re-derives the relay set
+  // at send time via publishSetFor(cp), so a box the church proves LATER still gets the token. The item carries
+  // `cp` (the active church) so _itemChurch routes it exactly where announceMembership's join goes.
+  // RETRY-PATH USERS (rule 2): _outbox / _outboxSave / _outboxFlush / _itemChurch / _outboxRelays(→publishSetFor)
+  // / _outboxFull / _outboxDropPushTokens — a pushtoken item is just a church item to all of them (cp set, no
+  // groupId/peer/join/leave), so none needed a pushtoken branch except the one-per-device replace rules above.
+  async publishPushToken(token, env) {
+    if (!sk) await window.Fellowship.ready;
+    const tok = String(token || '').toLowerCase();
+    if (!/^[0-9a-f]{8,}$/.test(tok)) return { ok: false, reason: 'bad-token' };   // APNs tokens are hex; refuse anything else before it reaches the relay
+    const evt = finalizeEvent(_monotonicF(window.Fellowship._buildPushTokenEvent({ pub, token: tok, env })), sk);
+    _outboxDropPushTokens(pub);   // one queued pushtoken action per device; this newer one replaces any older
+    _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    _outboxSave();
+    try { await _outboxFlush(o => o && o.evt && o.evt.id === evt.id); } catch (e) {}
+    const delivered = !_outbox.some(o => o && o.evt && o.evt.id === evt.id);   // flushed off the queue → it landed now
+    return { ok: true, evt, delivered };   // ok: durably QUEUED (retry guarantees delivery), not "landed this instant"
+  },
+  async deletePushToken() {
+    if (!sk) await window.Fellowship.ready;
+    // Deregister: a replaceable copy with empty content + a `deleted` tag. The registry drops the token on either.
+    // Same retried path as the register: a one-shot deregister that is refused (cold gate / offline) would leave a
+    // LIVE token in the registry — the member turned push OFF but keeps being pushed. Dropping any queued register
+    // first also stops a token we are deregistering from racing out ahead of this delete.
+    _outboxDropPushTokens(pub);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pushtoken:' + pub], ['t', NET], ['p', pub], ['deleted', '1']], content: '' }), sk);
+    _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    _outboxSave();
+    try { await _outboxFlush(o => o && o.evt && o.evt.id === evt.id); } catch (e) {}
+    const delivered = !_outbox.some(o => o && o.evt && o.evt.id === evt.id);
+    return { ok: true, evt, delivered };
+  },
+
   // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
   // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
   subscribeChurchGroups(churchNpub, onGroups) {
@@ -7273,15 +7399,15 @@ window.Fellowship = {
     // them once the roster picks them up), so this first copy is sealed to the CHURCH key — the same path a
     // member awaiting approval uses — and is re-sealed to the congregation key when one arrives.
     const childProfile = {};
-    const k0 = finalizeEvent({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+    const k0 = finalizeEvent(_monotonicF({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }), childSk);
     let childNameDoc = null;
     try {
       const body = JSON.stringify({ name });
       const ct = nip44e(body, nip44ck(childSk, cp));            // the church's copy, so a steward sees who this is
       const own = nip44e(body, nip44ck(childSk, childPub));     // the child's own recovery copy, same shape as everyone's
-      childNameDoc = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+      childNameDoc = finalizeEvent(_monotonicF({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ c: ct, m: own }) }), childSk);
     } catch (e) {}
-    const join = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }, childSk);
+    const join = finalizeEvent(_monotonicF({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]], content: JSON.stringify({ joined: ts }) }), childSk);
     // the parent's guardian-link REQUEST (signed by the parent) — the steward confirms it
     // NO NAMES IN THE REQUEST. This carried the child's name AND the parent's, in cleartext, in a document any
     // effective member of the church could read — a worse leak than the kind-0 it sat beside, and it survived
@@ -7296,8 +7422,9 @@ window.Fellowship = {
     // prefix so it is NOT a new document type), a ['p', parentpub] tag, content {parent, church} — and the request must carry a
     // ['p', churchpub] tag naming a registered church. A drift here is SILENT (the relay just ignores a bad ack), so
     // scripts/a-parent-minted-child-is-a-minor-on-a-real-relay.test.mjs publishes this function's own output to a real gateway.
+    // INTENTIONALLY not _monotonicF: the ack is embedded in req.content and never published as its own document, so it has no tie to lose.
     const ack = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:ack:' + cp], ['p', pub]], content: JSON.stringify({ parent: pub, church: cp }) }, childSk);
-    const req = finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }, sk);
+    const req = finalizeEvent(_monotonicF({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['p', childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }), sk);
     // PUBLISH FIRST, REVEAL SECOND. This used to console.warn each failure and return the twelve words
     // regardless. On a bad link a parent wrote them down, set up the child's phone, and there was no join
     // document, no sealed name and nothing for the steward — the row said "Waiting for steward to confirm"
@@ -7659,7 +7786,7 @@ window.Fellowship = {
   // UNION of both lines: rosters keep `pods` (console pod-filter feature, from integration); events take the
   // calendar branch's richer mapper — imgPos/imgZoom (focal-point + zoom) and exceptions (move/skip one occurrence).
   subscribeChurchRosters(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/roster:', (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), cb); },
-  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', recur: c.recur || '', day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions) }), cb); },
+  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', recur: c.recur || '', day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp }), cb); },
 
   // ── Meal trains / Care module (member side) ──
   // Read the church's Care config so the member app knows whether to show the Care card (and, for
@@ -9587,7 +9714,7 @@ window.Fellowship = {
         const id = d.slice('trinityone/event:'.length);
         // AUDIT-2026-07-24 (group events): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', exceptions: _evExceptions(c.exceptions), byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', exceptions: _evExceptions(c.exceptions), noRsvp: !!c.noRsvp, byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
       },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
@@ -9629,7 +9756,7 @@ window.Fellowship = {
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6));
     // imgPos/imgZoom: cover focal point + zoom (see app/recur.jsx eventImgStyle); carried so a member-published
     // group event frames its image the same everywhere it is read. A missing value is centre/scale-1 (unchanged look).
-    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: (ev.imgPos && typeof ev.imgPos === 'object') ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: (typeof ev.imgZoom === 'number' && ev.imgZoom > 1) ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions) });
+    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: (ev.imgPos && typeof ev.imgPos === 'object') ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: (typeof ev.imgZoom === 'number' && ev.imgZoom > 1) ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions), noRsvp: !!ev.noRsvp, recur: ev.recur || '', day: ev.date ? new Date(ev.date + 'T12:00').getDay() : 0, nth: ev.recur === 'monthly' ? (new Date(ev.date + 'T12:00').getDate() >= 29 ? -1 : Math.ceil(new Date(ev.date + 'T12:00').getDate() / 7)) : null });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/event:' + id], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
     return { id, ...JSON.parse(content) };

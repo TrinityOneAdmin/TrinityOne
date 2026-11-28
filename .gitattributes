@@ -54,6 +54,8 @@ ci          export-ignore
 #   .github/              — workflow definitions. Read by GitHub from a checkout, never from a bundle.
 #   relay-app/desktop/    — the Suite's Tauri build tree (Cargo.toml, build.rs, main.rs). The control UI beside
 #                           it is deliberately public; its BUILD SOURCES are not part of that.
+#   finance-app/          — the TrinityOne Finance desktop program's Tauri build tree (2026-11-18). A relay never
+#                           runs it; it is built from a checkout, like relay-app/desktop.
 #
 # NOT excluded, deliberately, and each is a decision rather than an oversight:
 #   package.json      — the relay's own manifest; bundle-contents' MUST_SHIP asserts it, and the box needs it.
@@ -66,6 +68,7 @@ ci          export-ignore
 capacitor.config.json  export-ignore
 .github                export-ignore
 relay-app/desktop      export-ignore
+finance-app            export-ignore
 design             export-ignore
 
 # ── the confusables data and its generator are build-time only (install-from-file name labelling) ──────────────────

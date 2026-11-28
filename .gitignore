@@ -20,6 +20,9 @@ ios/
 !/plugins/trinity-directpush/android/
 /plugins/trinity-directpush/android/build/
 /plugins/trinity-directpush/android/src/main/assets/directpush/bg-bundle.js
+# …and its iOS counterpart (BGAppRefreshTask reader, same plan).
+!/plugins/trinity-directpush/ios/
+/plugins/trinity-directpush/ios/assets/directpush/bg-bundle.js
 *.apk
 dist/
 *.log

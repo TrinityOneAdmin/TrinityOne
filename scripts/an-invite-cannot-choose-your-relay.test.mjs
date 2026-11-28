@@ -222,6 +222,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], name
     // Round 9: addRelay (and refreshNamedRelays) refuse a spelling of a shared relay through this helper.
     fnBody(src, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
     fnBody(src, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
+    // THE REAL _packagedOrigin, never stubbed: ownRelay() / _ownOrigin() consult it first (APK, Tauri program -> shared pool).
+    fnBody(src, 'function _packagedOrigin', '_packagedOrigin'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),
@@ -752,7 +754,9 @@ function memberLink(answer) {
 }
 function stewardLink(relay) {
   const m = fnBody(STEWARD, '    joinUrl() {', 'Steward.joinUrl');
-  const f = new Function('window', 'location', 'ownIsLoopback', 'selfPublicRelay', 'selfRelayName', 'ownRelay', 'return { ' + m + ' };');
+  // joinUrl() asks the REAL _packagedOrigin() first (a packaged app's origin is never an invite base) — lifted alongside, never stubbed
+  const f = new Function('window', 'location', 'ownIsLoopback', 'selfPublicRelay', 'selfRelayName', 'ownRelay',
+    fnBody(STEWARD, 'function _packagedOrigin()', '_packagedOrigin') + '\nreturn { ' + m + ' };');
   return f({ Steward: { npub: npubEncode(church.pub) } }, undefined, () => false, () => '', () => '', () => relay).joinUrl();
 }
 test('a link a MEMBER shares is received exactly like the console\'s joinUrl() link: the signed box adopted, an unsigned one refused', async () => {

@@ -185,6 +185,9 @@ function widgetClearChurch() {
   // The widget's bare "N new messages" count (Direct Mode) rides this SAME lifecycle: it exists only while the key can be
   // read in the background, so every path that clears the church settings clears it too.
   if (W && W.clearMessageCount) { try { Promise.resolve(W.clearMessageCount()).catch(() => {}); } catch (e) {} }
+  // iOS Keychain bg-copy (AfterFirstUnlock): remove it so the background reader cannot use a stale key.
+  // On Android/web the plugin is absent and this is a no-op.
+  try { const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge; if (P && P.deleteBgKey) Promise.resolve(P.deleteBgKey()).catch(() => {}); } catch (e) {}
 }
 // Today keeps an hourly probe throttle; this tells it the settings are gone so it writes them again WHEN ALLOWED
 // (audit re-check R3). Today's re-run reads rememberedUntil(), so from rememberClear() this must fire only AFTER the
@@ -205,6 +208,8 @@ function widgetOffForNewAccount() {
   // (sole writer: NotifSettingsScreen in app/screens-extras.jsx; sole reader beyond it: the background
   // reader's gate in plugins/trinity-directpush/js/bg-entry.js, same origin) must not carry onto a new person.
   try { localStorage.removeItem('trinityone.directpush.optin'); } catch (e) {}
+  // iOS Keychain bg-copy: a new person must not inherit the previous person's AfterFirstUnlock key.
+  try { const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge; if (P && P.deleteBgKey) Promise.resolve(P.deleteBgKey()).catch(() => {}); } catch (e) {}
   const W = _widgetPlugin();
   if (W && W.setEnabled) { try { Promise.resolve(W.setEnabled({ on: false })).catch(() => {}); } catch (e) {} }
   try { window.dispatchEvent(new CustomEvent('trinity-widget-changed', { detail: false })); } catch (e) {}

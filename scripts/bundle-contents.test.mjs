@@ -125,6 +125,7 @@ const NEVER = [
   [/^(docs|reference|deploy|ci)\//, 'a tree that describes the box rather than running it'],
   [/^\.github\//, 'CI workflow definitions'],
   [/^relay-app\/desktop\//, 'the Suite Tauri build tree'],
+  [/^finance-app\//, 'the Finance desktop program\'s Tauri build tree'],
   [/^capacitor\.config\.json$/, 'it states that shipped Android builds have remote WebView debugging on'],
   [/\.(pem|key|p12|keystore|jks)$/i, 'key material'],
   [/^\.env/, 'environment/secret files'],
@@ -180,7 +181,7 @@ test('the exclusion is committed, not just present on disk', () => {
     // A5
     /^\*\.test\.mjs\s+export-ignore/m, /^\*\.probe\.mjs\s+export-ignore/m,
     /^capacitor\.config\.json\s+export-ignore/m, /^\.github\s+export-ignore/m,
-    /^relay-app\/desktop\s+export-ignore/m]) {
+    /^relay-app\/desktop\s+export-ignore/m, /^finance-app\s+export-ignore/m]) {
     assert.match(committed, pat, 'the export-ignore rules are not in the archived tree, so nothing is excluded');
   }
 });

@@ -622,7 +622,8 @@ function App() {
   );
   // identity surfaces (ProfileSheet hub + the focused sheets)
   const [profile, setProfile] = useA(idParam === 'profile');
-  const [member, setMember] = useA(idParam === 'member' ? window.TrinityData.MEMBERS.River : null);
+  const [memberInDM, setMemberInDM] = useA(false);   // the card was opened from inside the DM thread with that same person
+  const [member, setMember] = useA(null);   // the pubkey of the member whose card is open (was a dev-only MEMBERS.River object; ?id=member no longer seeds one)
   const [idSheet, setIdSheet] = useA(['recovery', 'invite', 'relays'].includes(idParam) ? idParam : null);
   const [newId, setNewId] = useA(idParam === 'newid');
   const [walletSheet, setWalletSheet] = useA(false);   // member wallet hub (balance + add + withdraw)
@@ -1903,6 +1904,7 @@ function App() {
       try { if (key) localStorage.setItem(key, '1'); } catch (e) {}
     }
   }, [joinState.isPending, joinState.isAdmitted, joinState.approval]);
+  React.useEffect(() => { try { if (typeof dpBootNotifications === 'function') dpBootNotifications(); } catch (e) {} }, []);
   React.useEffect(() => { approvedToastedRef.current = false; }, [activeChurch]);   // reset on church switch
   // Has the ACTIVE church let this person in? For the first-run tour's Community part only (audit M1). Two positive
   // answers, neither falsely positive: my key is on the admitted list (isAdmitted — the approved toast above relies
@@ -2399,12 +2401,21 @@ function App() {
     const FS = window.Fellowship;
     const name = (FS && FS.myProfile && FS.myProfile.name) || '';
     let avatar = { kind: 'monogram', color: cur.color || '#5E8C6A' };
-    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; }
+    // displayFor reads profiles[myPubkey], which every kind-0 reader replaces as our own profile lands, so it is
+    // the FRESHEST copy of the bio. myProfile can lag it (a restored phone, before our kind-0 arrives) - an
+    // empty seed there used to let a name-only Save wipe the real bio. myProfile is only the fallback.
+    let freshAbout = '', aboutKnown = false, freshPin = null;
+    if (FS && FS.myPubkey && FS.displayFor) { const d = FS.displayFor(FS.myPubkey); if (d && d.av) avatar = d.av; if (d && typeof d.about === 'string') freshAbout = d.about; if (d && d.aboutKnown) aboutKnown = true; if (d && d.pinnedVerse) freshPin = d.pinnedVerse; }
     // stewards run their church from the separate Steward console — ordinary members aren't stewards,
     // so the member app hides steward-only tools (e.g. the invite generator).
     // handle '' = the member has chosen NO name (2026-07-30). It used to fall back to 'Anonymous', which
     // handed them a name they never picked; displayFor() now supplies 'Member' at the display layer.
-    return { name, avatar, npub: cur.npub || '', handle: cur.handle || '', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', hidden: !!(FS && FS.myProfile && FS.myProfile.hidden), steward: false };
+    // about = the member's own one-line bio, from the same stored profile as the name ('' when none)
+    // '' from a kind-0 we HAVE seen means the bio was cleared (maybe on another device): do not bring the old one back from myProfile.
+    const about = aboutKnown ? freshAbout : (freshAbout || ((FS && FS.myProfile && typeof FS.myProfile.about === 'string') ? FS.myProfile.about : ''));
+    // the pinned verse follows the bio's rule: a kind-0 we HAVE seen is the truth (none there = unpinned); until then myProfile.
+    const pinnedVerse = aboutKnown ? freshPin : (freshPin || ((FS && FS.myProfile && FS.myProfile.pinnedVerse) || null));
+    return { name, about, pinnedVerse, avatar, npub: cur.npub || '', handle: cur.handle || '', nip05: (FS && FS.myProfile && FS.myProfile.nip05) || '', hidden: !!(FS && FS.myProfile && FS.myProfile.hidden), steward: false };
   })();
   // saving a profile publishes name + mark to the user's key (kind-0). Patch only the fields supplied, so
   // a directory-visibility toggle (hidden only) never blanks the name, and vice-versa.
@@ -2415,6 +2426,11 @@ function App() {
     if (patch.name != null) meta.name = String(patch.name).trim();
     if (patch.avatar != null) meta.av = patch.avatar;
     if (patch.hidden != null) meta.hidden = !!patch.hidden;
+    // The bio travels only when the caller supplied one: setProfile reads a MISSING `about` as "keep what is
+    // stored", and '' as "clear it". So a name-only save or a directory toggle never touches the bio.
+    if (patch.about != null) meta.about = String(patch.about).trim();
+    // The pinned verse: undefined = keep what is stored, null = REMOVE it (so this is `!== undefined`, not `!= null`).
+    if (patch.pinnedVerse !== undefined) meta.pinnedVerse = patch.pinnedVerse;
     // RETURN IT. Audit 2026-09-02 #18. This swallowed the result, so identity.jsx toasted "Profile saved"
     // over a publish nobody accepted — and a member whose display name never reached the relay goes on
     // appearing as Anonymous to their whole church while their own screen shows the name they typed.
@@ -2464,6 +2480,18 @@ function App() {
     toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
     gotoRef: (book, chap, verse) => { setPlanRead(null); setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
+    // A PASSAGE BOOKMARK (Library, Study panel): the range travels IN the location, like a plan day ("John 3:16-21"),
+    // and ReadScreen's loc-driven inArrived() lights every verse. It used to hand a pendingPassage to ReadScreen, which
+    // applied it with setSel; the arrival effect re-fires on any dep change (e.g. version) and clears sel, leaving only
+    // the first verse lit on a device. Same-chapter only: verses of other chapters in refs are not part of the range.
+    selectPassageBookmark: (refs) => {
+      const m = /^(\d+)\.(\d+)\.(\d+)$/.exec((refs || [])[0]); if (!m) return;
+      const book = +m[1], chap = +m[2];
+      const vs = refs.map(r => { const x = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return x && +x[1] === book && +x[2] === chap ? +x[3] : null; }).filter(v => v != null);
+      const first = Math.min(...vs), last = Math.max(...vs);
+      const at = { book, chap, verse: first }; if (last > first) at.verseEnd = last;
+      setPlanRead(null); setLoc(at); setReadView('bible'); setTab('read');
+    },
     addModule: () => Bible.pickFile(),
     // "bibles" scopes the name: a commentary or a dictionary may legitimately be called KJV too, and
     // this sheet only ever means the translation. Without it, removeModule resolved the name against
@@ -2504,6 +2532,8 @@ function App() {
     openSearch: () => setSearchOpen(true),
     openShare: (v) => setShare(v),
     openShareSheet: (v) => setShareSheet(v),
+    // "Pin to my profile" in the verse share sheet: the same save path as the profile screen; resolves like saveIdentity.
+    pinVerse: (v) => saveIdentity({ pinnedVerse: v }),
     // share arbitrary text via the OS share sheet (native or web), falling back to clipboard
     shareText: async (text, title, url) => {
       const t = (text || '').trim(); if (!t) return;
@@ -2561,7 +2591,7 @@ function App() {
     openAudioBiblesWith: (stream) => { setAudioIncoming(stream); setAudioBibles(true); },   // "Open with" handed us an audio Bible
     // identity surfaces
     openProfile: () => setProfile(true),
-    openMember: (name) => { const m = window.TrinityData.MEMBERS[name]; if (m) setMember(m); else toast('Opening ' + name); },
+    openMember: (pk, opts) => { const me = window.Fellowship && window.Fellowship.myPubkey; if (typeof pk === 'string' && pk && pk !== me) { setMemberInDM(!!(opts && opts.inDMWith === pk)); setMember(pk); } },
     openRecovery: () => setIdSheet('recovery'),
     // optional community PIN
     openCommunitySecurity: () => setCommSec(true),
@@ -3113,7 +3143,7 @@ function App() {
             <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} ctx={ctx} />
             {/* identity: hub + focused sheets (designer layout, real backend) */}
             <ProfileSheet open={profile} onClose={() => setProfile(false)} identity={identity} onSave={saveIdentity} ctx={ctx} />
-            <MemberCard member={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} />
+            <MemberCard pubkey={member} open={!!member} onClose={() => setMember(null)} ctx={ctx} inDMWithThem={memberInDM} />
             <RecoverySheet open={idSheet === 'recovery'} onClose={() => setIdSheet(null)} ctx={ctx} />
             <CommunitySecuritySheet open={commSec} onClose={() => setCommSec(false)} ctx={ctx} />
             <InviteSheet open={idSheet === 'invite'} onClose={() => setIdSheet(null)} identity={identity} ctx={ctx} />
@@ -3128,8 +3158,8 @@ function App() {
             <PeopleScreen open={people && !desktop} onClose={() => setPeople(false)} ctx={ctx} />
             <ChurchSwitcher open={churchSwitcher} onClose={() => setChurchSwitcher(false)} ctx={ctx} initialMode={churchSwitcherMode}
               churches={churches} activeId={activeChurch}
-              onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); }}
-              onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); }} />
+              onPick={(id) => { ctx.setActiveChurch(id); setChurchSwitcher(false); if (profile) { setProfile(false); setTab('today'); } }}
+              onFollowed={() => { setChurchSwitcher(false); toast('Now following — loading church…'); if (profile) { setProfile(false); setTab('today'); } }} />
 
             <Toast msg={toastMsg} />
             {/* A2: the member app's only "that didn't work" surface. Self-contained — it listens for
