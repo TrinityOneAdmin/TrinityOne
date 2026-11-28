@@ -498,15 +498,18 @@ test('S17 — THE TWO LISTENERS HAVE DISJOINT SCHEMES: non-content links never o
     plugin.fire('appUrlOpen', { url });
     assert.equal(m.sheetProps(m.draw()).state, null, `${url} opened the install sheet`);
   }
-  assert.equal(m.window.location.search, '', 'a hostile link changed the location');
+  assert.equal(m.window.location.href, m.window.location.href.split('?')[0], 'a hostile link navigated the location');
+  const HREF0 = m.window.location.href;
   // the join regression: the real join listener still turns an invite into ?follow=
+  // The app navigates by assigning location.href (to keep the #invite= fragment), never location.search, so the
+  // navigated URL is what is asserted.
   plugin.fire('appUrlOpen', { url: 'https://app.trinityone.church/join?follow=npub1abc&name=Ada' });
-  assert.match(m.window.location.search, /follow=npub1abc/, 'the join link is no longer applied');
+  assert.match(m.window.location.href, /follow=npub1abc/, 'the join link is no longer applied');
   assert.equal(m.sheetProps(m.draw()).state, null, 'a join link opened the install sheet');
   // and a content:// link does not touch the location
-  m.window.location.search = '';
+  m.window.location.href = HREF0;
   plugin.fire('appUrlOpen', { url: 'content://media/external/file/9' });
-  assert.equal(m.window.location.search, '', 'a content:// link was treated as a join link');
+  assert.equal(m.window.location.href, HREF0, 'a content:// link was treated as a join link');
 });
 
 // ── quiet-link round 3: --clay-text on the REAL App root follows the church brand, then the member's accent, and always reads at >= 4.5:1 ──
