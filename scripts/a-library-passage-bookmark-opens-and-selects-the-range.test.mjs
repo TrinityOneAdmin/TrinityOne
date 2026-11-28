@@ -10,9 +10,10 @@
 // SLICED OUT of the source and RUN; the REAL ReadScreen is drawn and the assertion reads `selected` off the
 // <VerseRow> elements it produced. Delete the ctx entry, the Library call or the ReadScreen consumer and it goes red.
 //
-// Callers of what changed (rule 2): ctx.selectPassageBookmark is called by screens-library.jsx jump() (now live) and,
-// via ReadScreen's own override, by the Study panel (screens-read.jsx ~1443, unchanged: the override still wins).
-// ctx.pendingPassage / clearPendingPassage are read only by ReadScreen.
+// Callers of what changed (rule 2): ctx.selectPassageBookmark (app.jsx) is called by screens-library.jsx jump()
+// and by the Study-panel bookmark button (screens-read.jsx ~1443); both now route to the single app.jsx function.
+// It sets loc.verse/verseEnd so the reader's inArrived() range-highlight lights the whole passage and survives the
+// arrival effect. (The old pendingPassage/applyPassageSel/CommentaryPanel-override path was removed.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
