@@ -155,7 +155,7 @@ function reader(opts = {}) {
   const ctx = {
     loc: { ...start }, version: 'WEB',
     setLoc(x) { ctx.loc = { ...x }; },
-    toast: (m) => toasts.push(m), toggleBookmark() {}, bookmarks: [], notes: {}, highlights: {},
+    toast: (m) => toasts.push(m), toggleBookmark() {}, hasPassageBookmark: () => false, addPassageBookmark: () => 'bm1', removePassageBookmark() {}, bookmarks: [], notes: {}, highlights: {},
     openShareSheet: (pl) => shared.push(pl), plans: [], planProgress: {}, church: { name: 'Test Church' },
   };
   let tree = draw(ReadScreen, { ctx });
@@ -460,7 +460,7 @@ test('Copy and Share carry the words of BOTH chapters', () => {
   assert.equal(R.selectionLabel(), 'John 1:51-2:1');
   tile(R, 'Copy');
   assert.equal(R.copied.length, 1, 'Copy put nothing on the clipboard');
-  assert.ok(R.copied[0].startsWith('John 1:51-2:1 — '),
+  assert.ok(R.copied[0].startsWith('John 1:51-2:1 (WEB) — '),
     'the copied passage should be headed by the reference that spans the chapter line. Got: ' + R.copied[0]);
   assert.ok(R.copied[0].includes('Chapter 1 verse 51'), 'the copied text lost the chapter the passage began in');
   assert.ok(R.copied[0].includes('Chapter 2 verse 1'), 'the copied text lost the chapter the passage ran on into');
@@ -488,7 +488,10 @@ test('a rolled passage is never offered the per-verse actions', () => {
   assert.equal(R.cardCount(), '2 verses selected',
     'the card counted only the verse on screen, so a passage spanning two chapters looked like a single verse');
   // Define (2026-10-14) acts on the passage's TEXT, not on one verse's anchor, so it is offered for a rolled passage too.
-  assert.deepEqual(R.actionLabels(), ['Copy', 'Share', 'Define'],
+  // Bookmark IS offered for a multi-verse passage since the passage bookmark (_bm with multi > 1): it is keyed on the
+  // whole passage ('p:' + every verse key), not on the lowest verse on screen, so it cannot attach to the wrong verse.
+  // Note / Highlight / Cross-refs stay withheld - those are the per-verse anchored ones this test guards.
+  assert.deepEqual(R.actionLabels(), ['Bookmark', 'Copy', 'Share', 'Define'],
     'a passage that has crossed a chapter line was offered per-verse actions anchored on the wrong chapter. ' +
     'Found: ' + JSON.stringify(R.actionLabels()));
 });

@@ -89,7 +89,7 @@ function reader(opts = {}) {
   const ctx = {
     loc: { ...start }, version: 'WEB',
     setLoc(x) { ctx.loc = { ...x }; },
-    toast: (m) => toasts.push(m), toggleBookmark() {}, bookmarks: [], highlights: {},
+    toast: (m) => toasts.push(m), toggleBookmark() {}, hasPassageBookmark: () => false, addPassageBookmark: () => 'bm1', removePassageBookmark() {}, bookmarks: [], highlights: {},
     openShareSheet() {}, plans: [], planProgress: {}, church: { name: 'Test Church' },
     get notes() { return { ...store }; },
     setNote(k, t) { if (t) store[k] = t; else delete store[k]; },
