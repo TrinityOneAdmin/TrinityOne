@@ -223,7 +223,7 @@ for (const [, name, what] of WRITERS) {
 }
 
 // ══ ROW 9 · THE RULE 2 GUARD: no publisher may be added back onto a bare stamp ════════════════════════════
-test('every event this console signs is stamped by _monotonic — except the eight named credentials', () => {
+test('every event this console signs is stamped by _monotonic — except the nine named credentials', () => {
   // Measured on the shipped bundle with comments stripped: a comment naming finalizeEvent must not count,
   // and this file's own subject guarantees future comments will name it.
   const bare = stripComments(SHIP);
@@ -242,7 +242,9 @@ test('every event this console signs is stamped by _monotonic — except the eig
     if (tail.startsWith('_monotonic(')) continue;
     unstamped.push(tail.slice(0, 44));
   }
-  // The eight that are deliberately NOT ordered: the NIP-42 AUTH event (it is not stored and is stage 5),
+  // The nine that are deliberately NOT ordered: TWO NIP-42 AUTH events (pool.automaticallyAuth, and the one
+  // inside _queryAsKey added 2026-11-19 -- the count was 8 until then and this row went stale; that second AUTH
+  // predates the doc-signing fix and is unrelated to it; neither is stored, both are stage 5),
   // and the seven short-lived kind-27235 / kind-24242 credentials stage 2 put on _credNow(). Every one of
   // them is thrown away by the relay after a freshness check; none is a document and none is ordered.
   for (const t of unstamped) {
@@ -252,9 +254,9 @@ test('every event this console signs is stamped by _monotonic — except the eig
       'short-lived credential, it belongs on _credNow() and in the list this row keeps; if it is a ' +
       'document, wrap the template in _monotonic().');
   }
-  assert.equal(unstamped.length, 8,
-    'the console now signs ' + unstamped.length + ' things outside _monotonic, not eight. The eight are ' +
-    'the NIP-42 AUTH event and the seven stage-2 credentials (_nip98, _putBlob, uploadBlob, removeSermon’s ' +
+  assert.equal(unstamped.length, 9,
+    'the console now signs ' + unstamped.length + ' things outside _monotonic, not nine. The nine are ' +
+    'the two NIP-42 AUTH events (pool.automaticallyAuth AND _queryAsKey) and the seven stage-2 credentials (_nip98, _putBlob, uploadBlob, removeSermon’s ' +
     'blob-delete arm, registerPush, registerAtRelay, and the /config dialler in the registration fan-out).');
 });
 

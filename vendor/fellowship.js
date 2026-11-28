@@ -13608,18 +13608,18 @@
       const childPub = getPublicKey2(childSk);
       const ts = Math.floor(Date.now() / 1e3);
       const childProfile = {};
-      const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }, childSk);
+      const k0 = finalizeEvent2(_monotonicF({ kind: 0, created_at: ts, tags: [], content: JSON.stringify(childProfile) }), childSk);
       let childNameDoc = null;
       try {
         const body = JSON.stringify({ name });
         const ct = encrypt(body, getConversationKey(childSk, cp));
         const own = encrypt(body, getConversationKey(childSk, childPub));
-        childNameDoc = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c: ct, m: own }) }, childSk);
+        childNameDoc = finalizeEvent2(_monotonicF({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c: ct, m: own }) }), childSk);
       } catch (e) {
       }
-      const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
+      const join2 = finalizeEvent2(_monotonicF({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }), childSk);
       const ack = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:ack:" + cp], ["p", pub]], content: JSON.stringify({ parent: pub, church: cp }) }, childSk);
-      const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }, sk);
+      const req = finalizeEvent2(_monotonicF({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub, ack }) }), sk);
       const why = { join: "", k0: "", name: "", req: "" };
       const sent = async (e, key) => {
         if (!e) return false;
