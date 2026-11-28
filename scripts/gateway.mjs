@@ -1032,7 +1032,9 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
   // when the member app is here the steward card goes behind a closed <details> below the steps. A box
   // holding ONLY the steward build shows it as a normal card — hiding it would leave nothing to download.
   const present = held.filter((h) => h.present);
-  const tuckSteward = present.some((h) => h.name === 'trinityone.apk');
+  // The finance app is a helper tool too (a treasurer's, not a member's), so it is tucked the same way.
+  const HELPER_APKS = ['trinityone-steward.apk', 'trinityone-finance.apk'];
+  const tuckHelpers = present.some((h) => h.name === 'trinityone.apk');
   const card = (h, quiet) => {
     const ageDays = Math.max(0, Math.floor((Date.now() - h.at) / APK_DAY));
     // Describe the consequence, do not nag and do not prescribe. A member cannot fix this; the sentence
@@ -1053,8 +1055,8 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
       + sha
       + '</section>';
   };
-  const cards = present.filter((h) => !(tuckSteward && h.name === 'trinityone-steward.apk')).map((h) => card(h, false)).join('\n');
-  const steward = tuckSteward ? present.find((h) => h.name === 'trinityone-steward.apk') : null;
+  const cards = present.filter((h) => !(tuckHelpers && HELPER_APKS.includes(h.name))).map((h) => card(h, false)).join('\n');
+  const tucked = tuckHelpers ? HELPER_APKS.map((n) => present.find((h) => h.name === n)).filter(Boolean) : [];
   const empty = '<section class="card"><h2>Nothing to install yet</h2><p class="blurb">This machine is not holding a copy of the app right now. Whoever looks after it can add one from the relay control panel — “Let members install the app from this box”.</p></section>';
   const E = INSTALL_ESC;
   // The three iPhone steps. On an iPhone they ARE the page; everywhere else they sit behind a closed chevron.
@@ -1082,12 +1084,12 @@ function installPageHtml({ held, base, qr, ios = false, android = false }) {
   // On an iPhone every .apk is behind the "Android phones" chevron, so the leaders chevron holds only the
   // steward's TestFlight link. Elsewhere it holds the tucked steward .apk (if any) and that link.
   // An Android visitor is not shown the steward's iPhone link (owner, 2026-11-18): no iPhone content on Android.
-  const leadersBody = (!ios && steward ? card(steward, true) : '') + (android ? '' : stewardIphone);
+  const leadersBody = (!ios ? tucked.map((h) => card(h, true)).join('\n') : '') + (android ? '' : stewardIphone);
   const leaders = leadersBody ? fold('leaders', 'For church leaders', leadersBody) : '';
   const main = ios
     ? '<section class="card"><h2>TrinityOne for iPhone</h2><p class="blurb">' + E(APK_BLURBS['trinityone.apk']) + '</p>' + iphoneSteps + '</section>'
       + leaders
-      + (present.length ? fold('android', 'Android phones', present.map((h) => card(h, h.name === 'trinityone-steward.apk')).join('\n') + androidSteps) : '')
+      + (present.length ? fold('android', 'Android phones', present.map((h) => card(h, HELPER_APKS.includes(h.name))).join('\n') + androidSteps) : '')
     // An Android phone gets no iPhone section at all. Anyone else (a desktop, or an iPad reporting a Mac
     // User-Agent) gets it closed, ABOVE the leaders chevron.
     : (cards || empty) + androidSteps
