@@ -1044,15 +1044,23 @@ const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static 
 // down. Also the fallback when a church is joined by bare npub (no relay in the link) and we have none
 // yet (e.g. the CDN-hosted app), so its name + groups resolve. Add a host's wss URL here once it joins
 // the pool — these relays don't sync to each other, so clients write to all of them.
-const CANONICAL_RELAYS = [
-  'wss://app.trinityone.church/relay',                    // a8 / master-01 via Cloudflare — primary (own domain)
-  // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
-  // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
-  // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
-  // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
-  // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
-  // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
-];
+// ⚠ COMPILE-TIME TEST-RELAY OVERRIDE (live-sim isolation, "option B"). A build made with
+// TRINITY_TEST_RELAY=wss://… (esbuild --define:__TEST_RELAY__, see scripts/build-fellowship.sh) makes the WHOLE
+// shared canonical pool that ONE relay — so EVERY consumer (the export window.Fellowship.CANONICAL_RELAYS, the
+// follow path app/app.jsx:~1105 which addRelay()s F.CANONICAL_RELAYS, churchRelaysRaw, and each
+// `CANONICAL_RELAYS.includes` shared-pool check) routes to the isolated test relay and NOT app.trinityone.church.
+// In every normal/Release build __TEST_RELAY__ is "" so this is byte-for-byte the old value. ADMISSION IS
+// UNTOUCHED: _netRelays / churchRelays() still require the relay to PROVE its identity key, and the pin list
+// (CANONICAL_RELAY_PUBS) is not edited — an unpinned test relay is admitted the ordinary way (it proves our key,
+// root 2), never as a pinned canonical. The `'wss://app.trinityone.church/relay'` literal stays inline so the
+// is-this-relay-one-of-ours pin guardian still reads the shipped canonical URL. `typeof` guards the define so a
+// test that evaluates this with __TEST_RELAY__ absent keeps the production path.
+// ⚠ RELAY SESSION: review against reference/RELAY-ADMISSION.md before merge.
+// (History, now in git: a dead ts.net path to the same box was removed 2026-11-10 (D0); dev-box 2026-06-25; NAS 2026-06-17.)
+// The regex lives in its own statement so the CANONICAL_RELAYS line stays a clean, regex-free literal the
+// is-this-relay-one-of-ours pin guardian can parse (it reads the quoted canonical URL out of that statement).
+const _TEST_RELAY_OVERRIDE = (typeof __TEST_RELAY__ !== 'undefined' && /^wss:\/\//i.test(__TEST_RELAY__)) ? __TEST_RELAY__ : '';
+const CANONICAL_RELAYS = _TEST_RELAY_OVERRIDE ? [_TEST_RELAY_OVERRIDE] : ['wss://app.trinityone.church/relay'];   // a8 / master-01 via Cloudflare — primary (own domain, pinned)
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 // Church content (members, groups, plans, devotionals) must stay reachable on the church's SHARED relays
 // even when the member also runs a private/home relay — otherwise a relay split (groups on one relay,
@@ -1062,6 +1070,8 @@ const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary share
 // background verifier works from, what the Relays sheet shows, and what the membership document is READ over
 // (see churchRelayNet): a reader built on the FILTERED list could never learn about the box that would admit
 // itself, which is the §6-bis deadlock one level down from enrolment. Nothing publishes over this.
+// (The test-relay override now lives in the CANONICAL_RELAYS const above, so this stays the original one-liner —
+// it, and every other consumer of CANONICAL_RELAYS, picks up the isolated pool automatically.)
 function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays || []), ...CANONICAL_RELAYS])]; }
 // THE PUBLISH SET — the same list with the C4 gate applied, AFTER the never-empty guards above. May be
 // empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
@@ -4131,7 +4141,9 @@ function _mine(o) { return !!(o && o.evt && pub && o.evt.pubkey === pub); }
 // Only THIS identity's entries count (owner 2026-10-27): another identity's parked entries are not this person's queue.
 function _outboxFull() {
   let n = 0;
-  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+  // A pushtoken is one entry per device and REPLACES the older one of its kind (like a join/leave/profile), so it
+  // can never pile up and must not count toward the member's chat-queue limit — nor let a stuck token refuse chat.
+  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && !o.pushtoken && _mine(o)) n++;
   return n >= OUTBOX_MAX;
 }
 // THE "DIDN'T SEND" BIN IS CAPPED AT 500, VISIBLY (owner 2026-10-27). Nothing is ever evicted from it. From 450 the
@@ -4180,6 +4192,11 @@ function _leavingFor(cp) {
 function _announceBlocked(cp) { return _leavingFor(cp); }
 // Take this church's queued join(s) off the queue — a newer join replaces them, a Leave removes them.
 function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o))); return _outbox.length !== n; }   // this identity's only
+// Take this device's queued pushtoken action off the queue. pushtoken:<pub> is ONE replaceable doc, so a newer
+// register (or a deregister) is the whole truth — an older queued copy could only ever be refused as "a newer
+// version is already stored", or, worse, land AFTER the newer one and undo it. Keyed on the SIGNER (this phone's
+// pub), like _mine, so another identity's queued token on a shared device is left alone.
+function _outboxDropPushTokens(p) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.pushtoken && o.evt && o.evt.pubkey === p)); return _outbox.length !== n; }
 _outboxLoad();
 
 // ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
@@ -7005,6 +7022,67 @@ window.Fellowship = {
     try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] unhideMessage failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
+  },
+
+  // ── PUSH-NOTIFICATION DEVICE TOKEN (iOS/APNs; the "Prompt alerts" tier only). See reference/SCOPE-notifications.md §15.
+  // The member signs a REPLACEABLE kind-30078 doc that binds their own pubkey -> APNs device token. The relay-side
+  // registry (Linux) verifies the signature and that the author is the <pub> in the d-suffix, then the push hook at
+  // ingest (gateway.mjs) looks the token up and sends a CONTENTLESS "New message" push. An APNs token is a routing
+  // handle, not a secret, so the content is cleartext — nothing here encrypts and nothing reads the member's key.
+  //
+  // PUSH-ONLY, BY OWNER DECISION (2026-11-25): only the Prompt-alerts tier calls this. The On-device polling tier never
+  // does — it must not, because registering a token is unrelated to (and must not arm) the lock-readable "Stay open 30
+  // days" Keychain path that polling needs and push exists to remove. Keep the two code paths apart.
+  //
+  // CALLERS: publishPushToken — screens-extras.jsx dpSetTier() 'push' branch + the apnsToken listener (1 logical site).
+  //          deletePushToken  — screens-extras.jsx dpSetTier() leaving-'push' branch (1 site).
+  //          _buildPushTokenEvent — publishPushToken (here) + scripts/the-push-token-doc-binds-the-members-own-pubkey.test.mjs (lifted).
+  // MULTI-CHURCH NOTE: queued to the outbox and retried to the ACTIVE church's publish set (publishSetFor(churchPub),
+  // re-derived at send time); a member who follows several churches registers on the active one's relay. Per-church
+  // fan-out is a later concern (iOS pilot is single-church).
+  _buildPushTokenEvent({ pub, token, env, ts }) {
+    const t = ts || Math.floor(Date.now() / 1000);
+    return { kind: 30078, created_at: t,
+      tags: [['d', 'trinityone/pushtoken:' + pub], ['t', NET], ['p', pub]],
+      content: JSON.stringify({ token: String(token || '').toLowerCase(), platform: 'ios', env: env === 'sandbox' ? 'sandbox' : 'production', ts: t }) };
+  },
+  // QUEUE FIRST, THEN ATTEMPT — the same rule as announceMembership and a group message. This WAS a bare one-shot
+  // `_publishBounded(churchRelays(), evt)` with a console.warn on failure: no retry, no persistence, nothing on
+  // screen. That is the exact silent-failure the join path was fixed out of (UX audit 2026-08-04): a member who
+  // enables Prompt alerts right after joining hits a COLD gate cache (the church's own box is not proved yet, or
+  // the socket is still coming up), the one send is refused as an outage, and the token is LOST — so the relay
+  // never learns where to push and the member gets no notifications, with no error anywhere. The outbox retries
+  // across reconnects and restarts (trinity-relay-returned / online / the 45s tick) and re-derives the relay set
+  // at send time via publishSetFor(cp), so a box the church proves LATER still gets the token. The item carries
+  // `cp` (the active church) so _itemChurch routes it exactly where announceMembership's join goes.
+  // RETRY-PATH USERS (rule 2): _outbox / _outboxSave / _outboxFlush / _itemChurch / _outboxRelays(→publishSetFor)
+  // / _outboxFull / _outboxDropPushTokens — a pushtoken item is just a church item to all of them (cp set, no
+  // groupId/peer/join/leave), so none needed a pushtoken branch except the one-per-device replace rules above.
+  async publishPushToken(token, env) {
+    if (!sk) await window.Fellowship.ready;
+    const tok = String(token || '').toLowerCase();
+    if (!/^[0-9a-f]{8,}$/.test(tok)) return { ok: false, reason: 'bad-token' };   // APNs tokens are hex; refuse anything else before it reaches the relay
+    const evt = finalizeEvent(_monotonicF(window.Fellowship._buildPushTokenEvent({ pub, token: tok, env })), sk);
+    _outboxDropPushTokens(pub);   // one queued pushtoken action per device; this newer one replaces any older
+    _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    _outboxSave();
+    try { await _outboxFlush(o => o && o.evt && o.evt.id === evt.id); } catch (e) {}
+    const delivered = !_outbox.some(o => o && o.evt && o.evt.id === evt.id);   // flushed off the queue → it landed now
+    return { ok: true, evt, delivered };   // ok: durably QUEUED (retry guarantees delivery), not "landed this instant"
+  },
+  async deletePushToken() {
+    if (!sk) await window.Fellowship.ready;
+    // Deregister: a replaceable copy with empty content + a `deleted` tag. The registry drops the token on either.
+    // Same retried path as the register: a one-shot deregister that is refused (cold gate / offline) would leave a
+    // LIVE token in the registry — the member turned push OFF but keeps being pushed. Dropping any queued register
+    // first also stops a token we are deregistering from racing out ahead of this delete.
+    _outboxDropPushTokens(pub);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pushtoken:' + pub], ['t', NET], ['p', pub], ['deleted', '1']], content: '' }), sk);
+    _outbox.push({ evt, groupId: null, pushtoken: true, cp: window.Fellowship.churchPub || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    _outboxSave();
+    try { await _outboxFlush(o => o && o.evt && o.evt.id === evt.id); } catch (e) {}
+    const delivered = !_outbox.some(o => o && o.evt && o.evt.id === evt.id);
+    return { ok: true, evt, delivered };
   },
 
   // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──

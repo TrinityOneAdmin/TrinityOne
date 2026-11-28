@@ -312,6 +312,24 @@ function dpWidgetCountClear() {
     if (W && W.clearMessageCount) Promise.resolve(W.clearMessageCount()).catch(() => {});
   } catch (e) {}
 }
+// iOS Keychain bg-copy: the plugin's default accessibility (WhenUnlocked) blocks reads while the screen is locked,
+// so a BGAppRefreshTask that runs with the screen off gets nil. The bridge copies the mnemonic to a separate entry
+// with AfterFirstUnlock accessibility. Android doesn't need this (EncryptedSharedPreferences is always readable).
+// Callers: dpSetTier() 'ondevice' branch (1). On Android/web the plugin is absent and these are no-ops. Never called
+// by the 'push' tier — owner decision: Prompt alerts must not arm the lock-readable key path.
+function dpBgKeyWrite() {
+  try {
+    const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge;
+    if (P && P.writeBgKey) Promise.resolve(P.writeBgKey()).catch(() => {});
+  } catch (e) {}
+}
+// Callers: dpSetTier() leaving-'ondevice' branch (1), widgetClearChurch in identity.src.js (1), widgetOffForNewAccount in identity.src.js (1).
+function dpBgKeyClear() {
+  try {
+    const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.DirectPushBridge;
+    if (P && P.deleteBgKey) Promise.resolve(P.deleteBgKey()).catch(() => {});
+  } catch (e) {}
+}
 // What turning ON must do, given the key source. The reader can only read the key if there is no PIN, or the PIN's
 // "stay open" record exists (the PIN encrypts the key otherwise). 'enable' = nothing more needed; 'offer-remember' = ask
 // for the existing 30-day "stay open" (TrinityIdentity.rememberDevice); 'unlock-first' = PIN-locked right now, so
@@ -321,6 +339,74 @@ function dpOnPlan(hasPin, locked, canRemember, rememberedUntil) {
   if (rememberedUntil > 0) return 'enable';
   if (!canRemember) return 'enable';
   return locked ? 'unlock-first' : 'offer-remember';
+}
+
+// ── Three-way "while the app is closed" tier (iOS). 'push' = Prompt alerts (APNs, instant); 'ondevice' = today's
+// BGAppRefresh/WorkManager polling (private, delayed); 'off' = nothing. See reference/SCOPE-notifications.md §8/§15. ──
+// The legacy boolean trinityone.directpush.optin is DERIVED from the tier ('1' iff 'ondevice') so bg-entry.js (the
+// background reader) and every existing opt-in test keep working unchanged — they read only that key.
+const TIER_KEY = 'trinityone.notif.tier';
+// The tier definitions. HONEST PER PLATFORM (owner, 2026-11-25): never offer a tier that does nothing on this phone.
+//  - iOS has APNs push ('push'); its On-device BGAppRefresh native is NOT wired yet (deferred follow-up, §15), so iOS
+//    does NOT list 'ondevice'. When that native lands, add DP_TIERS.ondevice to the iOS list.
+//  - Android has the existing WorkManager polling ('ondevice'); push is out of scope there, so Android has no 'push'.
+const DP_TIERS = {
+  push: { key: 'push', icon: 'bell', accent: 'var(--sage)', label: 'Prompt alerts', sub: 'Get notified right away. A wake-up signal goes through Apple — never your messages.' },
+  ondevice: { key: 'ondevice', icon: 'clock', accent: 'var(--clay)', label: 'On-device only', sub: 'No outside services. This phone checks now and then, so alerts can be delayed.' },
+  off: { key: 'off', icon: 'x', accent: 'var(--ink-3)', label: 'Off', sub: 'Alerts for new messages arrive only when TrinityOne is open.' },
+};
+function dpPlatform() { try { const C = window.Capacitor; return (C && C.getPlatform && C.getPlatform()) || ''; } catch (e) { return ''; } }
+function dpTierOptions() {
+  const p = dpPlatform();
+  if (p === 'ios') return [DP_TIERS.push, DP_TIERS.off];
+  if (p === 'android') return [DP_TIERS.ondevice, DP_TIERS.off];
+  return [DP_TIERS.off];
+}
+function dpTierGet() {
+  let v = null;
+  try { v = localStorage.getItem(TIER_KEY); } catch (e) { v = null; }
+  if (v !== 'push' && v !== 'ondevice' && v !== 'off') {
+    // MIGRATION: a member who opted into the old on/off "Message notifications" (optin='1') keeps it as 'ondevice'
+    // on upgrade — never silently demoted. Absent + optin!='1' ⇒ 'off', the historical default.
+    v = dpOptInGet() ? 'ondevice' : 'off';
+  }
+  // CLAMP to a tier this platform actually offers, so the picker's selection is always real: a legacy iOS 'ondevice'
+  // (whose BGTask native was never wired) falls to 'off' rather than showing a selected option that isn't listed.
+  if (!dpTierOptions().some((o) => o.key === v)) v = 'off';
+  return v;
+}
+// Persist the tier AND keep the legacy optin in step ('1' only for the on-device polling tier, never for push).
+function dpTierSet(tier) {
+  try { localStorage.setItem(TIER_KEY, tier); } catch (e) {}
+  dpOptInSet(tier === 'ondevice');
+}
+// iOS APNs bridge (native ApnsBridge plugin, wired via scripts/ios-fixup.sh). register() asks iOS for a device token;
+// the token arrives asynchronously on the 'apnsToken' event. Absent on Android/web/sim-without-plugin ⇒ no-ops.
+function apnsRegister() {
+  try {
+    const P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ApnsBridge;
+    if (P && P.register) return Promise.resolve(P.register()).catch(() => {});
+  } catch (e) {}
+  return Promise.resolve();
+}
+// Set up the token→relay forwarder ONCE (idempotent). When iOS hands us a token AND the member is on the push tier,
+// publish the signed pushtoken doc (§15). Guarded so a token refresh that arrives while Settings is closed still
+// forwards. App bootstrap may also call this; the guard makes a second call harmless.
+let _apnsForwardWired = false;
+function apnsEnsureForward() {
+  if (_apnsForwardWired) return;
+  let P; try { P = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ApnsBridge; } catch (e) { P = null; }
+  if (!P || !P.addListener) return;   // not native / plugin absent — nothing to wire, try again next time
+  _apnsForwardWired = true;
+  try {
+    P.addListener('apnsToken', (ev) => {
+      try {
+        if (dpTierGet() !== 'push') return;   // only the push tier registers a token with the relay
+        const F = window.Fellowship;
+        if (F && F.publishPushToken) Promise.resolve(F.publishPushToken(ev && ev.token, ev && ev.env)).catch(() => {});
+      } catch (e) {}
+    });
+  } catch (e) { _apnsForwardWired = false; }
 }
 
 function NotifSettingsScreen({ open, onClose, ctx }) {
@@ -346,22 +432,37 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
   );
   const off = !prefs.enabled;
   // Message notifications while closed (Direct Mode). Shown on the phone app only; default OFF.
-  const [dpOn, setDpOn] = useX(dpOptInGet);
-  const [dpOffer, setDpOffer] = useX(false);   // the "stay open on this phone" prompt is showing
-  React.useEffect(() => { if (open) { setDpOn(dpOptInGet()); setDpOffer(false); } }, [open]);
-  const flipDirect = async () => {
-    if (dpOn) {   // opt-out: the reader no-ops from its next run
-      dpOptInSet(false); setDpOn(false); setDpOffer(false);
-      dpWidgetCountClear();   // the home-screen widget's count goes with the opt-in
-      return;
+  const [tier, setTierState] = useX(dpTierGet);
+  const [dpOffer, setDpOffer] = useX(false);   // the "stay open on this phone" prompt is showing (on-device tier + PIN)
+  React.useEffect(() => { if (open) { setTierState(dpTierGet()); setDpOffer(false); apnsEnsureForward(); } }, [open]);
+  // THE THREE-WAY CHOICE. Each tier arms ONLY its own machinery; switching away undoes exactly what the old tier armed.
+  const dpSetTier = async (next) => {
+    const prev = dpTierGet();
+    if (next === prev) return;
+    // Leaving a tier: undo exactly what it armed, and nothing the other tiers own.
+    if (prev === 'ondevice') { dpBgKeyClear(); dpWidgetCountClear(); }   // drop the lock-readable key + the widget count
+    if (prev === 'push') { try { const F = window.Fellowship; if (F && F.deletePushToken) await F.deletePushToken(); } catch (e) {} }   // tell the relay to forget this device's token
+    dpTierSet(next); setTierState(next); setDpOffer(false);
+    if (next === 'ondevice') {
+      // Today's polling path, unchanged. A PIN-locked church needs the lock-readable key ("Stay open 30 days").
+      const ID = window.TrinityIdentity || {};
+      let until = 0; try { until = ID.rememberedUntil ? (await ID.rememberedUntil()) || 0 : 0; } catch (e) {}
+      const plan = dpOnPlan(!!(ID.hasPin && ID.hasPin()), !!(ID.isLocked && ID.isLocked()), !!(ID.canRemember && ID.canRemember()), until);
+      dpBgKeyWrite();   // copy the mnemonic to the iOS AfterFirstUnlock Keychain entry (no-op on Android/web)
+      if (plan === 'offer-remember') setDpOffer(true);
+      else if (plan === 'unlock-first') ctx.toast('Unlock with your PIN, then choose “Stay open” here so alerts can arrive');
+    } else if (next === 'push') {
+      // PUSH-ONLY (owner, 2026-11-25): this branch must NEVER arm the lock-readable key path — no dpBgKeyWrite, no
+      // "Stay open 30 days". Ask for OS notification permission (a push with none shows nothing), then register for
+      // APNs; the device token forwards to the relay via apnsEnsureForward()'s listener.
+      apnsEnsureForward();
+      if (N && N.permission && N.permission() !== 'granted') {
+        const ok = N.ensurePerm ? await N.ensurePerm() : false;
+        if (!ok) ctx.toast('Allow notifications in your device settings first');
+      }
+      apnsRegister();
     }
-    const ID = window.TrinityIdentity || {};
-    let until = 0; try { until = ID.rememberedUntil ? (await ID.rememberedUntil()) || 0 : 0; } catch (e) {}
-    const plan = dpOnPlan(!!(ID.hasPin && ID.hasPin()), !!(ID.isLocked && ID.isLocked()), !!(ID.canRemember && ID.canRemember()), until);
-    if (!dpOptInSet(true)) { ctx.toast('Couldn’t save that on this phone'); return; }
-    setDpOn(true);
-    if (plan === 'offer-remember') setDpOffer(true);
-    else if (plan === 'unlock-first') ctx.toast('Unlock with your PIN, then choose “Stay open” here so alerts can arrive');
+    // 'off' needs nothing beyond the leaving-tier cleanup above.
   };
   const acceptStayOpen = async () => {
     const ID = window.TrinityIdentity || {};
@@ -420,9 +521,23 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
           <React.Fragment>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>WHILE THE APP IS CLOSED</div>
             <Group>
-              <NotifToggleRow icon="chat" accent="var(--clay)" label="Message notifications" sub={dpOn ? 'On — this phone checks for new messages now and then' : 'Off — alerts for new messages arrive only when the app is open'} on={dpOn} onFlip={flipDirect} />
+              {dpTierOptions().map((o, i) => {
+                const sel = tier === o.key;
+                return (
+                  <button key={o.key} onClick={() => dpSetTier(o.key)} aria-pressed={sel} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '13px 15px', background: 'none', border: 'none', borderTop: i ? '1px solid var(--line)' : 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                    <Icon name={o.icon} size={19} color={o.accent} style={{ flexShrink: 0 }} />
+                    <span style={{ flex: 1 }}>
+                      <span style={{ display: 'block', fontSize: 14.5, fontWeight: 700, color: 'var(--ink)' }}>{o.label}</span>
+                      <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.4, marginTop: 2 }}>{o.sub}</span>
+                    </span>
+                    <span aria-hidden="true" style={{ flexShrink: 0, width: 20, height: 20, borderRadius: '50%', border: sel ? 'none' : '2px solid var(--line)', background: sel ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {sel ? <Icon name="check" size={13} color="#fff" /> : null}
+                    </span>
+                  </button>
+                );
+              })}
             </Group>
-            {dpOn && dpOffer ? (
+            {tier === 'ondevice' && dpOffer ? (
               <div style={{ padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, transparent)', marginBottom: 14 }}>
                 <div style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
                   Your PIN is locking your church, so alerts can’t arrive while the app is locked. To get them, let this phone <b>stay open for 30 days</b> without asking for your PIN.
@@ -439,7 +554,7 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
 
         <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '10px 6px 0' }}>
           {native
-            ? 'Serving reminders show on this device even when the app is closed. Message alerts can also arrive while the app is closed if you turn on Message notifications above and keep TrinityOne open on this phone; announcement alerts arrive when the app is open.'
+            ? 'Serving reminders show on this device even when the app is closed. For message alerts while the app is closed, choose Prompt alerts (a wake-up signal through Apple — never your messages) or On-device only (this phone checks now and then). Announcement alerts arrive when the app is open.'
             : 'Notifications arrive even when TrinityOne is closed, as long as your device allows them. Direct messages never include the message text.'}
         </p>
         <button onClick={() => ctx.openHelp && ctx.openHelp('notifications')} style={{ marginTop: 16, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,

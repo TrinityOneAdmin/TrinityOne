@@ -158,9 +158,33 @@ struct KeychainReader {
         return status == errSecSuccess
     }
 
+    /// Read the mnemonic from the plugin's WhenUnlocked entries (remember-me → plaintext) and copy it
+    /// to the AfterFirstUnlock bg-copy. Called from the foreground when the screen is on and the Keychain
+    /// is fully accessible. Returns true if the bg-copy was written.
+    ///
+    /// Callers: DirectPushBridge.writeBgKey (1 caller — Capacitor plugin bridge from JS opt-in toggle)
+    static func refreshBgCopy() -> Bool {
+        if let raw = readKeychainString(account: rememberPrefixedKey) {
+            let unwrapped = unwrapPluginJson(raw)
+            if let data = unwrapped.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let m = obj["m"] as? String, !m.trimmingCharacters(in: .whitespaces).isEmpty {
+                return writeBgMnemonic(m)
+            }
+        }
+        if let plain = readKeychainString(account: mnemonicPrefixedKey) {
+            let unwrapped = unwrapPluginJson(plain)
+            if !unwrapped.trimmingCharacters(in: .whitespaces).isEmpty {
+                return writeBgMnemonic(unwrapped)
+            }
+        }
+        NSLog("DIRECTPUSH refreshBgCopy: no readable mnemonic in plugin entries")
+        return false
+    }
+
     /// Remove the background-accessible mnemonic copy. Called on opt-out, lock, forget, or church switch.
     ///
-    /// Callers: the opt-out path, widgetClearChurch equivalent on iOS (not yet wired)
+    /// Callers: DirectPushBridge.deleteBgKey (1 caller — Capacitor plugin bridge from JS cleanup paths)
     static func deleteBgMnemonic() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

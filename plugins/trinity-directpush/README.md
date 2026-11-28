@@ -72,7 +72,7 @@ See `ios/Info.plist.additions` for the plist entries:
 
 1. Add Background Modes capability (background fetch) in the Xcode project settings
 2. Copy `ios/assets/directpush/` into the app bundle (Add Files to Xcode project, or a Copy Bundle Resources build phase). The bundle must contain `directpush/bg.html` and `directpush/bg-bundle.js`.
-3. Copy the four Swift files from `plugins/trinity-directpush/ios/` into the Xcode project (KeychainReader.swift, CapSchemeHandler.swift, BackgroundReader.swift, BackgroundRefreshScheduler.swift). They have no external dependencies beyond Foundation/WebKit/BackgroundTasks/UserNotifications.
+3. Copy the five Swift files from `plugins/trinity-directpush/ios/` into the Xcode project (KeychainReader.swift, CapSchemeHandler.swift, BackgroundReader.swift, BackgroundRefreshScheduler.swift, DirectPushBridge.swift). DirectPushBridge is a CAPPlugin (import Capacitor) that exposes `writeBgKey`/`deleteBgKey` to JS for the Keychain bg-copy lifecycle. The others need only Foundation/WebKit/BackgroundTasks/UserNotifications.
 4. KeychainSwift is NOT needed: KeychainReader uses raw Security framework (SecItemCopyMatching).
 5. Apply the AppDelegate changes from `ios/AppDelegate.swift.reference`.
 6. Apply the Info.plist additions from `ios/Info.plist.additions`.
