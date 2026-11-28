@@ -162,7 +162,15 @@ test('the scan actually reaches beyond the three original files', () => {
 test('the registry has no dead entries', () => {
   // A declaration for a type nobody uses is worse than none: it reads as coverage.
   // A6: was `new Set([...G, ...F, ...S])`, so a type declared for a file outside those three counted as dead.
-  const used = new Set(EVERYWHERE.keys());
+  //
+  // RELAY-ONLY TYPES COUNT AS USED (2026-11-26, trinityone/pushtoken:). A type the relay actively gates via a
+  // `D.X` reference in gateway.mjs is NOT dead, even before any client publishes it — which is the normal state
+  // for the FIRST phase of a feature whose relay side lands before its app side (pushtoken: is the registry +
+  // admission half of contentless APNs; the sender and the iOS client are later phases). REG_USED is the exact
+  // set the sibling test above ("every d-tag the RELAY knows about is declared") already credits, so a type the
+  // relay references is "used" here for the same reason it is "known" there. A type declared but referenced
+  // NOWHERE — not in gateway via D.X, not as a literal in any scanned src/app file — is still flagged dead.
+  const used = new Set([...EVERYWHERE.keys(), ...REG_USED]);
   const dead = ALL_PREFIXES.filter(p => !used.has(p)).sort();
   assert.deepEqual(dead, [], 'declared but used nowhere — remove them, or the registry starts lying about coverage');
 });

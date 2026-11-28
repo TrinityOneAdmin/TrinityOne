@@ -169,6 +169,7 @@ const derived = [
 
 test('the registry exports exactly the member-writable list this file derives', () => {
   // 21 → 15 on 2026-09-29: 6 MyData types removed + wallet moved from UNDECLARED into DOC_TYPES
+  // 15 → 16 on 2026-11-26: trinityone/pushtoken: added (member-authored iOS push token, phase 1 of contentless APNs)
   assert.ok(derived.length >= 15, 'the derived list looks too small to be real: ' + derived.length);
   assert.ok(Array.isArray(MEMBER_WRITABLE_TYPES), 'the registry exports no MEMBER_WRITABLE_TYPES list at all');
   assert.deepEqual([...MEMBER_WRITABLE_TYPES].sort(), [...derived].sort(),
@@ -273,6 +274,11 @@ const SHAPES = {
   'trinityone/member:':         () => doc(mia, D.MEMBER + church.pub, { joined: now() }),
   'trinityone/stewardreq:':     () => doc(mia, D.STEWARDREQ + church.pub, { note: 'happy to help' }, [['p', church.pub]]),
   'trinityone/name:':           () => doc(mia, D.NAME + church.pub, 'SEALED-NAME', [['p', church.pub]]),
+  // A MEMBER'S OWN iOS push token — d=pushtoken:<HER OWN pubkey>. accept() has a dedicated self-binding branch
+  // (pushtokenIdOk + MEMBERS.has) BEFORE this catch-all, so the suffix MUST be the author's key. The core safety
+  // property — a member cannot register under ANOTHER member's key, at any door — is proven in
+  // scripts/a-member-cannot-register-anothers-push-token.test.mjs; here we only prove her own still lands.
+  'trinityone/pushtoken:':      () => doc(mia, D.PUSHTOKEN + mia.pub, { token: 'apns-tok', platform: 'ios', env: 'prod', ts: now() }),
   'trinityone/guardreq:':       () => doc(mia, D.GUARDREQ + kid.pub, { child: kid.pub, parent: mia.pub }, [['p', church.pub]]),
   'trinityone/careslot:':       () => doc(mia, D.SLOT + NEED + ':2026-10-04', { note: 'lasagne' }, [['church', church.pub]]),
   'trinityone/careavail:':      () => doc(mia, D.AVAIL + church.pub, { days: ['sat'] }, [['p', church.pub]]),
