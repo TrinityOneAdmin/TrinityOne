@@ -3144,7 +3144,7 @@ async function churchMarkDataUrl({ picture, name, accent } = {}) {
   try { return await svgToPng(svg, 240); } catch (e) { return null; }
 }
 // build the printable invite as a real PDF (A4) — CHURCH-branded (name + accent + logo), then QR + steps.
-async function buildInvitePdf({ name, url, svg, accent, logo }) {
+async function buildInvitePdf({ name, url, svg, joinUrl, joinSvg, accent, logo }) {
   const J = window.jspdf && window.jspdf.jsPDF; if (!J) return null;
   const doc = new J({ unit: 'pt', format: 'a4' });
   const W = doc.internal.pageSize.getWidth(), M = 56; let y = 66;
@@ -3162,16 +3162,26 @@ async function buildInvitePdf({ name, url, svg, accent, logo }) {
   doc.text('on TrinityOne', W / 2, y, { align: 'center', charSpace: 1 }); y += 20;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(107, 96, 82);
   doc.text(doc.splitTextToSize('A private, offline-first place to read and belong — no sign-up, no tracking.', W - 2 * M), W / 2, y, { align: 'center' }); y += 26;
-  try { const png = await svgToPng(svg, 600); const qs = 168; doc.addImage(png, 'PNG', (W - qs) / 2, y, qs, qs); y += qs + 16; } catch (e) { y += 6; }
-  doc.setFontSize(10.5); doc.setTextColor(120, 110, 95);
-  doc.text('Scan with a phone camera, or go to:', W / 2, y, { align: 'center' }); y += 14;
-  doc.setFont('courier', 'normal'); doc.setFontSize(8); doc.setTextColor(90, 80, 70);
-  const ul = doc.splitTextToSize(url, W - 2 * M); doc.text(ul, W / 2, y, { align: 'center' }); y += ul.length * 10 + 16;
+  // TWO codes, side by side: 1 = install the app (install page), 2 = join this church (join link).
+  // The second is dropped only when there is no join link to encode (church key not ready).
+  const codes = [{ n: '1 · Download the app', u: url, s: svg }];
+  if (joinUrl && joinSvg) codes.push({ n: '2 · Join ' + nm, u: joinUrl, s: joinSvg });
+  const colw = (W - 2 * M) / codes.length, qs = codes.length > 1 ? 128 : 168; let rowEnd = y;
+  for (let ci = 0; ci < codes.length; ci++) {
+    const c = codes[ci], cx = M + colw * ci + colw / 2; let cy = y;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(ar, ag, ab);
+    doc.text(doc.splitTextToSize(c.n, colw - 12), cx, cy, { align: 'center' }); cy += 8;
+    try { const png = await svgToPng(c.s, 600); doc.addImage(png, 'PNG', cx - qs / 2, cy, qs, qs); } catch (e) {}
+    cy += qs + 12;
+    doc.setFont('courier', 'normal'); doc.setFontSize(6.5); doc.setTextColor(90, 80, 70);
+    const ul = doc.splitTextToSize(c.u, colw - 14); doc.text(ul, cx, cy, { align: 'center' }); cy += ul.length * 8;
+    rowEnd = Math.max(rowEnd, cy);
+  }
+  y = rowEnd + 14;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(60, 52, 44);
-  [['1.', 'Open your phone camera and point it at the code (or type the link).'],
-   ['2.', 'Tap Add to Home Screen / Install so it works offline.'],
-   ['3.', 'Open the app, tap Follow a church and search for ' + nm + '. Set your name so your church family recognises you — you can stay private if you need to.'],
-   ['4.', 'When asked, write your 12-word recovery phrase in the boxes below.']].forEach(([n, s]) => {
+  [['1.', 'Scan code 1 with your phone camera (or type its link) to download the app. Tap Add to Home Screen / Install so it works offline.'],
+   ['2.', 'Open the app, then scan code 2 (or tap Follow a church and search for ' + nm + ') to join. Set your name so your church family recognises you — you can stay private if you need to.'],
+   ['3.', 'When asked, write your 12-word recovery phrase in the boxes below.']].forEach(([n, s]) => {
     const l = doc.splitTextToSize(s, W - 2 * M - 18); doc.text(n, M, y); doc.text(l, M + 18, y); y += l.length * 13 + 4;
   });
   y += 8;
@@ -3311,7 +3321,7 @@ window.SkConfirm = SkConfirm;
 // In-app invite poster. Replaces a window.open() print popup that TRAPPED the steward in the Capacitor
 // webview (chrome-less window, hardware back did nothing). This is a normal in-app overlay: X / Done /
 // backdrop close it, and the hardware back button closes it too (Capacitor App + popstate).
-function InvitePosterModal({ church, url, svg, joinUrl, onClose }) {
+function InvitePosterModal({ church, url, svg, joinUrl, joinSvg, onClose }) {
   React.useEffect(() => {
     try { history.pushState({ inviteposter: 1 }, ''); } catch (e) {}
     const onPop = () => onClose();
@@ -3351,7 +3361,7 @@ function InvitePosterModal({ church, url, svg, joinUrl, onClose }) {
     setPdfBusy(true);
     try {
       const logo = await churchMarkDataUrl({ picture: church.picture, name: church.name, accent: church.accent });   // dp, or the initials badge
-      const doc = await buildInvitePdf({ name: church.name, url, svg, accent: church.accent, logo });
+      const doc = await buildInvitePdf({ name: church.name, url, svg, joinUrl, joinSvg, accent: church.accent, logo });
       if (!doc) { window.print(); return; }   // jsPDF missing → fall back to browser print
       const fname = 'TrinityOne-invite-' + ((church.name || 'church').replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'church') + '.pdf';
       if (isNative) {
@@ -3384,17 +3394,23 @@ function InvitePosterModal({ church, url, svg, joinUrl, onClose }) {
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '1.6px', color: 'var(--clay-ink)', marginBottom: 8 }}>TRINITYONE</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, lineHeight: 1.1, marginBottom: 8 }}>Join {church.name || 'your church'}</div>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 16, maxWidth: 320, marginLeft: 'auto', marginRight: 'auto' }}>A private, offline-first place to read and belong — no sign-up, no tracking.</div>
-          <div style={{ display: 'inline-flex', padding: 12, background: '#fff', borderRadius: 16, border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ width: 190, height: 190 }} dangerouslySetInnerHTML={{ __html: svg }} />
-          </div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '14px 0 6px' }}>Scan with a phone camera, or go to:</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 11px', textAlign: 'left' }}>{url}</div>
+          {/* TWO codes, stacked: 1 installs the app (install page), 2 joins this church (join link). */}
+          {[{ k: 'install', n: '1 · Download the app', h: 'Scan to install, or go to:', u: url, s: svg },
+            joinUrl && joinSvg ? { k: 'join', n: '2 · Join ' + (church.name || 'your church'), h: 'Already have the app? Scan to join, or open:', u: joinUrl, s: joinSvg } : null].filter(Boolean).map(c => (
+            <div key={c.k} data-poster-qr={c.k} style={{ marginBottom: 14, breakInside: 'avoid' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--clay-ink)', marginBottom: 8 }}>{c.n}</div>
+              <div style={{ display: 'inline-flex', padding: 12, background: '#fff', borderRadius: 16, border: '1px solid var(--line)', boxShadow: 'var(--shadow-sm)' }}>
+                <div style={{ width: 170, height: 170 }} dangerouslySetInnerHTML={{ __html: c.s }} />
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '10px 0 6px' }}>{c.h}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 11px', textAlign: 'left' }}>{c.u}</div>
+            </div>
+          ))}
         </div>
         {/* getting started + a place to write the recovery phrase (so the printed sheet is self-contained) */}
         <ol style={{ margin: '18px 0 0', paddingLeft: 20, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
-          <li>Open your phone camera and point it at the code (or type the link).</li>
-          <li>Tap <b>Add to Home Screen / Install</b> so it works offline.</li>
-          <li>Open the app, tap <b>Follow a church</b> and search for <b>{church.name || 'your church'}</b>. Set your name so your church family recognises you — you can stay private if you need to.</li>
+          <li>Scan <b>code 1</b> with your phone camera (or type its link) to download the app. Tap <b>Add to Home Screen / Install</b> so it works offline.</li>
+          <li>Open the app, then scan <b>code 2</b> (or tap <b>Follow a church</b> and search for <b>{church.name || 'your church'}</b>) to join. Set your name so your church family recognises you — you can stay private if you need to.</li>
           <li>When asked, write your <b>12-word recovery phrase</b> in the boxes below.</li>
         </ol>
         <div style={{ display: 'flex', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)' }}>
@@ -3640,7 +3656,7 @@ function JoinCard({ qrSize = 92, center = false }) {
         </div>
         {savedLine('join')}
       </div>
-      {poster ? <InvitePosterModal church={church} url={posterLink.url} svg={posterLink.svg} joinUrl={url} onClose={() => setPoster(false)} /> : null}
+      {poster ? <InvitePosterModal church={church} url={posterLink.url} svg={posterLink.svg} joinUrl={url} joinSvg={svg} onClose={() => setPoster(false)} /> : null}
     </div>
 
     {/* ── GETTING THE APP, kept apart from the joining code on purpose ──────────────────────────────────
