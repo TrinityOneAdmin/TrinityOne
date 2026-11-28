@@ -131,8 +131,8 @@ echo "  Info.plist: usage strings + export-compliance + UIScene manifest + backg
 # Push is enabled on the App ID (com.trinityone.app); the app needs the aps-environment entitlement to be
 # ISSUED a device token. 'development' = the APNs SANDBOX, which is what a debug/simulator/dev build must use
 # (the relay sender routes on the pushtoken doc's env field; see reference/SCOPE-notifications.md §15). A
-# Release/App Store/TestFlight build must sign with aps-environment='production' instead — that is a
-# CI/signing concern, not this local sim build. Written + wired idempotently so a signed sim build issues a
+# Release/App Store/TestFlight build signs with aps-environment='production' via AppRelease.entitlements (below) — (it was previously
+# hardcoded development for both configs). Written + wired idempotently so a signed sim build issues a
 # REAL sandbox token. (This is the §16-deferred entitlement, unblocked once Push was enabled on the App ID.)
 ENT="$APPDIR/App/App.entitlements"
 if [ -f "$ENT" ] && grep -q "aps-environment" "$ENT"; then
@@ -151,23 +151,50 @@ PLIST
   echo "  App.entitlements: written (aps-environment=development / APNs sandbox)"
 fi
 "$PB" -c "Print :aps-environment" "$ENT" >/dev/null 2>&1 || { echo "ios-fixup: ERROR — App.entitlements missing aps-environment" >&2; exit 1; }
-# Point the App target's build configs (Debug + Release) at the entitlements file. Idempotent: insert after the
-# App target's own PRODUCT_BUNDLE_IDENTIFIER (a line unique to the two App configs), only if not already set.
-if grep -q "CODE_SIGN_ENTITLEMENTS = App/App.entitlements;" "$PBX"; then
-  echo "  project.pbxproj: CODE_SIGN_ENTITLEMENTS already set — skipped"
-else
-  python3 -I - "$PBX" <<'PY'
-import sys
+# Release entitlement: aps-environment=production. The app reports env via `#if DEBUG` (sandbox in Debug, production
+# in Release), so the signed entitlement MUST match per config — a Release build signed 'development' would register a
+# SANDBOX token while telling the relay env='production', and production APNs would reject it (push silently never arrives).
+ENTR="$APPDIR/App/AppRelease.entitlements"
+cat > "$ENTR" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>production</string>
+</dict>
+</plist>
+PLIST
+[ "$("$PB" -c "Print :aps-environment" "$ENTR" 2>/dev/null)" = "production" ] || { echo "ios-fixup: ERROR — AppRelease.entitlements is not aps-environment=production" >&2; exit 1; }
+echo "  AppRelease.entitlements: written (aps-environment=production / APNs production)"
+# Point each App target build config at ITS entitlements file: Debug -> App.entitlements (development), Release ->
+# AppRelease.entitlements (production). Idempotent and self-correcting: any existing CODE_SIGN_ENTITLEMENTS line in an
+# App config block (e.g. the old Debug+Release -> App.entitlements wiring) is replaced, then the right one inserted
+# after the App target's own PRODUCT_BUNDLE_IDENTIFIER (a line unique to the two App configs).
+# BEGIN-WIRE-PY
+python3 -I - "$PBX" <<'PY'
+import re, sys
 p = sys.argv[1]
 s = open(p).read()
 anchor = "PRODUCT_BUNDLE_IDENTIFIER = com.trinityone.app;"
-n = s.count(anchor)
-assert n >= 1, "App target bundle-id anchor not found in pbxproj — re-check ios-fixup after a Capacitor upgrade"
-s = s.replace(anchor, anchor + "\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = App/App.entitlements;")
+ent = {"Debug": "App/App.entitlements", "Release": "App/AppRelease.entitlements"}
+done = {"Debug": 0, "Release": 0}
+def fix(m):
+    blk = m.group(0)
+    if anchor not in blk:
+        return blk
+    name = re.search(r"\bname = (\w+);", blk)
+    name = name.group(1) if name else None
+    assert name in ent, "App config with unexpected name %r — re-check ios-fixup after a Capacitor upgrade" % name
+    blk = re.sub(r"\n[ \t]*CODE_SIGN_ENTITLEMENTS = [^;]*;", "", blk)
+    done[name] += 1
+    return blk.replace(anchor, anchor + "\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = %s;" % ent[name])
+s = re.sub(r"isa = XCBuildConfiguration;.*?\n\t\t\};", fix, s, flags=re.S)
+assert done["Debug"] >= 1 and done["Release"] >= 1, "App Debug/Release config not both found in pbxproj — re-check ios-fixup after a Capacitor upgrade"
 open(p, "w").write(s)
-print("  project.pbxproj: CODE_SIGN_ENTITLEMENTS set on %d App config(s)" % n)
+print("  project.pbxproj: CODE_SIGN_ENTITLEMENTS Debug->App.entitlements x%d, Release->AppRelease.entitlements x%d" % (done["Debug"], done["Release"]))
 PY
-fi
+# END-WIRE-PY
 
 # ── 3. AppDelegate.swift: append SceneDelegate + BackupExclude plugin (idempotent) ──
 # Both are appended to AppDelegate.swift (already in the Sources build phase) rather
