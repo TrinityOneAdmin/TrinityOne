@@ -1,8 +1,10 @@
 {
-  "versionCode": 227,
-  "versionName": "0.9.72",
+  "versionCode": 228,
+  "versionName": "0.9.73",
   "url": "trinityone.apk",
-  "stewardVersionCode": 227,
+  "stewardVersionCode": 228,
   "stewardUrl": "trinityone-steward.apk",
-  "date": "2026-11-25"
+  "financeVersionCode": 228,
+  "financeUrl": "trinityone-finance.apk",
+  "date": "2026-11-28"
 }
