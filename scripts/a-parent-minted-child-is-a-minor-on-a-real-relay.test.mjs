@@ -61,6 +61,9 @@ function mint(mnemonic) {
     console: { warn() {} },
     window: { Fellowship: { relays: ['wss://test.invalid'], ready: Promise.resolve() }, TrinityIdentity: { makeInvite: () => ({ mnemonic, profile: {} }) } },
   };
+  // the SHIPPED tie-breaker createChildAccount now signs through (lifted, with its own stamp memory), not a stub
+  scope._lastStampF = new Map();
+  scope._monotonicF = new Function('_lastStampF', grabMethod(SRC, 'function _monotonicF(tmpl)') + '\nreturn _monotonicF;')(scope._lastStampF);
   const args = Object.keys(scope);
   const fn = new Function(...args, `return ({ ${BODY} }).createChildAccount;`)(...args.map(k => scope[k]));
   return { run: () => fn('npub1church', 'Ellie', { mnemonic }), events };

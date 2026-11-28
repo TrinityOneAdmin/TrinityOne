@@ -33547,14 +33547,14 @@ zoo`.split("\n");
         return { ok: false, attempted: false, name: nm, reason: "the key words are not a valid phrase" };
       }
       const ts = now();
-      const join3 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, memberSk);
-      const k0 = finalizeEvent2({ kind: 0, created_at: ts, tags: [], content: "{}" }, memberSk);
+      const join3 = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }), memberSk);
+      const k0 = finalizeEvent2(_monotonic({ kind: 0, created_at: ts, tags: [], content: "{}" }), memberSk);
       let nameDoc = null;
       try {
         const body = JSON.stringify({ name: nm });
         const c = encrypt2(body, getConversationKey(memberSk, cp));
         const m = encrypt2(body, getConversationKey(memberSk, memberPub));
-        nameDoc = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c, m }) }, memberSk);
+        nameDoc = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp]], content: JSON.stringify({ c, m }) }), memberSk);
       } catch (e) {
       }
       const j = await _quietSend(join3);
@@ -33687,8 +33687,8 @@ zoo`.split("\n");
         return false;
       }
       const ts = now();
-      const nameGone = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, mSk);
-      const memberGone = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp], ["deleted", "1"]], content: "" }, mSk);
+      const nameGone = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/name:" + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }), mSk);
+      const memberGone = finalizeEvent2(_monotonic({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp], ["deleted", "1"]], content: "" }), mSk);
       const r1 = await _quietSend(nameGone);
       const r2 = await _quietSend(memberGone);
       return r1.ok && r2.ok;

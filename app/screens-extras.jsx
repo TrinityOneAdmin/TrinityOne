@@ -368,12 +368,22 @@ function dpTierGet() {
   if (v !== 'push' && v !== 'ondevice' && v !== 'off') {
     // MIGRATION: a member who opted into the old on/off "Message notifications" (optin='1') keeps it as 'ondevice'
     // on upgrade — never silently demoted. Absent + optin!='1' ⇒ 'off', the historical default.
-    v = dpOptInGet() ? 'ondevice' : 'off';
+    if (dpOptInGet()) {
+      v = 'ondevice';
+    } else {
+      const p = dpPlatform();
+      v = p === 'ios' ? 'push' : p === 'android' ? 'ondevice' : 'off';
+    }
+    dpTierSet(v);
   }
   // CLAMP to a tier this platform actually offers, so the picker's selection is always real: a legacy iOS 'ondevice'
   // (whose BGTask native was never wired) falls to 'off' rather than showing a selected option that isn't listed.
-  if (!dpTierOptions().some((o) => o.key === v)) v = 'off';
+  if (!dpTierOptions().some((o) => o.key === v)) v = dpTierOptions()[0]?.key || 'off';
   return v;
+}
+function dpBootNotifications() {
+  const tier = dpTierGet();
+  if (tier === 'push') { apnsRegister(); apnsEnsureForward(); }
 }
 // Persist the tier AND keep the legacy optin in step ('1' only for the on-device polling tier, never for push).
 function dpTierSet(tier) {
@@ -615,4 +625,4 @@ function SearchOverlay({ open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { NotificationsScreen, NotifSettingsScreen, CurrencyScreen, ListenScreen, SearchOverlay });
+Object.assign(window, { dpBootNotifications, NotificationsScreen, NotifSettingsScreen, CurrencyScreen, ListenScreen, SearchOverlay });
