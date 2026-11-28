@@ -315,7 +315,7 @@ function dpWidgetCountClear() {
 // iOS Keychain bg-copy: the plugin's default accessibility (WhenUnlocked) blocks reads while the screen is locked,
 // so a BGAppRefreshTask that runs with the screen off gets nil. The bridge copies the mnemonic to a separate entry
 // with AfterFirstUnlock accessibility. Android doesn't need this (EncryptedSharedPreferences is always readable).
-// Callers: dpSetTier() 'ondevice' branch (1). On Android/web the plugin is absent and these are no-ops. Never called
+// Callers (2): dpSetTier() 'ondevice' branch + dpBootNotifications() 'ondevice' boot branch. On Android/web the plugin is absent and these are no-ops. Never called
 // by the 'push' tier — owner decision: Prompt alerts must not arm the lock-readable key path.
 function dpBgKeyWrite() {
   try {
@@ -381,9 +381,23 @@ function dpTierGet() {
   if (!dpTierOptions().some((o) => o.key === v)) v = dpTierOptions()[0]?.key || 'off';
   return v;
 }
-function dpBootNotifications() {
-  const tier = dpTierGet();
-  if (tier === 'push') { apnsRegister(); apnsEnsureForward(); }
+// Arms the ACTUAL selected tier at boot. dpSetTier() early-returns when next===prev, so a default that is already
+// pre-selected (fresh Android = 'ondevice') would otherwise never be armed. Callers: the boot effect in app.jsx (1).
+//  - 'ondevice': copy the key for the lock-readable background reader (idempotent; no-op where the plugin is absent).
+//  - 'push': iOS CONSENT — show the OS permission prompt FIRST; register for APNs (and so publish a token) ONLY if
+//    granted. The push tier NEVER touches dpBgKeyWrite. Returns a promise that never rejects.
+async function dpBootNotifications() {
+  try {
+    const tier = dpTierGet();
+    if (tier === 'ondevice') { dpBgKeyWrite(); return; }
+    if (tier === 'push') {
+      const N = window.TrinityNotif;
+      let ok = false;
+      try { ok = !!(N && N.ensurePerm && await N.ensurePerm()); } catch (e) { ok = false; }
+      if (!ok) return;   // no grant => no APNs registration, no token published
+      apnsEnsureForward(); apnsRegister();
+    }
+  } catch (e) {}
 }
 // Persist the tier AND keep the legacy optin in step ('1' only for the on-device polling tier, never for push).
 function dpTierSet(tier) {
@@ -468,7 +482,7 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
       apnsEnsureForward();
       if (N && N.permission && N.permission() !== 'granted') {
         const ok = N.ensurePerm ? await N.ensurePerm() : false;
-        if (!ok) ctx.toast('Allow notifications in your device settings first');
+        if (!ok) { ctx.toast('Allow notifications in your device settings first'); return; }   // no grant => no register/token
       }
       apnsRegister();
     }
