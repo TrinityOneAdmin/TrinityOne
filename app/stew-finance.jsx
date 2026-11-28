@@ -3399,10 +3399,15 @@ function DashFinanceBook({ finTab, setFinTab, finMoreOpen, setFinMoreOpen } = {}
       </div>}
       {_tabStripLifted && !actionsOpen && <button onClick={() => setActionsOpen(true)} aria-label="Open actions" style={{
         position: 'fixed', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
-        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '14px 12px', minWidth: 44, borderRadius: '13px 0 0 13px',
-        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center',
+        background: 'var(--clay)', color: 'var(--on-clay, #fff)', padding: '12px 0', width: 36, minHeight: 44, borderRadius: '13px 0 0 13px',
+        boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
       }}>
-        <Icon name="more-horizontal" size={17} color="#fff" />
+        <Icon name="more-horizontal" size={16} color="#fff" />
+        {/* The word is back (a bare red tab told nobody what it did). It fits because: lineHeight 1 makes the
+            vertical box exactly one em wide (the old default line-height left a fat empty column); letter-spacing
+            adds a trailing space after the LAST letter, which after the 180deg turn sits at the top — the marginTop
+            cancels it so the word is not pushed off-centre with a gap above it. */}
+        <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 11, lineHeight: 1, fontWeight: 800, letterSpacing: '0.08em', marginTop: '-0.08em', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' }}>ACTIONS</span>
       </button>}
       {_tabStripLifted && actionsOpen ? <>
         <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
