@@ -1654,27 +1654,6 @@ function ReadScreen({ ctx }) {
       setTimeout(go, 600);
     } else { sc.scrollTop = 0; }
   }, [loc.book, loc.chap, loc.verse, version]);
-  // SELECT A SAVED PASSAGE (a multi-verse bookmark): the verses of refs[0]'s chapter, with the action card open.
-  const applyPassageSel = (refs) => {
-    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(refs[0]);
-    if (!m) return;
-    const chap = +m[2], book = +m[1];
-    const verseNums = refs
-      .map(r => { const rm = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return rm && +rm[1] === book && +rm[2] === chap ? +rm[3] : null; })
-      .filter(v => v != null);
-    setSel(verseNums);
-    setCarry([]);
-    setArrived(null);
-    setSheet('action');
-  };
-  // A passage bookmark opened from the Library (app.jsx ctx.selectPassageBookmark): consumed here, AFTER the arrival
-  // effect above (effects run in order), because that effect clears the selection on every location change.
-  useE(() => {
-    const p = ctx.pendingPassage;
-    if (!p || !p.refs) return;
-    applyPassageSel(p.refs);
-    if (ctx.clearPendingPassage) ctx.clearPendingPassage();
-  }, [ctx.pendingPassage]);
   // The verses a plan day / link arrived on. A range ("John 3:16-21") carries loc.verseEnd and lights all of it;
   // `arrived` is still the single first verse, and goes null on any tap, which clears the whole range.
   const inArrived = (v) => arrived != null && (String(arrived) === String(v)
@@ -2075,12 +2054,7 @@ function ReadScreen({ ctx }) {
         }} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
-      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={{...ctx, selectPassageBookmark: (refs) => {
-        const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(refs[0]);
-        if (!m) return;
-        ctx.gotoRef(+m[1], +m[2], +m[3]);
-        applyPassageSel(refs);
-      }}} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />

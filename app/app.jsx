@@ -491,7 +491,6 @@ function App() {
 
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
-  const [pendingPassage, setPendingPassage] = useA(null);   // { refs } a passage bookmark opened from the Library: the reader selects it on arrival, then clears this
   const [planRead, setPlanRead] = useA(null);   // { plan, day } while the reader was opened FROM a plan day; PlanReadBar shows only while the reader is still on that day's passage
   // On boot the reader opens where this member left off in the translation that loaded (resolveStartLoc,
   // above), else at the translation's default. Every later navigation — the reader's own controls, gotoRef
@@ -2481,10 +2480,18 @@ function App() {
     toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
     gotoRef: (book, chap, verse) => { setPlanRead(null); setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
-    // A PASSAGE BOOKMARK OPENED FROM THE LIBRARY: go to its first verse and leave the range for the reader to select
-    // (ReadScreen consumes ctx.pendingPassage on arrival, after its own arrival effect has cleared any selection).
-    selectPassageBookmark: (refs) => { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec((refs || [])[0]); if (!m) return; setPendingPassage({ refs }); setPlanRead(null); setLoc({ book: +m[1], chap: +m[2], verse: +m[3] }); setReadView('bible'); setTab('read'); },
-    pendingPassage, clearPendingPassage: () => setPendingPassage(null),
+    // A PASSAGE BOOKMARK (Library, Study panel): the range travels IN the location, like a plan day ("John 3:16-21"),
+    // and ReadScreen's loc-driven inArrived() lights every verse. It used to hand a pendingPassage to ReadScreen, which
+    // applied it with setSel; the arrival effect re-fires on any dep change (e.g. version) and clears sel, leaving only
+    // the first verse lit on a device. Same-chapter only: verses of other chapters in refs are not part of the range.
+    selectPassageBookmark: (refs) => {
+      const m = /^(\d+)\.(\d+)\.(\d+)$/.exec((refs || [])[0]); if (!m) return;
+      const book = +m[1], chap = +m[2];
+      const vs = refs.map(r => { const x = /^(\d+)\.(\d+)\.(\d+)$/.exec(r); return x && +x[1] === book && +x[2] === chap ? +x[3] : null; }).filter(v => v != null);
+      const first = Math.min(...vs), last = Math.max(...vs);
+      const at = { book, chap, verse: first }; if (last > first) at.verseEnd = last;
+      setPlanRead(null); setLoc(at); setReadView('bible'); setTab('read');
+    },
     addModule: () => Bible.pickFile(),
     // "bibles" scopes the name: a commentary or a dictionary may legitimately be called KJV too, and
     // this sheet only ever means the translation. Without it, removeModule resolved the name against
